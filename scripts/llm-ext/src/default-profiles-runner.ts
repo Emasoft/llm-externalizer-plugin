@@ -63,7 +63,9 @@ function lockPathFor(profile: DefaultProfileName): string {
   return join(getConfigDir(), `default-profile-${profile}.lock`);
 }
 
-function logPathFor(profile: DefaultProfileName): string {
+/** Where a population child's stdout/stderr lands — surfaced to the user when a
+ *  paid population blocks their command, so "wait ~15 min" is checkable. */
+export function defaultProfileLogPath(profile: DefaultProfileName): string {
   return join(getConfigDir(), `default-profile-${profile}.log`);
 }
 
@@ -116,14 +118,19 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
     log,
     budgetUsd,
     lockPath = lockPathFor(opts.profile),
-    logPath = logPathFor(opts.profile),
+    logPath = defaultProfileLogPath(opts.profile),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
   } = opts;
 
   const isPaid = PAID_PROFILES.has(profile);
+  // `--allow-paid-models-tests` is REQUIRED for the paid two, and leaving it out
+  // made this remedy a dead end: a user copy-pasting it hit the same opt-in
+  // refusal the message was supposed to resolve. It grants nothing on its own —
+  // the child re-reads `allow_paid_models` from settings.yaml and refuses first
+  // on that master switch, which this flag explicitly cannot override.
   const remedy = isPaid
-    ? `llm-ext-benchmark --populate-default-profile ${profile} --budget-usd ${budgetUsd ?? 2}`
+    ? `llm-ext-benchmark --populate-default-profile ${profile} --allow-paid-models-tests --budget-usd ${budgetUsd ?? 2}`
     : `llm-ext-benchmark --populate-default-profile ${profile}`;
 
   if (env[DISABLE_ENV] === "1") {
@@ -166,7 +173,20 @@ export function populateDefaultProfile(opts: PopulateOpts): PopulationOutcome {
   }
 
   const argv = [scriptPath, "--populate-default-profile", profile];
-  if (isPaid && budgetUsd !== undefined) argv.push("--budget-usd", String(budgetUsd));
+  if (isPaid) {
+    // WITHOUT this the child dies in seconds at assertPaidBenchmarkAllowed's
+    // per-run opt-in check, banks a failure cooldown, and retries forever on
+    // backoff — so `ensemble`/`mass-scout` could NEVER auto-populate, even with
+    // allow_paid_models: true. Passing it is not a loosening: the child reads
+    // the MASTER switch (allow_paid_models) from settings.yaml itself and
+    // refuses on that first, and this flag cannot override it. We only reach
+    // here once that same master switch already gated us above, so this simply
+    // carries the authorization the user already gave across the process
+    // boundary — the flag exists to stop an UNATTENDED spend nobody asked for,
+    // and this spend is exactly the one they asked for.
+    argv.push("--allow-paid-models-tests");
+    if (budgetUsd !== undefined) argv.push("--budget-usd", String(budgetUsd));
+  }
 
   let child;
   try {
@@ -212,7 +232,7 @@ export function describeOutcome(outcome: PopulationOutcome): string | null {
       return `[llm-externalizer] ${outcome.reason}.\n  Run: ${outcome.remedy}\n  Or set allow_paid_models: true in settings.yaml to let it populate on first use.\n`;
     case "spawned":
       return outcome.blocksCaller
-        ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${logPathFor(outcome.profile)}\n`
+        ? `[llm-externalizer] '${outcome.profile}' is being benchmarked now (~15 min). Re-run this command when it finishes; progress: ${defaultProfileLogPath(outcome.profile)}\n`
         : null;
     case "skipped":
       return null;

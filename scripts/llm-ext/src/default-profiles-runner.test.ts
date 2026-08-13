@@ -79,6 +79,47 @@ describe("populateDefaultProfile — the paid gate", () => {
   });
 });
 
+describe("populateDefaultProfile — the argv handed to the child", () => {
+  /** Spawn a recorder script that dumps its own argv, so we assert what the
+   *  child ACTUALLY receives rather than that a spawn merely happened. */
+  function recordedArgv(over: Parameters<typeof opts>[0]): string[] {
+    const out = join(cfg, "argv.json");
+    const rec = join(cfg, "record.js");
+    writeFileSync(
+      rec,
+      `require("fs").writeFileSync(${JSON.stringify(out)}, JSON.stringify(process.argv.slice(2))); process.exit(0);\n`,
+    );
+    const r = populateDefaultProfile(opts({ ...over, scriptPath: rec }));
+    expect(r.kind).toBe("spawned");
+    // The child is detached; poll briefly for its write rather than sleeping blind.
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline && !existsSync(out)) {
+      // Busy-wait is acceptable here: the child exits in milliseconds and this
+      // keeps the test synchronous alongside the sync populateDefaultProfile.
+    }
+    if (!existsSync(out)) throw new Error("recorder child never wrote its argv");
+    return JSON.parse(readFileSync(out, "utf-8")) as string[];
+  }
+
+  it("passes --allow-paid-models-tests for a PAID profile — without it the child dies at the opt-in check and the profile can never populate", () => {
+    // REGRESSION (v13.2.0): the flag was missing, so an authorized paid
+    // population failed in seconds, banked a cooldown, and retried forever.
+    // Asserting outcome.kind ONLY — as the original test did — cannot see this;
+    // the spawn succeeds either way. The defect lives in the argv.
+    const argv = recordedArgv({ profile: "ensemble", allowPaidModels: true, budgetUsd: 2 });
+    expect(argv).toContain("--allow-paid-models-tests");
+    expect(argv).toContain("--populate-default-profile");
+    expect(argv).toContain("ensemble");
+    expect(argv).toContain("--budget-usd");
+  });
+
+  it("does NOT pass the paid opt-in for `free` — a $0 benchmark has nothing to authorize", () => {
+    const argv = recordedArgv({ profile: "free", allowPaidModels: true });
+    expect(argv).not.toContain("--allow-paid-models-tests");
+    expect(argv).not.toContain("--budget-usd");
+  });
+});
+
 describe("populateDefaultProfile — the lock", () => {
   it("treats a lock holding a LIVE pid as 'already running' and starts nothing", () => {
     const lockPath = join(cfg, "held.lock");

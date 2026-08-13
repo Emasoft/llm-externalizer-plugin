@@ -256,12 +256,21 @@ describe("dispatcher hook — maybeEnsureDefaultProfileReady", () => {
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
   });
 
-  it("'ensemble' under allow_paid_models: true is allowed to spawn (proceeds, returns null)", async () => {
+  it("'ensemble' under allow_paid_models: true spawns AND blocks this call — proceeding would send the unroutable placeholder to the provider", async () => {
+    // This test previously asserted `gate === null` ("proceeds"), which encoded
+    // a real defect: the profile still holds PLACEHOLDER_MODEL_ID at this
+    // moment, so proceeding sent that sentinel to OpenRouter and surfaced a raw
+    // 404. `blocksCaller` existed to prevent exactly that and was never acted
+    // on. The population still starts — only the current call is stopped, with
+    // a message that says what to do.
     const mod = await loadFreshIndex(UNPOPULATED_ENSEMBLE_ALLOW_PAID_YAML);
     await mod.boot();
     const gate = await mod.maybeEnsureDefaultProfileReady();
-    expect(gate).toBeNull();
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
+    expect(gate).not.toBeNull();
+    expect(gate?.isError).toBe(true);
+    expect(gate?.content?.[0]?.text).toMatch(/BENCHMARK IN PROGRESS/);
+    expect(gate?.content?.[0]?.text).toMatch(/ensemble/);
   });
 
   it("a live cooldown suppresses the attempt (no populateDefaultProfile call) on an unpopulated profile", async () => {
@@ -312,7 +321,12 @@ describe("dispatcher hook — maybeEnsureDefaultProfileReady", () => {
       { timestamp: isoTs(1 * 3_600_000), model: modelId, kind: "non_retryable_failure", detail: "HTTP 404" },
     ]);
     const gateB = await modB.maybeEnsureDefaultProfileReady();
-    expect(gateB).toBeNull(); // mass-scout is paid + allow_paid_models: true here, so it spawns and proceeds
+    // mass-scout is PAID and allow_paid_models is true here, so population
+    // starts AND this call is blocked — its configured model was just judged
+    // persistently dead, so proceeding would re-send the very id that is gone.
+    // The trigger invariant this test exists for is the call-count pair below;
+    // only the return SHAPE changed.
+    expect(gateB?.isError).toBe(true);
     expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
     expect(populateDefaultProfileMock.mock.calls[0][0]).toMatchObject({ profile: "mass-scout" });
   });

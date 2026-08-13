@@ -223,6 +223,7 @@ import { getProfileRecord } from "./default-profiles-state.js";
 import {
   populateDefaultProfile,
   describeOutcome,
+  defaultProfileLogPath,
   type PopulationOutcome,
 } from "./default-profiles-runner.js";
 import { readModelEvents, assessModelPersistence } from "./model-events.js";
@@ -460,9 +461,12 @@ function getCurrentBackend(): BackendConfig {
 // The LM Studio native-API probe cache moved to ./provider/lmstudio.ts with the
 // detector that owns it (B1 Phase 5); `clearLMStudioProbeCache` is imported above.
 
-// ── Settings file watcher — auto-reload on manual edits ─────────────
-// Polls settings.yaml every 5s. On change: validate → reload in memory.
-// Invalid changes are logged but ignored (old settings remain active).
+// ── Explicit settings reload ─────────────────────────────────────────
+// There is NO file watcher and no poller — one lived here and was deliberately
+// removed (see the note further down: "It is GONE… Do not reintroduce a
+// module-scope timer, watcher, or open handle"). A manual edit to settings.yaml
+// therefore does NOT propagate on its own: it is picked up by the next process,
+// or in-process only via `reset` / `--profile`, which call this.
 
 /**
  * Reload settings from disk. Returns true if settings changed and were applied.
@@ -491,10 +495,22 @@ function reloadSettingsFromDisk(): boolean {
     return false;
   }
 
-  // Validate before applying
+  // Validate before applying — with the SAME unpopulated-default-profile
+  // exemption the boot path uses. validateProfile deliberately has none of its
+  // own (an empty pool genuinely cannot serve a request), so every caller must
+  // apply it, and this one did not: a `reset` while the active profile was an
+  // unpopulated machine-owned default — the normal state right after a fresh
+  // install, or right after switching `active` to one — rejected the ENTIRE
+  // reload. That discarded any other edit made in the same save, including the
+  // `allow_paid_models: true` flip a user would make precisely to get those
+  // profiles populated.
   if (newSettings.active) {
     const validation = validateSettings(newSettings);
-    if (!validation.valid) {
+    const activeProfile = newSettings.profiles[newSettings.active];
+    const exempt =
+      activeProfile !== undefined &&
+      shouldBootDespiteInvalidActiveProfile(newSettings.active, activeProfile);
+    if (!validation.valid && !exempt) {
       process.stderr.write(
         `[llm-externalizer] ⚠ settings.yaml change rejected: ${validation.errors.join("; ")}\n`,
       );
@@ -2290,6 +2306,28 @@ export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | nul
               `NOT YET BENCHMARKED\n\n${outcome.reason}.\n` +
               `Run: ${outcome.remedy}\n` +
               `Or set allow_paid_models: true in settings.yaml to let it populate on first use.`,
+          },
+        ],
+        isError: true,
+      };
+    }
+    // A PAID population was just started. The profile still holds the
+    // unroutable placeholder id, so proceeding would send that sentinel to
+    // OpenRouter and surface a raw provider 404 — the exact ugly failure the
+    // placeholder was chosen to make impossible to mistake for a real model.
+    // `blocksCaller` existed to prevent this and was never acted on: only the
+    // "refused" branch returned, so "spawned" fell through to null. `free`
+    // deliberately does NOT block — it proceeds on the FREE_POOL_SEED fallback.
+    if (outcome.kind === "spawned" && outcome.blocksCaller) {
+      return {
+        content: [
+          {
+            type: "text",
+            text:
+              `BENCHMARK IN PROGRESS\n\n` +
+              `'${outcome.profile}' has no models yet and is being benchmarked now ` +
+              `(typically ~15 minutes). Re-run this command when it finishes.\n` +
+              `Progress: ${defaultProfileLogPath(outcome.profile)}`,
           },
         ],
         isError: true,
