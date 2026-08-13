@@ -213,9 +213,12 @@ import {
 } from "./model-reconcile.js";
 import {
   ensureDefaultProfileReady,
+  cachedPricesFromResults,
   type CatalogPriceSnapshot,
   type DefaultProfileBenchmarkRunner,
 } from "./default-profiles.js";
+import { loadCachedReport } from "./benchmark/pick.js";
+import { getEnsemblePriceCeiling } from "./config.js";
 import { getProfileRecord } from "./default-profiles-state.js";
 import {
   populateDefaultProfile,
@@ -2178,13 +2181,15 @@ async function runModelReconcile(): Promise<void> {
  * tool call fast with the refusal's remedy text so the user isn't billed for
  * something nobody authorized.
  *
- * Not yet wired here (future work, outside this pass's scope): `cachedPrices`
- * and `qualifyingPool` — decideDefaultProfilePopulation's "model-price-
- * increased" and "new-model-arrived" triggers — because nothing currently
- * PERSISTS the last-picked prices / qualifying pool for a completed
- * benchmark (default-profiles-state.ts's recordBenchmarkSuccess has no
- * caller yet). The "unpopulated", "model-removed", and
- * "model-unavailable-at-runtime" triggers are fully live.
+ * `cachedPrices` and `qualifyingPool` — decideDefaultProfilePopulation's
+ * "model-price-increased" and "new-model-arrived" triggers — are wired from
+ * this profile's OWN candidate class (the `:free` pool for `free`; the
+ * paid pool under the ensemble price ceiling for `ensemble`/`mass-scout`)
+ * and from the last-persisted fingerprint/prices
+ * (default-profiles-state.ts's getProfileRecord / the cached benchmark
+ * report). Both degrade to "no drift signal" — never a false invalidation —
+ * on any read failure, per decideDefaultProfilePopulation's own fail-open
+ * contract.
  *
  * Returns a ToolResult ONLY when the tool call itself must fail (a paid
  * default profile refused to auto-benchmark) — null means "proceed",
@@ -2200,10 +2205,38 @@ export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | nul
   // already-populated profile (decideDefaultProfilePopulation's own
   // contract) — so an empty snapshot here is the safe degrade, not an error.
   let catalog: CatalogPriceSnapshot[] = [];
+  let qualifyingPool: CatalogPriceSnapshot[] = [];
   try {
-    catalog = catalogForReconcile(await fetchOpenRouterModels()).priceSnapshot;
+    const reconcileCatalog = catalogForReconcile(await fetchOpenRouterModels());
+    catalog = reconcileCatalog.priceSnapshot;
+    if (activeName === "free") {
+      const freeIds = new Set(reconcileCatalog.freeQualified);
+      qualifyingPool = catalog.filter((m) => freeIds.has(m.id));
+    } else {
+      // ensemble / mass-scout: the same paid, ceiling-qualifying class
+      // pick.ts's pickEnsembleByPriceCeiling draws from (strictly under the
+      // ceiling on BOTH input and output, never a ':free' id).
+      const ceiling = getEnsemblePriceCeiling(loadSettings());
+      qualifyingPool = catalog.filter(
+        (m) =>
+          !isFreeSuffixModelId(m.id) &&
+          m.inputDollarsPerMillion < ceiling &&
+          m.outputDollarsPerMillion < ceiling,
+      );
+    }
   } catch {
-    /* empty catalog is the fail-open default */
+    /* empty catalog / pool is the fail-open default */
+  }
+
+  // Best-effort: an unreadable or missing cached report yields "no cached
+  // price baseline" (undefined), not an error — decideDefaultProfilePopulation
+  // then simply skips the price-increase check for this run.
+  let cachedPrices: ReturnType<typeof cachedPricesFromResults> | undefined;
+  try {
+    const report = loadCachedReport(join(getConfigDir(), "benchmark-results.json"));
+    cachedPrices = cachedPricesFromResults(report.results);
+  } catch {
+    /* no cached report yet — fail open, no price-drift signal this run */
   }
 
   // Durable, model-scoped runtime failures only (model-events.ts's
@@ -2238,6 +2271,9 @@ export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | nul
     {
       runtimeUnavailableIds,
       cooldownUntil: record?.cooldownUntil,
+      qualifyingPool,
+      lastPoolFingerprint: record?.poolFingerprint,
+      cachedPrices,
     },
   );
 

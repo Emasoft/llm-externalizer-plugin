@@ -337,4 +337,37 @@ describe("default-profiles-state sidecar", () => {
 
     expect(secondCooldownDelta).toBeGreaterThan(firstCooldownDelta);
   });
+
+  // ── Unit E — round trip: state sidecar → decideDefaultProfilePopulation ──
+  // The anti-thrash guarantee (see poolFingerprint's docstring) must survive
+  // an ACTUAL disk round-trip, not merely an in-memory `opts` object — a bug
+  // in the JSON (de)serialization of poolFingerprint would only surface here.
+
+  it("a completed benchmark banked via recordBenchmarkSuccess reads back as up-to-date against the SAME pool", () => {
+    const profile = ensembleProfile();
+    const pool = buildQualifyingPool(40);
+
+    recordBenchmarkSuccess("ensemble", poolFingerprint(pool), ["a/one", "a/two", "a/three"], Date.now());
+    const record = getProfileRecord("ensemble");
+
+    const decision = decideDefaultProfilePopulation(profile, [], {
+      qualifyingPool: pool,
+      lastPoolFingerprint: record?.poolFingerprint,
+    });
+    expect(decision).toEqual({ needsBenchmark: false, reason: "up-to-date" });
+  });
+
+  it("a pool that gained a qualifying model since the banked fingerprint reads back as new-model-arrived", () => {
+    const profile = ensembleProfile();
+    const oldPool = buildQualifyingPool(40);
+    recordBenchmarkSuccess("ensemble", poolFingerprint(oldPool), ["a/one", "a/two", "a/three"], Date.now());
+    const record = getProfileRecord("ensemble");
+
+    const newPool = [...oldPool, model("filler/new-arrival", 1, 2)];
+    const decision = decideDefaultProfilePopulation(profile, [], {
+      qualifyingPool: newPool,
+      lastPoolFingerprint: record?.poolFingerprint,
+    });
+    expect(decision).toEqual({ needsBenchmark: true, reason: "new-model-arrived" });
+  });
 });

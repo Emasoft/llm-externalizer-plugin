@@ -96,6 +96,9 @@ import {
   FREE_POOL_SEED,
   getEnsemblePriceCeiling,
 } from "../config.js";
+import { recordBenchmarkSuccess, recordBenchmarkFailure } from "../default-profiles-state.js";
+import { poolFingerprint, type CatalogPriceSnapshot } from "../default-profiles.js";
+import { toCatalogPriceSnapshot } from "../model-reconcile.js";
 
 import { parseArgs, type CliOptions } from "./cli-args.js";
 
@@ -963,6 +966,7 @@ async function runPopulateFreeDefaultProfile(
   // zero-cost id lacking that suffix must be dropped here, before it reaches the sweep.
   const freeIds = freeSuffixOnly(discoveredPool);
   if (freeIds.length === 0) {
+    recordBenchmarkFailure("free", Date.now());
     return {
       ok: false,
       code: 2,
@@ -979,6 +983,14 @@ async function runPopulateFreeDefaultProfile(
     };
   }
 
+  // The candidate set the picker actually selected `passing` from — banked on
+  // success as the drift-detection baseline, so a later check compares apples
+  // to apples (see poolFingerprint's docstring in default-profiles.ts).
+  const freeIdSet = new Set(freeIds);
+  const qualifyingPool: CatalogPriceSnapshot[] = toCatalogPriceSnapshot(catalog).filter((m) =>
+    freeIdSet.has(m.id),
+  );
+
   // Bypass the normal cost filter exactly like --bench-free-pool: the resolved pool
   // rides in as --include baselines (qualifyingTopN: 0 empties the auto-discovered
   // candidate list), and free_only (set above) is the guard that keeps this $0.
@@ -989,9 +1001,16 @@ async function runPopulateFreeDefaultProfile(
     dryRun: false,
     fromCache: false,
   };
-  const sweep = await deps.runSweep(sweepOpts);
+  let sweep: SweepOutcome;
+  try {
+    sweep = await deps.runSweep(sweepOpts);
+  } catch (err) {
+    recordBenchmarkFailure("free", Date.now());
+    throw err;
+  }
   const passing = passingFreePoolIds(sweep.results);
   if (passing.length === 0) {
+    recordBenchmarkFailure("free", Date.now());
     return {
       ok: false,
       code: 2,
@@ -1000,6 +1019,7 @@ async function runPopulateFreeDefaultProfile(
     };
   }
   const w = updateFreeDefaultProfile(settingsPath, passing);
+  recordBenchmarkSuccess("free", poolFingerprint(qualifyingPool), w.newPool, Date.now());
   return {
     ok: true,
     summary: `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' — ${w.newPool.join(", ")}`,
@@ -1029,12 +1049,21 @@ async function runPopulatePaidDefaultProfile(
   const ranked = rankByQualityIndex(discovered);
   const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
   if (candidates.length === 0) {
+    recordBenchmarkFailure(name, Date.now());
     return {
       ok: false,
       code: 2,
       summary: `--populate-default-profile ${name}: no candidate model met the requirement gate — nothing to benchmark`,
     };
   }
+  // The candidate set the picker will select from — banked on success (and
+  // reused, unchanged, whichever of ensemble/mass-scout actually writes) as
+  // the drift-detection baseline for THIS profile name.
+  const qualifyingPool: CatalogPriceSnapshot[] = candidates.map((c) => ({
+    id: c.id,
+    inputDollarsPerMillion: c.inputDollarsPerMillion,
+    outputDollarsPerMillion: c.outputDollarsPerMillion,
+  }));
 
   const workload = describeKeywordWorkload();
   let estimatedUsd = 0;
@@ -1051,6 +1080,7 @@ async function runPopulatePaidDefaultProfile(
     // ABORT BEFORE SPENDING A CENT — same rule and same message shape as
     // --update-all's pre-flight abort (runUpdateAll), so the fix is always the same
     // typed decision: raise --budget-usd, shrink --qualifying-top-n, or go --free.
+    recordBenchmarkFailure(name, Date.now());
     return {
       ok: false,
       code: 2,
@@ -1069,12 +1099,19 @@ async function runPopulatePaidDefaultProfile(
     };
   }
 
-  const sweep = await deps.runSweep(opts);
+  let sweep: SweepOutcome;
+  try {
+    sweep = await deps.runSweep(opts);
+  } catch (err) {
+    recordBenchmarkFailure(name, Date.now());
+    throw err;
+  }
 
   if (name === "ensemble") {
     const ceiling = getEnsemblePriceCeiling(loadSettings());
     const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling });
     if (picks.length === 0) {
+      recordBenchmarkFailure(name, Date.now());
       return {
         ok: false,
         code: 2,
@@ -1083,6 +1120,12 @@ async function runPopulatePaidDefaultProfile(
       };
     }
     updateEnsembleDefaultProfile(settingsPath, picks);
+    recordBenchmarkSuccess(
+      name,
+      poolFingerprint(qualifyingPool),
+      picks.map((p) => p.modelId),
+      Date.now(),
+    );
     return {
       ok: true,
       summary: `populate-default-profile ensemble: wrote ${picks.length} model(s) — ${picks.map((p) => p.modelId).join(", ")}`,
@@ -1096,6 +1139,7 @@ async function runPopulatePaidDefaultProfile(
   try {
     pick = pickMassScoutModel(sweep.results);
   } catch (err) {
+    recordBenchmarkFailure(name, Date.now());
     return {
       ok: false,
       code: 2,
@@ -1104,6 +1148,7 @@ async function runPopulatePaidDefaultProfile(
     };
   }
   const w = updateMassScoutDefaultProfile(settingsPath, pick);
+  recordBenchmarkSuccess(name, poolFingerprint(qualifyingPool), [w.newModelId], Date.now());
   return {
     ok: true,
     summary: `populate-default-profile mass-scout: wrote '${w.newModelId}'`,
