@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.8] - 2026-08-13
+
+### Fixed
+
+- Fix(session-summary): name the race winner in the progress line
+
+A timed run reported "[chunk 1/1] done in 84.2s" inside a command that took
+534s wall-clock. The 84.2s line is unattributable as written: it reads
+identically whether the race won in 84s, or whether all four racers failed
+over several minutes and the sequential fallback then took 84s. Those are
+opposite outcomes - one means racing works, the other means racing is
+burning minutes before the old path does the work anyway - and they call
+for different fixes.
+
+The driver already emits raceSize and raceWinnerModel on the "done" event;
+the CLI was throwing them away. It now prints them, so the next
+measurement can distinguish a win from a fallthrough instead of leaving it
+to inference.
+
+
 ## [13.3.7] - 2026-08-13
 
 ### Fixed
