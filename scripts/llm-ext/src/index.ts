@@ -17,7 +17,6 @@ import {
   appendFileSync,
   unlinkSync,
 } from "node:fs";
-import { parse as yamlParse } from "yaml";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
@@ -159,7 +158,6 @@ function resolveDefaultMaxTokens(): number {
 
 import {
   type Settings,
-  type Profile,
   type ResolvedProfile,
   API_PRESETS,
   validateSettings,
@@ -409,40 +407,22 @@ function getCurrentBackend(): BackendConfig {
  * see the new backend via the next `getCurrentBackend()` call.
  */
 function reloadSettingsFromDisk(): boolean {
-  let raw: string;
-  try {
-    raw = readFileSync(SETTINGS_FILE, "utf-8");
-  } catch {
-    // File temporarily missing (mid-save) — skip this cycle
-    return false;
-  }
-
-  let parsed: {
-    active?: string;
-    profiles?: Record<string, Profile>;
-    allow_paid_models?: boolean;
-  };
-  try {
-    parsed = yamlParse(raw);
-  } catch {
+  // The parse lives in exactly one place (config.ts's loadSettings) so no
+  // top-level key can be dropped here — this function used to hand-rebuild
+  // the Settings object from three known keys, which silently discarded any
+  // other key on every hot-reload (see the incident this used to document).
+  const newSettings = loadSettings();
+  if (!newSettings) {
+    // Say that the EDIT was ignored, not just that a read failed. loadSettings
+    // warns on a parse throw but is silent when the file merely parses to a
+    // non-object, and either way it cannot know a reload was in progress —
+    // without this line the user edits settings.yaml, nothing changes, and
+    // nothing explains why.
     process.stderr.write(
-      `[llm-externalizer] ⚠ settings.yaml has invalid YAML — ignoring change\n`,
+      `[llm-externalizer] ⚠ settings.yaml could not be parsed — ignoring change, keeping the previous settings.\n`,
     );
     return false;
   }
-
-  if (!parsed || typeof parsed !== "object" || !parsed.profiles) {
-    return false;
-  }
-
-  const newSettings: Settings = {
-    active: parsed.active || "",
-    profiles: parsed.profiles || {},
-    // Carry the master switch through the hot-reload — without this line, editing
-    // allow_paid_models in settings.yaml would be silently ignored until restart
-    // (the reload builder used to drop every top-level key but active/profiles).
-    allow_paid_models: parsed.allow_paid_models === true,
-  };
 
   // Validate before applying
   if (newSettings.active) {

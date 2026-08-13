@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
-import { parse as yamlParse } from "yaml";
+import { parse as yamlParse, Document as YamlDocument, isScalar } from "yaml";
 import { registeredTools } from "./model-qualification/registry.js";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -517,9 +517,30 @@ export const PLACEHOLDER_MODEL_ID = "placeholder/unpopulated-default-profile";
  */
 export function isPlaceholderProfile(profile: Profile): boolean {
   if (profile.free_only === true) {
+    // A MALFORMED free_models (a YAML scalar where a list belongs) is a broken
+    // profile, not an empty one — coerceFreeModels flattens it to [], so
+    // treating "coerces to empty" as "placeholder" would silently reclassify a
+    // user's typo as "not benchmarked yet", swallow the "must be a YAML list"
+    // error, and quietly overwrite their line with benchmark output.
+    if (profile.free_models !== undefined && !Array.isArray(profile.free_models)) {
+      return false;
+    }
     return coerceFreeModels(profile.free_models).length === 0;
   }
   return profile.model === PLACEHOLDER_MODEL_ID;
+}
+
+/**
+ * True iff this is a MACHINE-OWNED default profile that simply has not been
+ * benchmarked yet — the one case where an "invalid" profile is expected and
+ * self-healing rather than a user error.
+ *
+ * The name check is load-bearing: an arbitrary user profile with an empty
+ * free_models list is a genuine misconfiguration and must keep failing
+ * validation. Only free/ensemble/mass-scout populate themselves.
+ */
+export function isUnpopulatedDefaultProfile(name: string, profile: Profile): boolean {
+  return isDefaultProfileName(name) && isPlaceholderProfile(profile);
 }
 
 function placeholderFreeProfile(): Profile {
@@ -559,9 +580,10 @@ function placeholderMassScoutProfile(): Profile {
 /** Default settings: the 3 dynamic, machine-owned default profiles, each an
  *  unpopulated PLACEHOLDER (see isPlaceholderProfile). The scan/benchmark/
  *  compare procedure (update-all.ts) populates them; nothing here hardcodes a
- *  model id. A placeholder VALIDATES (validateProfile stops after the
- *  structural checks — see its placeholder guard) so the CLI boots and every
- *  read-only command works; population happens on first LLM use. */
+ *  model id. These placeholders do NOT pass validateProfile — an empty pool
+ *  genuinely cannot serve a request — so the boot path must recognise them via
+ *  isUnpopulatedDefaultProfile() and route them to population rather than to a
+ *  misconfiguration error. */
 export function generateDefaultSettings(): Settings {
   return {
     active: "free",
@@ -573,6 +595,60 @@ export function generateDefaultSettings(): Settings {
       "mass-scout": placeholderMassScoutProfile(),
     },
   };
+}
+
+/**
+ * Render the on-disk default settings.yaml — a commented file GENERATED from
+ * generateDefaultSettings(), so the shipped defaults have exactly ONE source.
+ *
+ * This used to be a hand-maintained SETTINGS_TEMPLATE string literal sitting
+ * beside generateDefaultSettings(), and the two drifted the moment the default
+ * profiles changed: the template still declared the five old hand-written
+ * profiles while the code claimed to write three machine-managed ones, and the
+ * template was the copy that actually reached disk. A generated file cannot
+ * drift from the object it is generated from — the test asserts a round-trip.
+ */
+export function renderDefaultSettingsYaml(): string {
+  const doc = new YamlDocument(generateDefaultSettings());
+
+  doc.commentBefore = [
+    " ──────────────────────────────────────────────────────────────────────",
+    " LLM Externalizer — Settings",
+    " ──────────────────────────────────────────────────────────────────────",
+    " Profile-based configuration. Each profile defines a complete LLM backend",
+    " setup. Edit this file by hand, then run `llm-ext settings reset` to reload.",
+    "",
+    " Location: ~/.llm-externalizer/settings.yaml",
+    "",
+    " The three profiles below (free, ensemble, mass-scout) are MACHINE-MANAGED:",
+    " their model ids are chosen and kept current by the benchmark procedure, and",
+    " are (re)populated automatically when a model is retired, repriced, or a",
+    " better one appears. They start EMPTY — a placeholder model id means 'not",
+    " benchmarked yet', not 'broken'. Any profile you add yourself is left alone,",
+    " forever: nothing here rewrites a profile it does not own.",
+    " ──────────────────────────────────────────────────────────────────────",
+  ].join("\n");
+
+  const activeNode = doc.get("active", true);
+  if (isScalar(activeNode)) {
+    activeNode.comment = " the profile every command uses unless --profile says otherwise";
+  }
+
+  const paidNode = doc.get("allow_paid_models", true);
+  if (isScalar(paidNode)) {
+    paidNode.commentBefore = [
+      " ── Master paid-spend switch ─────────────────────────────────────────",
+      " DEFAULT false — only FREE models are used, everywhere, by default. While",
+      " this is false (or absent), every remote profile is forced to its free pool",
+      " no matter which 'model' it configures, and the two paid machine-managed",
+      " profiles (ensemble, mass-scout) refuse to auto-benchmark themselves,",
+      " because benchmarking a paid model sends billable requests. Set it to true",
+      " to allow paid models — then `ensemble` and `mass-scout` populate on first",
+      " use, printing their estimated cost ceiling before spending anything.",
+    ].join("\n");
+  }
+
+  return doc.toString({ indent: 2 });
 }
 
 /** Local-time timestamp `YYYYMMDD_HHMMSS±HHMM` for a corrupt-settings backup
@@ -617,8 +693,10 @@ export function ensureSettingsExist(): Settings {
 
   if (!existsSync(settingsPath)) {
     mkdirSync(configDir, { recursive: true });
-    // First run: write commented template for human readability
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    // First run: write the commented defaults, GENERATED from
+    // generateDefaultSettings() so the on-disk file can never disagree with the
+    // in-memory fallback (they were two hand-maintained copies, and drifted).
+    writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
     // Restrict permissions immediately — users may add API keys to the template,
     // so default umask (0644) is not safe.
     try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
@@ -640,14 +718,15 @@ export function ensureSettingsExist(): Settings {
         `automatically. Regenerating ${settingsPath} with the 3 machine-managed ` +
         `default profiles (free, ensemble, mass-scout).\n`,
     );
-    writeFileSync(settingsPath, SETTINGS_TEMPLATE, "utf-8");
+    writeFileSync(settingsPath, renderDefaultSettingsYaml(), "utf-8");
     try { chmodSync(settingsPath, 0o600); } catch { /* Windows may not support chmod */ }
   }
 
   const settings = loadSettings();
   if (!settings) {
-    // Should be unreachable (we just wrote SETTINGS_TEMPLATE, which is valid
-    // YAML) — but never silently proceed with a null settings object.
+    // Should be unreachable (we just wrote renderDefaultSettingsYaml(), which
+    // is valid YAML by construction — a round-trip test proves it) — but never
+    // silently proceed with a null settings object.
     throw new Error(`Failed to parse ${settingsPath}. Check YAML syntax.`);
   }
 
@@ -714,17 +793,14 @@ export function validateProfile(
     );
   }
 
-  // ── Unpopulated default-profile placeholder ───────────────────────
-  // A machine-owned default profile (free/ensemble/mass-scout) starts life as
-  // a PLACEHOLDER: correct SHAPE, contents pending until the benchmark runner
-  // populates it on first use. Everything structural — mode, api, preset
-  // existence, mode↔preset compatibility — has been checked above. The CONTENT
-  // checks below (non-empty free_models, ensemble slot count) would reject a
-  // state the CLI must be able to boot into, gating every command behind NOT
-  // CONFIGURED with no way to reach the population hook. Stop here instead.
-  if (isPlaceholderProfile(profile)) {
-    return { valid: errors.length === 0, errors };
-  }
+  // NOTE — deliberately NO placeholder exemption here. An unpopulated default
+  // profile genuinely CANNOT serve a request (no models), so reporting it valid
+  // would be a lie, and the "free_only needs a non-empty pool" rule below is a
+  // zero-spend invariant, not a formality. The distinction that actually
+  // matters is "the USER misconfigured this" vs "the MACHINE has not populated
+  // it yet" — and that belongs to the CALLER, which knows whether the profile
+  // is machine-owned and can route it to population instead of to an error.
+  // See isUnpopulatedDefaultProfile() and the boot gate in index.ts.
 
   // ── free_only rules (TRDD-8b6b3646) ───────────────────────────────
   // The switch can NEVER cause spend, so the constraints here are strict.
@@ -1371,9 +1447,12 @@ export function resolveModelForTool(
 }
 
 // ── Free-pool seed list (TRDD-f1510055) ────────────────────────────────────
-// Canonical default `free_models` pool for the `remote-free-ensemble` profile.
-// Updating this list MUST stay in sync with the SETTINGS_TEMPLATE block above
-// (the generator copies these entries verbatim into a fresh settings.yaml).
+// Runtime "never dark" fallback pool: used when a remote profile has no
+// configured `free_models` of its own, so free_only / cost-safety code paths
+// always have a usable free pool to fall back to. This list is NOT copied
+// into generated settings.yaml (see renderDefaultSettingsYaml() above) —
+// the two are independent now; keep this comment free of any template
+// cross-reference.
 //
 // Selection criteria (curated 2026-05-27): OpenRouter `:free` tier models that
 //   - meet the per-tool requirements floor (context >= 128K, max_output >= 8K,
@@ -1477,144 +1556,3 @@ export function assertFreeOnlyModel(
   }
 }
 
-// ── Settings template ───────────────────────────────────────────────
-// Written on first run for human readability (comments are preserved).
-// Users edit settings.yaml manually in their editor.
-
-export const SETTINGS_TEMPLATE = `# ──────────────────────────────────────────────────────────────────────
-# LLM Externalizer — Settings
-# ──────────────────────────────────────────────────────────────────────
-# Profile-based configuration. Each profile defines a complete LLM
-# backend setup. Edit this file manually and either restart Claude Code
-# or call the MCP 'reset' tool to reload.
-#
-# Location: ~/.llm-externalizer/settings.yaml
-# ──────────────────────────────────────────────────────────────────────
-
-# Active profile name
-active: local-lmstudio-qwen35
-
-# ── Master paid-spend switch ─────────────────────────────────────────
-# DEFAULT false — only FREE models are used, everywhere, by default. While
-# this is false (or absent), every remote (OpenRouter) profile is forced to
-# its free pool no matter what 'model' it configures, and even paid
-# *benchmarks* are refused — one switch guarantees zero paid spend. Local
-# profiles are $0/offline and always run as-is. Set it true to use paid
-# models (and to benchmark them); per-profile 'free_only' then remains an
-# opt-in. A remote profile with no 'free_models' still runs free — the
-# server auto-discovers a benchmark-vetted free pool at $0.
-allow_paid_models: false
-
-# ── Profiles ─────────────────────────────────────────────────────────
-profiles:
-
-  # ── Local: LM Studio with Qwen 3.5 ────────────────────────────────
-  local-lmstudio-qwen35:
-    mode: local
-    api: lmstudio-local
-    model: "thecluster/qwen3.5-27b-mlx"
-    # url: "http://localhost:1234"       # (default from lmstudio-local preset)
-    # api_token: $LM_API_TOKEN           # (default from lmstudio-local preset)
-    # timeout: 300                        # (default from lmstudio-local preset)
-
-  # ── Local: Ollama with Qwen 3 14B ─────────────────────────────────
-  local-ollama-qwen314:
-    mode: local
-    api: ollama-local
-    model: "qwen3:14b"
-    # url: "http://localhost:11434"       # (default from ollama-local preset)
-
-  # ── Remote: Single model via OpenRouter ────────────────────────────
-  remote-single-geminiflash:
-    mode: remote
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    api_key: $OPENROUTER_API_KEY          # set this env var, or replace with direct key
-    # Optional: high-quality scan model (TRDD-DBUSM55E). Drives high_quality_scan —
-    # ONE strong model at max reasoning instead of the cheap 3-model ensemble.
-    # Absent → these exact defaults are used automatically. Needs an OpenRouter
-    # (remote) profile; NOT available under free_only (it is a paid model).
-    # high_quality_model:
-    #   id: "z-ai/glm-5.2"            # default high-quality model
-    #   reasoning_effort: max          # max -> OpenRouter "xhigh" (the real ceiling)
-    #   cache: true                    # prompt-cache the system prompt across files
-    #   min_quantization: fp8          # accept fp8-or-higher precision endpoints only
-    #   provider: "gmicloud/fp8"       # preferred provider (provider.order[0])
-    #   allow_fallbacks: false         # pin the preferred provider
-
-  # ── Remote: Ensemble (three models in parallel) ────────────────────
-  remote-ensemble-geminigrok:
-    mode: remote-ensemble
-    api: openrouter-remote
-    model: "google/gemini-2.5-flash"
-    second_model: "x-ai/grok-4.1-fast"
-    api_key: $OPENROUTER_API_KEY
-    # Optional: per-tool model overrides (TRDD-f45eeaa0). Absent → this
-    # profile's \`model\` (back-compat). Keys must be LLM-using tool names;
-    # a model set here should pass that tool's benchmark — see the
-    # security-triage benchmark (/llm-externalizer-security-triage-benchmark).
-    # tool_models:
-    #   security_scan: "qwen/qwen-2.5-7b-instruct"
-    #   code_task: "google/gemini-2.5-flash"
-
-  # ── Remote: FREE-ONLY ensemble (zero spend) ───────────────────────
-  # free_only ignores model/second_model/third_model and uses ONLY the
-  # free_models pool. The top free models that clear the requirements
-  # floor form the ensemble; the rest are the rate-limit fallback pool.
-  # EVERY free_models entry MUST end with ':free' — the validator rejects
-  # the profile otherwise, so this profile can NEVER bill.
-  #
-  # The 15-model seed list below matches FREE_POOL_SEED in config.ts and
-  # is the canonical default. The auto-benchmark trigger (TRDD-f1510055)
-  # scores this pool when the profile is first activated (free_only=true
-  # + empty :free cache) and writes results to:
-  #   ~/.llm-externalizer/benchmark-results.json (keyword task)
-  #   ~/.llm-externalizer/security-triage-results.json (security_scan)
-  # Run it manually with: /llm-externalizer:llm-externalizer-bench-free-pool
-  remote-free-ensemble:
-    mode: remote-ensemble
-    api: openrouter-remote
-    free_only: true
-    api_key: $OPENROUTER_API_KEY            # free models still need the key (rate-limited, but $0)
-    free_models:
-      - "poolside/laguna-m.1:free"
-      - "deepseek/deepseek-v4-flash:free"
-      - "google/gemma-4-26b-a4b-it:free"
-      - "google/gemma-4-31b-it:free"
-      - "arcee-ai/trinity-large-thinking:free"
-      - "nvidia/nemotron-3-super-120b-a12b:free"
-      - "nvidia/nemotron-3-nano-30b-a3b:free"
-      - "minimax/minimax-m2.5:free"
-      - "qwen/qwen3-next-80b-a3b-instruct:free"
-      - "openai/gpt-oss-120b:free"
-      - "openai/gpt-oss-20b:free"
-      - "qwen/qwen3-coder:free"
-      - "z-ai/glm-4.5-air:free"
-      - "meta-llama/llama-3.3-70b-instruct:free"
-      - "nousresearch/hermes-3-llama-3.1-405b:free"
-
-# ── API Presets Reference ────────────────────────────────────────────
-# Use with --api when creating profiles:
-#
-# LOCAL PRESETS (mode: local):
-#   lmstudio-local    LM Studio native API     http://localhost:1234   auth: $LM_API_TOKEN
-#   ollama-local      Ollama OpenAI-compat     http://localhost:11434  auth: (none)
-#   vllm-local        vLLM OpenAI-compat       http://localhost:8000   auth: $VLLM_API_KEY
-#   llamacpp-local    llama.cpp OpenAI-compat   http://localhost:8080   auth: (none)
-#   generic-local     Any OpenAI-compat        (url required)          auth: $LM_API_TOKEN
-#
-# REMOTE PRESETS (mode: remote / remote-ensemble):
-#   openrouter-remote  OpenRouter              https://openrouter.ai   auth: $OPENROUTER_API_KEY
-#
-# All local backends must support structured output (response_format: json_schema).
-#
-# ── Modes Reference ─────────────────────────────────────────────────
-#   local             Sequential requests to a local server
-#   remote            Parallel requests, single model via OpenRouter
-#   remote-ensemble   Parallel requests, three models, combined report
-#
-# ── Auth Values ──────────────────────────────────────────────────────
-# Auth fields (api_key, api_token) accept either:
-#   $ENV_VAR_NAME     Resolved from process environment at runtime
-#   "direct-value"    Used as-is (no env lookup)
-`;

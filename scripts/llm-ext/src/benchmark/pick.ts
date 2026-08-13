@@ -21,7 +21,7 @@
  */
 
 import { readFileSync, writeFileSync, renameSync as renameSyncCb, existsSync } from "node:fs";
-import { parse as yamlParse, stringify as yamlStringify } from "yaml";
+import { stringify as yamlStringify, parseDocument } from "yaml";
 
 import { registeredTools } from "../model-qualification/registry.js";
 import { DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M } from "../config.js";
@@ -182,43 +182,53 @@ export function renderEnsembleBlock(profileName: string, picks: readonly PickedM
 }
 
 /** Atomic settings.yaml mutation: load YAML → update profile's three
- *  model slots → write to a tmp file → rename over original. The
- *  rest of the YAML (other profiles, `active:`, comments) is preserved
- *  by-key — the YAML library re-emits anything we didn't change.
+ *  model slots → write to a tmp file → rename over original.
  *  Returns the old values so the caller can show a diff. */
 export interface YamlMutationResult {
   oldEnsemble: { model: string; second_model?: string; third_model?: string };
   newEnsemble: { model: string; second_model?: string; third_model?: string };
 }
 
-/** The narrow shape every writer below mutates. */
+/** The narrow shape every writer below reads from (a plain snapshot — never
+ *  mutated directly; mutations go through `handle.doc.setIn`/`deleteIn`). */
 type SettingsRoot = { active?: string; profiles?: Record<string, Record<string, unknown>> };
 
 /**
+ * A loaded settings.yaml: the live `yaml` Document (edited in place via
+ * `setIn`/`deleteIn` so comments, blank lines and anchors survive) plus a
+ * plain-object snapshot (`root`) used only for READING old values / running
+ * guards. Never mutate `root` directly — it is not what gets written.
+ */
+export interface SettingsHandle {
+  doc: ReturnType<typeof parseDocument>;
+  root: SettingsRoot;
+}
+
+/**
  * Shared load+validate step for EVERY settings writer in this file: existsSync
- * guard → yamlParse with a clear error → top-level-object guard → profiles-map
+ * guard → parseDocument with a clear error → top-level-object guard → profiles-map
  * guard. One spelling of these four errors, so a new writer cannot drift from
  * the established (and tested) messages.
  */
-function loadSettingsRoot(settingsPath: string): SettingsRoot {
+function loadSettingsRoot(settingsPath: string): SettingsHandle {
   if (!existsSync(settingsPath)) {
     throw new Error(`settings.yaml not found at ${settingsPath}`);
   }
   const raw = readFileSync(settingsPath, "utf-8");
-  let doc: unknown;
-  try {
-    doc = yamlParse(raw);
-  } catch (err) {
-    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${(err as Error).message}`, { cause: err });
+  const doc = parseDocument(raw);
+  if (doc.errors.length > 0) {
+    throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${doc.errors[0].message}`, {
+      cause: doc.errors[0],
+    });
   }
-  if (typeof doc !== "object" || doc === null) {
+  const root = doc.toJS() as SettingsRoot;
+  if (typeof root !== "object" || root === null) {
     throw new Error(`settings.yaml at ${settingsPath} must be a YAML object at the top level.`);
   }
-  const root = doc as SettingsRoot;
   if (!root.profiles || typeof root.profiles !== "object") {
     throw new Error(`settings.yaml at ${settingsPath} missing 'profiles' map.`);
   }
-  return root;
+  return { doc, root };
 }
 
 /**
@@ -230,28 +240,30 @@ function loadSettingsRoot(settingsPath: string): SettingsRoot {
 function loadProfileForMutation(
   settingsPath: string,
   profileName: string,
-): { root: SettingsRoot; profile: Record<string, unknown> } {
-  const root = loadSettingsRoot(settingsPath);
-  const profile = root.profiles![profileName];
+): { handle: SettingsHandle; profile: Record<string, unknown> } {
+  const handle = loadSettingsRoot(settingsPath);
+  const profile = handle.root.profiles![profileName];
   if (!profile || typeof profile !== "object") {
     throw new Error(
       `settings.yaml at ${settingsPath} has no profile named '${profileName}'. ` +
-        `Existing profiles: ${Object.keys(root.profiles!).join(", ")}.`,
+        `Existing profiles: ${Object.keys(handle.root.profiles!).join(", ")}.`,
     );
   }
-  return { root, profile };
+  return { handle, profile };
 }
 
 /**
- * Shared atomic write: serialize → tmp file → rename over the original. rename is
+ * Shared atomic write: serialize the live Document (edited in place via
+ * `setIn`/`deleteIn`, so every comment, blank line and anchor the operator
+ * wrote by hand survives) → tmp file → rename over the original. rename is
  * atomic on POSIX; on Windows it is atomic too when both paths sit on the same
  * volume — which they always do here (the tmp lives in the target's own dir). A
  * crash mid-write therefore leaves the ORIGINAL settings.yaml intact, never a
  * half-written one: these writers run unattended (CLI/cron), so a torn config file
  * would silently break every later tool call.
  */
-function writeSettingsAtomic(settingsPath: string, root: SettingsRoot): void {
-  const newRaw = yamlStringify(root, { indent: 2 });
+function writeSettingsAtomic(settingsPath: string, handle: SettingsHandle): void {
+  const newRaw = handle.doc.toString();
   const tmp = settingsPath + ".tmp." + process.pid;
   writeFileSync(tmp, newRaw, "utf-8");
   renameSyncCb(tmp, settingsPath);
@@ -263,22 +275,23 @@ export function applyPicksToSettings(
   picks: readonly PickedModel[],
 ): YamlMutationResult {
   if (picks.length < 1) throw new Error("applyPicksToSettings: need at least one pick");
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const oldEnsemble: YamlMutationResult["oldEnsemble"] = {
     model: typeof profile.model === "string" ? profile.model : "",
     ...(typeof profile.second_model === "string" ? { second_model: profile.second_model } : {}),
     ...(typeof profile.third_model === "string" ? { third_model: profile.third_model } : {}),
   };
-  // Update in-place; preserve every other key (mode, api, api_key, url,
-  // timeout, etc.).
-  profile.mode = picks.length >= 2 ? "remote-ensemble" : "remote";
-  profile.model = picks[0].modelId;
-  if (picks.length >= 2) profile.second_model = picks[1].modelId;
-  else delete profile.second_model;
-  if (picks.length >= 3) profile.third_model = picks[2].modelId;
-  else delete profile.third_model;
+  // Update in-place via the live Document; preserve every other key (mode,
+  // api, api_key, url, timeout, etc.) AND every comment/blank line/anchor.
+  const path = ["profiles", profileName];
+  handle.doc.setIn([...path, "mode"], picks.length >= 2 ? "remote-ensemble" : "remote");
+  handle.doc.setIn([...path, "model"], picks[0].modelId);
+  if (picks.length >= 2) handle.doc.setIn([...path, "second_model"], picks[1].modelId);
+  else handle.doc.deleteIn([...path, "second_model"]);
+  if (picks.length >= 3) handle.doc.setIn([...path, "third_model"], picks[2].modelId);
+  else handle.doc.deleteIn([...path, "third_model"]);
 
-  writeSettingsAtomic(settingsPath, root);
+  writeSettingsAtomic(settingsPath, handle);
   return {
     oldEnsemble,
     newEnsemble: {
@@ -335,10 +348,10 @@ export function applyToolModelToSettings(
         `Registered LLM-using tools: ${known.join(", ")}.`,
     );
   }
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   // Read the existing tool_models map defensively: a malformed value (null, a
   // scalar, an array) must NOT crash — treat it as empty so we still write a
-  // valid map. Preserve every existing tool entry by spreading the old object.
+  // valid map.
   const existing = profile.tool_models;
   const oldToolModels: Record<string, string> =
     existing && typeof existing === "object" && !Array.isArray(existing)
@@ -346,9 +359,16 @@ export function applyToolModelToSettings(
       : {};
   const oldModelId = typeof oldToolModels[tool] === "string" ? oldToolModels[tool] : "";
 
-  profile.tool_models = { ...oldToolModels, [tool]: modelId };
+  // Written as one setIn on the whole `tool_models` map (not a nested setIn
+  // on just `tool`): a nested setIn would throw when the existing value is
+  // malformed (a scalar/array, not a map) instead of the defensive "treat as
+  // empty" behavior above — so replace the whole map with the merged result,
+  // same semantics the old plain-object writer had (`{...oldToolModels,
+  // [tool]: modelId}`). Every other profile key / top-level comment is still
+  // preserved via the Document API.
+  handle.doc.setIn(["profiles", profileName, "tool_models"], { ...oldToolModels, [tool]: modelId });
 
-  writeSettingsAtomic(settingsPath, root);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, tool, oldModelId, newModelId: modelId };
 }
 
@@ -410,15 +430,15 @@ export function applyFreePoolToSettings(
     );
   }
   const newPool = [...new Set(modelIds)];
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   const existing = profile.free_models;
   const oldPool: string[] = Array.isArray(existing)
     ? existing.filter((v): v is string => typeof v === "string")
     : [];
 
-  profile.free_models = newPool;
+  handle.doc.setIn(["profiles", profileName, "free_models"], newPool);
 
-  writeSettingsAtomic(settingsPath, root);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, oldPool, newPool };
 }
 
@@ -469,7 +489,7 @@ export function applyEnsembleSlotToSettings(
       `applyEnsembleSlotToSettings: unknown slot '${slot}'. Valid slots: ${ENSEMBLE_SLOTS.join(", ")}.`,
     );
   }
-  const { root, profile } = loadProfileForMutation(settingsPath, profileName);
+  const { handle, profile } = loadProfileForMutation(settingsPath, profileName);
   if (slot !== "model" && profile.mode !== "remote-ensemble") {
     throw new Error(
       `applyEnsembleSlotToSettings: profile '${profileName}' has mode '${String(profile.mode)}' — ` +
@@ -478,9 +498,9 @@ export function applyEnsembleSlotToSettings(
     );
   }
   const oldModelId = typeof profile[slot] === "string" ? (profile[slot] as string) : "";
-  profile[slot] = modelId;
+  handle.doc.setIn(["profiles", profileName, slot], modelId);
 
-  writeSettingsAtomic(settingsPath, root);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, slot, oldModelId, newModelId: modelId };
 }
 
@@ -515,12 +535,12 @@ export function addProfileToSettings(
   if (typeof profileName !== "string" || profileName.length === 0) {
     throw new Error("addProfileToSettings: profileName must be a non-empty string");
   }
-  const root = loadSettingsRoot(settingsPath);
-  const created = !(profileName in root.profiles!);
-  root.profiles![profileName] = profile;
-  if (opts.setActive) root.active = profileName;
+  const handle = loadSettingsRoot(settingsPath);
+  const created = !(profileName in handle.root.profiles!);
+  handle.doc.setIn(["profiles", profileName], profile);
+  if (opts.setActive) handle.doc.setIn(["active"], profileName);
 
-  writeSettingsAtomic(settingsPath, root);
+  writeSettingsAtomic(settingsPath, handle);
   return { profileName, created, activated: opts.setActive === true };
 }
 
