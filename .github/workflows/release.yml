@@ -88,6 +88,12 @@ jobs:
           text_exit=$?
           set -e
           cat "$REPORT_TXT"
+          # Publish-side copy: SHA256SUMS, the release upload and the provenance
+          # attestation all expect ./validation-report.txt. Copying it back AFTER
+          # the text scan has finished restores that asset without putting a
+          # half-written file under the scanner — unlike validation.json, this
+          # name is gitignored, so it was never the finding that failed the gate.
+          cp "$REPORT_TXT" validation-report.txt
           if [ "$text_exit" -eq 0 ]; then
             echo "Validation passed (clean)"
             exit 0
