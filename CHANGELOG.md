@@ -1,6 +1,24 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.4.1] - 2026-08-13
+
+### Documentation
+
+- Docs(session-summary): document the new flags and correct a stale default
+
+The README's flag table listed neither --concurrency nor --chunk-timeout-s,
+both of which have shipped for a while, and neither of the two flags added
+in v13.4.0. It also stated the chunk budget default as min(50000, window);
+the driver has used 25_000 since the map phase became concurrent, where a
+smaller chunk is strictly better.
+
+Adds the missing five rows, a paragraph on what to do when the summary must
+exist no matter what, and a worked unattended example. docs/ and commands/
+carry no session-summary references, so nothing there needed changing; the
+--help text and the compact-session skill were updated with the code.
+
+
 ## [13.4.0] - 2026-08-13
 
 ### Added
