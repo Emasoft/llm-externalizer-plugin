@@ -18,7 +18,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, copyFileSync, statSync, readFileSync, symlinkSync, lstatSync, rmSync, cpSync } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
@@ -64,6 +64,42 @@ function pickPackageManager() {
     }
   }
   return null;
+}
+
+// Where the native deps live when Claude Code did not tell us.
+//
+// CLAUDE_PLUGIN_DATA is exported by Claude Code when IT launches the plugin. It
+// is NOT set when a user (or a skill, or a script) runs `llm-ext` straight from
+// a shell — and that used to be a hard FATAL telling them to set an environment
+// variable they had no reason to know about. The data dir is not a secret,
+// though: it is a fixed function of where this launcher sits.
+//
+//   <root>/plugins/cache/<marketplace>/<plugin>/<version>/scripts/llm-ext   <- SCRIPT_DIR
+//   <root>/plugins/data/<plugin>-<marketplace>                              <- the data dir
+//
+// So derive it. Returns null when the layout does not match (a dev checkout, a
+// vendored copy), because guessing a write location outside the known layout is
+// worse than saying we don't know.
+function deriveDataDirFromLayout() {
+  const versionDir = resolve(SCRIPT_DIR, "..", "..");
+  const pluginDir = resolve(versionDir, "..");
+  const marketplaceDir = resolve(pluginDir, "..");
+  const cacheDir = resolve(marketplaceDir, "..");
+  const pluginsRoot = resolve(cacheDir, "..");
+  if (basename(cacheDir) !== "cache" || basename(pluginsRoot) !== "plugins") return null;
+  const plugin = basename(pluginDir);
+  const marketplace = basename(marketplaceDir);
+  if (!plugin || !marketplace) return null;
+  return join(pluginsRoot, "data", `${plugin}-${marketplace}`);
+}
+
+/** True when the data dir already carries a usable better-sqlite3. A version
+ *  bump gives the plugin a fresh cache dir with no node_modules, but the DATA
+ *  dir is shared across versions — so the deps are usually already there and
+ *  only the link is missing. Re-running the package manager in that case costs
+ *  ~40s of network for nothing. */
+function dataDirHasDeps(dataDir) {
+  return existsSync(join(dataDir, "node_modules", "better-sqlite3", "package.json"));
 }
 
 function installDeps(dataDir) {
@@ -235,23 +271,34 @@ let installed = false;
 try {
   await tryImport();
 } catch (err) {
-  const dataDir = process.env.CLAUDE_PLUGIN_DATA;
+  const dataDir = process.env.CLAUDE_PLUGIN_DATA || deriveDataDirFromLayout();
   if (!dataDir) {
     process.stderr.write(
-      `[llm-externalizer] FATAL: native module 'better-sqlite3' is missing AND CLAUDE_PLUGIN_DATA is unset.\n` +
-        `The launcher cannot self-install without a persistent data directory.\n` +
-        `Set CLAUDE_PLUGIN_DATA or reinstall the plugin via Claude Code.\n\n` +
+      `[llm-externalizer] FATAL: native module 'better-sqlite3' is missing, CLAUDE_PLUGIN_DATA is unset,\n` +
+        `and this launcher is not running from a plugin cache layout, so its data directory\n` +
+        `cannot be derived. Set CLAUDE_PLUGIN_DATA, or run \`npm install\` in ${SCRIPT_DIR}.\n\n` +
         `Original error: ${err instanceof Error ? err.message : String(err)}\n`,
     );
     process.exit(1);
   }
+  if (!process.env.CLAUDE_PLUGIN_DATA) {
+    log(`CLAUDE_PLUGIN_DATA unset — using the derived data dir ${dataDir}`);
+  }
 
   // Self-install path. The previous SessionStart-bash-hook architecture was
   // replaced with this in-launcher path so the install works on Windows too.
-  log("better-sqlite3 not found — running one-time self-install...");
   try {
-    installDeps(dataDir);
-    linkNodeModules(dataDir);
+    if (dataDirHasDeps(dataDir)) {
+      // The deps are already in the data dir and only this version's link is
+      // missing — the normal case right after a plugin upgrade, since the cache
+      // dir is per-version and the data dir is not.
+      log("native deps already present in the data dir — linking them into this version.");
+      linkNodeModules(dataDir);
+    } else {
+      log("better-sqlite3 not found — running one-time self-install...");
+      installDeps(dataDir);
+      linkNodeModules(dataDir);
+    }
     installed = true;
   } catch (installErr) {
     process.stderr.write(
