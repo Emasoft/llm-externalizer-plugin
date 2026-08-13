@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.4.0] - 2026-08-13
+
+### Added
+
+- Feat(session-summary): --until-done, --max-retries-per-chunk, and the loop in the skill
+
+Compaction was checkpoint-and-stop by design: a chunk got 3 attempts on a
+model, a delisted or quota-capped model was demoted to the next ranked free
+one, and when those ran out the command FAILED with a resumable checkpoint
+and a "re-run once the limit clears" message. That is the right default for
+an interactive run - it reports the problem instead of sitting on it - but
+it means an unattended compaction does not reliably produce a summary, and
+the retry budget was not reachable from the CLI at all.
+
+Three changes, smallest first:
+
+- `--max-retries-per-chunk N` exposes the driver's existing
+  maxRetriesPerChunk (default 2, i.e. 3 attempts). It covers provider
+  hiccups and, on concurrent runs, rate-limit backoff. It deliberately does
+  NOT cover a delisted or quota-exhausted model: that is a fallback signal,
+  not a retry signal, and demotion already handles it.
+
+- `--until-done` retries the WHOLE compaction until it succeeds. This is
+  cheap and correct only because of the checkpoint: each pass keeps every
+  chunk that landed and redoes only what did not, so passes converge instead
+  of repeating work. Re-entering summarizeSession rather than looping inside
+  it also re-resolves the model list, so a model that was quota-capped last
+  pass is picked up again once its quota resets. Argument errors still fail
+  immediately - the flag retries the compaction, not a typo in a path.
+
+- The skill documents both, plus the outer `until ...; do sleep 60; done`
+  shell loop for the case where the process itself may be killed. The flag
+  covers failures inside one invocation; the loop covers losing the
+  invocation.
+
+The backoff policy is its own module with its own tests rather than four
+lines inline, because it is the part that can fail invisibly: the loop is
+unbounded, so a zero-length wait busy-loops against the very endpoint that
+rate-limited us, and the UTC-midnight arithmetic either stalls a full day or
+does not wait at all if it is wrong. 30s doubling to a 15-minute cap; a
+failure that names an exhausted daily quota waits for the 00:00 UTC reset
+instead, since that is when the free tier actually returns, still capped per
+sleep so a run stays observable and can pick up an earlier recovery.
+
+15 tests: midnight exactly (a full day, never zero), month and year
+boundaries, the doubling curve, the cap, an attempt count large enough to
+overflow 2**n to Infinity (setTimeout treats Infinity as 1ms and busy-loops),
+and the quota-vs-transient classification in both directions.
+
+
 ## [13.3.8] - 2026-08-13
 
 ### Fixed
