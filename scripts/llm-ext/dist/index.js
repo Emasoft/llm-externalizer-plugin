@@ -255303,14 +255303,12 @@ import {
   readFileSync as readFileSync29,
   writeFileSync as writeFileSync21
 } from "node:fs";
-import { homedir as homedir6 } from "node:os";
 import { dirname as dirname13, join as join30, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
-var LLM_EXT_HOME = join30(homedir6(), ".llm-externalizer");
-var BENCH_CACHE = join30(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join30(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join30(LLM_EXT_HOME, "free-pool-bench.log");
+var benchCachePath = () => join30(getConfigDir(), "benchmark-results.json");
+var benchLockPath = () => join30(getConfigDir(), "free-pool-bench.lock");
+var benchLogPath = () => join30(getConfigDir(), "free-pool-bench.log");
 var DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 function resolveBenchmarkScriptPath() {
   const here = dirname13(fileURLToPath8(import.meta.url));
@@ -255319,7 +255317,7 @@ function resolveBenchmarkScriptPath() {
   const fromSrc = pathResolve(here, "..", "dist", "benchmark.js");
   return fromSrc;
 }
-function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
+function benchCacheHasFreeEntries(cachePath6 = benchCachePath()) {
   try {
     const raw = readFileSync29(cachePath6, "utf-8");
     const data = JSON.parse(raw);
@@ -255331,7 +255329,7 @@ function benchCacheHasFreeEntries(cachePath6 = BENCH_CACHE) {
     return false;
   }
 }
-function lockHoldsLivePid(lockPath = BENCH_LOCK) {
+function lockHoldsLivePid(lockPath = benchLockPath()) {
   if (!existsSync24(lockPath)) return false;
   try {
     const pid = parseInt(readFileSync29(lockPath, "utf-8").trim(), 10);
@@ -255353,9 +255351,9 @@ function maybeTriggerFreePoolBench(opts) {
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath: cachePath6 = BENCH_CACHE,
-    lockPath = BENCH_LOCK,
-    logPath = BENCH_LOG,
+    cachePath: cachePath6 = benchCachePath(),
+    lockPath = benchLockPath(),
+    logPath = benchLogPath(),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
     force = false
@@ -255396,7 +255394,7 @@ function maybeTriggerFreePoolBench(opts) {
     };
   }
   try {
-    mkdirSync23(LLM_EXT_HOME, { recursive: true });
+    mkdirSync23(getConfigDir(), { recursive: true });
   } catch {
   }
   let logFd;

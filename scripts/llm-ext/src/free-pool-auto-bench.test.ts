@@ -14,9 +14,10 @@ import {
   rmSync,
   existsSync,
   readFileSync,
+  realpathSync,
 } from "node:fs";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { maybeTriggerFreePoolBench } from "./free-pool-auto-bench";
 
 let dir: string;
@@ -209,6 +210,70 @@ describe("maybeTriggerFreePoolBench — spawn", () => {
       reason: null,
       pid: expect.any(Number),
     });
+  });
+});
+
+/**
+ * The DEFAULT path resolution — deliberately the one thing every other test
+ * here bypasses by injecting cachePath/lockPath/logPath.
+ *
+ * That injection is what let a real bug live: the module built its paths from
+ * join(homedir(), ".llm-externalizer") at import time, so LLM_EXT_CONFIG_DIR
+ * was honoured for settings.yaml but IGNORED for the bench cache, lock and
+ * log. A run pointed at a scratch/CI config dir still took the lock and wrote
+ * the log in the user's REAL config dir — observed in the wild spawning a
+ * child that read the REAL settings.yaml and tried to benchmark paid models
+ * (only the allow_paid_models master switch stopped it). getConfigDir() also
+ * resolves symlinks in the deepest existing ancestor, so the constant was
+ * skipping a security control too.
+ *
+ * These tests omit the path opts ON PURPOSE. A test that injects paths cannot
+ * observe this class of bug at all.
+ */
+describe("maybeTriggerFreePoolBench — default paths honour LLM_EXT_CONFIG_DIR", () => {
+  let prevConfigDir: string | undefined;
+  let cfgDir: string;
+
+  beforeEach(() => {
+    // NOT tmpdir(): on macOS that is /var/folders/..., and getConfigDir()
+    // rejects any config dir outside $HOME or /private/tmp (its own guard
+    // against a planted path). /tmp realpaths to /private/tmp, so it is the
+    // one scratch location a legitimate config dir may live in.
+    cfgDir = mkdtempSync("/tmp/llm-ext-autobench-cfg-");
+    prevConfigDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfgDir;
+  });
+
+  afterEach(() => {
+    if (prevConfigDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
+    try {
+      rmSync(cfgDir, { recursive: true, force: true });
+    } catch {
+      /* race with the detached child closing fds — harmless on cleanup */
+    }
+  });
+
+  it("writes the lock and log under LLM_EXT_CONFIG_DIR, never under $HOME", () => {
+    const r = maybeTriggerFreePoolBench({
+      activeProfile: "remote-free-ensemble",
+      // cachePath / lockPath / logPath deliberately OMITTED — the whole point.
+      scriptPath: stubScript,
+      log: (m: string) => log.push(m),
+      env: {} as NodeJS.ProcessEnv,
+      freeOnlyActive: true,
+      freeOnlyWasOn: false,
+    });
+
+    expect(r.outcome).toBe("spawned");
+    expect(existsSync(join(cfgDir, "free-pool-bench.lock"))).toBe(true);
+
+    // The announced log path must be INSIDE the configured dir. realpath is
+    // required: getConfigDir() resolves /tmp -> /private/tmp on macOS, so a
+    // raw compare against cfgDir would fail on a CORRECT implementation.
+    const announced = log.join("");
+    expect(announced).toContain(realpathSync(cfgDir));
+    expect(announced).not.toContain(join(homedir(), ".llm-externalizer"));
   });
 });
 

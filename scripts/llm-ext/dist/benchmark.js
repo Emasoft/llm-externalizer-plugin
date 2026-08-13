@@ -229941,14 +229941,9 @@ import {
   readFileSync as readFileSync23,
   writeFileSync as writeFileSync15
 } from "node:fs";
-import { homedir as homedir3 } from "node:os";
 import { dirname as dirname7, join as join23, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath6 } from "node:url";
-var LLM_EXT_HOME = join23(homedir3(), ".llm-externalizer");
-var BENCH_CACHE = join23(LLM_EXT_HOME, "benchmark-results.json");
-var BENCH_LOCK = join23(LLM_EXT_HOME, "free-pool-bench.lock");
-var BENCH_LOG = join23(LLM_EXT_HOME, "free-pool-bench.log");
 
 // src/model-reconcile.ts
 function toCatalogPriceSnapshot(cat) {

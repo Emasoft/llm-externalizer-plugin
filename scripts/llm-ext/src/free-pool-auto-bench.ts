@@ -22,15 +22,33 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { getConfigDir } from "./config.js";
 
-const LLM_EXT_HOME = join(homedir(), ".llm-externalizer");
-const BENCH_CACHE = join(LLM_EXT_HOME, "benchmark-results.json");
-const BENCH_LOCK = join(LLM_EXT_HOME, "free-pool-bench.lock");
-const BENCH_LOG = join(LLM_EXT_HOME, "free-pool-bench.log");
+// Resolved PER CALL through getConfigDir(), never as import-time constants
+// built from homedir(). Two things broke when these were constants:
+//
+//   1. LLM_EXT_CONFIG_DIR was IGNORED here while settings.yaml honoured it, so
+//      a run pointed at a scratch/CI config dir still read the cache, took the
+//      lock, and wrote the log in the user's REAL ~/.llm-externalizer. The
+//      "isolated" run therefore shared one lock with the real one and read
+//      real benchmark results. Reproduced: a scratch-dir run spawned a child
+//      that read the REAL settings.yaml and tried to benchmark the user's paid
+//      models — only the allow_paid_models master switch stopped it.
+//   2. getConfigDir() also resolves symlinks in the deepest existing ancestor
+//      so mkdirSync(recursive) cannot be walked out of the allowed path via a
+//      planted symlink. A plain join(homedir(), ...) skips that check, so this
+//      module was bypassing a security control, not just an env var.
+//
+// Functions, not constants, because the env var must be read when the path is
+// USED — a module-level call would freeze whatever the env held at first
+// import, which is exactly the bug in a slower disguise (tests that set the
+// var per-case would still collide).
+const benchCachePath = (): string => join(getConfigDir(), "benchmark-results.json");
+const benchLockPath = (): string => join(getConfigDir(), "free-pool-bench.lock");
+const benchLogPath = (): string => join(getConfigDir(), "free-pool-bench.log");
 const DISABLE_ENV = "LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH";
 
 /** Public so tests can override; default looks up the bundled benchmark.js
@@ -52,7 +70,7 @@ export function resolveBenchmarkScriptPath(): string {
 
 /** True iff the cached benchmark JSON contains at least one `:free` model
  *  in its `results[]` array. Missing/unreadable cache returns false. */
-function benchCacheHasFreeEntries(cachePath: string = BENCH_CACHE): boolean {
+function benchCacheHasFreeEntries(cachePath: string = benchCachePath()): boolean {
   try {
     const raw = readFileSync(cachePath, "utf-8");
     const data = JSON.parse(raw) as { results?: Array<{ modelId?: string }> };
@@ -67,7 +85,7 @@ function benchCacheHasFreeEntries(cachePath: string = BENCH_CACHE): boolean {
 
 /** True iff a lock file holds a still-alive PID. Stale locks (PID gone)
  *  return false AND the caller should clear the lock. */
-function lockHoldsLivePid(lockPath: string = BENCH_LOCK): boolean {
+function lockHoldsLivePid(lockPath: string = benchLockPath()): boolean {
   if (!existsSync(lockPath)) return false;
   try {
     const pid = parseInt(readFileSync(lockPath, "utf-8").trim(), 10);
@@ -136,7 +154,7 @@ export interface TriggerResult {
  *      → not a *transition*, just a re-resolve.
  *
  * Otherwise: spawn a detached `node <benchmark.js> --bench-free-pool`,
- * write the child PID to the lock file, log to BENCH_LOG, return.
+ * write the child PID to the lock file, log to benchLogPath(), return.
  */
 export function maybeTriggerFreePoolBench(
   opts: MaybeTriggerOpts,
@@ -146,9 +164,9 @@ export function maybeTriggerFreePoolBench(
     freeOnlyActive,
     freeOnlyWasOn,
     log,
-    cachePath = BENCH_CACHE,
-    lockPath = BENCH_LOCK,
-    logPath = BENCH_LOG,
+    cachePath = benchCachePath(),
+    lockPath = benchLockPath(),
+    logPath = benchLogPath(),
     scriptPath = resolveBenchmarkScriptPath(),
     env = process.env,
     force = false,
@@ -194,10 +212,10 @@ export function maybeTriggerFreePoolBench(
     };
   }
 
-  // Ensure the home dir exists (first-run case where the user never
+  // Ensure the config dir exists (first-run case where the user never
   // touched settings.yaml manually).
   try {
-    mkdirSync(LLM_EXT_HOME, { recursive: true });
+    mkdirSync(getConfigDir(), { recursive: true });
   } catch {
     /* dir already exists — fine */
   }
