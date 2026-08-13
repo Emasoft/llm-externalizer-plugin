@@ -1,6 +1,97 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.7] - 2026-08-13
+
+### Fixed
+
+- Fix(launcher): install native deps without being told where the data dir is
+
+Running `llm-ext` from a shell died with "FATAL: native module
+'better-sqlite3' is missing AND CLAUDE_PLUGIN_DATA is unset", telling the
+user to set an environment variable they had no reason to know about.
+CLAUDE_PLUGIN_DATA is exported by Claude Code when IT launches the plugin;
+a user, a skill, or a script invoking the CLI directly has no such export,
+so first use outside Claude Code always failed.
+
+The data directory was never actually unknown. It is a fixed function of
+where the launcher sits:
+
+  <root>/plugins/cache/<marketplace>/<plugin>/<version>/scripts/llm-ext
+  <root>/plugins/data/<plugin>-<marketplace>
+
+so it is now derived from the launcher's own path when the variable is
+absent, and the self-install proceeds. Derivation is refused, with the
+original hard failure, when the surrounding layout is not a plugin cache -
+guessing a write location outside the known layout is worse than saying we
+do not know.
+
+Second fix in the same path: the data dir is shared across versions while
+the cache dir is per-version, so right after an upgrade the deps are
+already installed and only this version's link is missing. The launcher
+now checks for better-sqlite3 in the data dir and links instead of
+re-running the package manager.
+
+Verified against a replica of the real cache layout, all with
+CLAUDE_PLUGIN_DATA unset: a cold run derives the data dir, installs and
+boots; a subsequent fresh version dir sharing that data dir skips the
+install and boots in 0.12s instead of ~40s; a non-plugin layout fails with
+the actionable message. The derivation was also checked against this
+machine's real install path and reproduces its existing data dir exactly.
+
+
+### Performance
+
+- Perf(session-summary): race a one-chunk compaction across the top-K models
+
+A transcript that prunes down to a single chunk got the worst deal in the
+module. Auto-concurrency resolves to min(chunkCount, ...) = 1, so the
+sequential branch runs - and that branch does not hedge. Fan-out needs
+chunks.length > 1 to engage, so it never engages either. One model, one
+attempt, no mitigation, against a free tier whose measured per-request
+latency spans 91s to 1478s. A real compaction of this exact shape took
+340.8 seconds for its single chunk.
+
+The intuitive fix - split the chunk up and parallelize - makes it worse,
+and this repo already recorded the measurement: a 4x smaller chunk was no
+faster and produced 80 aborts instead of 13, because latency here is
+dominated by queueing, not by how much the model generates. Splitting one
+chunk into N turns the map phase into the MAX of N draws from a heavy
+tail. Racing K copies of the SAME chunk turns it into the MIN of K draws.
+
+So a one-chunk run now dispatches to the same top-K models fan-out would
+have used and takes the first usable answer. Cost is unchanged at $0
+(every racer is a :free model, already gated by assertFreeOnlyModel), and
+rate safety is not close to the line: K distinct models, one request each,
+against a per-model bucket measured to absorb 32 concurrent.
+
+What the design deliberately preserves:
+
+- The chunk budget already fits every racer. Under fanoutActive the budget
+  was computed from the MIN window across these same K models, so no racer
+  can be handed a chunk its window cannot take.
+- Only the winner commits. Losers are dropped exactly as a hedge loser is,
+  and writeChunkSummaryOnce is the backstop when one settles late.
+- A loser never mutates the active model and never runs applyTransition. A
+  bystander that 404s or overflows says nothing about the model the run is
+  pinned to; treating it as a fallback signal would rotate the active model
+  on someone else's failure.
+- All-K failure falls through to the untouched sequential path, which does
+  the ordinary transition and exhaustion handling. The pessimistic case is
+  the old behaviour plus K-1 wasted free calls.
+- concurrency: 1 - the library default and every non-CLI caller - is
+  byte-identical. The race is gated on fanoutActive.
+
+ChunkEvent now carries raceSize and raceWinnerModel on "done". The race's
+premise is that distinct models sit in different queues, and that premise
+is unproven for every model but the primary, so the winner has to be
+observable or nobody can tell whether racing bought anything.
+
+Four tests: the fast model wins while the primary is still hanging; a
+late-settling loser never overwrites the committed summary; a single
+eligible model makes exactly one call; concurrency: 1 never races.
+
+
 ## [13.3.6] - 2026-08-13
 
 ### Fixed
