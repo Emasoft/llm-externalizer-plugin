@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.3.1] - 2026-08-13
+
+### Fixed
+
+- Fix(free-pool): honour LLM_EXT_CONFIG_DIR in the auto-bench paths
+
+free-pool-auto-bench.ts built its cache/lock/log paths from
+join(homedir(), ".llm-externalizer") as IMPORT-TIME constants, so
+LLM_EXT_CONFIG_DIR was honoured for settings.yaml and ignored here. Two
+consequences, both real:
+
+1. ISOLATION. A run pointed at a scratch or CI config dir still read the
+   cache, took the lock, and wrote the log in the user's REAL config dir.
+   So "isolated" runs shared one lock with the live one and could read real
+   benchmark results. Reproduced while verifying v13.3.0: a scratch-dir run
+   spawned a child that read the REAL settings.yaml and tried to benchmark
+   the user's PAID models. Only the allow_paid_models master switch stopped
+   it ("No API call was made, $0 spent") -- the isolation did not.
+
+2. SECURITY. getConfigDir() resolves symlinks in the deepest existing
+   ancestor so mkdirSync(recursive) cannot be walked outside the allowed
+   path via a planted symlink, and it enforces an allowlist ($HOME or
+   /private/tmp). A bare join(homedir(), ...) skips both. This module was
+   bypassing a control, not merely an env var.
+
+Fixed by resolving through getConfigDir() at CALL time. Functions, not
+constants: a module-level getConfigDir() call would freeze whatever the env
+held at first import -- the same bug in a slower disguise, and still wrong
+for tests that set the var per case.
+
+WHY IT SURVIVED THIS LONG: every existing test in this file injects
+cachePath/lockPath/logPath explicitly, so nothing ever exercised the DEFAULT
+resolution the bug lived in. The new test omits those opts ON PURPOSE. It
+also had to allocate its scratch dir under /tmp rather than tmpdir(), because
+tmpdir() is /var/folders/... on macOS and getConfigDir() correctly refuses
+it -- the guard from (2) doing its job.
+
+Gates: tsc 0 - eslint 0 - build 0 - vitest 2035 passed / 0 failed / 4 skipped.
+Behavioural proof: with LLM_EXT_CONFIG_DIR set, the lock and log now land in
+that dir and the real ~/.llm-externalizer/free-pool-bench.log is untouched
+(48362 bytes before and after); pre-fix, the identical command wrote there.
+
+NOT PUBLISHED -- local commit only, pending review.
+
+
 ## [13.3.0] - 2026-08-13
 
 ### Added
