@@ -3,7 +3,7 @@ name: llm-externalizer-scan-and-fix-serially
 description: Scan a codebase, aggregate findings into one canonical bug list, then fix each bug serially with a sonnet- or opus-model serial-fixer subagent. Use when fixes mutate shared state or bug order matters.
 allowed-tools:
   - Bash
-  - Task
+  - Agent
 argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-secrets] [--text]"
 ---
 
@@ -13,7 +13,7 @@ Two-phase audit that mirrors `/llm-externalizer:llm-externalizer-scan-and-fix` e
 
 - `answer_mode: auto` — `0` (ONE REPORT PER FILE) by default, **automatically upgraded to `1` (ONE REPORT PER GROUP) if the `--file-list` contains `---GROUP:id---` markers**. The aggregator walks every `.md` in the reports dir regardless of mode, so both work; mode 1 is more efficient when logically related files share an audit (the LLM sees them together in one request).
 - `output_dir: $MAIN_ROOT/reports/llm-externalizer/` — required so the aggregator finds every scan report and the bug list shares a directory with them.
-- Never more than **1** concurrent Task call in the fix loop. Bug order matters here — do not parallelise.
+- Never more than **1** concurrent `Agent` call in the fix loop. Bug order matters here — do not parallelise.
 
 **Picking this vs `scan-and-fix`:** parallel fixers race on shared state (imports, types, schemas, shared mocks) and fix bugs in an arbitrary per-file order. This command is for audits where later fixes depend on earlier ones, or where the same shared file is edited by multiple findings. For independent per-file fixes, `/llm-externalizer:llm-externalizer-scan-and-fix` is faster on wall-clock time.
 
@@ -429,13 +429,18 @@ fi
   - In both cases: `prompt: "$BUGS_TO_FIX"` (bare absolute path, nothing else).
 - `USE_CUSTOM=0` → `subagent_type: "general-purpose"`, `prompt: $($H print-fallback-prompt --file "$BUGS_TO_FIX")`.
 
+Never pass `subagent_type: "fork"` — a fork inherits this conversation, and the serial fixer is
+built to start from the bug file alone.
+
 For `i = 1 .. MAX_ITER`, maintain `stuck_streak = 0`, `prev_unfixed`, `prev_total`:
 
 1. `$H count --file "$BUGS_TO_FIX"`. If `UNFIXED=0`, break — all done.
-2. Dispatch ONE `Task` call. Read its return line. If it starts with `[FAILED]`, break and surface the reason.
-3. Append the return line to `$PROGRESS_LOG`:
+2. Dispatch ONE `Agent` call, then **wait for its completion notification** — since Claude Code
+   2.1.232 the dispatch returns an agent id, not the fixer's answer. Take the summary line from
+   the notification's `<result>`. If it starts with `[FAILED]`, break and surface the reason.
+3. Append that result line to `$PROGRESS_LOG`:
    ```bash
-   printf '%s\n' "$TASK_RETURN_LINE" >> "$PROGRESS_LOG"
+   printf '%s\n' "$AGENT_RESULT_LINE" >> "$PROGRESS_LOG"
    ```
 4. Surface progress to the user:
    ```bash
@@ -449,7 +454,7 @@ For `i = 1 .. MAX_ITER`, maintain `stuck_streak = 0`, `prev_unfixed`, `prev_tota
 6. Re-run `$H count`. If `cur_unfixed >= prev_unfixed` AND `cur_total <= prev_total`, `stuck_streak += 1`. If `stuck_streak >= 2`, break ("No progress for 2 iterations, stopping.").
 7. Update `prev_unfixed`, `prev_total` and continue.
 
-**Never exceed 1 concurrent Task call.** Do not rewrite this step to parallelise.
+**Never exceed 1 concurrent `Agent` call.** Do not rewrite this step to parallelise.
 
 ## Step 7 — Final summary
 
@@ -468,9 +473,9 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 
 - Iteration cap: `MAX_ITER = max(UNFIXED_START * 2 + 5, 5)` (computed by `$H count`).
 - Stuck detection: 2 consecutive iterations with no progress → break.
-- Hard stop on `[FAILED] ...` return from a subagent.
-- Zero parent-conversation inheritance (each Task spawn is fresh; user/project CLAUDE.md load the same way they did under `claude -p`).
-- No background processes. Ending the parent session stops the loop cleanly between iterations.
+- Hard stop on a `[FAILED] ...` result from a subagent.
+- Zero parent-conversation inheritance (each `Agent` spawn is fresh; user/project CLAUDE.md load the same way they did under `claude -p`). This is why `subagent_type: "fork"` is forbidden here: a fork would inherit the whole conversation.
+- Each fixer DOES run as a background agent (Claude Code 2.1.232), but the loop is still serial: it dispatches one and waits for that agent's completion notification before the next iteration. Ending the parent session between iterations stops the loop cleanly; ending it while a fixer is mid-flight abandons that fixer's turn, and any edits it had already written to disk stay written.
 - No commits.
 - All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.fix-found-bugs.*` prefix.
 
@@ -478,7 +483,7 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 
 This command is multi-agent orchestration with serial scheduling: scan with one CLI batch, aggregate findings into a canonical bug list, then dispatch one serial-fixer subagent per bug in a loop. It shares the multi-agent orchestration shape with `/llm-externalizer:llm-externalizer-scan-and-fix`, differing only in serial-vs-parallel scheduling — neither shape is a single callable unit because both compose CLI commands with N subagent dispatches across multiple turns.
 
-Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. A single CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. A single CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Agent tool), so this capability is inherently slash-only.
 
 ## Error handling
 

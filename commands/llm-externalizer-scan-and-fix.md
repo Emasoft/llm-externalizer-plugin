@@ -3,7 +3,7 @@ name: llm-externalizer-scan-and-fix
 description: Two-stage codebase audit. LLM Externalizer scan produces one report per file; parallel sonnet- or opus-model fixer subagents (≤15 concurrent) verify and fix each finding. Orchestrator never reads scan or fixer content — only report paths.
 allowed-tools:
   - Bash
-  - Task
+  - Agent
 argument-hint: "[target] [--file-list path] [--instructions path] [--specs path] [--free] [--no-secrets] [--text]"
 ---
 
@@ -354,7 +354,7 @@ Do NOT use `AskUserQuestion` here — checkpointing is always cheap and always s
 
 ## Step 4b — Pick the fixer model (auto-route big files to Opus)
 
-Per the per-file invariant: **one fixer agent handles exactly one report file** (= one source file's worth of findings). Never assign multiple reports to the same agent invocation — that's why Step 4c batches 15 separate `Task` calls rather than passing a list to one agent.
+Per the per-file invariant: **one fixer agent handles exactly one report file** (= one source file's worth of findings). Never assign multiple reports to the same agent invocation — that's why Step 4c batches 15 separate `Agent` calls rather than passing a list to one agent.
 
 Default to Sonnet. Promote individual reports to Opus when EITHER (a) the source file is large (>1000 lines or >50 KB) or (b) the report carries many findings (>5 `[[FINDING]]` blocks). This is per-report routing — a 250-file scan typically ends up with a mix of Sonnet and Opus subagents.
 
@@ -414,18 +414,25 @@ sed -n '16,30p' "$VALIDATED"
 # … and so on until TOTAL
 ```
 
-For every path that batch returns, call `agent_for_report "$path"` (Step 4b) to pick the right fixer variant per-report, then spawn ONE subagent of that variant via the `Task` tool. The prompt is EXACTLY the absolute report path (one line, nothing else). **One agent = one report = one source file.** Never list multiple reports in a single agent's prompt.
+For every path that batch returns, call `agent_for_report "$path"` (Step 4b) to pick the right fixer variant per-report, then spawn ONE subagent of that variant via the `Agent` tool. The prompt is EXACTLY the absolute report path (one line, nothing else). **One agent = one report = one source file.** Never list multiple reports in a single agent's prompt.
 
 Force-Opus override: if the env var `LLM_EXT_FORCE_OPUS=1` is set, every report routes to the Opus variant regardless of the per-file size check. Useful for high-stakes scans (production code, security audits) where the user wants maximum reasoning depth on every file.
 
 Batch rule:
 
-- **Up to 15 Task calls in a single assistant message** → they run concurrently.
-- If the batch size is > 15, emit 15 per message and wait for the batch to finish before sending the next. NEVER exceed 15 in flight at once.
-- Each `Task` call uses one of these two literal `subagent_type` strings (decided per-report by `agent_for_report` in Step 4b):
+- **Up to 15 `Agent` calls in a single assistant message** → they run concurrently.
+- Since Claude Code 2.1.232 each spawn is BACKGROUND: the call returns an agent id immediately,
+  and the fixer's own answer arrives later as that agent's completion notification. So "the batch
+  finished" means **15 completion notifications have arrived** — NOT that the assistant message
+  returned. Do not start the next batch on the strength of the dispatch calls returning.
+- If the batch size is > 15, emit 15 per message and wait for those 15 notifications before
+  sending the next batch. NEVER exceed 15 in flight at once.
+- Each `Agent` call uses one of these two literal `subagent_type` strings (decided per-report by `agent_for_report` in Step 4b):
   - `subagent_type: "llm-externalizer-parallel-fixer-sonnet-agent"` (the default per-report)
   - `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"` (when the per-report size check OR `LLM_EXT_FORCE_OPUS=1` promotes the call)
-- Each `Task` call also carries:
+- Never pass `subagent_type: "fork"`. A fork inherits this conversation, which is exactly the
+  context the per-file fixer design exists to keep out of the fixers.
+- Each `Agent` call also carries:
   - `description: "Fix report: <basename>"` (≤5 words)
   - `prompt: "<absolute report path>"` (nothing else)
 
@@ -433,7 +440,11 @@ Batch rule:
 
 Each fixer returns one line (its `.fixer.`-summary path). **Discard that text.** The join script in Step 5 globs `$REPORTS_DIR` directly — it does NOT need the orchestrator to hand it the paths. Treating the fixer returns as informational-only saves ~100 chars × N orchestrator tokens (~25 KB for a 250-file scan).
 
-The only reason to *look* at a fixer's return line is to check whether it starts with `[FAILED] `. For completed batches, you can count successes cheaply with `ls -1 "$REPORTS_DIR" | grep -cF '.fixer.'` (use `-F` for fixed-string, no regex needed — `.fixer.` contains only dots and lowercase letters so escaping is trivial, but fixed-string is faster and safer).
+The only reason to *look* at a fixer's result is to check whether it starts with `[FAILED] `, and that result lives in the agent's completion notification (`<result>`), not in the dispatch call's return. For completed batches, you can count successes cheaply with `ls -1 "$REPORTS_DIR" | grep -cF '.fixer.'` (use `-F` for fixed-string, no regex needed — `.fixer.` contains only dots and lowercase letters so escaping is trivial, but fixed-string is faster and safer).
+
+This filesystem count is also the safety net for the barrier above: Step 5's join reads whatever
+`.fixer.` files exist on disk, so if it ever runs early it under-counts visibly rather than
+silently merging a half-finished batch.
 
 **Do NOT `Read` any fixer summary.** The content belongs to the join script alone.
 
@@ -491,9 +502,9 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 
 ## Three-surface compliance: by-design slash-only (GAP-11)
 
-This command is multi-agent orchestration: scan with one CLI batch, fan out up to 15 parallel fixer subagents (one per report) via the Task tool, then run a join script. It is not a single callable unit — it composes a CLI scan command with N subagent dispatches and a Python join script across multiple turns of orchestrator control flow.
+This command is multi-agent orchestration: scan with one CLI batch, fan out up to 15 parallel fixer subagents (one per report) via the Agent tool, then run a join script. It is not a single callable unit — it composes a CLI scan command with N subagent dispatches and a Python join script across multiple turns of orchestrator control flow.
 
-Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. A single CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Task tool), so this capability is inherently slash-only.
+Per TRDD-a24b213c §C, this is a documented exemption from the "every capability has a CLI command + slash command" invariant — not a gap waiting to be filled. A single CLI surface would have to spawn subagents itself (which only the orchestrator can do via the Agent tool), so this capability is inherently slash-only.
 
 ## Error handling
 

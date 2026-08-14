@@ -3,7 +3,7 @@ name: llm-externalizer-high-quality-scan-and-fix
 description: High-quality two-stage audit. ONE strong remote model (default z-ai/glm-5.2, max reasoning + cache) scans each file via high_quality_scan; then parallel Opus fixer subagents (≤15) verify and fix each finding in the same run. Paid + OpenRouter-only — fails fast on a local backend, free_only, or no credit. Orchestrator never reads scan or fixer content, only report paths.
 allowed-tools:
   - Bash
-  - Task
+  - Agent
 argument-hint: '<folder> [--instructions path] [--specs path] [--text] [--no-secrets]'
 ---
 
@@ -112,9 +112,18 @@ fi
 
 ## Step 6 — Dispatch Opus fixers (always Opus, ≤15 concurrent)
 
-Read `$VALIDATED` in batches of 15 (`sed -n 'START,ENDp'`). For each path, spawn ONE subagent via `Task` — **always `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"`** (high-quality scan → high-quality fix; no Sonnet downgrade). Each `Task` carries `description: "Fix report: <basename>"` and `prompt: "<absolute report path>"` (the path, nothing else). **One agent = one report = one source file.** Up to 15 `Task` calls per assistant message (they run concurrently); never exceed 15 in flight; wait for a batch before sending the next.
+Read `$VALIDATED` in batches of 15 (`sed -n 'START,ENDp'`). For each path, spawn ONE subagent via `Agent` — **always `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"`** (high-quality scan → high-quality fix; no Sonnet downgrade). Each `Agent` call carries `description: "Fix report: <basename>"` and `prompt: "<absolute report path>"` (the path, nothing else). **One agent = one report = one source file.** Up to 15 `Agent` calls per assistant message (they run concurrently); never exceed 15 in flight.
 
-The Opus fixer agent already VERIFIES each finding (file-read + flow-trace) before editing and rejects false positives — this is the "verify then fix in the same turn" the high-quality mode promises. **IGNORE the fixers' return text** (each returns its `.fixer.`-summary path; the join script globs `$REPORTS_DIR` directly). Do NOT `Read` any fixer summary. Abort with `[FAILED] — llm-externalizer-parallel-fixer-opus-agent not installed` if the agent is missing.
+Since Claude Code 2.1.232 each spawn is BACKGROUND: the call returns an agent id immediately and
+the fixer's answer arrives later as that agent's completion notification. **"Wait for a batch
+before sending the next" means wait for 15 completion notifications** — not for the assistant
+message to return. Never pass `subagent_type: "fork"`; a fork would inherit this conversation,
+which is exactly what the per-file fixer design keeps out.
+
+The Opus fixer agent already VERIFIES each finding (file-read + flow-trace) before editing and rejects false positives — this is the "verify then fix in the same turn" the high-quality mode promises. **IGNORE the fixers' result text** (each reports its `.fixer.`-summary path in its completion notification; the join script globs `$REPORTS_DIR` directly). Do NOT `Read` any fixer summary. Abort with `[FAILED] — llm-externalizer-parallel-fixer-opus-agent not installed` if the agent is missing.
+
+Step 7's join reads whatever `.fixer.` files are on disk, so running it before the batch's
+notifications have all arrived under-counts visibly rather than silently merging a partial batch.
 
 ## Step 7 — Join + return
 
@@ -144,7 +153,7 @@ On any error: `[FAILED] llm-externalizer-high-quality-scan-and-fix — <one-line
 
 ## Three-surface compliance: by-design slash-only (GAP-11)
 
-This command is multi-agent orchestration — a `high-quality-scan` CLI batch, then up to 15 parallel Opus fixer subagents (one per report) via the Task tool, then a Python join script across multiple turns of orchestrator control flow. Per TRDD-a24b213c §C, that is a documented exemption from the "every capability has a CLI command + slash command" invariant: a single CLI surface cannot spawn subagents (only the orchestrator can, via Task), so the `_and_fix` capability is inherently slash-only. The pure scan IS two-surfaced (the `high-quality-scan` CLI command + `/llm-externalizer:llm-externalizer-high-quality-scan`).
+This command is multi-agent orchestration — a `high-quality-scan` CLI batch, then up to 15 parallel Opus fixer subagents (one per report) via the Agent tool, then a Python join script across multiple turns of orchestrator control flow. Per TRDD-a24b213c §C, that is a documented exemption from the "every capability has a CLI command + slash command" invariant: a single CLI surface cannot spawn subagents (only the orchestrator can, via the Agent tool), so the `_and_fix` capability is inherently slash-only. The pure scan IS two-surfaced (the `high-quality-scan` CLI command + `/llm-externalizer:llm-externalizer-high-quality-scan`).
 
 ## Error handling
 

@@ -2,7 +2,7 @@
 name: llm-externalizer-fix-report
 description: Fix findings in ONE existing per-file scan report. Pick sonnet or opus via menu, dispatches a single parallel-fixer subagent, returns its `.fixer.`-summary path. For whole-folder audits use `/llm-externalizer:llm-externalizer-scan-and-fix`.
 allowed-tools:
-  - Task
+  - Agent
   - Bash
 argument-hint: "@scan-report.md"
 ---
@@ -11,7 +11,7 @@ argument-hint: "@scan-report.md"
 
 Dispatch one parallel-fixer-agent subagent (sonnet or opus — picked via menu) against one scan report. The agent reads the report, classifies each finding (REAL BUG / FALSE-POSITIVE / HALLUCINATION / CANTFIX), applies surgical edits for real bugs, runs per-language linters, writes a `.fixer.`-tagged summary beside the report, and returns the summary path.
 
-You (the orchestrator) never read the report, the source, or the summary. You just validate the argument, dispatch the Task, and surface the result.
+You (the orchestrator) never read the report, the source, or the summary. You just validate the argument, dispatch the agent, and surface the result.
 
 ## When to use this command vs `scan-and-fix`
 
@@ -118,9 +118,9 @@ test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
   || { echo "[FAILED] llm-externalizer-fix-report — $FIXER_AGENT not installed"; exit 1; }
 ```
 
-### Step 3 — Dispatch ONE Task call
+### Step 3 — Dispatch ONE Agent call
 
-Exactly one `Task` call. The `subagent_type` value comes from `$FIXER_AGENT` (Step 2b) and is exactly one of these two literal strings:
+Exactly one `Agent` call. The `subagent_type` value comes from `$FIXER_AGENT` (Step 2b) and is exactly one of these two literal strings:
 
 - `subagent_type: "llm-externalizer-parallel-fixer-sonnet-agent"` (when Step 2b picked sonnet — the default)
 - `subagent_type: "llm-externalizer-parallel-fixer-opus-agent"` (when Step 2b promoted the call to opus)
@@ -134,15 +134,22 @@ Do NOT pass the user's conversation context, do NOT paraphrase the report, do NO
 
 ### Step 4 — Surface the result
 
-The agent returns ONE line — its `.fixer.`-summary path, or `[FAILED] <agent-name> — <reason>`.
+**The dispatch is asynchronous.** Since Claude Code 2.1.232 a non-teammate agent spawned from an
+interactive session runs in the BACKGROUND: the `Agent` call returns an agent id immediately, not
+the agent's answer. The answer arrives later, in that agent's completion notification.
+
+So: after Step 3, **wait for the completion notification** and read its `<result>`. That result is
+ONE line — the `.fixer.`-summary path, or `[FAILED] <agent-name> — <reason>`.
 
 - On success, emit to the user: `Fixed report: <summary-path>`. Do NOT `Read` the summary content; the user reviews it directly.
-- On `[FAILED]` return, relay the failure line verbatim and stop.
+- On `[FAILED]`, relay the failure line verbatim and stop.
+
+Never treat the dispatch call's own return value as the fixer's answer — it is only the handle.
 
 ## Hardcoded constraints (do not override)
 
 - Exactly ONE fixer dispatch per invocation. No parallel fanout (`scan-and-fix` is for that).
-- The orchestrator MUST NOT `Read` the report, the source files, or the fixer summary. Only `Bash` validation + one `Task` call + one user-facing line.
+- The orchestrator MUST NOT `Read` the report, the source files, or the fixer summary. Only `Bash` validation + one `Agent` call + one user-facing line.
 - No commits, no pushes. The user reviews the diff and commits themselves.
 
 ## Three-surface compliance: by-design slash-only (GAP-9)

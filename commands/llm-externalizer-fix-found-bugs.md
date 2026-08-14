@@ -2,7 +2,7 @@
 name: llm-externalizer-fix-found-bugs
 description: Aggregate unfixed findings across every report in `./reports/llm-externalizer/` and fix each via a fresh serial-fixer subagent (sonnet/opus menu). Optional `@merged-report.md` scopes the loop to one report.
 allowed-tools:
-  - Task
+  - Agent
   - Read
   - Edit
   - Write
@@ -35,7 +35,7 @@ Subcommands (run `$H --help` for the full tree, or `$H <sub> --help` for per-fla
 | `count --file PATH` | Current state | One line: `TOTAL=N FIXED=N UNFIXED=N MAX_ITER=N` |
 | `fixed-titles --file PATH` | Snapshot FIXED titles | One title per line, sorted |
 | `diff-fixed --file PATH --previous SNAP` | User-facing progress updates | `Fixed: <title> — N unfixed remaining` per newly-FIXED bug |
-| `print-fallback-prompt --file PATH` | Prompt for general-purpose Task dispatch (when the selected serial-fixer variant isn't installed) | Full prompt text |
+| `print-fallback-prompt --file PATH` | Prompt for general-purpose Agent dispatch (when the selected serial-fixer variant isn't installed) | Full prompt text |
 | `timestamp` | Fresh sortable local-TZ ISO-8601 prefix | `20260418T153045+0200` |
 | `init-run [--base DIR]` | Create `./reports/llm-externalizer/` + emit all TS-prefixed output paths | Shell-parseable: `RUN_TS=...`, `OUTDIR=...`, `BUGS_TO_FIX=...`, `INITIAL_STATE=...`, `SNAPSHOT=...`, `SUMMARY=...`, `PROGRESS_LOG=...` |
 | `save-summary --file PATH --output PATH [--run-start-ts TS]` | Write final markdown summary (counts + FIXED/unfixed title lists) | Absolute path of the written file |
@@ -49,7 +49,7 @@ All persistent artifacts land in **`./reports/llm-externalizer/`** (relative to 
 <RUN_TS>.fix-found-bugs.initial-state.txt    # initial FIXED-titles snapshot
 <RUN_TS>.fix-found-bugs.snapshot.txt         # per-iteration snapshot (overwritten each loop)
 <RUN_TS>.fix-found-bugs.summary.md           # final markdown summary
-<RUN_TS>.fix-found-bugs.progress.log         # per-iteration Task return line (append)
+<RUN_TS>.fix-found-bugs.progress.log         # per-iteration agent result line (append)
 ```
 
 Example: `20260418T153045+0200.fix-found-bugs.summary.md`.
@@ -197,6 +197,9 @@ One bug = one fresh agent invocation. Each bug gets a brand-new dispatch.
 
 ### Step 5 — Pick subagent_type
 
+Never pass `subagent_type: "fork"`. A fork inherits this conversation; the serial fixer is
+designed to start from the bug file alone.
+
 ```bash
 if test -f "${CLAUDE_PLUGIN_ROOT}/agents/${FIXER_AGENT}.md" \
    || test -f "$HOME/.claude/agents/${FIXER_AGENT}.md"; then
@@ -217,10 +220,12 @@ fi
 Maintain `stuck_streak = 0`, `prev_unfixed`, `prev_total`.
 
 1. Re-run `$H count --file "$BUGS_TO_FIX"`. If `UNFIXED=0`, break — all done.
-2. Dispatch ONE `Task` call. Read its return line. If it starts with `[FAILED]`, break and surface the reason.
-3. Append the return line to `$PROGRESS_LOG`:
+2. Dispatch ONE `Agent` call, then **wait for its completion notification** — since Claude Code
+   2.1.232 the dispatch returns an agent id, not the fixer's answer. Take the summary line from
+   the notification's `<result>`. If it starts with `[FAILED]`, break and surface the reason.
+3. Append that result line to `$PROGRESS_LOG`:
    ```bash
-   printf '%s\n' "$TASK_RETURN_LINE" >> "$PROGRESS_LOG"
+   printf '%s\n' "$AGENT_RESULT_LINE" >> "$PROGRESS_LOG"
    ```
 4. Surface progress to the user:
    ```bash
@@ -269,9 +274,9 @@ Per TRDD-a24b213c §C, this is a documented exemption from the "every capability
 
 - Iteration cap: `MAX_ITER = max(UNFIXED_START * 2 + 5, 5)` (computed by `$H count`).
 - Stuck detection: 2 consecutive iterations with no progress → break.
-- Hard stop on `[FAILED] ...` return from a subagent.
-- Zero parent-conversation inheritance (each Task spawn is fresh — `~/.claude/CLAUDE.md`, project `CLAUDE.md`, and auto-memory still load the same way they did for `claude -p`).
-- No background processes. Ending the parent session stops the loop cleanly between iterations.
+- Hard stop on a `[FAILED] ...` result from a subagent.
+- Zero parent-conversation inheritance (each `Agent` spawn is fresh — `~/.claude/CLAUDE.md`, project `CLAUDE.md`, and auto-memory still load the same way they did for `claude -p`). This is why `subagent_type: "fork"` is forbidden here: a fork would inherit the whole conversation.
+- Each fixer DOES run as a background agent (Claude Code 2.1.232), but the loop is still serial: it dispatches one and waits for that agent's completion notification before the next iteration. Ending the parent session between iterations stops the loop cleanly; ending it while a fixer is mid-flight abandons that fixer's turn, and any edits it had already written to disk stay written.
 - No commits.
 - All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.` prefix — add that directory to `.gitignore` if you don't want it committed. (The plugin's own `.gitignore` already excludes the dir at the plugin-repo level; each consuming project manages its own ignore rules.)
-- **Never exceed 15 concurrent Task calls.** This command dispatches serially (one at a time) because bug order matters — later bugs may be superseded by fixes in earlier ones. Do not rewrite the loop to parallelise.
+- **Never exceed 15 concurrent `Agent` calls.** This command dispatches serially (one at a time) because bug order matters — later bugs may be superseded by fixes in earlier ones. Do not rewrite the loop to parallelise.
