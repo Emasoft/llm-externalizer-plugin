@@ -281,12 +281,21 @@ export const DEFAULT_CHUNK_TIMEOUT_MS = 600_000;
  * eligible model, and whichever answers first with usable text wins — see
  * `attemptChunkMaybeHedged` in the concurrent map loop below.
  *
- * Half of `DEFAULT_CHUNK_TIMEOUT_MS`, not some independent tuning: waiting
- * out the FULL deadline before hedging would only rescue the very last
- * moment of a doomed attempt, and waiting less would fire a hedge for
- * ordinary requests that were simply going to finish a bit late (the median
- * of the measured spread is well under a minute). Sitting at the midpoint
- * hedges genuine stragglers without doubling cost on the common case.
+ * WHY 60s: it sits just above the measured MEDIAN. Waiting out the full
+ * `DEFAULT_CHUNK_TIMEOUT_MS` before hedging would only rescue the very last
+ * moment of a doomed attempt, and waiting much less would fire a hedge for
+ * ordinary requests that were simply going to finish a bit late. Hedging just
+ * past the median catches genuine stragglers without doubling cost on the
+ * common case.
+ *
+ * NOT a fraction of `DEFAULT_CHUNK_TIMEOUT_MS` — do not "restore" one. This
+ * comment used to read "half of DEFAULT_CHUNK_TIMEOUT_MS ... sitting at the
+ * midpoint", which was true when that default was 120_000 and became false
+ * when it rose to 600_000; 60s is now one TENTH of it, and a reader who
+ * trusted the old wording computed a 300s hedge point — a 5x error about the
+ * behavior of a latency-critical path. The two constants are tuned against
+ * DIFFERENT measurements (this one against the median, that one against the
+ * slow tail), so they are deliberately independent and must not be re-coupled.
  */
 export const HEDGE_AFTER_MS = 60_000;
 
