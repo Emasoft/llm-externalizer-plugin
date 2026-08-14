@@ -1,6 +1,84 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.1] - 2026-08-14
+
+### Fixed
+
+- Fix(setup,docs,tests): background dispatch in the wizard, README, and the gate
+
+Three follow-ons to the 2.1.232 background-spawn change.
+
+setup wizard: the plan called for pinning `background: false` on the command,
+copying the precedent at skills/llm-externalizer-scan/SKILL.md, which uses
+`context: fork` + `background: false` to defend against the same default that
+landed for forked skills in 2.1.218. That pin is NOT applied here, because
+checking first showed it would be inert: across the 37 plugins installed on
+this machine, `background:` appears in SKILL.md frontmatter only and in zero
+command frontmatters. Adding an unrecognized key would have looked like a fix
+and changed nothing.
+
+What the wizard gets instead is an accurate statement of the constraint. It is
+genuinely interactive — it calls AskUserQuestion, and it pauses for the user to
+confirm a runner install and a model download — and a background agent cannot
+hold a live turn. The command now tells the orchestrator to relay the agent's
+questions and answer via SendMessage, and not to read the dispatch's return as
+a finished setup. Whether a command can opt out of backgrounding is an open
+upstream question; this documents the behavior rather than guessing at a knob.
+
+dogfood gate: `allowed-tools` shape-3 accepted "Task" OR "Agent". That is why
+five commands carried a retired tool name indefinitely without the suite going
+red — the check was broader than the invariant it guarded, so it passed while
+verifying nothing. `Task` is now a hard FAIL with an explanatory message.
+
+README: the architecture diagram drew dispatch flowing straight into the join,
+which is the synchronous model the release removed; it now shows the await step
+between them. Install no longer prescribes a mandatory restart (2.1.221
+activates immediately when safe, 2.1.232 refreshes the marketplace on install),
+keeping /reload-plugins as the fallback.
+
+- Fix(commands): agent dispatch is asynchronous, and the tool is Agent not Task
+
+Claude Code 2.1.232: "non-teammate agent spawns in interactive sessions now
+run in the background by default". An Agent(...) call returns an agent id
+immediately; the subagent's answer arrives later in its completion
+notification. Two separate defects followed from that.
+
+1. All five orchestration commands declared `allowed-tools: Task`. That tool
+   name no longer exists — it is `Agent`, as llm-externalizer-setup.md already
+   spelled it. A command that declares a nonexistent tool is not granted the
+   real one, so the dispatches were unauthorized.
+
+2. The serial loops in fix-found-bugs and scan-and-fix-serially said "Dispatch
+   ONE Task call. Read its return line" and then logged $TASK_RETURN_LINE.
+   There is no return line at dispatch time any more, so the loops logged
+   nothing and could never observe a [FAILED]. They now wait for the
+   completion notification and read its <result>; the placeholder is renamed
+   $AGENT_RESULT_LINE so the name cannot be mistaken for the dispatch value.
+
+The parallel commands say explicitly that "the batch finished" means 15
+completion notifications have arrived, not that the assistant message
+returned — dispatch calls returning is exactly the false signal that would
+start batch N+1 while batch N is still running.
+
+scan-and-fix's "IGNORE fixer return text" design needed no change: it already
+globs $REPORTS_DIR instead of trusting returns, which is why it survived this
+release intact. That filesystem count is now documented as the barrier's
+safety net — an early join under-counts visibly instead of silently merging a
+partial batch.
+
+Also corrects two claims that this release falsified: "No background
+processes. Ending the parent session stops the loop cleanly between
+iterations." The fixers ARE background agents now; the loop is still serial,
+and killing the session mid-fixer abandons its turn while leaving any edits
+it already wrote on disk.
+
+Added an explicit ban on subagent_type: "fork" in every dispatch site. Forking
+became the default-on feature in the same release, and a fork inherits the
+whole conversation — precisely the context the per-file fixer architecture
+exists to keep out of the fixers.
+
+
 ## [13.5.0] - 2026-08-13
 
 ### Added
