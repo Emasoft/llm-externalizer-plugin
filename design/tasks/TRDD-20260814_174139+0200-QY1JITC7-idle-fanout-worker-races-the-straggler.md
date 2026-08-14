@@ -3,7 +3,7 @@ trdd-id: QY1JITC7
 title: Idle fan-out workers should race the longest-outstanding chunk instead of idle-polling
 column: backburner
 created: 2026-08-14T17:41:39+0200
-updated: 2026-08-14T17:41:39+0200
+updated: 2026-08-14T17:48:00+0200
 current-owner: llm-externalizer session
 task-type: refactor
 approval-tier: 0
@@ -110,9 +110,13 @@ termination test written first, is how that list gets a fourth entry.
 
 - [ ] An idle fan-out worker launches at most one speculative attempt, on the
       longest-outstanding in-flight chunk, from a slot at zero in-flight count.
-- [ ] A test proves the map phase does NOT wait on a speculative attempt whose chunk was
+- [x] A test proves the map phase does NOT wait on a speculative attempt whose chunk was
       committed by its real owner (the hazard above). This test is written BEFORE the
-      feature.
+      feature. **DONE 2026-08-14, commit `f3d521f`** — `driver.test.ts`, fan-out block,
+      "the map phase never waits on an attempt whose chunk is already committed". It
+      encodes the hazard, not the feature: a call for an already-answered marker is
+      answered after 3s, so a non-abandoning implementation blows the bound. Verified to
+      FAIL (exit 1) under an induced duplicate call before being kept.
 - [ ] A losing racer never calls `applyFanoutTransition` and never mutates `activeModelIdx`.
 - [ ] Commit path goes through `writeChunkSummaryOnce`; no double-write under a late settle.
 - [ ] Per-model in-flight never exceeds `PER_MODEL_CONCURRENCY`, speculative included.
