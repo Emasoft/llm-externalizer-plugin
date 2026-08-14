@@ -1697,6 +1697,90 @@ describe("driver: summarizeSession", () => {
       expect(callOrder).toEqual(["0", "1", "2", "3"]);
       expect(result.modelId).toBe(FREE_MODEL);
     });
+
+    it("the map phase never waits on an attempt whose chunk is already committed", async () => {
+      // GUARD FOR TRDD-QY1JITC7, written BEFORE the feature it guards.
+      //
+      // The proposal there is that an idle fan-out worker, instead of
+      // idle-polling at `FANOUT_IDLE_POLL_MS`, launches a speculative attempt
+      // on the longest-outstanding chunk so dead capacity becomes min-of-K on
+      // the straggler that sets wall clock.
+      //
+      // The hazard that stopped it being written that day: the map phase ends
+      // at `Promise.allSettled(workers)`, so a worker parked on a speculative
+      // call does not return until that call settles. If the real owner commits
+      // the chunk first, the speculative result is worthless — but the whole
+      // phase is still waiting on it. On the measured free-tier tail (up to
+      // 1478s) that turns a latency OPTIMISATION into a catastrophic
+      // regression, which is the exact opposite of the point.
+      //
+      // HOW THIS TEST BITES. Any call for a marker that has ALREADY been
+      // answered is, by construction, work whose result cannot be needed — it
+      // is precisely the shape of a discarded racer. Such a call is answered
+      // very slowly here. Today nothing issues one, so the run finishes on the
+      // slow chunk alone and the bound passes with room to spare. Add
+      // speculative racing WITHOUT a way to abandon the wait and this call
+      // starts happening, the phase parks on it, and the bound fails loudly.
+      //
+      // Real timers (the whole block uses them) and a deliberately wide bound,
+      // because the assertion is "does not wait for an extra ~3s", not
+      // "completes in exactly N ms" — a tight bound here would be flaky on a
+      // loaded CI box and would get deleted rather than debugged.
+      const lines = Array.from({ length: 4 }, (_, i) =>
+        userTurn(`u${i}`, `abandon-wait request ${i} `.repeat(30)),
+      );
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = {
+        id: FALLBACK_MODEL,
+        contextLength: 1_000_000,
+        maxCompletionTokens: 1_000,
+      };
+
+      const answered = new Set<string>();
+      const UNNEEDED_CALL_MS = 3_000; // dwarfs the slow chunk, so parking on it is unmistakable
+      const SLOW_CHUNK_MS = 300;
+
+      const callModel = vi.fn<CallModelFn>(async (prompt) => {
+        const marker = /abandon-wait request (\d+) /.exec(prompt)?.[1] ?? "?";
+        if (answered.has(marker)) {
+          // Nobody can still need this answer. A correct implementation either
+          // never makes this call, or stops waiting on it the moment the chunk
+          // commits. Either way the run must not absorb this delay.
+          await new Promise((r) => setTimeout(r, UNNEEDED_CALL_MS));
+          return `STALE-${marker}`;
+        }
+        if (marker === "3") await new Promise((r) => setTimeout(r, SLOW_CHUNK_MS));
+        answered.add(marker);
+        return `SUMMARY-${marker}`;
+      });
+
+      const startedAt = Date.now();
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+      const elapsedMs = Date.now() - startedAt;
+
+      // Correctness first: a race that drops the wrong answer is worse than a
+      // slow one, so pin the joined text before pinning the timing.
+      expect(result.totalChunks).toBe(4);
+      expect(result.summary).toBe(
+        joinChunkSummaries(["SUMMARY-0", "SUMMARY-1", "SUMMARY-2", "SUMMARY-3"]),
+      );
+      expect(result.summary).not.toContain("STALE-");
+
+      // The bound: the slow chunk plus generous slack, but far below what
+      // parking on one unneeded call would cost.
+      expect(elapsedMs).toBeLessThan(SLOW_CHUNK_MS + UNNEEDED_CALL_MS / 2);
+    }, 20_000);
   });
 
   // ── Hedging (owner-specified, 2026-08-12) ─────────────────────────────
