@@ -9,7 +9,20 @@ effort: medium
 
 **Quick redirect — if you just want OpenRouter (no local model), STOP and use `/llm-externalizer:llm-externalizer-configure` instead.** That command is a single-prompt API-key paste and takes ~30 seconds. This wizard is for LOCAL-backend setup (Ollama / LM Studio / vLLM / llama.cpp / Jan) and takes 2-10 minutes.
 
-Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type: "llm-externalizer-setup-agent"`. The wizard walks the user through the following steps:
+Spawn the `llm-externalizer-setup-agent` via the Agent tool using `subagent_type: "llm-externalizer-setup-agent"`. Never `subagent_type: "fork"` — the wizard must start from a clean context, not inherit the caller's conversation.
+
+> **Interactivity constraint (Claude Code 2.1.232).** Non-teammate agent spawns from an interactive
+> session now run in the BACKGROUND by default, and a background agent cannot hold a live turn with
+> the user. This wizard is genuinely interactive: it calls `AskUserQuestion`, and it pauses to let
+> the user confirm a runner install and a model download before continuing. When the agent is
+> backgrounded, those pauses cannot reach the user directly — the orchestrator must relay them.
+>
+> So: after dispatching, WATCH for the agent's messages and completion notification, relay any
+> question it raises to the user, and send the answer back with `SendMessage` to that agent. Do not
+> assume the wizard ran to completion just because the dispatch call returned; the dispatch returns
+> an agent id, not a finished setup.
+
+The wizard walks the user through the following steps:
 
 1. **Platform detection** — OS family (macOS / Linux / WSL2 / Windows), architecture, RAM, GPU.
 2. **Runner detection** — scan for Ollama, LM Studio, vLLM, llama.cpp, Jan (CLI presence + listening port).

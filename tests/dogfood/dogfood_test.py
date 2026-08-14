@@ -741,8 +741,9 @@ def resolve_command_tool(fm: dict[str, object], body: str, catalog: set[str]) ->
        it is checked FIRST for a reason (see below).
     2. Benchmark wrapper — the body runs `llm-ext-benchmark`; dispatch is by
        flag, so there is no subcommand to resolve (by design, GAP-2).
-    3. Orchestration wrapper — `allowed-tools` includes `Task`/`Agent`; the
-       command dispatches a subagent rather than a command (GAP-8..14).
+    3. Orchestration wrapper — `allowed-tools` includes `Agent`; the command
+       dispatches a subagent rather than a command (GAP-8..14). `Task` is the
+       retired spelling and is now a hard FAIL, not an accepted synonym.
     4. Installer / external-CLI wrapper — `Bash`-only and legitimately never
        calls `llm-ext` (the statusline installer).
 
@@ -776,9 +777,18 @@ def resolve_command_tool(fm: dict[str, object], body: str, catalog: set[str]) ->
     if "llm-ext-benchmark" in body:
         return PASS, "benchmark CLI wrapper (flag-dispatched)"
 
-    # Shape 3 — orchestration wrapper (Task/Agent subagent dispatch).
-    if "Task" in tools or "Agent" in tools:
-        return PASS, "orchestration wrapper (Task/Agent dispatch; by-design slash-only)"
+    # Shape 3 — orchestration wrapper (Agent subagent dispatch).
+    #
+    # `Agent` ONLY. This used to accept `Task` as well, and that permissiveness is
+    # exactly why five commands sat on `allowed-tools: Task` — a tool name Claude
+    # Code no longer has — without the gate ever going red. A command that declares
+    # a nonexistent tool is not granted the real one, so those dispatches were
+    # unauthorized while this check reported PASS. Do not re-add `Task` here: the
+    # whole value of this branch is that it fails when the spelling drifts.
+    if "Task" in tools:
+        return FAIL, "allowed-tools lists `Task`; the subagent-dispatch tool is `Agent`"
+    if "Agent" in tools:
+        return PASS, "orchestration wrapper (Agent dispatch; by-design slash-only)"
 
     # Shape 4 — installer / external-CLI wrapper with no llm-ext call to check.
     if "Bash" in tools:

@@ -88,6 +88,9 @@ Keeping the fix half local means the expensive model only touches code when it a
 │        │  4. dispatch FIXER SUBAGENTS (local Claude Sonnet/Opus)        │
 │        │       • parallel: up to 15 concurrent, one per report          │
 │        │       • serial:   one bug at a time from an aggregated list    │
+│        │       • dispatch returns an agent id, NOT the fixer's answer;  │
+│        │         each fixer runs in the background and reports back     │
+│        │         in its own completion notification                     │
 │        │                                                                │
 │        │     EACH FIXER subagent:                                       │
 │        │       a. reads ONE report from disk                            │
@@ -97,6 +100,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 │        │       e. runs the language linter, re-verifies                 │
 │        │       f. writes a .fixer.*.md summary                          │
 │        │                                                                │
+│        │  4b. AWAIT every fixer's completion notification               │
 │        │  5. join-script merges all fixer summaries into one report     │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -171,7 +175,9 @@ claude plugin marketplace add Emasoft/emasoft-plugins
 claude plugin install llm-externalizer@emasoft-plugins
 ```
 
-Then restart Claude Code (or `/reload-plugins` inside a running session).
+Claude Code 2.1.221+ activates a newly installed plugin immediately when it is safe to do so, and
+2.1.232 refreshes the marketplace as part of the install — so neither a restart nor a manual
+marketplace update is normally required. If the commands do not show up, `/reload-plugins`.
 
 ### 3 · (Later) Update the plugin
 
@@ -489,7 +495,7 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
 | `/llm-externalizer:llm-externalizer-cluster-synonyms` | Cluster SENTENCES / short labels by full-sentence meaning equivalence (taxonomy / ontology / label canonicalisation, 10k–1M items). File-in, file-out, zero orchestrator tokens; resumable + budget-capped | `clusters.jsonl` + `clusters_summary.json` + `stats.json` + `checkpoint.sqlite` + counter line |
 | `/llm-externalizer:llm-externalizer-compact-session` | Compact ANY Claude Code session transcript to a compaction-style summary at $0. Takes `<project-slug>/<session-id>.jsonl` for another project, a bare session id for this one, or nothing for this project's latest. Incremental — a re-run only summarizes new turns | Report path (nine-section summary, user messages verbatim) |
-| `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent) → joined report | Per-file scan reports + fixer summaries + joined report |
+| `/llm-externalizer:llm-externalizer-scan-and-fix` | Scan whole codebase → per-file reports → parallel fixer subagents (≤15 concurrent, awaited by completion notification) → joined report | Per-file scan reports + fixer summaries + joined report |
 | `/llm-externalizer:llm-externalizer-scan-and-fix-serially` | Same scan; fixes bugs one at a time in a serial loop (safer when fixes touch shared state) | Per-file reports + canonical bug list + serial fixer summary |
 | `/llm-externalizer:llm-externalizer-high-quality-scan` | Folder scan with ONE strong remote model (default `z-ai/glm-5.2`) at max reasoning + prompt cache, NOT the cheap ensemble. Paid + OpenRouter-only — fails fast on a local backend, `free_only`, or no credit | Per-file scan reports (or merged) |
 | `/llm-externalizer:llm-externalizer-high-quality-scan-and-fix` | High-quality scan (above) → parallel **Opus** fixer subagents (≤15) verify and fix each finding in the same run | Per-file reports + Opus fixer summaries + joined report |
@@ -896,7 +902,7 @@ the requirements **and** passes that tool's benchmark. See
 
 ## Agents
 
-All six agents are **internal** — users dispatch them via slash commands, not directly. Each Task spawn is fresh (zero parent-conversation context); user / project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (**Sonnet default**, **Opus optional**) before dispatching; the four fixer variants below exist so the selected model is pre-baked and callable without a `model:` override.
+All six agents are **internal** — users dispatch them via slash commands, not directly. Each `Agent` spawn is fresh (zero parent-conversation context — which is why the commands never use `subagent_type: "fork"`); user / project `CLAUDE.md` load the same way they do under `claude -p`. The fixer commands show a two-option menu (**Sonnet default**, **Opus optional**) before dispatching; the four fixer variants below exist so the selected model is pre-baked and callable without a `model:` override.
 
 | Agent | Model | Role | Dispatched by |
 |---|---|---|---|
