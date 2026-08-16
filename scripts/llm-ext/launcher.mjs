@@ -22,10 +22,14 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { nativeDepsDir } from "./data-dir.mjs";
+import { withInstallLock } from "./install-lock.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SRC_PKG = join(SCRIPT_DIR, "package.json");
 const SRC_LOCK = join(SCRIPT_DIR, "package-lock.json");
+// Shared by installDeps' spawnSync timeout and the install lock's wait/stale
+// ceiling below — one number for "how long a self-install is allowed to take".
+const INSTALL_TIMEOUT_MS = 300_000;
 
 function log(line) {
   process.stderr.write(`[llm-externalizer] ${line}\n`);
@@ -113,7 +117,7 @@ function installDeps(dataDir) {
   const result = spawnSync(pm.bin, args, {
     cwd: dataDir,
     stdio: "inherit",
-    timeout: 300_000,
+    timeout: INSTALL_TIMEOUT_MS,
     env,
   });
   if (result.status !== 0) {
@@ -254,18 +258,29 @@ try {
 
   // Self-install path. The previous SessionStart-bash-hook architecture was
   // replaced with this in-launcher path so the install works on Windows too.
+  //
+  // Two `llm-ext` processes can start at once on a fresh machine (e.g. a
+  // parallel agent fan-out) — everything from here through linkNodeModules()
+  // is wrapped in a cross-process lock so only one of them ever runs npm or
+  // touches node_modules; the rest wait and reuse its result.
   try {
-    if (dataDirHasDeps(dataDir)) {
-      // The deps are already in the data dir and only this version's link is
-      // missing — the normal case right after a plugin upgrade, since the cache
-      // dir is per-version and the data dir is not.
-      log("native deps already present in the data dir — linking them into this version.");
-      linkNodeModules(dataDir);
-    } else {
-      log("better-sqlite3 not found — running one-time self-install...");
-      installDeps(dataDir);
-      linkNodeModules(dataDir);
-    }
+    await withInstallLock(dataDir, INSTALL_TIMEOUT_MS, () => {
+      // Re-check under the lock: the winner of the lock race may have
+      // installed while we were waiting, so this must not be hoisted above
+      // the lock acquisition (that was the third race — reading "deps
+      // present" mid-write).
+      if (dataDirHasDeps(dataDir)) {
+        // The deps are already in the data dir and only this version's link is
+        // missing — the normal case right after a plugin upgrade, since the cache
+        // dir is per-version and the data dir is not.
+        log("native deps already present in the data dir — linking them into this version.");
+        linkNodeModules(dataDir);
+      } else {
+        log("better-sqlite3 not found — running one-time self-install...");
+        installDeps(dataDir);
+        linkNodeModules(dataDir);
+      }
+    });
     installed = true;
   } catch (installErr) {
     process.stderr.write(

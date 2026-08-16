@@ -27,6 +27,9 @@ export default defineConfig({
       // headless caller (hook, cron, daemon — no CLAUDE_PLUGIN_DATA) resolves
       // the same directory an interactive session does instead of guessing.
       'src/data-dir.test.ts',
+      // The launcher's cross-process install lock — proves exclusion +
+      // stale-lock recovery deterministically (fake timers, no spawning).
+      'src/install-lock.test.ts',
       // --profile global flag + -o/--output_dir on newly-report-writing
       // commands (profile+output-flags task).
       'src/cli/profile-flag-and-output-dir.test.ts',
