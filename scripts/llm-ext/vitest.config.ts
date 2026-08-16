@@ -23,6 +23,10 @@ export default defineConfig({
       'src/launcher-boot.test.ts',
       // Grouped CLI launcher (TRDD-DT11TE2Z) — argv rewrite + did-you-mean.
       'src/cli/launcher.test.ts',
+      // The launcher's native-deps location. One fixed user-owned address, so a
+      // headless caller (hook, cron, daemon — no CLAUDE_PLUGIN_DATA) resolves
+      // the same directory an interactive session does instead of guessing.
+      'src/data-dir.test.ts',
       // --profile global flag + -o/--output_dir on newly-report-writing
       // commands (profile+output-flags task).
       'src/cli/profile-flag-and-output-dir.test.ts',

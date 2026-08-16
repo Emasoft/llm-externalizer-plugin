@@ -18,8 +18,10 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, copyFileSync, statSync, readFileSync, symlinkSync, lstatSync, rmSync, cpSync } from "node:fs";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { nativeDepsDir } from "./data-dir.mjs";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const SRC_PKG = join(SCRIPT_DIR, "package.json");
@@ -64,33 +66,6 @@ function pickPackageManager() {
     }
   }
   return null;
-}
-
-// Where the native deps live when Claude Code did not tell us.
-//
-// CLAUDE_PLUGIN_DATA is exported by Claude Code when IT launches the plugin. It
-// is NOT set when a user (or a skill, or a script) runs `llm-ext` straight from
-// a shell — and that used to be a hard FATAL telling them to set an environment
-// variable they had no reason to know about. The data dir is not a secret,
-// though: it is a fixed function of where this launcher sits.
-//
-//   <root>/plugins/cache/<marketplace>/<plugin>/<version>/scripts/llm-ext   <- SCRIPT_DIR
-//   <root>/plugins/data/<plugin>-<marketplace>                              <- the data dir
-//
-// So derive it. Returns null when the layout does not match (a dev checkout, a
-// vendored copy), because guessing a write location outside the known layout is
-// worse than saying we don't know.
-function deriveDataDirFromLayout() {
-  const versionDir = resolve(SCRIPT_DIR, "..", "..");
-  const pluginDir = resolve(versionDir, "..");
-  const marketplaceDir = resolve(pluginDir, "..");
-  const cacheDir = resolve(marketplaceDir, "..");
-  const pluginsRoot = resolve(cacheDir, "..");
-  if (basename(cacheDir) !== "cache" || basename(pluginsRoot) !== "plugins") return null;
-  const plugin = basename(pluginDir);
-  const marketplace = basename(marketplaceDir);
-  if (!plugin || !marketplace) return null;
-  return join(pluginsRoot, "data", `${plugin}-${marketplace}`);
 }
 
 /** True when the data dir already carries a usable better-sqlite3. A version
@@ -271,19 +246,11 @@ let installed = false;
 try {
   await tryImport();
 } catch (err) {
-  const dataDir = process.env.CLAUDE_PLUGIN_DATA || deriveDataDirFromLayout();
-  if (!dataDir) {
-    process.stderr.write(
-      `[llm-externalizer] FATAL: native module 'better-sqlite3' is missing, CLAUDE_PLUGIN_DATA is unset,\n` +
-        `and this launcher is not running from a plugin cache layout, so its data directory\n` +
-        `cannot be derived. Set CLAUDE_PLUGIN_DATA, or run \`npm install\` in ${SCRIPT_DIR}.\n\n` +
-        `Original error: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-    process.exit(1);
-  }
-  if (!process.env.CLAUDE_PLUGIN_DATA) {
-    log(`CLAUDE_PLUGIN_DATA unset — using the derived data dir ${dataDir}`);
-  }
+  // One fixed location, identical for every caller — an interactive session, a
+  // skill, a cron job, a detached daemon. Nothing to derive, nothing to inherit
+  // from the environment, so there is no "unresolvable data dir" state to fail
+  // on and no way for two callers to install into two different directories.
+  const dataDir = nativeDepsDir();
 
   // Self-install path. The previous SessionStart-bash-hook architecture was
   // replaced with this in-launcher path so the install works on Windows too.
