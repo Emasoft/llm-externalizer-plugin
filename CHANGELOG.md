@@ -1,6 +1,108 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.2] - 2026-08-16
+
+### Documentation
+
+- Docs: TRDD-QY1JITC7 — tick the pre-feature guard test (f3d521f)
+
+- Docs: add TRDD-QY1JITC7 — idle fan-out workers should race the straggler
+
+Records the measurement that shows the compaction <2min target cannot be met
+by the prescribed method (more chunks in parallel), the specific dead capacity
+that can be reclaimed instead, and the termination hazard that must be tested
+before the mechanism is built.
+
+- Docs(session-summary): HEDGE_AFTER_MS is not half of the chunk timeout
+
+The comment claimed HEDGE_AFTER_MS was "half of DEFAULT_CHUNK_TIMEOUT_MS" and
+described 60s as "sitting at the midpoint". The constants are 60_000 and
+600_000 — one tenth. The wording was almost certainly true when the chunk
+default was 120_000 and silently became false when it rose to 600_000.
+
+This is not cosmetic: the two sentences are the only stated rationale for a
+constant on a latency-critical path, so a reader reasoning from them computes
+a 300s hedge point instead of 60s and mis-predicts by 5x when a straggler gets
+duplicated. Measured this session, the real 60s trigger fires roughly 80s
+before a slow chunk finishes, which is exactly the behavior the old wording
+would have hidden.
+
+Replaced with the rationale the number actually has — 60s sits just above the
+measured median — plus an explicit warning not to re-couple the two constants.
+They are tuned against different measurements: the hedge point against the
+median, the chunk timeout against the slow tail. Coupling them again would
+re-introduce this drift the next time either is retuned.
+
+
+### Fixed
+
+- Fix(launcher): pin native deps to ~/.llm-externalizer, not the plugin cache
+
+The native-deps directory used to be CLAUDE_PLUGIN_DATA, falling back to a
+path DERIVED from the launcher's own position inside the plugin cache
+(<root>/plugins/cache/<marketplace>/<plugin>/<version>/...  ->
+<root>/plugins/data/<plugin>-<marketplace>).
+
+Both halves fail the same caller. A hook-spawned, cron-spawned or
+daemon-spawned child inherits no CLAUDE_PLUGIN_DATA, so it fell to the
+derivation; the derivation resolved a FIXED number of ".." hops, so any
+placement other than the exact expected depth returned null and the
+launcher died on a hard FATAL. Callers were left guessing the address --
+and a wrong guess self-installs a SECOND native module into a directory
+nothing else reads. Anchoring the address on the cache also made it
+version-shaped: it moves whenever the plugin layout does.
+
+The deps now live at one fixed, user-owned location -- ~/.llm-externalizer
+/native, under the same root as settings.yaml and honouring the same
+LLM_EXT_CONFIG_DIR override as getConfigDir(). There is nothing to derive,
+nothing to inherit from the environment, and therefore no "unresolvable
+data dir" state to fail on: every caller resolves the same directory, and
+it survives plugin upgrades, reinstalls and cache wipes.
+
+Reported by the ai-maestro-janitor session, whose cold-resume handoff had
+been degrading to a template for two days against the old contract.
+
+Verified: cold start from a plain temp dir (no CLAUDE_PLUGIN_DATA, no cache
+layout -- the exact shape that used to FATAL) installs into <config>/native,
+links it, and boots the CLI. Full suite 2093 passed / 4 skipped, typecheck
+and lint clean.
+
+
+### Testing
+
+- Test(session-summary): guard the map phase against waiting on abandoned work
+
+Written BEFORE the feature it guards (TRDD-QY1JITC7 acceptance criterion 2).
+
+That TRDD proposes letting an idle fan-out worker race the longest-outstanding
+chunk instead of idle-polling, because measurement showed two free models
+polling for 127s and 69s while one chunk ran to 143.8s and set the 146s wall
+clock. The hazard that stopped it being implemented the same day: the map phase
+ends at Promise.allSettled(workers), so a worker parked on a speculative call
+does not return until that call settles. If the real owner commits the chunk
+first, the phase waits on a result nobody can use — on the measured free-tier
+tail that is up to 1478s, turning the optimisation into a large regression.
+
+The test encodes the hazard rather than the feature. A call for a marker that
+was already answered is, by construction, work whose result cannot be needed —
+exactly the shape of a discarded racer — so the mock answers it after 3s. Today
+nothing issues such a call, so the run finishes on its 300ms slow chunk and both
+the text and timing assertions pass with room. Add speculative racing without a
+way to abandon the wait and the call starts happening, the phase absorbs the
+delay, and this fails.
+
+Proven to bite rather than assumed: inducing a genuine duplicate call for the
+slow chunk (a transient throw after the mock recorded the answer) fails the test
+with exit 1 on the joined-summary assertion, picking up STALE-3. Control
+reverted; driver suite 57 passed, tsc 0, eslint 0.
+
+The timing bound is deliberately loose — slow chunk + half the unneeded-call
+cost. The assertion is "does not absorb an extra ~3s", not "finishes in exactly
+N ms"; a tight bound would be flaky under CI load and would get deleted instead
+of debugged.
+
+
 ## [13.5.1] - 2026-08-14
 
 ### Fixed
