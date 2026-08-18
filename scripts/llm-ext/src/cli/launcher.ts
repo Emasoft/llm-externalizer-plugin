@@ -198,6 +198,25 @@ function outputFlagOf(tool: ToolDef | undefined): string | undefined {
  *  token after a boolean flag ONLY when it is one of these. */
 const BOOLEAN_VALUE_LITERALS = new Set(["true", "false", "1", "0", "yes", "no", "on", "off"]);
 
+/** Global boolean flags handled by main.ts OUTSIDE any tool schema (`--quiet`
+ *  in parseFlags; `--estimate`/`--preview` stripped before dispatch; `--help`/
+ *  `-h` short-circuits earlier). They appear in no tool's
+ *  `inputSchema.properties`, so without this list the unknown-flag guess in
+ *  `flagTakesValue` treated them as value-taking and swallowed the following
+ *  POSITIONAL as their "value" (`llm-ext scan folder --quiet ./src` ate
+ *  `./src`). Adding a global boolean flag to main.ts REQUIRES adding it here —
+ *  launcher.test.ts iterates this set with the flag placed BEFORE the
+ *  positional, so a missing entry fails the suite. `--profile` is deliberately
+ *  absent: it TAKES a value, and extractProfileFlag() strips it from argv
+ *  before resolveInvocation ever runs. */
+export const GLOBAL_BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
+  "--quiet",
+  "--estimate",
+  "--preview",
+  "--help",
+  "-h",
+]);
+
 /**
  * Does `token` (a `-`-prefixed flag) consume the NEXT token as its value?
  *
@@ -208,12 +227,14 @@ const BOOLEAN_VALUE_LITERALS = new Set(["true", "false", "1", "0", "yes", "no", 
  * `--folder_path` as its value and `src/` to die as an "unexpected argument".
  * The same hit `-o out.md` typed before the input.
  *
- * An unknown flag is assumed to take a value: guessing the other way would
- * steal its argument, whereas guessing this way leaves the flat parser to
- * report the unknown flag — the honest error either way.
+ * A GLOBAL boolean flag never takes a value (checked first — it is known, just
+ * not in the schema). A truly UNKNOWN flag is assumed to take a value:
+ * guessing the other way would let its argument win the positional slot, and
+ * either way the flat parser then rejects the unknown flag by name.
  */
 function flagTakesValue(token: string, next: string | undefined, tool: ToolDef | undefined): boolean {
   if (token.includes("=")) return false; // `--flag=value` carries its own value
+  if (GLOBAL_BOOLEAN_FLAGS.has(token)) return false; // global bool — never eats a token
   if (next === undefined || next.startsWith("-")) return false;
   const props = tool?.inputSchema?.properties ?? {};
   const name = token.replace(/^-+/, "");

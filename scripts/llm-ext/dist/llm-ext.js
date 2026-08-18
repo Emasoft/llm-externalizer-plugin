@@ -262429,8 +262429,16 @@ function outputFlagOf(tool) {
   return void 0;
 }
 var BOOLEAN_VALUE_LITERALS = /* @__PURE__ */ new Set(["true", "false", "1", "0", "yes", "no", "on", "off"]);
+var GLOBAL_BOOLEAN_FLAGS = /* @__PURE__ */ new Set([
+  "--quiet",
+  "--estimate",
+  "--preview",
+  "--help",
+  "-h"
+]);
 function flagTakesValue(token, next, tool) {
   if (token.includes("=")) return false;
+  if (GLOBAL_BOOLEAN_FLAGS.has(token)) return false;
   if (next === void 0 || next.startsWith("-")) return false;
   const props = tool?.inputSchema?.properties ?? {};
   const name = token.replace(/^-+/, "");

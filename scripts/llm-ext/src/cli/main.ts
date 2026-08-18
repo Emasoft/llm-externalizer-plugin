@@ -221,6 +221,9 @@ function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
       flag = flag.slice(0, eq);
     }
 
+    // Global boolean flag — any flag handled like this MUST also be listed in
+    // GLOBAL_BOOLEAN_FLAGS (launcher.ts), or the grouped launcher's unknown-
+    // flag guess swallows the positional that follows it.
     if (flag === "quiet") {
       quiet = true;
       continue;
@@ -522,7 +525,8 @@ async function main(): Promise<void> {
   // --estimate (task #187): dry-run the invocation and print the predicted
   // cost INSTEAD of dispatching. Stripped before parseFlags because it is a
   // global flag, not part of any tool's schema. The paid-mode rules/skills
-  // tell agents to run this before every paid operation.
+  // tell agents to run this before every paid operation. Global boolean flags
+  // stripped here MUST also be listed in GLOBAL_BOOLEAN_FLAGS (launcher.ts).
   const estimateIdx = rest.indexOf("--estimate");
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);

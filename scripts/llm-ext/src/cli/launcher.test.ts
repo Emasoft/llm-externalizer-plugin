@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { buildTools } from "../tools/definitions.js";
 import {
+  GLOBAL_BOOLEAN_FLAGS,
   GROUPS,
   isGroupName,
   levenshtein,
@@ -243,6 +244,20 @@ describe("resolveInvocation — global flags in the action slot (defect 1)", () 
       command: "scan_folder",
       argv: ["--folder_path", "./src", "--quiet"],
     });
+  });
+});
+
+describe("resolveInvocation — global flag BEFORE the positional (self-audit F-launcher)", () => {
+  it("no global boolean flag swallows the positional that follows it", () => {
+    for (const flag of GLOBAL_BOOLEAN_FLAGS) {
+      if (flag === "--help" || flag === "-h") continue; // routed to action-help above
+      const r = resolveInvocation(["scan", "folder", flag, "./src"], tools);
+      expect(r).toEqual({
+        kind: "dispatch",
+        command: "scan_folder",
+        argv: [flag, "--folder_path", "./src"],
+      });
+    }
   });
 });
 
