@@ -1,9 +1,11 @@
 ---
 trdd-id: P4ULUV1R
 title: Lift the non-empty non-echo response gate from session_summary to the common send path
-column: dev
+column: complete
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-18T20:12:00+0200
+updated: 2026-08-18T23:52:00+0200
+release-via: publish
+implementation-commits: [bd7ce89, 478d78e, 18718e7]
 current-owner: llm-externalizer-claude
 task-type: bugfix
 approval-tier: 0
@@ -105,3 +107,9 @@ written to the report file and the command exits 0.
 ## Notes and lessons learned
 
 ## Approval log
+
+- 2026-08-18T23:52:00+0200 — COMPLETE. bd7ce89 (shared gate + 3 sites) +
+  478d78e (8 mutation-checked surface tests) + 18718e7 (empty-final-
+  summary non-zero exit + 4 more echo sites). Full suite 2117 green,
+  dogfood 119/0, shipped in v13.5.7 (7b758c5). Janitor session notified
+  (their TRDD-PXP08ZQC verification proceeds on their cache update).
