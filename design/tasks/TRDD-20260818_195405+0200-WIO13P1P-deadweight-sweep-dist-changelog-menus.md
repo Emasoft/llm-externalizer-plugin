@@ -3,7 +3,7 @@ trdd-id: WIO13P1P
 title: Deadweight sweep — dist size, CHANGELOG bloat, dead script, menu surface collapse
 column: dev
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-19T00:14:00+0200
+updated: 2026-08-19T00:35:00+0200
 current-owner: llm-externalizer-claude
 task-type: refactor
 approval-tier: 0
@@ -39,11 +39,16 @@ Measurements, all first-hand verified 2026-08-19 (post v13.5.8):
    family. Collapse ⇒ 40→25 commands; user-facing removals need
    deprecation notes (README + CHANGELOG).
 
-NEXT ACTION: commit sub-item 3 (git rm add-shebang.mjs), then 1, then 2,
-each with before/after measurements in the commit body; then evaluate 4.
+DONE 2026-08-19: sub-item 3 → 3ab7cc4 (20 lines), sub-item 1 → fedacf5
+(dist 40,387,772→25,603,726 B, −36.6%; rebuild deterministic; `--help` +
+`--version` green), sub-item 2 → 2c4138d (prepend + subject-only,
+verified on a copy: +16 lines, past entries byte-untouched). Dogfood
+after all three: **119 PASS / 0 FAIL / 1 SKIP**.
 
-Gotcha: dist/ MUST stay tracked (GitHub install); rebuild + verify
-`llm-ext --help` + dogfood before claiming sub-item 1 done.
+NEXT ACTION: sub-item 4 — collapse the 16 mass-scout command files into
+one dispatcher command (+ deprecation notes in README + CHANGELOG),
+then close the card. Sub-item 2's real-world proof = next publish run
+(watch step 4 duration + prepended section).
 
 ## WHY
 
@@ -76,8 +81,8 @@ together they slow installs, bloat diffs, and pollute agent menus.
 
 - [ ] Each sub-item lands as its own commit with measurements in the
       commit body (before/after size or count).
-- [ ] No install/runtime regression: dogfood suite green, plugin loads,
-      `llm-ext --help` intact.
+- [x] No install/runtime regression: dogfood suite green (119/0 post
+      sub-items 1+2+3), plugin loads, `llm-ext --help` intact.
 
 ## Notes and lessons learned
 
