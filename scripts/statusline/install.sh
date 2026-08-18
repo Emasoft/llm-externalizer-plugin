@@ -12,6 +12,23 @@
 
 set -euo pipefail
 
+# Argv guard: this installer takes NO arguments. Anything unexpected must exit
+# BEFORE any side effect — without this guard, probing the script with any flag
+# (even --bogus) copied files and patched ~/.claude/settings.json.
+usage() {
+  cat <<'EOF'
+Usage: install.sh            install the statusline (takes NO arguments)
+       install.sh --help     show this help and exit (no side effects)
+Env:   REFRESH_INTERVAL=<seconds>   statusline refresh interval (default 3)
+EOF
+}
+if [[ $# -gt 0 ]]; then
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    *) echo "ERROR: unknown argument: $1 (this installer takes none)." >&2; usage >&2; exit 2 ;;
+  esac
+fi
+
 SCRIPT_DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SRC="$SCRIPT_DIR/statusline.py"
 DEST="$HOME/.claude/statusline.py"

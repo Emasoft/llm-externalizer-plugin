@@ -23,7 +23,8 @@ Behaviour mirrors install.sh exactly:
 - ``REFRESH_INTERVAL`` env var overrides the 3-second default.
 
 Usage:
-    python3 scripts/install_statusline.py
+    python3 scripts/install_statusline.py            # install (takes NO arguments)
+    python3 scripts/install_statusline.py --help     # print help, change nothing
 
 Or via the bundled slash command:
     /llm-externalizer:llm-externalizer-install-statusline
@@ -61,7 +62,28 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
         raise
 
 
+_USAGE = """\
+Usage: install_statusline.py            install the statusline (takes NO arguments)
+       install_statusline.py --help     show this help and exit (no side effects)
+Env:   REFRESH_INTERVAL=<seconds>       statusline refresh interval (default 3)"""
+
+
 def main() -> None:
+    # Argv guard: this installer takes NO arguments. Anything unexpected must
+    # exit BEFORE any side effect — without this guard, probing the script with
+    # any flag (even --bogus) copied files and patched ~/.claude/settings.json.
+    args = sys.argv[1:]
+    if args:
+        if args[0] in ("-h", "--help"):
+            print(_USAGE)
+            sys.exit(0)
+        print(
+            f"Error: unknown argument: {args[0]} (this installer takes none).",
+            file=sys.stderr,
+        )
+        print(_USAGE, file=sys.stderr)
+        sys.exit(2)
+
     plugin_root = Path(__file__).resolve().parent.parent
     src = plugin_root / "scripts" / "statusline" / "statusline.py"
     claude_dir = Path.home() / ".claude"
