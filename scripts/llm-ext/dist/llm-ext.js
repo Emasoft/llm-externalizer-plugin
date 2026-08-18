@@ -219687,6 +219687,26 @@ function resolveDiffScope(mode, dir) {
   return { mode, repoRoot, files, hunksByFile, skipped };
 }
 
+// src/response-gate.ts
+var ECHO_MIN_RESPONSE_LENGTH = 40;
+function normalizeForEchoCheck(text) {
+  return text.replace(/\s+/g, " ").trim().toLowerCase();
+}
+function isEchoResponse(response, sourceText) {
+  const normResponse = normalizeForEchoCheck(response);
+  if (normResponse.length < ECHO_MIN_RESPONSE_LENGTH) return false;
+  const normSource = normalizeForEchoCheck(sourceText);
+  return normSource.includes(normResponse);
+}
+function gateLLMResponse(content, sourceText) {
+  if (content.trim().length === 0) return "empty";
+  if (isEchoResponse(content, sourceText)) return "echo";
+  return null;
+}
+function gateFailureMessage(verdict) {
+  return verdict === "empty" ? "LLM returned empty response" : "LLM echoed its input back instead of answering";
+}
+
 // src/grouping.ts
 import { statSync } from "node:fs";
 import { basename, dirname, extname } from "node:path";
@@ -253918,16 +253938,6 @@ function classifyModelFallback(detail) {
   }
   return null;
 }
-var ECHO_MIN_RESPONSE_LENGTH = 40;
-function normalizeForEchoCheck(text) {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
-}
-function isEchoResponse(response, sourceText) {
-  const normResponse = normalizeForEchoCheck(response);
-  if (normResponse.length < ECHO_MIN_RESPONSE_LENGTH) return false;
-  const normSource = normalizeForEchoCheck(sourceText);
-  return normSource.includes(normResponse);
-}
 async function callWithRetry(prompt, modelId, maxOutputTokens, callModel, maxRetries, label, checkpointPath, echoCheckSource, retryTransient = false, sleepFn = sleep) {
   let lastErr = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -258506,6 +258516,9 @@ async function processFileCheck(filePath, task, options = {}) {
   const lang = options.language || detectLang(filePath);
   const fileLineCount = codeBlock.split("\n").length;
   const useEnsemble = options.ensemble !== false;
+  const perFileUserContent = `${buildPreInstructions(true, "read")}Task: ${task}
+
+${codeBlock}`;
   const messages = [
     {
       role: "system",
@@ -258513,9 +258526,8 @@ async function processFileCheck(filePath, task, options = {}) {
     },
     {
       role: "user",
-      content: `${buildPreInstructions(true, "read")}Task: ${task}
-
-${codeBlock}`
+      // Kept in a variable: it is also the response gate's echo ground truth.
+      content: perFileUserContent
     }
   ];
   const resp = await ensembleStreaming(
@@ -258537,8 +258549,11 @@ ${codeBlock}`
     fileLineCount
   );
   const footer = formatFooter(resp, "code_task", filePath);
-  if (resp.content.trim().length === 0) {
-    return { filePath, success: false, error: "LLM returned empty response" };
+  {
+    const verdict = gateLLMResponse(resp.content, perFileUserContent);
+    if (verdict !== null) {
+      return { filePath, success: false, error: gateFailureMessage(verdict) };
+    }
   }
   const filename = options.batchId ? batchReportFilename(
     "batch_check",
@@ -258884,10 +258899,11 @@ ${fence}`;
               useEnsemble
             );
             const footer = formatFooter(resp, "chat");
-            if (resp.content.trim().length === 0) {
+            const chatVerdict = gateLLMResponse(resp.content, promptBase);
+            if (chatVerdict !== null) {
               return {
                 content: [
-                  { type: "text", text: "FAILED: LLM returned empty response." }
+                  { type: "text", text: `FAILED: ${gateFailureMessage(chatVerdict)}.` }
                 ],
                 isError: true
               };
@@ -258986,7 +259002,7 @@ ${fd.block}`;
                 useEnsemble
               );
               const footer = formatFooter(resp, "chat", group[0]?.path);
-              if (resp.content.trim().length > 0) {
+              if (gateLLMResponse(resp.content, userContent) === null) {
                 if (autoBatched) {
                   const fileList = group.map((fd) => fd.path).join(", ");
                   batchResults.push(

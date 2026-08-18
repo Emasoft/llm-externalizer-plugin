@@ -853,38 +853,11 @@ function classifyModelFallback(detail: string): ModelFallbackReason | null {
   return null;
 }
 
-/** Below this many normalized characters, a substring match is not worth
- *  rejecting on — short generic replies ("Done.", "OK, summarized.") can
- *  coincide with a short fragment of the input by chance, and rejecting
- *  those would punish genuinely terse (but real) summaries. Real echoes
- *  measured in the wild (a copied transcript line) run into the hundreds of
- *  characters, so this floor is far below any real echo and only guards
- *  against short-string false positives. */
-const ECHO_MIN_RESPONSE_LENGTH = 40;
-
-function normalizeForEchoCheck(text: string): string {
-  return text.replace(/\s+/g, " ").trim().toLowerCase();
-}
-
-/**
- * True when `response` is not a summary of `sourceText` but a copy of it —
- * the WHOLE (normalized) response appears verbatim as a contiguous
- * substring of the source. Deliberately a "whole-response-is-input" test,
- * not "contains any input text": a legitimate summary very often quotes a
- * short fragment of the source (a file name, an error message, a command)
- * without being an echo, and rejecting on any shared substring would punish
- * that. Only when the ENTIRE response reduces to something already present
- * verbatim in the source — i.e. the model produced no new prose of its own
- * — is this a rejection. Measured live: a 1M-context free model asked to
- * summarize a large chunk returned a single raw line lifted straight from
- * the transcript; that response IS its own source substring in full.
- */
-export function isEchoResponse(response: string, sourceText: string): boolean {
-  const normResponse = normalizeForEchoCheck(response);
-  if (normResponse.length < ECHO_MIN_RESPONSE_LENGTH) return false;
-  const normSource = normalizeForEchoCheck(sourceText);
-  return normSource.includes(normResponse);
-}
+// The echo check moved to the shared response gate (TRDD-P4ULUV1R) so every
+// surface judges echoes identically; re-exported here because this module is
+// where it was born and its tests and callers import it from here.
+export { isEchoResponse } from "../response-gate.js";
+import { isEchoResponse } from "../response-gate.js";
 
 /**
  * Call `callModel` with a bounded number of retries — but ONLY for a

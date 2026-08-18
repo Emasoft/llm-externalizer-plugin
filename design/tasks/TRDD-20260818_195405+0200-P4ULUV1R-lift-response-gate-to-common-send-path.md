@@ -1,15 +1,47 @@
 ---
 trdd-id: P4ULUV1R
 title: Lift the non-empty non-echo response gate from session_summary to the common send path
-column: planned
+column: dev
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-18T19:54:05+0200
+updated: 2026-08-18T20:12:00+0200
 current-owner: llm-externalizer-claude
 task-type: bugfix
 approval-tier: 0
 ---
 
 # Lift the non-empty/non-echo response gate to the common send path
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
+
+Phase 1 implemented, awaiting full-suite + build verification:
+- NEW `src/response-gate.ts`: `isEchoResponse`/`normalizeForEchoCheck`/
+  `ECHO_MIN_RESPONSE_LENGTH` moved here from session_summary/driver.ts
+  (driver re-exports `isEchoResponse` — its tests unchanged, 70/70 green)
+  plus `gateLLMResponse` (null|"empty"|"echo") + `gateFailureMessage`.
+- GATED: processFileCheck (scan/check/code per-file path — echo added to
+  the existing empty check; source = perFileUserContent), chat
+  single-shot (source = promptBase), chat batched (echoed group now
+  dropped like an empty one; source = userContent).
+- `src/response-gate.test.ts` added AND registered in vitest.config.ts
+  (the include list is explicit — an unregistered test never runs).
+- FACT CORRECTION vs the body below: empty was ALREADY gated on chat
+  single-shot and processFileCheck before this card; the real gap was
+  echo (everywhere) + silent inclusion of echoed batch groups.
+
+NEXT ACTION: read reports_dev/vitest-p4uluv1r.log — full suite + build
+must be green; then commit source (by name) + this card.
+
+Remaining (Phase 2, this card stays open until decided/done):
+- Per-surface stubbed-boundary tests (chat/code/scan/check) per
+  acceptance box 3.
+- Batched path: decide whether ALL-groups-gated should FAIL the command
+  instead of producing an empty report (currently pre-existing skip
+  semantics are preserved).
+- check_imports: document that structure (JSON parse) covers
+  conformance on that path — verify, then tick or amend box 2.
+- ensembleStreaming call sites NOT in the card's acceptance list
+  (compare_files 5025/5323, check_references 5467/5540 region) — audit
+  whether they need the gate; new card if scope grows.
 
 ## WHY
 

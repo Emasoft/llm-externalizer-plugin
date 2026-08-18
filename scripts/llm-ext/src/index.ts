@@ -28,6 +28,7 @@ import {
   resolveRulesLayers,
 } from "./review-rules.js";
 import { parseDiffMode, resolveDiffScope, type DiffScope } from "./diff-scope.js";
+import { gateFailureMessage, gateLLMResponse } from "./response-gate.js";
 import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
@@ -2658,6 +2659,7 @@ async function processFileCheck(
   const fileLineCount = codeBlock.split("\n").length;
   const useEnsemble = options.ensemble !== false; // default true
 
+  const perFileUserContent = `${buildPreInstructions(true, "read")}Task: ${task}\n\n${codeBlock}`;
   const messages: ChatMessage[] = [
     {
       role: "system",
@@ -2665,7 +2667,8 @@ async function processFileCheck(
     },
     {
       role: "user",
-      content: `${buildPreInstructions(true, "read")}Task: ${task}\n\n${codeBlock}`,
+      // Kept in a variable: it is also the response gate's echo ground truth.
+      content: perFileUserContent,
     },
   ];
 
@@ -2690,8 +2693,13 @@ async function processFileCheck(
 
   const footer = formatFooter(resp, "code_task", filePath);
 
-  if (resp.content.trim().length === 0) {
-    return { filePath, success: false, error: "LLM returned empty response" };
+  // Shared response gate (TRDD-P4ULUV1R): empty AND echoed responses are
+  // failures — "the model printed something" is not success.
+  {
+    const verdict = gateLLMResponse(resp.content, perFileUserContent);
+    if (verdict !== null) {
+      return { filePath, success: false, error: gateFailureMessage(verdict) };
+    }
   }
 
   // Save report — use batch filename if batchId is set
@@ -3336,10 +3344,13 @@ async function dispatchCallToolInner(
             useEnsemble,
           );
           const footer = formatFooter(resp, "chat");
-          if (resp.content.trim().length === 0) {
+          // Shared response gate (TRDD-P4ULUV1R): empty AND echoed responses
+          // are failures — "the model printed something" is not success.
+          const chatVerdict = gateLLMResponse(resp.content, promptBase);
+          if (chatVerdict !== null) {
             return {
               content: [
-                { type: "text", text: "FAILED: LLM returned empty response." },
+                { type: "text", text: `FAILED: ${gateFailureMessage(chatVerdict)}.` },
               ],
               isError: true,
             };
@@ -3453,7 +3464,10 @@ async function dispatchCallToolInner(
               useEnsemble,
             );
             const footer = formatFooter(resp, "chat", group[0]?.path);
-            if (resp.content.trim().length > 0) {
+            // Shared response gate (TRDD-P4ULUV1R): an echoed group answer is
+            // dropped exactly like an empty one — including it would present
+            // the input back as if it were analysis.
+            if (gateLLMResponse(resp.content, userContent) === null) {
               if (autoBatched) {
                 const fileList = group.map((fd) => fd.path).join(", ");
                 batchResults.push(
