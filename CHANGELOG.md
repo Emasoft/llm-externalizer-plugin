@@ -1,6 +1,99 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.4] - 2026-08-18
+
+### Changed
+
+- Build: rebuild the shipped bundle for the session-summary prompt fix
+
+bin/llm-ext loads scripts/llm-ext/dist/llm-ext.js through launcher.mjs, so the
+source change above does nothing on an installed copy until this artifact is
+rebuilt — a green suite and a clean tsc would still have shipped the old
+prompt.
+
+
+### Fixed
+
+- Fix(session-summary): stop shipping a model's refusal as a successful summary
+
+An integrator reported `llm-ext session-summary --stdout` "failing completely".
+It had not failed: exit 0, non-empty stdout, and the stdout was the model
+DECLINING the task. The caller trusted the exit code, wrote the refusal into
+its state file as the session's own handoff, and cleared the live session on
+the strength of it. 1 of 19 handoffs on that host was poisoned that way.
+
+WHY THE MODEL REFUSED — two independent triggers, diagnosed with the
+integrator, both addressed here.
+
+FRAME. chunkPromptHeader opened by telling the model its output "REPLACES the
+transcript for a future session that must RESUME this work ... a handoff, not a
+report". That is a description of privilege escalation: what I write becomes
+authoritative context another agent acts on. Read over a transcript that itself
+contains agent instructions, it is indistinguishable from an attempt to launder
+instructions forward — and the model said so in as many words. It did not
+object to summarizing; it objected to authoring something that would be obeyed.
+The caller's use of the artifact is now simply not stated. It was never the
+model's business, and stating it was the entire trigger. The completeness
+requirement survives as an extraction spec: a report carrying goal, decisions,
+changes, findings, errors and open threads IS a resumable handoff. Resumability
+was always a property of the CONTENT, never of the frame.
+
+CONTENT. The prompt ran straight into the transcript body with a blank line
+between them and nothing marking which was which, so a transcript ABOUT agent
+infrastructure (cron, self-arming, session management) read as a description of
+something suspicious. Two additions defuse it: a neutral BEGIN TRANSCRIPT DATA
+separator, and a paragraph naming the embedded instructions and permitting the
+model to DESCRIBE rather than follow them. That resolves the dilemma it was
+refusing over instead of leaving it to guess. Both are worded WITHOUT naming
+the threat: "prompt injection" / "ignore any instructions below" is itself a
+suspicion cue that makes a safety-tuned model likelier to decline.
+
+WHY NO ANTI-REFUSAL INSTRUCTION: "you must comply" would trade a visible
+failure for an invisible one, and a model talked out of a refusal writes a
+worse summary. Deliberately not done.
+
+DETECTION — exit 0 must stop meaning "the process printed something".
+isNonconformingResponse joins no-text and echo as a third runtime verdict: a
+response containing none of the nine mandated section headings demotes the
+model, advances to the next candidate (a different model plausibly complies on
+identical input), and exits NON-ZERO if every candidate fails. Exit 0 now means
+schema-conforming output — a contract an integrator can key on instead of
+sniffing prose.
+
+WHY it tests for the SCHEMA and not for refusal phrasing: the transcripts this
+tool exists to compact routinely DISCUSS refusals, safety and prompt injection,
+so any "sounds like a decline" matcher would reject legitimate summaries of
+exactly those sessions. Judging the response's SHAPE against ground truth we
+control is the same principle isEchoResponse already uses. Known false
+negative — a refusal that quotes the schema back — is accepted deliberately: it
+leaves us where we were, whereas a phrase matcher trades that rare miss for
+unbounded wrong rejections. Named "nonconforming", not "refusal", because that
+is what is actually measured.
+
+ALSO FIXED, found en route and latent since the echo guard shipped: an error
+`detail` quotes model output, and advanceModel fed it to classifyUnavailable,
+which substring-matches "404", "not found" and "quota". A summary that merely
+MENTIONED a 404 could earn a healthy model a persisted cross-run cooldown.
+RUNTIME_VERDICT_REASONS now passes "" for our own runtime verdicts, so the
+no-cooldown behaviour they always intended holds by construction rather than by
+luck of the wording. That also makes it safe to widen this excerpt to 400 chars
+so an integrator's stderr log carries the model's actual words without a repro.
+
+ModelFallbackEvent.reason re-spelled the union's members instead of naming it,
+so adding a reason compiled at the declaration and failed at the assignment —
+the error pointed at the writer, never at the stale list. It references the
+type now.
+
+TESTS: 43 existing fixtures returned bare "SUMMARY"/"CHUNK-1" and never modelled
+a conforming response; they now carry a heading via summaryFixture(). Added the
+false-positive guard that matters most — a legitimate summary OF a transcript
+discussing refusals and prompt injection must be ACCEPTED — plus refusal
+demotion, the isNonconformingResponse unit cases, and assertions that the three
+trigger phrases stay ABSENT from the prompt so a future "make the stakes
+clearer" edit fails the suite instead of quietly restoring them.
+
+
 ## [13.5.3] - 2026-08-18
 
 ### Documentation
