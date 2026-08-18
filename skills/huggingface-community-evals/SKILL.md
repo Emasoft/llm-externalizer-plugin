@@ -1,6 +1,6 @@
 ---
 name: huggingface-community-evals
-description: "Run rigorous evaluations against Hugging Face Hub models using inspect-ai or lighteval on local hardware. Covers backend selection (vLLM / Transformers / accelerate), local GPU evals, smoke tests, and task selection. Use when the user wants a deeper benchmark than the wizard's 5-test compatibility check. Loaded by llm-externalizer-setup-agent."
+description: "llm-externalizer's bundled copy, adapted for its setup wizard (distinct from the huggingface-skills plugin's skill of the same name). Run rigorous evaluations against Hugging Face Hub models using inspect-ai or lighteval on local hardware. Covers backend selection (vLLM / Transformers / accelerate), local GPU evals, smoke tests, and task selection. Use when the user wants a deeper benchmark than the wizard's 5-test compatibility check. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 

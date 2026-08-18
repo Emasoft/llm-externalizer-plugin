@@ -1,6 +1,6 @@
 ---
 name: huggingface-local-models
-description: "Select GGUF artifacts and quantizations for llama.cpp on CPU, Mac Metal, CUDA, or ROCm runtimes. Covers Q4_K_M vs Q5_K_M vs Q6_K trade-offs, llama-server launch flags, --hf-repo/--hf-file fallback for non-standard naming, and conversion from Transformers weights when no GGUF exists. Use when the user picks llama.cpp / LM Studio / Ollama on non-Apple-Silicon platforms. Loaded by llm-externalizer-setup-agent."
+description: "llm-externalizer's bundled copy, adapted for its setup wizard (distinct from the huggingface-skills plugin's skill of the same name). Select GGUF artifacts and quantizations for llama.cpp on CPU, Mac Metal, CUDA, or ROCm runtimes. Covers Q4_K_M vs Q5_K_M vs Q6_K trade-offs, llama-server launch flags, --hf-repo/--hf-file fallback for non-standard naming, and conversion from Transformers weights when no GGUF exists. Use when the user picks llama.cpp / LM Studio / Ollama on non-Apple-Silicon platforms. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 

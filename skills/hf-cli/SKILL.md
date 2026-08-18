@@ -1,6 +1,6 @@
 ---
 name: hf-cli
-description: "Hugging Face Hub CLI (`hf`) reference for downloading, uploading, and managing models, datasets, and repos. Covers custom --local-dir placement, --include/--exclude file filters, --revision pinning, cache management, and `hf auth login` for gated repos. Use when the setup wizard's pre-built download_command needs extension. Loaded by llm-externalizer-setup-agent."
+description: "llm-externalizer's bundled copy, adapted for its setup wizard (distinct from the huggingface-skills plugin's skill of the same name). Hugging Face Hub CLI (`hf`) reference for downloading, uploading, and managing models, datasets, and repos. Covers custom --local-dir placement, --include/--exclude file filters, --revision pinning, cache management, and `hf auth login` for gated repos. Use when the setup wizard's pre-built download_command needs extension. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 

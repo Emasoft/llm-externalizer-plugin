@@ -1,6 +1,6 @@
 ---
 name: huggingface-best
-description: "Find the highest-scoring models for a coding task by querying the official Hugging Face benchmark leaderboards, with memory-budget filtering and per-device fit. Use when the recommender script returns no compatible row and the user has explicitly widened the search. Loaded by llm-externalizer-setup-agent."
+description: "llm-externalizer's bundled copy, adapted for its setup wizard (distinct from the huggingface-skills plugin's skill of the same name). Find the highest-scoring models for a coding task by querying the official Hugging Face benchmark leaderboards, with memory-budget filtering and per-device fit. Use when the recommender script returns no compatible row and the user has explicitly widened the search. Loaded by llm-externalizer-setup-agent."
 user-invocable: false
 ---
 
