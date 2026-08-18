@@ -1,6 +1,77 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.6] - 2026-08-18
+
+### Documentation
+
+- Docs: add TRDD-P4ULUV1R, TRDD-WIO13P1P, TRDD-VI9BPO35 — phase-2 audit cards
+
+Cards the three remaining CONFIRMED self-audit findings (evidence:
+reports/plugin-self-audit/DELEGATION.md) as Tier-0 planned TRDDs, per
+the hub's PHASE-2 GO dispatch (2026-08-18):
+- P4ULUV1R: lift the non-empty/non-echo response gate from
+  session_summary to the common send path (keeps the (nonconforming)
+  literal — janitor 3.3.16 keys on it).
+- WIO13P1P: deadweight sweep (dist size within the dist-stays-tracked
+  constraint, CHANGELOG subject-only entries, dead add-shebang.mjs,
+  mass-scout menu collapse).
+- VI9BPO35: HF skill description dedup — hub closed its resolver half
+  without a card; the description fix on our 4 bundled copies is ours.
+  Names must NOT change.
+
+- Docs: purge two stale facts from shipped surfaces — wrong group name, dead MCP claim
+
+1. rules/use-llm-externalizer.md (installed into ~/.claude/rules/ on every
+   machine): the 7-group list said 'config' but that group was renamed —
+   'llm-ext config show' exits 1, 'llm-ext settings show' exits 0
+   (verified live). Fleet-wide blast radius: every session reading the
+   rule was taught a command that fails.
+2. models replacements --help still asserted 'the MCP server is read-only
+   by design' — the MCP server was deleted in d557c68. Reworded to state
+   the surviving invariant (this command never mutates settings) without
+   the dead component. dist rebuilt and verified via ./bin/llm-ext.
+
+Installed copies (~/.claude/rules/use-llm-externalizer.md, ~/.claude/CLAUDE.md:330)
+fixed in place the same way.
+
+
+### Fixed
+
+- Fix(launcher): global boolean flags no longer swallow the following positional
+
+flagTakesValue() assumed every schema-unknown flag takes a value, but
+--quiet/--estimate/--preview are GLOBAL flags handled in main.ts and
+appear in no tool's inputSchema — so 'llm-ext scan folder --quiet ./src'
+consumed ./src as --quiet's value and the command died blaming the
+user's path, not the flag. The old comment claimed the flat parser would
+'report the unknown flag' — false for this class: it saw an unexpected
+positional instead, which is why the bug survived review.
+
+Fix: exported GLOBAL_BOOLEAN_FLAGS const checked first (never eats a
+token); truly-unknown flags keep the take-value guess (correct: the flat
+parser then rejects them BY NAME). Test iterates the const with the flag
+BEFORE the positional — the ordering both old --quiet tests missed.
+main.ts sites carry keep-in-sync comments so a future global flag can't
+recur the class. --profile excluded: value-taking and stripped by
+extractProfileFlag before the launcher runs (verified main.ts:437 vs 458).
+
+Verified: 24/24 launcher tests; './bin/llm-ext session compact --quiet
+/nonexistent/x.jsonl' now fails naming the path (positional captured).
+
+- Fix(statusline): argv-guard both installers — refuse any argument before side effects
+
+Previously both installers ignored argv entirely: probing them with ANY
+flag (even --help or --bogus) ran the full install and patched
+~/.claude/settings.json as a side effect. Now --help/-h prints usage and
+exits 0, any other argument errors with exit 2, and both paths exit
+BEFORE any file copy or settings patch. Bare invocation (the only form
+the slash command and check-statusline.py --fix use) is unchanged.
+
+Verified: sh/py x --help/--bogus all leave settings.json checksum
+unchanged; bash -n and py_compile clean.
+
+
 ## [13.5.5] - 2026-08-18
 
 ### Documentation
