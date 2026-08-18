@@ -1,6 +1,51 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.5] - 2026-08-18
+
+### Documentation
+
+- Docs(session-summary): pin the field evidence against tightening the guard
+
+Field run on 13.5.4 across 9 real transcripts: 0/9 refusals, 0/9 false
+positives, and heading counts in CONFORMING outputs ranged 4-9. The obvious
+next 'improvement' — reject below N headings — would eat the two at the
+bottom, both small-but-real sessions, and would contradict the prompt's own
+instruction to omit empty sections. Recording the counterexamples where
+someone about to add that threshold will read them.
+
+
+### Fixed
+
+- Fix(session-summary): strip availability vocabulary from the nonconforming exit
+
+The exhaustion error said "every candidate free model is unavailable" on EVERY
+path, including the one where nothing was throttled and the models simply
+declined. An integrator scanning that message for transient markers matched the
+word "unavailable" and classified a permanent refusal as retryable, which would
+burn its whole retry deadline on a model that will decline identically every
+time. Reported first-hand by that caller after wiring to the new contract.
+
+The nonconforming path now has its own message with no availability vocabulary
+at all — not "unavailable", not "rate limit", not "429" — and says what is
+actually true: the models answered, but not with the requested schema, so
+re-running unchanged will not help. That is also the correct OPERATOR advice;
+"re-run once a model recovers" was wrong here, since there is nothing to
+recover from.
+
+The caller keys on the literal `(nonconforming)` token, so it is placed BEFORE
+the response excerpt: the excerpt is arbitrary model text and could otherwise
+contain the token itself, or any transient marker, ahead of ours. Renaming that
+token is a BREAKING change for such callers.
+
+The fix is at the source rather than left to the caller's scan ordering — one
+integrator already worked around it, and every future one would have to
+rediscover the same hazard.
+
+TEST pins the contract as a contract: the token is present, precedes the model's
+words, and none of the nine availability phrases appears in the message.
+
+
 ## [13.5.4] - 2026-08-18
 
 ### Changed
