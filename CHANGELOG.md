@@ -1,6 +1,84 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.7] - 2026-08-18
+
+### Added
+
+- Feat(response-gate): shared non-empty + non-echo gate on chat and per-file send paths (TRDD-P4ULUV1R)
+
+Echo responses passed as success everywhere outside session_summary: an
+answer that is verbatim its own input was saved as a report and exited
+0. New src/response-gate.ts owns the verdict (isEchoResponse moved from
+session_summary/driver.ts, which re-exports it unchanged — its
+schema-aware 'nonconforming' verdict and the (nonconforming) exit token
+janitor 3.3.16 keys on are deliberately NOT generalized). Gated:
+processFileCheck (scan/check/code per-file; echo added beside the
+existing empty check), chat single-shot, and chat batched (an echoed
+group is now dropped exactly like an empty one instead of shipping the
+input back as analysis). Fact correction vs the card: empty was already
+gated on two of the three sites; the real gap was echo.
+
+response-gate.test.ts registered in vitest.config.ts's EXPLICIT include
+list (an unregistered test never runs). Verified: tsc clean, full suite
+2109 passed / 4 skipped, build green. Phase 2 (per-surface stubbed
+tests, all-groups-gated batch semantics, check_imports doc) tracked in
+the card's STATE block.
+
+
+### Documentation
+
+- Docs: add retro TRDD-GNVIIMJP, TRDD-744G4A9W, TRDD-ME1CAHG4 — card the three pre-carded v13.5.6 fixes
+
+Hub governance requirement (Phase-2 dispatch 2026-08-18): every Phase-2
+change must cite its audit finding via a TRDD. fce10d9 (installer argv
+guards), b1f008f (stale-doc purge) and 51d46bb (launcher global-flag
+fix) landed before their cards; these retro-cards carry the SHAs in
+implementation-commits and cite the DELEGATION.md findings, restoring
+the blame -> commit -> TRDD -> finding chain. All three shipped in
+v13.5.6 (c242eba).
+
+
+### Fixed
+
+- Fix(response-gate): empty final summary exits non-zero; echo gated at compare_files and check_references (TRDD-P4ULUV1R)
+
+session-summary could assemble an EMPTY summary and exit 0 — with
+--stdout that shipped literally nothing at a zero exit (measured by the
+ai-maestro-janitor's handoff composer: 14 consecutive attempts on one
+host, every cycle degrading to a template handoff with no classifiable
+signal). The per-response no-text gate cannot catch this: it judges one
+model reply, not the reduce result. The new final-assembly gate fails
+BOTH --stdout and report-file paths with a message that deliberately
+avoids availability vocabulary (classifyUnavailable substring-matches;
+same reason as the (nonconforming) wording fix in v13.5.5).
+
+Also extends the shared echo gate to the 4 remaining accept sites:
+compare_files (both paths, loud FAILED) and check_references (both
+paths, echoed reply dropped exactly like an empty one) — a model
+returning the diff or source verbatim is not analysis.
+
+Verified: full suite 2117 passed / 4 skipped, tsc + build green;
+14/14 gate tests including the 8 mutation-checked surface wiring tests.
+
+
+### Testing
+
+- Test(response-gate): 8 per-surface wiring tests — echo/empty at chat, per-file, batched, check_imports (TRDD-P4ULUV1R)
+
+Stubs ONLY globalThis.fetch (the repo's own idiom); local single-model
+backend so the model's exact bytes reach the gate (the OpenRouter
+ensemble wraps answers in '## Model:' headers, which would un-echo a
+verbatim echo and pass for the wrong reason). Mutation-checked: removing
+each of the 3 gate sites reddened exactly its wiring test. check_imports
+asserts conformance-by-JSON-parse (no text gate there by design).
+Registered in vitest.config.ts's explicit include list.
+
+Authored by the js-test-writer agent; verified first-hand (vitest exit 0
+via &&-chain, tsc clean). Report:
+reports/js-test-writer/20260818_202841+0200-response-gate-surface-tests.md
+
+
 ## [13.5.6] - 2026-08-18
 
 ### Documentation
