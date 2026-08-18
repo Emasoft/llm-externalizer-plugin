@@ -47,16 +47,11 @@ const shared = {
 };
 
 await Promise.all([
-  // The engine. No longer an MCP server — it exports boot() + dispatchCallTool()
-  // and is consumed in-process by the CLI below. Still emitted as its own bundle
-  // because publish.py's release check asserts this artifact exists; that check
-  // moves to dist/llm-ext.js when the canonical-pipeline upgrade lands, and this
-  // entry goes with it.
-  build({
-    ...shared,
-    entryPoints: ["src/index.ts"],
-    outfile: "dist/index.js",
-  }),
+  // No separate engine bundle: the engine (src/index.ts) is consumed in-process
+  // by the CLI entry and bundled into dist/llm-ext.js. The old dist/index.js
+  // twin existed only for publish.py's release check, which asserts
+  // dist/llm-ext.js since the canonical-pipeline upgrade (publish.py ~L935) —
+  // re-adding it would ship a second 14.8MB copy of the same code.
   // The user-facing binary: `llm-ext <command>`.
   build({
     ...shared,
@@ -71,5 +66,5 @@ await Promise.all([
 ]);
 
 console.log(
-  "Build complete: dist/index.js, dist/llm-ext.js, dist/benchmark.js (fully bundled)",
+  "Build complete: dist/llm-ext.js, dist/benchmark.js (fully bundled)",
 );
