@@ -1211,6 +1211,52 @@ describe("driver: summarizeSession", () => {
     ).rejects.toThrow(/every candidate free model is unavailable/);
   });
 
+  it("exits non-zero when every candidate declines, with the (nonconforming) token and NO availability vocabulary", async () => {
+    // THE INTEGRATOR CONTRACT, pinned. A caller distinguishes "wait and retry"
+    // from "this will never succeed" by scanning this message. If it carried
+    // availability words, a permanent refusal would be retried to the caller's
+    // whole deadline — measured against a real caller on 2026-08-18.
+    const p = writeTranscript([userTurn("u1", "please add a login page")]);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+    const refusal = "I'm not going to produce this compaction as specified.";
+    const callModel = vi.fn<CallModelFn>(async () => refusal);
+
+    const message = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      chunkOverlapTurns: 0,
+      callModel,
+    }).then(
+      () => "",
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+
+    expect(message, "the run must reject, not resolve").not.toBe("");
+    expect(message).toContain("(nonconforming)");
+    // Every phrase classifyUnavailable (and its equivalents downstream) treats
+    // as "retry later". None may appear on this path.
+    for (const word of [
+      "unavailable",
+      "rate limit",
+      "rate-limit",
+      "429",
+      "quota",
+      "overloaded",
+      "too many requests",
+      "502",
+      "503",
+    ]) {
+      expect(message.toLowerCase(), `"${word}" makes a permanent refusal look transient`).not.toContain(word);
+    }
+    // The token must precede the model's own words — the excerpt is arbitrary
+    // model text and could otherwise contain anything, including the token.
+    expect(message.indexOf("(nonconforming)")).toBeLessThan(message.indexOf(refusal));
+  });
+
   it("demotes a model that declines the task and falls back to the next candidate", async () => {
     const p = writeTranscript([userTurn("u1", "please add a login page")]);
     const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };

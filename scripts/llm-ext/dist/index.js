@@ -254173,6 +254173,11 @@ async function summarizeSession(options) {
     const store = getCooldownStore();
     const earliest = earliestReset(store, models.map((m) => m.id), Date.now());
     const when = earliest && earliest > Date.now() ? ` Earliest known reset: ${new Date(earliest).toISOString()}.` : "";
+    if (lastErr.reason === "nonconforming") {
+      return new Error(
+        `session-summary: no candidate produced a conforming summary \u2014 tried ${triedIds.join(", ")}. Last response from '${lastErr.modelId}' (nonconforming): the models answered, but not with the requested schema, so re-running unchanged will not help. Detail: ${lastErr.detail}. Checkpoint saved at ${options.checkpointPath}.`
+      );
+    }
     return new Error(
       `session-summary: every candidate free model is unavailable \u2014 tried ${triedIds.join(", ")}. Last failure on '${lastErr.modelId}' (${lastErr.reason}): ${lastErr.detail}.${when} Checkpoint saved at ${options.checkpointPath} \u2014 re-run once a model recovers.`
     );

@@ -1441,6 +1441,31 @@ export async function summarizeSession(
     const earliest = earliestReset(store, models.map((m) => m.id), Date.now());
     const when =
       earliest && earliest > Date.now() ? ` Earliest known reset: ${new Date(earliest).toISOString()}.` : "";
+    // The nonconforming path gets its own message, deliberately containing NO
+    // availability vocabulary — not "unavailable", not "rate limit", not
+    // "429", none of the words `classifyUnavailable` and every integrator's
+    // equivalent scan for. Two reasons, and the second is the load-bearing one:
+    //
+    //   1. The advice differs. Nothing was throttled here; the models ANSWERED.
+    //      Telling the operator to wait for a reset is simply wrong — waiting
+    //      changes nothing about a model that will decline again.
+    //   2. A caller reading this message must not classify it as transient. The
+    //      generic wording below says "every candidate free model is
+    //      unavailable", and an integrator matching that word would retry a
+    //      permanent refusal until its whole deadline burned. That happened to
+    //      a real caller (2026-08-18), which is why this branch exists.
+    //
+    // `(nonconforming)` is the stable token callers key on, and it is placed
+    // BEFORE the excerpt so a model's own words can never precede it. Renaming
+    // it is a BREAKING change for those callers — version-flag it and say so.
+    if (lastErr.reason === "nonconforming") {
+      return new Error(
+        `session-summary: no candidate produced a conforming summary — tried ${triedIds.join(", ")}. ` +
+          `Last response from '${lastErr.modelId}' (nonconforming): the models answered, but not with ` +
+          `the requested schema, so re-running unchanged will not help. Detail: ${lastErr.detail}. ` +
+          `Checkpoint saved at ${options.checkpointPath}.`,
+      );
+    }
     return new Error(
       `session-summary: every candidate free model is unavailable — tried ${triedIds.join(", ")}. ` +
         `Last failure on '${lastErr.modelId}' (${lastErr.reason}): ${lastErr.detail}.${when} ` +
