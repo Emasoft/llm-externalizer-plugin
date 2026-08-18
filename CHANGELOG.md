@@ -1,6 +1,26 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.8] - 2026-08-18
+
+### Documentation
+
+- Docs(skills): self-identifying descriptions on the 4 HF skills colliding with huggingface-skills (TRDD-VI9BPO35)
+
+With both plugins installed, skill menus showed duplicate hf-cli /
+huggingface-best / huggingface-community-evals / huggingface-local-models
+rows with nothing saying which plugin owns them — agents picked at
+random. Each bundled copy's description now LEADS with the owning
+plugin + purpose ('llm-externalizer's bundled copy, adapted for its
+setup wizard...'); verified honest first: all 4 differ from the
+upstream copies (153-310 diff lines each) and are setup-agent preloads.
+Names deliberately unchanged (USER constraint — resolver scoping and
+cross-references depend on them). Cross-reference sweep: no text
+depends on the old description wording. Dogfood 119/0.
+
+- Docs: TRDD-P4ULUV1R -> complete (shipped in v13.5.7)
+
+
 ## [13.5.7] - 2026-08-18
 
 ### Added
