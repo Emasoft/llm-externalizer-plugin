@@ -4464,6 +4464,31 @@ async function dispatchCallToolInner(
             ? `Resumed from checkpoint: ${result.checkpointPath}\n`
             : `Checkpoint: ${result.checkpointPath}\n`);
 
+        // Final-assembly gate (TRDD-P4ULUV1R; reported by the janitor's
+        // handoff composer 2026-08-18): a run whose ASSEMBLED summary is
+        // empty must not exit 0 — with --stdout that shipped literally
+        // nothing at a zero exit, 14 consecutive times on one host, and the
+        // caller had no honest way to classify it. The per-response no-text
+        // gate upstream cannot cover this: it judges one model reply, not
+        // the reduce result. Wording deliberately avoids availability
+        // vocabulary (quota/404/etc.) — classifyUnavailable substring-
+        // matches, and this verdict must never sideline a model (same
+        // reason as the (nonconforming) path, v13.5.5).
+        if (result.summary.trim().length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  "FAILED: session-summary assembled an empty summary " +
+                  `(${result.totalChunks} chunk(s) mapped; transcript ${transcriptPath}). ` +
+                  "Retry is reasonable; the checkpoint is preserved.",
+              },
+            ],
+            isError: true,
+          };
+        }
+
         // --stdout (opt-in, caller-selected): return the summary TEXT
         // directly instead of writing a report file and returning its path.
         // Deliberately skips saveResponse entirely in this mode — "stdout
@@ -5040,7 +5065,12 @@ async function dispatchCallToolInner(
           } catch (err) {
             return { error: `LLM error: ${err instanceof Error ? err.message : String(err)}` };
           }
-          if (!resp.content.trim()) return { error: "LLM returned empty response" };
+          // Shared response gate (TRDD-P4ULUV1R): echo added beside the
+          // empty check — a model returning the diff back is not a comparison.
+          {
+            const v = gateLLMResponse(resp.content, String(msgs[1].content));
+            if (v !== null) return { error: gateFailureMessage(v) };
+          }
           return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
         };
 
@@ -5345,10 +5375,12 @@ async function dispatchCallToolInner(
           cfUseEnsemble,
         );
         const cfFooter = formatFooter(cfResp, "compare_files", fileA);
-        if (!cfResp.content.trim()) {
+        // Shared response gate (TRDD-P4ULUV1R): echo added beside the empty check.
+        const cfVerdict = gateLLMResponse(cfResp.content, String(cfMessages[1].content));
+        if (cfVerdict !== null) {
           return {
             content: [
-              { type: "text", text: "FAILED: LLM returned empty response." },
+              { type: "text", text: `FAILED: ${gateFailureMessage(cfVerdict)}.` },
             ],
             isError: true,
           };
@@ -5480,7 +5512,9 @@ async function dispatchCallToolInner(
               ];
               const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
               const footer = formatFooter(resp, "check_references", filePath);
-              if (resp.content.trim()) {
+              // Shared response gate (TRDD-P4ULUV1R): an echoed reply (the
+              // source file returned verbatim) is dropped like an empty one.
+              if (gateLLMResponse(resp.content, String(msgs[1].content)) === null) {
                 const depInfo = deps.length > 0 ? `\n\nDependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
                 gReports.push(`## File: ${filePath}${depInfo}\n\n${resp.content}${footer}`);
               }
@@ -5564,7 +5598,8 @@ async function dispatchCallToolInner(
           );
           const crFooter = formatFooter(crResp, "check_references", filePath);
 
-          if (crResp.content.trim()) {
+          // Shared response gate (TRDD-P4ULUV1R): echo dropped like empty.
+          if (gateLLMResponse(crResp.content, String(crMessages[1].content)) === null) {
             const depInfo =
               depPaths.length > 0
                 ? `\n\nDependencies checked: ${depPaths.map((p) => `\`${p}\``).join(", ")}`

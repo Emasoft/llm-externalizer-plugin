@@ -11,9 +11,28 @@ approval-tier: 0
 
 # Lift the non-empty/non-echo response gate to the common send path
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-18 (rev 2)
 
-Phase 1 implemented, awaiting full-suite + build verification:
+PHASE 2 LANDED (this commit): (a) FINAL-ASSEMBLY gate on session-summary
+— an empty assembled summary now exits non-zero on BOTH --stdout and
+report-file paths (defect reported live by the ai-maestro-janitor
+session: 14x exit-0-empty on one host; wording avoids availability
+vocabulary so classifyUnavailable can never key on it); (b) echo gate at
+the 4 remaining sites (compare_files x2 fail loudly; check_references
+x2 drop the reply like an empty one); (c) 8 per-surface wiring tests
+(478d78e, mutation-checked by the authoring agent, re-verified
+first-hand). Acceptance notes: the generic surfaces deliberately do NOT
+use the `(nonconforming)` token — janitor 3.3.16 keys it to
+session_summary's schema verdict; generic failures say empty/echo.
+Batch all-groups-gated already fails via the pre-existing "no group
+produced anything" exit (asserted by surface test 5). check_imports
+conformance comes from its mandated JSON parse (surface tests 7/8).
+
+NEXT ACTION: dogfood (`uv run tests/dogfood/dogfood_test.py`, $0) →
+publish (>=13.5.7) → message the janitor session the version (their
+TRDD-PXP08ZQC rollout waits on it) → move this card testing→complete.
+
+Phase 1 (landed bd7ce89):
 - NEW `src/response-gate.ts`: `isEchoResponse`/`normalizeForEchoCheck`/
   `ECHO_MIN_RESPONSE_LENGTH` moved here from session_summary/driver.ts
   (driver re-exports `isEchoResponse` — its tests unchanged, 70/70 green)

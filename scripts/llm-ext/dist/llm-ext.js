@@ -259761,6 +259761,17 @@ ${sizeLine}
 ` + (result.resumedFromCheckpoint ? `Resumed from checkpoint: ${result.checkpointPath}
 ` : `Checkpoint: ${result.checkpointPath}
 `);
+          if (result.summary.trim().length === 0) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `FAILED: session-summary assembled an empty summary (${result.totalChunks} chunk(s) mapped; transcript ${transcriptPath}). Retry is reasonable; the checkpoint is preserved.`
+                }
+              ],
+              isError: true
+            };
+          }
           if (ssStdoutRaw === true) {
             return { content: [{ type: "text", text: result.summary }] };
           }
@@ -260256,7 +260267,10 @@ ${fence}${sourceBlocks}` }
             } catch (err3) {
               return { error: `LLM error: ${err3 instanceof Error ? err3.message : String(err3)}` };
             }
-            if (!resp.content.trim()) return { error: "LLM returned empty response" };
+            {
+              const v = gateLLMResponse(resp.content, String(msgs[1].content));
+              if (v !== null) return { error: gateFailureMessage(v) };
+            }
             return { content: resp.content + formatFooter(resp, "compare_files", fA), model: resp.model };
           };
           const gitDiffPair = (repo, fromRef, toRef, filePath) => {
@@ -260535,10 +260549,11 @@ ${diffFence}` + sourceFileBlocks
             cfUseEnsemble
           );
           const cfFooter = formatFooter(cfResp, "compare_files", fileA);
-          if (!cfResp.content.trim()) {
+          const cfVerdict = gateLLMResponse(cfResp.content, String(cfMessages[1].content));
+          if (cfVerdict !== null) {
             return {
               content: [
-                { type: "text", text: "FAILED: LLM returned empty response." }
+                { type: "text", text: `FAILED: ${gateFailureMessage(cfVerdict)}.` }
               ],
               isError: true
             };
@@ -260664,7 +260679,7 @@ ${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` }
                 ];
                 const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
                 const footer = formatFooter(resp, "check_references", filePath);
-                if (resp.content.trim()) {
+                if (gateLLMResponse(resp.content, String(msgs[1].content)) === null) {
                   const depInfo = deps.length > 0 ? `
 
 Dependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
@@ -260742,7 +260757,7 @@ ${depBlocks.join("\n\n")}` : "## No local dependencies resolved \u2014 check for
               crLineCount
             );
             const crFooter = formatFooter(crResp, "check_references", filePath);
-            if (crResp.content.trim()) {
+            if (gateLLMResponse(crResp.content, String(crMessages[1].content)) === null) {
               const depInfo = depPaths.length > 0 ? `
 
 Dependencies checked: ${depPaths.map((p) => `\`${p}\``).join(", ")}` : "";
