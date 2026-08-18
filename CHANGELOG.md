@@ -1,6 +1,64 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.3] - 2026-08-18
+
+### Documentation
+
+- Docs: add TRDD-Q185FRMW — serialize first-run native install (closes #13 design)
+
+Issue #13: the first-run self-install of native deps in scripts/llm-ext/launcher.mjs
+is unguarded against concurrency. Three races verified first-hand at 7cc4521:
+concurrent npm into one node_modules, a TOCTOU in linkNodeModules whose cpSync
+fallback throws again uncaught, and dataDirHasDeps reading a half-written tree.
+
+WHY the fix is a lock and not a redesign: races 1 and 2 self-heal on retry and the
+window opens once per machine, so they alone would not justify a change. Race 3 links
+an incomplete tree, so its damage outlives the racing process — that is what makes
+this worth fixing. Scope is therefore one exclusive-create mkdir lock, not a
+staging-dir + atomic-rename rewrite.
+
+WHY mkdirSync without recursive: atomic exclusive-create on POSIX and Windows with
+zero dependencies. flock(2) would need a native addon, ruled out fleet-wide 2026-07-17.
+
+WHY a stale-lock break is mandatory: without it one crash mid-install bricks every
+future run, which is strictly worse than the race being fixed.
+
+
+### Fixed
+
+- Fix(launcher): serialize first-run native install with an exclusive-create lock (TRDD-Q185FRMW)
+
+Closes the three races in issue #13. Two llm-ext processes starting on a fresh
+machine both ran npm into one node_modules, both raced the linkNodeModules
+symlink (TOCTOU -> EEXIST -> cpSync throws again, uncaught), and a loser could
+read dataDirHasDeps as true mid-write and link a half-built tree.
+
+WHY a lock and not a staging+rename redesign: races 1 and 2 self-heal on retry
+and the window opens once per machine. Race 3 is the one that justifies a change
+at all, because it LINKS the incomplete tree, so its damage outlives the racing
+process. Smallest fix that closes all three is serialization, not a rewrite.
+
+WHY mkdirSync without recursive: atomic exclusive-create on POSIX and Windows,
+zero dependencies. flock(2) needs a native addon, ruled out on this fleet.
+
+WHY the dataDirHasDeps re-check sits INSIDE withInstallLock: hoisting it above
+the lock reintroduces race 3 verbatim. Do not move it.
+
+WHY the stale-lock mtime break exists: without it a crash while holding the lock
+bricks every future run - strictly worse than the race being fixed.
+
+WHY the test never spawns processes: a two-process race test passes with the lock
+deleted, since it relies on scheduling to produce the collision. The exclusion is
+asserted deterministically (hold, assert contender parked, release, assert it
+proceeds) and the negative assertion was verified to fail against a neutered lock.
+
+install-lock.mjs is load-bearing at runtime: bin/llm-ext imports launcher.mjs from
+the repo tree, so an uncommitted sibling would break every invocation on a fresh
+clone. The npm package is unaffected - its files list is dist/** and its bin
+points at dist/llm-ext.js, so scripts/ never ships there.
+
+
 ## [13.5.2] - 2026-08-16
 
 ### Documentation
