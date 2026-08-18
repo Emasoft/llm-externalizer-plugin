@@ -756,12 +756,18 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         return
 
     # ── 4. Generate CHANGELOG.md via git-cliff ──
-    # git-cliff re-generates the full CHANGELOG from all commits since
-    # the initial tag. The unreleased commits get grouped under the new
-    # tag. commit_parsers in cliff.toml control the section layout.
+    # PREPEND mode: only the unreleased commits are rendered (under the
+    # new tag) and inserted at the top of the existing CHANGELOG.md.
+    # This replaced full-history --output regen (TRDD-WIO13P1P): the
+    # full regen took ~16 minutes per publish on this repo and rewrote
+    # every past entry, whereas prepend takes seconds and leaves
+    # pre-2026-08-19 full-body entries untouched. git-cliff strips the
+    # configured [changelog].header from the old file and re-writes
+    # header + new section + rest, so the header must stay in sync with
+    # the file's first lines. commit_parsers control the section layout.
     print("── 4. Generate CHANGELOG.md ──")
     cliff_result = run(
-        ["git-cliff", "--tag", tag, "--output", str(changelog)],
+        ["git-cliff", "--unreleased", "--tag", tag, "--prepend", str(changelog)],
         capture=True,
         check=False,
     )
