@@ -39,9 +39,13 @@ Remaining (Phase 2, this card stays open until decided/done):
   semantics are preserved).
 - check_imports: document that structure (JSON parse) covers
   conformance on that path — verify, then tick or amend box 2.
-- ensembleStreaming call sites NOT in the card's acceptance list
-  (compare_files 5025/5323, check_references 5467/5540 region) — audit
-  whether they need the gate; new card if scope grows.
+- ensembleStreaming call sites NOT in the card's acceptance list —
+  AUDITED 2026-08-18 (read in place): compare_files (~index.ts:5043 and
+  ~5348) and check_references (~5480 and ~5554) each already fail on
+  EMPTY but accept an ECHO (a model returning the diff/source verbatim
+  ships as analysis). Same one-line gate fix, user content in scope at
+  every site (msgs user entry). Apply after the surface-test agent
+  exits (it reads index.ts; don't shift lines under it).
 
 ## WHY
 
