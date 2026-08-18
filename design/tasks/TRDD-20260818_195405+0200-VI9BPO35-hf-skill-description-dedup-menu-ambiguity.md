@@ -1,12 +1,14 @@
 ---
 trdd-id: VI9BPO35
 title: Disambiguate the 4 HF skill descriptions colliding with huggingface-skills plugin
-column: planned
+column: complete
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-18T19:54:05+0200
+updated: 2026-08-19T00:13:16+0200
 current-owner: llm-externalizer-claude
 task-type: docs
 approval-tier: 0
+release-via: publish
+implementation-commits: [4036f67]
 ---
 
 # HF skill description dedup (menu ambiguity)
@@ -43,10 +45,17 @@ DESCRIPTIONS only.
 
 ## Acceptance
 
-- [ ] All 4 descriptions self-identify plugin + purpose in the first
+- [x] All 4 descriptions self-identify plugin + purpose in the first
       clause; names unchanged.
-- [ ] CPV validate clean on the plugin after the edit.
+- [x] CPV validate clean on the plugin after the edit.
 
 ## Notes and lessons learned
 
 ## Approval log
+
+- 2026-08-19T00:13:16+0200 — COMPLETE. 4036f67: all 4 bundled copies
+  verified to genuinely differ from upstream (153-310 diff lines each,
+  setup-agent preloads) so each description leads with owning plugin +
+  specialization; names unchanged (USER constraint). Cross-reference
+  sweep clean. Dogfood 119/0, all publish gates green. Shipped in
+  v13.5.8 (e463512).
