@@ -1,15 +1,49 @@
 ---
 trdd-id: WIO13P1P
 title: Deadweight sweep — dist size, CHANGELOG bloat, dead script, menu surface collapse
-column: planned
+column: dev
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-18T19:54:05+0200
+updated: 2026-08-19T00:14:00+0200
 current-owner: llm-externalizer-claude
 task-type: refactor
 approval-tier: 0
 ---
 
 # Deadweight sweep
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-08-19
+
+Measurements, all first-hand verified 2026-08-19 (post v13.5.8):
+
+1. **dist 39M** = `scripts/llm-ext/dist/`: index.js 14,784,046 B +
+   llm-ext.js 14,873,439 B + benchmark.js 10,730,287 B, all git-tracked.
+   `dist/index.js` is DROPPABLE: the esbuild.config.mjs comment keeping it
+   ("publish.py's release check asserts this artifact") is STALE —
+   publish.py:935-948 already asserts `dist/llm-ext.js`; the CLI bundle is
+   self-contained (bundles the engine from src, hence the twins); runtime
+   path is `bin/llm-ext → launcher.mjs → dist/llm-ext.js`; only
+   `scripts/llm-ext/package.json "main"` still points at index.js (repoint
+   to dist/llm-ext.js). Expected: −14.78M (−38%).
+2. **CHANGELOG 15,485 lines / 764K.** publish.py runs `git-cliff --tag X
+   --output CHANGELOG.md` = FULL-HISTORY regen each publish — measured
+   **~16 minutes** during the v13.5.8 publish. Fix: `--unreleased
+   --prepend` + subject-only template line in cliff.toml (first line of
+   `commit.message`); past entries stay verbatim, new ones one-line,
+   regen time drops to seconds.
+3. **add-shebang.mjs**: tracked at `scripts/llm-ext/add-shebang.mjs`,
+   zero live refs (grep: only CHANGELOG + this card cite it) → `git rm`.
+4. **Menu collapse**: 16 `commands/llm-externalizer-mass-scout*.md`
+   files, 1,101 lines total, each a thin doc wrapper over
+   `bin/llm-ext mass-scout-* …`; skill
+   `llm-externalizer-mass-scouting` (97 lines) already covers the
+   family. Collapse ⇒ 40→25 commands; user-facing removals need
+   deprecation notes (README + CHANGELOG).
+
+NEXT ACTION: commit sub-item 3 (git rm add-shebang.mjs), then 1, then 2,
+each with before/after measurements in the commit body; then evaluate 4.
+
+Gotcha: dist/ MUST stay tracked (GitHub install); rebuild + verify
+`llm-ext --help` + dogfood before claiming sub-item 1 done.
 
 ## WHY
 
