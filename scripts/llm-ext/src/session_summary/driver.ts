@@ -1074,6 +1074,15 @@ export const MANDATED_SECTION_HEADINGS = [
  * Same principle as isEchoResponse — judge the response's SHAPE against
  * ground truth we control, never its topic.
  *
+ * DO NOT tighten this to "fewer than N headings". The prompt instructs OMITTING
+ * sections with no content, so a low count is COMPLIANCE, not degradation — a
+ * threshold would contradict our own instruction. Measured across 9 real
+ * transcripts on 13.5.4: conforming outputs carried 4 to 9 headings, and the
+ * two at the bottom (a 1,253-byte summary of an out-of-credits session; a
+ * 5-heading summary of a shell-fixture review) were both genuinely small
+ * sessions with factual content. Those two are exactly what a threshold would
+ * start eating. Same run: 0/9 refusals, 0/9 false positives.
+ *
  * The known false NEGATIVE: a refusal that quotes the schema back at us slips
  * through. That is deliberate — it leaves us exactly where we were before this
  * guard existed, whereas a phrase matcher would trade this rare miss for a
