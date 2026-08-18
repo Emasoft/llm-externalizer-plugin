@@ -235393,7 +235393,7 @@ var MASS_SCOUT_TOOLS = [
   },
   {
     name: "check_tool_replacements",
-    description: "READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) \u2014 for every LLM tool that HAS a per-tool benchmark (security_scan, search_existing_implementations), asks 'is its incumbent model degraded?' by aggregating the durable model-health ledger, and (only when degraded, or when `force` is set) runs that tool's ADVISORY benchmark to surface the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger it runs NO benchmark and recommends keeping every incumbent (zero false positives). ADVISORY ONLY \u2014 writes a markdown report + returns its path; it NEVER rewrites settings. To actually adopt a recommendation, run the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path; the MCP server is read-only by design and cannot mutate its own config).",
+    description: "READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) \u2014 for every LLM tool that HAS a per-tool benchmark (security_scan, search_existing_implementations), asks 'is its incumbent model degraded?' by aggregating the durable model-health ledger, and (only when degraded, or when `force` is set) runs that tool's ADVISORY benchmark to surface the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger it runs NO benchmark and recommends keeping every incumbent (zero false positives). ADVISORY ONLY \u2014 writes a markdown report + returns its path; it NEVER rewrites settings. To actually adopt a recommendation, run the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path; this command is read-only by design and never mutates settings).",
     inputSchema: {
       type: "object",
       properties: {

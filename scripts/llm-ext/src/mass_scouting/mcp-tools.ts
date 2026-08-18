@@ -1021,8 +1021,8 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "benchmark and recommends keeping every incumbent (zero false positives). " +
       "ADVISORY ONLY — writes a markdown report + returns its path; it NEVER " +
       "rewrites settings. To actually adopt a recommendation, run the CLI " +
-      "`llm-ext-benchmark --auto-replace --apply` (the sole writer path; the MCP " +
-      "server is read-only by design and cannot mutate its own config).",
+      "`llm-ext-benchmark --auto-replace --apply` (the sole writer path; this " +
+      "command is read-only by design and never mutates settings).",
     inputSchema: {
       type: "object",
       properties: {
