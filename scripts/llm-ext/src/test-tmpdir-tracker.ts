@@ -22,12 +22,20 @@ import { afterAll } from "vitest";
 
 const created: string[] = [];
 const originalMkdtempSync = fs.mkdtempSync;
+const originalMkdtempAsync = fs.promises.mkdtemp;
 
 fs.mkdtempSync = ((prefix: string, options?: unknown) => {
   const dir = (originalMkdtempSync as (p: string, o?: unknown) => string | Buffer)(prefix, options);
   created.push(dir.toString());
   return dir;
 }) as typeof fs.mkdtempSync;
+// The promise variant too (`import { mkdtemp } from "node:fs/promises"`) — no
+// test uses it today; this keeps the next one from being the leak.
+fs.promises.mkdtemp = (async (prefix: string, options?: unknown) => {
+  const dir = await (originalMkdtempAsync as (p: string, o?: unknown) => Promise<string | Buffer>)(prefix, options);
+  created.push(dir.toString());
+  return dir;
+}) as typeof fs.promises.mkdtemp;
 syncBuiltinESMExports();
 
 afterAll(() => {

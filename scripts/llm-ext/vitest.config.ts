@@ -10,6 +10,9 @@ export default defineConfig({
     // Every temp dir a test file mkdtemps is removed in that file's afterAll —
     // the suite leaked 2,400+ orphan dirs into /tmp before this (see the file).
     setupFiles: ['src/test-tmpdir-tracker.ts'],
+    // ...and the run FAILS if any llm-ext-named temp entry is still left behind
+    // at the end, whatever created it — the leak can never go unnoticed again.
+    globalSetup: ['src/test-tmpdir-guard.ts'],
     // Only run integration + unit tests by default — live tests require LM Studio
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
