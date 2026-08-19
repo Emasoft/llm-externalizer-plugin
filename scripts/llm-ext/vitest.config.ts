@@ -7,6 +7,9 @@ export default defineConfig({
     // Batch tests with 3 files need ~6-10 min; single-file tests need ~2-3 min.
     testTimeout: 900_000,
     hookTimeout: 120_000,
+    // Every temp dir a test file mkdtemps is removed in that file's afterAll —
+    // the suite leaked 2,400+ orphan dirs into /tmp before this (see the file).
+    setupFiles: ['src/test-tmpdir-tracker.ts'],
     // Only run integration + unit tests by default — live tests require LM Studio
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
