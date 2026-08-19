@@ -1,6 +1,22 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.10] - 2026-08-19
+
+### Added
+
+- Feat(session-summary): idle fan-out workers race the straggler (TRDD-QY1JITC7)
+
+
+### Documentation
+
+- Docs: TRDD-QY1JITC7 -> complete (measurement distribution recorded)
+
+- Docs: TRDD-63314265 -> complete (all phases incl. P4b already shipped)
+
+- Docs: TRDD-Q185FRMW -> complete (fix already shipped in v13.5.9 via cf9026d)
+
+
 ## [13.5.9] - 2026-08-19
 
 ### Documentation
