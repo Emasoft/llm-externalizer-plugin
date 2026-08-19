@@ -1,9 +1,11 @@
 ---
 trdd-id: WIO13P1P
 title: Deadweight sweep — dist size, CHANGELOG bloat, dead script, menu surface collapse
-column: dev
+column: complete
 created: 2026-08-18T19:54:05+0200
-updated: 2026-08-19T00:35:00+0200
+updated: 2026-08-19T01:05:00+0200
+release-via: publish
+implementation-commits: [3ab7cc4, fedacf5, 2c4138d, 9a3e119]
 current-owner: llm-externalizer-claude
 task-type: refactor
 approval-tier: 0
@@ -45,10 +47,12 @@ DONE 2026-08-19: sub-item 3 → 3ab7cc4 (20 lines), sub-item 1 → fedacf5
 verified on a copy: +16 lines, past entries byte-untouched). Dogfood
 after all three: **119 PASS / 0 FAIL / 1 SKIP**.
 
-NEXT ACTION: sub-item 4 — collapse the 16 mass-scout command files into
-one dispatcher command (+ deprecation notes in README + CHANGELOG),
-then close the card. Sub-item 2's real-world proof = next publish run
-(watch step 4 duration + prepended section).
+Sub-item 4 DONE → 9a3e119: 40→25 command menu entries, 16 files
+(1,101 lines) → 1 dispatcher; CLI unchanged; deprecation notes in
+README; dispatcher forbids "mass-scout <word>" pass-through (CLI
+silently drops the word). ALL FOUR SUB-ITEMS COMPLETE. Sub-item 2's
+real-world proof = next publish run (step 4 seconds, one prepended
+subject-only section).
 
 ## WHY
 
@@ -79,11 +83,17 @@ together they slow installs, bloat diffs, and pollute agent menus.
 
 ## Acceptance
 
-- [ ] Each sub-item lands as its own commit with measurements in the
-      commit body (before/after size or count).
+- [x] Each sub-item lands as its own commit with measurements in the
+      commit body (before/after size or count): 3ab7cc4 (20 lines),
+      fedacf5 (dist −36.6%), 2c4138d (16 min → seconds), 9a3e119
+      (40→25 commands, −1,101 lines).
 - [x] No install/runtime regression: dogfood suite green (119/0 post
       sub-items 1+2+3), plugin loads, `llm-ext --help` intact.
 
 ## Notes and lessons learned
 
 ## Approval log
+
+- 2026-08-19T01:05:00+0200 — COMPLETE. All 4 sub-items shipped
+  (3ab7cc4, fedacf5, 2c4138d, 9a3e119); dogfood 119/0 after 1-3,
+  plugin validate green after 4. Ships in the next release.
