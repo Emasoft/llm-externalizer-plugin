@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.9] - 2026-08-19
+
+### Documentation
+
+- Docs: TRDD-WIO13P1P -> complete (all 4 sub-items shipped)
+
+- Docs: TRDD-WIO13P1P sub-items 1-3 verified done (dogfood 119/0)
+
+- Docs: TRDD-WIO13P1P -> dev, verified measurements into STATE block
+
+- Docs: TRDD-VI9BPO35 -> complete (shipped in v13.5.8)
+
+
+### Performance
+
+- Perf(publish): changelog prepend mode + subject-only entries (TRDD-WIO13P1P sub-item 2)
+
+
+### Refactored
+
+- Refactor(commands)!: collapse 15 mass-scout-* slash commands into the mass-scout dispatcher (TRDD-WIO13P1P sub-item 4)
+
+- Refactor: drop the dead dist/index.js twin bundle (TRDD-WIO13P1P sub-item 1)
+
+- Refactor: remove dead add-shebang.mjs (TRDD-WIO13P1P sub-item 3)
+
+
+### Testing
+
+- Test: expect '1 mass-scout dispatcher (`' in README command split (TRDD-WIO13P1P)
+
+
 ## [13.5.8] - 2026-08-18
 
 ### Documentation
