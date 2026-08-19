@@ -254346,7 +254346,20 @@ async function summarizeSession(options) {
       }
     }
   } else if (fanoutEngaged) {
-    let collectTurnsForIndices2 = function(indices) {
+    let chunkSettledPromise2 = function(i) {
+      let n = chunkSettledNotifiers.get(i);
+      if (!n) {
+        let resolveFn;
+        const promise2 = new Promise((res) => {
+          resolveFn = res;
+        });
+        n = { promise: promise2, resolve: resolveFn };
+        chunkSettledNotifiers.set(i, n);
+      }
+      return n.promise;
+    }, fireChunkSettled2 = function(i) {
+      chunkSettledNotifiers.get(i)?.resolve();
+    }, collectTurnsForIndices2 = function(indices) {
       const seen = /* @__PURE__ */ new Set();
       const out = [];
       for (const idx of indices) {
@@ -254376,7 +254389,10 @@ async function summarizeSession(options) {
       ];
       checkpoint.updatedAt = nowIso();
       saveCheckpoint(options.checkpointPath, checkpoint);
-      for (const idx of pendingIndices) abandonedChunkIndices.add(idx);
+      for (const idx of pendingIndices) {
+        abandonedChunkIndices.add(idx);
+        fireChunkSettled2(idx);
+      }
       slotQueues[slotIdx] = appended.map((c) => c.index);
       fanoutSlots[slotIdx].budget = newBudget;
     }, redistributeSlotQueue2 = function(deadSlot, alsoIndex) {
@@ -254429,7 +254445,7 @@ async function summarizeSession(options) {
     }, claimNextChunk2 = function() {
       for (let k = 0; k < fanoutK; k++) {
         const idx = (slotCursor + k) % fanoutK;
-        if (slotInFlightCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
+        if (slotInFlightCount[idx] + slotFloatCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
           const chunkIndex = slotQueues[idx].shift();
           slotInFlightCount[idx]++;
           slotCursor = (idx + 1) % fanoutK;
@@ -254437,8 +254453,53 @@ async function summarizeSession(options) {
         }
       }
       return null;
+    }, maybeLaunchSpeculative2 = function() {
+      let target = null;
+      let oldest = Infinity;
+      for (const [i2, info] of inFlightChunkInfo) {
+        if (checkpoint.mapSummaries[i2] !== null || abandonedChunkIndices.has(i2)) continue;
+        if (info.startedAt < oldest) {
+          oldest = info.startedAt;
+          target = { i: i2, slotIdx: info.slotIdx };
+        }
+      }
+      if (!target) return null;
+      const { i } = target;
+      const tried = specTried.get(i) ?? /* @__PURE__ */ new Set();
+      let launchSlot = -1;
+      for (let s = 0; s < fanoutK; s++) {
+        if (s === target.slotIdx || fanoutSlots[s].dead || tried.has(s)) continue;
+        if (slotInFlightCount[s] === 0 && slotFloatCount[s] === 0 && slotQueues[s].length === 0) {
+          launchSlot = s;
+          break;
+        }
+      }
+      if (launchSlot < 0) return null;
+      tried.add(launchSlot);
+      specTried.set(i, tried);
+      slotFloatCount[launchSlot]++;
+      const attempt = callChunkModel(
+        i,
+        fanoutSlots[launchSlot].model,
+        `chunk ${i} (speculative, slot ${launchSlot})`,
+        true,
+        sleep
+      ).then(
+        (result) => {
+          if (result.kind === "ok") {
+            writeChunkSummaryOnce(i, result.summary);
+            fireChunkSettled2(i);
+          }
+        },
+        () => {
+        }
+        // a discarded racer must never reject anything
+      ).finally(() => {
+        slotFloatCount[launchSlot]--;
+      });
+      return Promise.race([attempt, chunkSettledPromise2(i)]);
     };
-    var collectTurnsForIndices = collectTurnsForIndices2, appendSlotChunks = appendSlotChunks2, redistributeSlotQueue = redistributeSlotQueue2, applyFanoutTransition = applyFanoutTransition2, claimNextChunk = claimNextChunk2;
+    var chunkSettledPromise = chunkSettledPromise2, fireChunkSettled = fireChunkSettled2, collectTurnsForIndices = collectTurnsForIndices2, appendSlotChunks = appendSlotChunks2, redistributeSlotQueue = redistributeSlotQueue2, applyFanoutTransition = applyFanoutTransition2, claimNextChunk = claimNextChunk2, maybeLaunchSpeculative = maybeLaunchSpeculative2;
     const fanoutSlots = fanoutModelsInit.map((m) => ({
       model: m,
       budget: maxChunkTokens,
@@ -254451,6 +254512,10 @@ async function summarizeSession(options) {
     const slotInFlightCount = new Array(fanoutK).fill(0);
     let nextReplacementIdx = fanoutK;
     let slotCursor = 0;
+    const inFlightChunkInfo = /* @__PURE__ */ new Map();
+    const slotFloatCount = new Array(fanoutK).fill(0);
+    const chunkSettledNotifiers = /* @__PURE__ */ new Map();
+    const specTried = /* @__PURE__ */ new Map();
     const FANOUT_IDLE_POLL_MS = 50;
     async function fanoutWorker(workerIdx) {
       if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
@@ -254460,6 +254525,11 @@ async function summarizeSession(options) {
           const allEmpty = slotQueues.every((q) => q.length === 0);
           const allIdle = slotInFlightCount.every((c) => c === 0);
           if (allEmpty && allIdle) return;
+          const specWait = maybeLaunchSpeculative2();
+          if (specWait) {
+            await specWait;
+            continue;
+          }
           await sleep(FANOUT_IDLE_POLL_MS);
           continue;
         }
@@ -254467,17 +254537,44 @@ async function summarizeSession(options) {
         try {
           if (checkpoint.mapSummaries[i] !== null) continue;
           const startedAt = Date.now();
+          inFlightChunkInfo.set(i, { slotIdx, startedAt });
           onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
           for (; ; ) {
-            const result = await callChunkModel(
+            const call = callChunkModel(
               i,
               fanoutSlots[slotIdx].model,
               `chunk ${i} (slot ${slotIdx})`,
               true,
               sleep
             );
-            const outcome = finishFromCallResult(i, result);
+            const raced = await Promise.race([
+              call.then(
+                (result) => ({ settled: true, result }),
+                (err3) => ({ settled: true, err: err3 })
+              ),
+              chunkSettledPromise2(i).then(() => ({ settled: false }))
+            ]);
+            if (!raced.settled) {
+              slotFloatCount[slotIdx]++;
+              void call.then(() => {
+              }, () => {
+              }).finally(() => {
+                slotFloatCount[slotIdx]--;
+              });
+              if (checkpoint.mapSummaries[i] !== null) {
+                onChunkEvent?.({
+                  chunkIndex: i,
+                  totalChunks: chunks.length,
+                  phase: "done",
+                  elapsedMs: Date.now() - startedAt
+                });
+              }
+              break;
+            }
+            if ("err" in raced) throw raced.err;
+            const outcome = finishFromCallResult(i, raced.result);
             if (outcome.kind === "ok") {
+              fireChunkSettled2(i);
               onChunkEvent?.({
                 chunkIndex: i,
                 totalChunks: chunks.length,
@@ -254492,6 +254589,7 @@ async function summarizeSession(options) {
             }
           }
         } finally {
+          inFlightChunkInfo.delete(i);
           slotInFlightCount[slotIdx]--;
         }
       }

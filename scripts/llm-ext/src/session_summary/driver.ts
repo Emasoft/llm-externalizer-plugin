@@ -1804,6 +1804,61 @@ export async function summarizeSession(
     let nextReplacementIdx = fanoutK; // next `models[]` candidate offered to a demoted slot
     let slotCursor = 0; // round-robin start across `claimNextChunk` calls, so slot 0 never starves the rest
 
+    // ── Speculative straggler racing (TRDD-QY1JITC7) ────────────────────
+    // Measured 2026-08-14: the map phase's wall clock IS the slowest chunk,
+    // and while it ran, every other slot's worker sat in the idle-poll
+    // branch doing nothing (two free models idle ~127s/~69s while one chunk
+    // ran alone to 143.8s). Hedging fires once, onto ONE model, and was not
+    // enough. So an idle worker now launches a duplicate attempt on the
+    // longest-outstanding in-flight chunk from a slot that is completely
+    // idle — min-of-K on exactly the chunk that sets wall clock, at zero
+    // extra per-model load (the launch slot was serving nobody).
+    //
+    // THE HAZARD this state machine exists to avoid (see the driver.test.ts
+    // guard "the map phase never waits on an attempt whose chunk is already
+    // committed"): the map phase ends at `Promise.allSettled(workers)`, so
+    // any worker still awaiting a call whose result nobody needs holds the
+    // WHOLE run hostage to a request whose answer will be discarded. Hence:
+    //  - every wait on a chunk's outcome — the real owner's and a racer's —
+    //    is raced against that chunk's `chunkSettledNotifiers` entry, which
+    //    fires the moment the chunk is committed (by anyone) or superseded;
+    //  - a call abandoned that way keeps occupying its slot's rate-bucket
+    //    share via `slotFloatCount` (per-model in-flight must never exceed
+    //    PER_MODEL_CONCURRENCY, speculative/floating included) but is NEVER
+    //    counted by the termination check (`allIdle`), which is what lets
+    //    the run end while a discarded request is still settling.
+
+    /** Real (claimed) work currently being processed: owner slot + start
+     *  time per chunk index — what "longest-outstanding" is computed from. */
+    const inFlightChunkInfo = new Map<number, { slotIdx: number; startedAt: number }>();
+    /** Floating calls per slot — speculative attempts plus abandoned owner
+     *  calls whose HTTP request has not settled yet. Counted toward the
+     *  PER_MODEL_CONCURRENCY admission cap, ignored by termination. */
+    const slotFloatCount: number[] = new Array(fanoutK).fill(0);
+    /** Per-chunk "decided elsewhere" notifiers — resolved on commit OR on
+     *  supersession by a re-split, so no waiter outlives the chunk's fate. */
+    const chunkSettledNotifiers = new Map<number, { promise: Promise<void>; resolve: () => void }>();
+    function chunkSettledPromise(i: number): Promise<void> {
+      let n = chunkSettledNotifiers.get(i);
+      if (!n) {
+        let resolveFn!: () => void;
+        const promise = new Promise<void>((res) => {
+          resolveFn = res;
+        });
+        n = { promise, resolve: resolveFn };
+        chunkSettledNotifiers.set(i, n);
+      }
+      return n.promise;
+    }
+    function fireChunkSettled(i: number): void {
+      chunkSettledNotifiers.get(i)?.resolve();
+    }
+    /** Slots that already spent a speculative attempt on a given chunk —
+     *  bounds racing to at most one attempt per (chunk, slot), so a
+     *  fast-failing bystander model cannot loop re-racing the same
+     *  straggler. */
+    const specTried = new Map<number, Set<number>>();
+
     /** All turns still owed a map summary from these chunk INDICES (already
      *  slot-scoped by the caller), overlap-de-duplicated by Turn identity —
      *  mirrors `collectRemainingTurns` but over an explicit index list
@@ -1853,7 +1908,13 @@ export async function summarizeSession(
       ];
       checkpoint!.updatedAt = nowIso();
       saveCheckpoint(options.checkpointPath, checkpoint!);
-      for (const idx of pendingIndices) abandonedChunkIndices.add(idx);
+      for (const idx of pendingIndices) {
+        abandonedChunkIndices.add(idx);
+        // A superseded index will never be committed — release anything
+        // (an idle worker racing it, its abandoned owner's bookkeeping)
+        // still waiting on its outcome. See TRDD-QY1JITC7's state above.
+        fireChunkSettled(idx);
+      }
       slotQueues[slotIdx] = appended.map((c) => c.index);
       fanoutSlots[slotIdx].budget = newBudget;
     }
@@ -1953,7 +2014,10 @@ export async function summarizeSession(
     function claimNextChunk(): { slotIdx: number; chunkIndex: number } | null {
       for (let k = 0; k < fanoutK; k++) {
         const idx = (slotCursor + k) % fanoutK;
-        if (slotInFlightCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
+        // Floating (speculative/abandoned) calls still occupy the model's
+        // rate bucket, so admission counts them — the per-model cap is a
+        // promise about OUTSTANDING requests, not about claimed work.
+        if (slotInFlightCount[idx] + slotFloatCount[idx] < PER_MODEL_CONCURRENCY && slotQueues[idx].length > 0) {
           const chunkIndex = slotQueues[idx].shift()!;
           slotInFlightCount[idx]++;
           slotCursor = (idx + 1) % fanoutK;
@@ -1965,6 +2029,73 @@ export async function summarizeSession(
 
     const FANOUT_IDLE_POLL_MS = 50; // only hit while every slot with pending work sits at its cap
 
+    /**
+     * TRDD-QY1JITC7: launch at most ONE speculative attempt on the
+     * longest-outstanding in-flight chunk, from a slot that is completely
+     * idle (no claimed work, no floating call, empty queue) and is not the
+     * straggler's own slot (same model = same per-model queue = nothing
+     * actually raced). Returns what the idle worker should await — the
+     * attempt raced against the chunk's decided-elsewhere notifier — or
+     * null when there is nothing worth racing (then the caller falls back
+     * to the plain idle poll).
+     *
+     * A racer's failure of ANY kind is discarded outright: a bystander
+     * model's 404/overflow says nothing about the model the chunk's owner
+     * is pinned to, so it must never reach `applyFanoutTransition`, the
+     * cooldown store, or a slot's model/budget (mirrors `raceSingleChunk`'s
+     * losers). Only a usable summary does anything, and it lands through
+     * `writeChunkSummaryOnce`, so a late settle can never double-commit.
+     */
+    function maybeLaunchSpeculative(): Promise<void> | null {
+      let target: { i: number; slotIdx: number } | null = null;
+      let oldest = Infinity;
+      for (const [i, info] of inFlightChunkInfo) {
+        if (checkpoint!.mapSummaries[i] !== null || abandonedChunkIndices.has(i)) continue;
+        if (info.startedAt < oldest) {
+          oldest = info.startedAt;
+          target = { i, slotIdx: info.slotIdx };
+        }
+      }
+      if (!target) return null;
+      const { i } = target;
+      const tried = specTried.get(i) ?? new Set<number>();
+      let launchSlot = -1;
+      for (let s = 0; s < fanoutK; s++) {
+        if (s === target.slotIdx || fanoutSlots[s].dead || tried.has(s)) continue;
+        if (slotInFlightCount[s] === 0 && slotFloatCount[s] === 0 && slotQueues[s].length === 0) {
+          launchSlot = s;
+          break;
+        }
+      }
+      if (launchSlot < 0) return null;
+      tried.add(launchSlot);
+      specTried.set(i, tried);
+      slotFloatCount[launchSlot]++;
+      const attempt = callChunkModel(
+        i,
+        fanoutSlots[launchSlot].model,
+        `chunk ${i} (speculative, slot ${launchSlot})`,
+        true,
+        sleep,
+      )
+        .then(
+          (result) => {
+            if (result.kind === "ok") {
+              writeChunkSummaryOnce(i, result.summary);
+              fireChunkSettled(i);
+            }
+            // fallback/overflow from a racer: discarded — see the header.
+          },
+          () => {}, // a discarded racer must never reject anything
+        )
+        .finally(() => {
+          slotFloatCount[launchSlot]--;
+        });
+      // The idle worker waits for the attempt OR for the chunk to be decided
+      // elsewhere — never for a call whose answer is already worthless.
+      return Promise.race([attempt, chunkSettledPromise(i)]);
+    }
+
     async function fanoutWorker(workerIdx: number): Promise<void> {
       if (workerIdx > 0) await sleep(STAGGER_INTERVAL_MS * workerIdx);
       for (;;) {
@@ -1972,7 +2103,15 @@ export async function summarizeSession(
         if (!claim) {
           const allEmpty = slotQueues.every((q) => q.length === 0);
           const allIdle = slotInFlightCount.every((c) => c === 0);
-          if (allEmpty && allIdle) return; // no more work anywhere — done
+          if (allEmpty && allIdle) return; // no more work anywhere — done (floats never gate this)
+          // TRDD-QY1JITC7: dead capacity races the straggler instead of
+          // pure polling. Falls back to the poll when no fully-idle slot
+          // (or no undecided in-flight chunk) exists.
+          const specWait = maybeLaunchSpeculative();
+          if (specWait) {
+            await specWait;
+            continue;
+          }
           await sleep(FANOUT_IDLE_POLL_MS); // every pending slot is at cap — wait for room
           continue;
         }
@@ -1980,17 +2119,50 @@ export async function summarizeSession(
         try {
           if (checkpoint!.mapSummaries[i] !== null) continue; // already done (resumed checkpoint)
           const startedAt = Date.now();
+          inFlightChunkInfo.set(i, { slotIdx, startedAt });
           onChunkEvent?.({ chunkIndex: i, totalChunks: chunks.length, phase: "start" });
           for (;;) {
-            const result = await callChunkModel(
+            // TRDD-QY1JITC7: the owner's wait, too, ends the moment its chunk
+            // is decided elsewhere (a speculative racer committed it, or a
+            // re-split superseded it) — otherwise a racer's win would change
+            // nothing about wall clock, since the map phase would still sit
+            // behind this slow request via Promise.allSettled(workers).
+            const call = callChunkModel(
               i,
               fanoutSlots[slotIdx].model,
               `chunk ${i} (slot ${slotIdx})`,
               true,
               sleep,
             );
-            const outcome = finishFromCallResult(i, result);
+            const raced = await Promise.race([
+              call.then(
+                (result) => ({ settled: true as const, result }),
+                (err: unknown) => ({ settled: true as const, err }),
+              ),
+              chunkSettledPromise(i).then(() => ({ settled: false as const })),
+            ]);
+            if (!raced.settled) {
+              // Decided elsewhere. The still-outstanding request keeps its
+              // rate-bucket share as a floating call (admission-counted,
+              // termination-ignored) until it settles; this worker moves on.
+              slotFloatCount[slotIdx]++;
+              void call.then(() => {}, () => {}).finally(() => {
+                slotFloatCount[slotIdx]--;
+              });
+              if (checkpoint!.mapSummaries[i] !== null) {
+                onChunkEvent?.({
+                  chunkIndex: i,
+                  totalChunks: chunks.length,
+                  phase: "done",
+                  elapsedMs: Date.now() - startedAt,
+                });
+              }
+              break;
+            }
+            if ("err" in raced) throw raced.err;
+            const outcome = finishFromCallResult(i, raced.result);
             if (outcome.kind === "ok") {
+              fireChunkSettled(i); // release any racer still waiting on this chunk
               onChunkEvent?.({
                 chunkIndex: i,
                 totalChunks: chunks.length,
@@ -2010,6 +2182,7 @@ export async function summarizeSession(
             // else: retry `i` against this slot's (possibly now different) model/budget
           }
         } finally {
+          inFlightChunkInfo.delete(i);
           slotInFlightCount[slotIdx]--;
         }
       }

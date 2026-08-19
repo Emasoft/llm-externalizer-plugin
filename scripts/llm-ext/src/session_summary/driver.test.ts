@@ -1996,6 +1996,93 @@ describe("driver: summarizeSession", () => {
       // parking on one unneeded call would cost.
       expect(elapsedMs).toBeLessThan(SLOW_CHUNK_MS + UNNEEDED_CALL_MS / 2);
     }, 20_000);
+
+    it("an idle slot's speculative racer decides the straggler even when the owner's call never settles", async () => {
+      // TRDD-QY1JITC7, the feature itself. Chunk 1's real owner (the
+      // FALLBACK_MODEL slot) issues a call that NEVER resolves — the free
+      // tier's measured worst case, distilled. The FREE_MODEL slot finishes
+      // its own chunk instantly and goes idle; the idle worker must race
+      // chunk 1 from that idle slot, commit the racer's answer, and release
+      // the owner's wait — so the whole run completes although one request
+      // is still (permanently) outstanding. Without the feature this test
+      // does not finish at all.
+      const lines = Array.from({ length: 2 }, (_, i) => userTurn(`u${i}`, `spec straggler request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /spec straggler request (\d+) /.exec(prompt)?.[1] ?? "?";
+        if (marker === "1" && modelId === FALLBACK_MODEL) {
+          return new Promise<string>(() => {}); // the owner's request hangs forever
+        }
+        return summaryFixture(`SUMMARY-${marker}-${modelId === FREE_MODEL ? "free" : "fb"}`);
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      expect(result.totalChunks).toBe(2);
+      // Chunk 0 by its owner (FREE slot); chunk 1 by the FREE-slot racer.
+      expect(result.summary).toBe(
+        joinChunkSummaries([summaryFixture("SUMMARY-0-free"), summaryFixture("SUMMARY-1-free")]),
+      );
+      // The racer's win is a latency bet, not a fallback decision: no model
+      // was demoted, no slot was rotated.
+      expect(result.fallbackEvents).toEqual([]);
+      // The duplicate attempt actually happened, on the idle slot's model.
+      expect(callModel.mock.calls.some(([pr, m]) => m === FREE_MODEL && /request 1 /.test(pr))).toBe(true);
+    }, 15_000);
+
+    it("a losing racer's failure is discarded — no fallback, no demotion, owner's answer stands", async () => {
+      // The racer 404s instantly; the chunk's real owner answers fine, just
+      // slowly. A bystander's failure must never run the fan-out transition
+      // machinery (no fallbackEvents entry, no slot demotion) and must never
+      // displace the owner's committed summary.
+      const lines = Array.from({ length: 2 }, (_, i) => userTurn(`u${i}`, `spec loser request ${i} `.repeat(30)));
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      const callModel = vi.fn<CallModelFn>(async (prompt, modelId) => {
+        const marker = /spec loser request (\d+) /.exec(prompt)?.[1] ?? "?";
+        if (marker === "1" && modelId === FALLBACK_MODEL) {
+          await new Promise((r) => setTimeout(r, 600)); // slow enough that a staggered idle worker races it
+          return summaryFixture(`SUMMARY-${marker}-owner`);
+        }
+        if (marker === "1" && modelId === FREE_MODEL) {
+          throw new Error("404 No endpoints found for this model — it has been delisted");
+        }
+        return summaryFixture(`SUMMARY-${marker}-owner`);
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        concurrency: "auto",
+        callModel,
+      });
+
+      expect(result.totalChunks).toBe(2);
+      expect(result.summary).toBe(
+        joinChunkSummaries([summaryFixture("SUMMARY-0-owner"), summaryFixture("SUMMARY-1-owner")]),
+      );
+      expect(result.fallbackEvents).toEqual([]);
+    }, 15_000);
   });
 
   // ── Hedging (owner-specified, 2026-08-12) ─────────────────────────────
