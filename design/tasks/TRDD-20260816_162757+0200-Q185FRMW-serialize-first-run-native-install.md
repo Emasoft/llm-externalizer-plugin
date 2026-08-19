@@ -1,9 +1,10 @@
 ---
 trdd-id: Q185FRMW
 title: Serialize the first-run native-dependency self-install in launcher.mjs
-column: planned
+column: complete
 created: 2026-08-16T16:27:57+0200
-updated: 2026-08-16T16:27:57+0200
+updated: 2026-08-19T09:52:00+0200
+implementation-commits: [cf9026d]
 current-owner: llm-externalizer-session
 task-type: bugfix
 approval-tier: 0
@@ -85,17 +86,24 @@ confirm the test name appears in a full-suite run.
 
 ## Acceptance
 
-- [ ] All three races closed by the single lock
-- [ ] `mkdirSync` exclusive-create; no native addon
-- [ ] `dataDirHasDeps` re-checked inside the lock
-- [ ] Stale-lock break present, with a comment saying why
-- [ ] Deterministic exclusion test, negative assertion verified to fail without the lock
-- [ ] Test registered in the vitest include list and seen in a full-suite run
-- [ ] `tsc --noEmit` clean; full `scripts/llm-ext` suite green
-- [ ] Ships correctly (launcher.mjs as-is vs build step confirmed)
+- [x] All three races closed by the single lock (`install-lock.mjs`, wrapped in `launcher.mjs` ~:266-283)
+- [x] `mkdirSync` exclusive-create; no native addon
+- [x] `dataDirHasDeps` re-checked inside the lock (launcher.mjs:272, with the no-hoist comment)
+- [x] Stale-lock break present, with a comment saying why (install-lock.mjs:43-55)
+- [x] Deterministic exclusion test, negative assertion verified to fail without the lock (neuter proof re-run 2026-08-19: lock bypassed → exclusion test FAILED exit=1; restored → 2/2 green)
+- [x] Test registered in the vitest include list (`src/install-lock.test.ts`) and green in the v13.5.9 full-suite publish gate
+- [x] `tsc --noEmit` clean; full `scripts/llm-ext` suite green (v13.5.9 publish gates: typecheck OK, test OK)
+- [x] Ships correctly — launcher.mjs runs as-is (no build step), shipped in v13.5.9; issue #13 CLOSED
 
 ## Approval log
 
 - 2026-08-16T16:27:57+0200 — Tier 0, self-authorized per the approval-tier rule;
   ruling corroborated by the fleet manager session (own repo, own scope,
   reversible, no release surface). No human approval required.
+- 2026-08-19T09:52:00+0200 — COMPLETE. Implementation had already landed in
+  cf9026d (2026-08-16) but the card was never advanced past `planned` — stale
+  column, not missing work. This session verified every acceptance box
+  first-hand: read install-lock.mjs + test + launcher wiring, re-ran the
+  neuter proof (lock bypassed → exclusion test fails; restored → green),
+  confirmed vitest registration, and confirmed the fix shipped in the
+  v13.5.9 release (cf9026d is an ancestor of the tag). Issue #13 CLOSED.
