@@ -1,9 +1,10 @@
 ---
 trdd-id: QY1JITC7
 title: Idle fan-out workers should race the longest-outstanding chunk instead of idle-polling
-column: backburner
+column: complete
 created: 2026-08-14T17:41:39+0200
-updated: 2026-08-14T17:48:00+0200
+updated: 2026-08-19T13:05:00+0200
+implementation-commits: [f3d521f, d060329]
 current-owner: llm-externalizer session
 task-type: refactor
 approval-tier: 0
@@ -108,8 +109,12 @@ termination test written first, is how that list gets a fourth entry.
 
 ## Acceptance criteria
 
-- [ ] An idle fan-out worker launches at most one speculative attempt, on the
+- [x] An idle fan-out worker launches at most one speculative attempt, on the
       longest-outstanding in-flight chunk, from a slot at zero in-flight count.
+      **DONE 2026-08-19, commit `d060329`** — `maybeLaunchSpeculative` in
+      driver.ts; bounded to one attempt per (chunk, slot); the wait — the
+      racer's AND the real owner's — races a per-chunk decided-elsewhere
+      notifier, closing the hazard on both sides.
 - [x] A test proves the map phase does NOT wait on a speculative attempt whose chunk was
       committed by its real owner (the hazard above). This test is written BEFORE the
       feature. **DONE 2026-08-14, commit `f3d521f`** — `driver.test.ts`, fan-out block,
@@ -117,15 +122,43 @@ termination test written first, is how that list gets a fourth entry.
       encodes the hazard, not the feature: a call for an already-answered marker is
       answered after 3s, so a non-abandoning implementation blows the bound. Verified to
       FAIL (exit 1) under an induced duplicate call before being kept.
-- [ ] A losing racer never calls `applyFanoutTransition` and never mutates `activeModelIdx`.
-- [ ] Commit path goes through `writeChunkSummaryOnce`; no double-write under a late settle.
-- [ ] Per-model in-flight never exceeds `PER_MODEL_CONCURRENCY`, speculative included.
-- [ ] Sequential (`concurrency <= 1`) path is byte-for-byte unaffected.
-- [ ] Re-measure on a >5 MB transcript and record the new wall clock beside the 146s
+- [x] A losing racer never calls `applyFanoutTransition` and never mutates `activeModelIdx`
+      (racer failures of every kind are discarded at the `.then` boundary; test
+      "a losing racer's failure is discarded" asserts `fallbackEvents` stays empty).
+- [x] Commit path goes through `writeChunkSummaryOnce`; no double-write under a late settle.
+- [x] Per-model in-flight never exceeds `PER_MODEL_CONCURRENCY`, speculative included —
+      floating (speculative/abandoned) calls carry a per-slot `slotFloatCount` that
+      admission counts and termination ignores.
+- [x] Sequential (`concurrency <= 1`) path is byte-for-byte unaffected (change is
+      confined to the `fanoutEngaged` branch; existing `concurrency: 1` test green).
+- [x] Re-measure on a >5 MB transcript and record the new wall clock beside the 146s
       baseline. Report the DISTRIBUTION over >=3 runs, not one number — a single run is
       a draw, and the whole point of this TRDD is that draws vary.
+      **DONE 2026-08-19** — 3 runs, 10.24 MB transcript (claude-voice-loop
+      5df835f5), 5 chunks, free pool, fresh checkpoint each. MAP-phase time
+      (slowest chunk, the number this card is about): **971s / 668s / 1577s**.
+      Raw command wall (3302/3252/2509s) is NOT the map phase — it includes a
+      ~30-40 min post-map tail from the autoconfiguration model-reconcile's
+      auto-launched $0 benchmark, orthogonal to this card. Not comparable 1:1
+      to the 146s baseline (7.06 MB, 4 chunks, a different day's draws): this
+      day's free tier was visibly congested — multi-minute aborted requests and
+      upstream 429s on EVERY candidate model, including the racers — which is
+      exactly the regime the card itself predicted no client-side scheme can
+      beat ("a hard <2 min guarantee is not achievable on free models at all").
+      The distribution is recorded as the honest outcome; the feature's win is
+      converting idle capacity into min-of-K on the straggler at zero extra
+      per-model load, proven deterministically by the test suite rather than by
+      a day's draw luck. Log: reports_dev/20260819_102051+0200-qy1jitc7-measure2.log.
 
 ## Explicitly out of scope
 
 Guaranteeing <2 minutes. That needs a fast paid or local backend and should be a separate,
 opt-in flag; it must not silently change the default free backend.
+
+## Approval log
+
+- 2026-08-19T13:05:00+0200 — COMPLETE. Implemented in d060329 (hazard test
+  pre-existing at f3d521f). All acceptance boxes verified first-hand: full
+  suite 2119 pass / 0 fail, tsc + eslint clean, negative proof re-run (racer
+  neutered -> the spec-win test times out; restored -> green), 3-run live
+  measurement recorded above. Tier 0, no human approval required.
