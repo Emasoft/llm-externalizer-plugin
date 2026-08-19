@@ -88,7 +88,10 @@ describe("README count consistency", () => {
   it("'N plugin commands' and its base/mass-scout/security split match the files", () => {
     expect(README).toContain(`${commands.length} plugin commands`);
     expect(README).toContain(`${baseCmds.length} base`);
-    expect(README).toContain(`${massScoutCmds.length} mass-scout (\``);
+    // README deliberately says "1 mass-scout dispatcher (`mass-scout`" since the
+    // v13.5.9 collapse of the per-action mass-scout-* slash commands (9a3e119);
+    // matching the bare "N mass-scout (`" would collide with the CLI-count wording.
+    expect(README).toContain(`${massScoutCmds.length} mass-scout dispatcher (\``);
     expect(securityScanCmd.length).toBe(1);
   });
 
