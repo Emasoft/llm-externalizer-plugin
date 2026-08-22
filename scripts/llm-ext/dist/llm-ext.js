@@ -228418,7 +228418,7 @@ function scanFilesForSecrets(filePaths) {
     "SECRETS DETECTED \u2014 operation aborted.",
     "",
     "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
-    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
+    "llm-ext reads files directly and does not inherit Claude Code's sandbox .env read-deny \u2014 that is exactly why this scan exists.",
     "",
     "Findings:"
   ];
@@ -254894,12 +254894,50 @@ async function selectModels(options = {}) {
 }
 
 // src/session-summary-resolve.ts
-import { existsSync as existsSync22, readdirSync as readdirSync8, statSync as statSync13 } from "node:fs";
+import { closeSync, existsSync as existsSync22, openSync, readdirSync as readdirSync8, readSync, statSync as statSync13 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { join as join28, resolve as resolve16 } from "node:path";
 import { createHash as createHash10 } from "node:crypto";
 function projectSlug(absProjectRoot) {
   return absProjectRoot.replace(/[^a-zA-Z0-9]/g, "-");
+}
+function resolveSessionDirName(projectRoot) {
+  const override = process.env.CLAUDE_CODE_PROJECT_DIR_NAME;
+  return override && override.length > 0 ? override : projectSlug(projectRoot);
+}
+function defaultClaudeProjectsDir() {
+  const cfg = process.env.CLAUDE_CONFIG_DIR;
+  const base = cfg && cfg.length > 0 ? resolve16(cfg) : join28(homedir3(), ".claude");
+  return join28(base, "projects");
+}
+function lastTimestampMs(path, tailBytes = 65536) {
+  const size = statSync13(path).size;
+  if (size === 0) return null;
+  const readLen = Math.min(size, tailBytes);
+  const fd = openSync(path, "r");
+  let text;
+  try {
+    const buf = Buffer.alloc(readLen);
+    readSync(fd, buf, 0, readLen, size - readLen);
+    text = buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines = text.split("\n");
+  if (readLen < size) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const obj = JSON.parse(line);
+      if (obj.timestamp) {
+        const ms = Date.parse(obj.timestamp);
+        if (!Number.isNaN(ms)) return ms;
+      }
+    } catch {
+    }
+  }
+  return null;
 }
 function resolveTranscriptPath(options = {}) {
   if (options.transcriptPath) {
@@ -254910,9 +254948,9 @@ function resolveTranscriptPath(options = {}) {
     return p;
   }
   const projectRoot = resolve16(options.projectRoot ?? resolveProjectMainRoot());
-  const claudeProjectsDir = options.claudeProjectsDir ?? join28(homedir3(), ".claude", "projects");
-  const slug = projectSlug(projectRoot);
-  const sessionDir = join28(claudeProjectsDir, slug);
+  const claudeProjectsDir = options.claudeProjectsDir ?? defaultClaudeProjectsDir();
+  const dirName = resolveSessionDirName(projectRoot);
+  const sessionDir = join28(claudeProjectsDir, dirName);
   if (options.sessionId) {
     const p = join28(sessionDir, `${options.sessionId}.jsonl`);
     if (!existsSync22(p)) {
@@ -254934,12 +254972,12 @@ function resolveTranscriptPath(options = {}) {
     );
   }
   let latestPath = "";
-  let latestMtimeMs = -Infinity;
+  let latestScore = -Infinity;
   for (const f of jsonlFiles) {
     const p = join28(sessionDir, f);
-    const mtimeMs = statSync13(p).mtimeMs;
-    if (mtimeMs > latestMtimeMs) {
-      latestMtimeMs = mtimeMs;
+    const score = lastTimestampMs(p) ?? statSync13(p).mtimeMs;
+    if (score > latestScore) {
+      latestScore = score;
       latestPath = p;
     }
   }
@@ -256270,7 +256308,7 @@ import { readFileSync as readFileSync30 } from "node:fs";
 import { join as join30 } from "node:path";
 
 // src/bench-lock.ts
-import { existsSync as existsSync24, openSync, closeSync, readFileSync as readFileSync29, statSync as statSync14, unlinkSync as unlinkSync2, writeFileSync as writeFileSync21 } from "node:fs";
+import { existsSync as existsSync24, openSync as openSync2, closeSync as closeSync2, readFileSync as readFileSync29, statSync as statSync14, unlinkSync as unlinkSync2, writeFileSync as writeFileSync21 } from "node:fs";
 var BENCH_LOCK_TTL_MS = 2 * 60 * 6e4;
 function benchLockIsHeld(lockPath, nowMs = Date.now()) {
   if (!existsSync24(lockPath)) return false;
@@ -256292,11 +256330,11 @@ function benchLockIsHeld(lockPath, nowMs = Date.now()) {
 function claimBenchLock(lockPath, nowMs = Date.now()) {
   const tryCreate = () => {
     try {
-      const fd = openSync(lockPath, "wx");
+      const fd = openSync2(lockPath, "wx");
       try {
         writeFileSync21(fd, String(process.pid), "utf-8");
       } finally {
-        closeSync(fd);
+        closeSync2(fd);
       }
       return { ok: true };
     } catch (e) {
@@ -256331,7 +256369,7 @@ function releaseBenchLock(lockPath) {
 }
 
 // src/bench-spawn.ts
-import { closeSync as closeSync2, existsSync as existsSync25, mkdirSync as mkdirSync23, openSync as openSync2 } from "node:fs";
+import { closeSync as closeSync3, existsSync as existsSync25, mkdirSync as mkdirSync23, openSync as openSync3 } from "node:fs";
 import { dirname as dirname13, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
@@ -256358,7 +256396,7 @@ function spawnDetachedBench(opts) {
   }
   let logFd;
   try {
-    logFd = openSync2(logPath, "a");
+    logFd = openSync3(logPath, "a");
   } catch (e) {
     releaseBenchLock(lockPath);
     return { ok: false, reason: `cannot open log ${logPath}: ${e.message}` };
@@ -256372,7 +256410,7 @@ function spawnDetachedBench(opts) {
     });
   } catch (e) {
     try {
-      closeSync2(logFd);
+      closeSync3(logFd);
     } catch {
     }
     releaseBenchLock(lockPath);
@@ -256385,7 +256423,7 @@ function spawnDetachedBench(opts) {
   });
   child.unref();
   try {
-    closeSync2(logFd);
+    closeSync3(logFd);
   } catch {
   }
   if (typeof child.pid === "number") {

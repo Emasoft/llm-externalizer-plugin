@@ -470,7 +470,7 @@ export function scanFilesForSecrets(filePaths: string[]): {
     "SECRETS DETECTED — operation aborted.",
     "",
     "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
-    "Claude Code cannot read .env files, ensuring secrets stay out of LLM context.",
+    "llm-ext reads files directly and does not inherit Claude Code's sandbox .env read-deny — that is exactly why this scan exists.",
     "",
     "Findings:",
   ];

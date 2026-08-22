@@ -15,7 +15,7 @@
  * ever produced, so no other character needs escaping).
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -25,6 +25,65 @@ import { resolveProjectMainRoot } from "./project-root.js";
 /** `<project-slug>` per Claude Code's own transcript-directory convention. */
 export function projectSlug(absProjectRoot: string): string {
   return absProjectRoot.replace(/[^a-zA-Z0-9]/g, "-");
+}
+
+/**
+ * Claude Code >= 2.1.234: a host that gives each session its own config
+ * directory can set CLAUDE_CODE_PROJECT_DIR_NAME to pick the per-project
+ * transcript directory name directly, instead of it always being derived
+ * from the project path via projectSlug(). Honor it verbatim when present.
+ */
+function resolveSessionDirName(projectRoot: string): string {
+  const override = process.env.CLAUDE_CODE_PROJECT_DIR_NAME;
+  return override && override.length > 0 ? override : projectSlug(projectRoot);
+}
+
+/** Same CLAUDE_CONFIG_DIR convention as rule-install.ts's resolveClaudeRulesDir(). */
+function defaultClaudeProjectsDir(): string {
+  const cfg = process.env.CLAUDE_CONFIG_DIR;
+  const base = cfg && cfg.length > 0 ? resolve(cfg) : join(homedir(), ".claude");
+  return join(base, "projects");
+}
+
+/**
+ * Last parseable JSONL `timestamp` field in a transcript, read from the
+ * tail of the file only (transcripts can be huge — never load the whole
+ * file into memory just to find the last line). Claude Code 2.1.239 fixed
+ * `/resume` showing a session as "recently changed" when only its file was
+ * touched or merely reopened; we apply the same fix here by ranking on the
+ * transcript's own last recorded event time instead of filesystem mtime,
+ * which a touch/reopen can bump without the session actually advancing.
+ */
+function lastTimestampMs(path: string, tailBytes = 65536): number | null {
+  const size = statSync(path).size;
+  if (size === 0) return null;
+  const readLen = Math.min(size, tailBytes);
+  const fd = openSync(path, "r");
+  let text: string;
+  try {
+    const buf = Buffer.alloc(readLen);
+    readSync(fd, buf, 0, readLen, size - readLen);
+    text = buf.toString("utf8");
+  } finally {
+    closeSync(fd);
+  }
+  const lines = text.split("\n");
+  // Drop the first line: when we didn't read from byte 0 it's a partial line.
+  if (readLen < size) lines.shift();
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    try {
+      const obj = JSON.parse(line) as { timestamp?: string };
+      if (obj.timestamp) {
+        const ms = Date.parse(obj.timestamp);
+        if (!Number.isNaN(ms)) return ms;
+      }
+    } catch {
+      // Not JSON (or a truncated line) — keep scanning earlier lines.
+    }
+  }
+  return null;
 }
 
 export interface ResolveTranscriptOptions {
@@ -54,9 +113,9 @@ export function resolveTranscriptPath(options: ResolveTranscriptOptions = {}): s
   }
 
   const projectRoot = resolve(options.projectRoot ?? resolveProjectMainRoot());
-  const claudeProjectsDir = options.claudeProjectsDir ?? join(homedir(), ".claude", "projects");
-  const slug = projectSlug(projectRoot);
-  const sessionDir = join(claudeProjectsDir, slug);
+  const claudeProjectsDir = options.claudeProjectsDir ?? defaultClaudeProjectsDir();
+  const dirName = resolveSessionDirName(projectRoot);
+  const sessionDir = join(claudeProjectsDir, dirName);
 
   if (options.sessionId) {
     const p = join(sessionDir, `${options.sessionId}.jsonl`);
@@ -85,12 +144,15 @@ export function resolveTranscriptPath(options: ResolveTranscriptOptions = {}): s
   }
 
   let latestPath = "";
-  let latestMtimeMs = -Infinity;
+  let latestScore = -Infinity;
   for (const f of jsonlFiles) {
     const p = join(sessionDir, f);
-    const mtimeMs = statSync(p).mtimeMs;
-    if (mtimeMs > latestMtimeMs) {
-      latestMtimeMs = mtimeMs;
+    // Rank by the transcript's own last event timestamp, falling back to
+    // mtime only when the file has no parseable timestamp — see
+    // lastTimestampMs()'s comment for why mtime alone is unreliable.
+    const score = lastTimestampMs(p) ?? statSync(p).mtimeMs;
+    if (score > latestScore) {
+      latestScore = score;
       latestPath = p;
     }
   }

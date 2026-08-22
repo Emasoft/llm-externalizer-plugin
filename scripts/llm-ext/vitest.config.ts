@@ -341,6 +341,10 @@ export default defineConfig({
       'src/session_summary/chunker.test.ts',
       'src/session_summary/model-select.test.ts',
       'src/session_summary/driver.test.ts',
+      // Transcript-path resolution (P5, TRDD-T4MZ8YQR) — CLAUDE_CONFIG_DIR /
+      // CLAUDE_CODE_PROJECT_DIR_NAME env overrides + timestamp-based recency
+      // (Claude Code 2.1.234 / 2.1.239 alignment).
+      'src/session-summary-resolve.test.ts',
       // Shared response gate (TRDD-P4ULUV1R) — the non-empty + non-echo verdict
       // every surface applies before accepting a model response.
       'src/response-gate.test.ts',
