@@ -172,7 +172,8 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 Use this to compact a session's `.jsonl` transcript (this one, or any other project's) without
 spending paid tokens — it only ever picks a free, text-capable OpenRouter model, falling back
 down the ranked list on delisting/quota exhaustion. Key flags: `--transcript <path>` /
-`--session-id <id>` (default: current project's most recently modified transcript),
+`--session-id <id>` (default: current project's most recent transcript, by its own last
+recorded event rather than file mtime),
 `--prune aggressive|moderate|none` (default `aggressive`), `--stdout` (print the summary text
 instead of writing a report file), `--resume` (fail fast unless a matching checkpoint exists).
 Full flag table + the 9-section output schema: `README.md` → "session_summary — session

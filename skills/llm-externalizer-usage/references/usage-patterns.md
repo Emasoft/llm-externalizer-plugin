@@ -267,7 +267,7 @@ Sections, Errors and Fixes, Problem Solving, All User Messages verbatim, Pending
 Work, Next Step) — but on **free** OpenRouter models only, so it always costs $0.
 
 ```bash
-# Current project's most recently modified session, no flags needed.
+# Current project's most recent session, no flags needed.
 llm-ext session-summary
 
 # A specific transcript, printing the summary text directly (no report file).

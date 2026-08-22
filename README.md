@@ -803,7 +803,7 @@ exits non-zero rather than reporting a false success.
 |---|---|
 | `--transcript <path>` | Explicit `.jsonl` transcript path. Wins over `--session-id` and the default. |
 | `--session-id <id>` | Resolve a transcript within the current project's `~/.claude/projects/<slug>/` dir. |
-| (neither given) | Defaults to the most recently modified transcript for the current project. |
+| (neither given) | Defaults to the current project's most recent transcript, ranked by the transcript's own last recorded event (not file mtime, which a touch or a mere reopen bumps). |
 | `--prune aggressive\|moderate\|none` | Default `aggressive` — drops tool-result payloads, pasted file contents, thinking blocks. |
 | `--min-context <n>` | Optional hard floor on eligible model `context_length`. Default: none (biggest available is used). |
 | `--max-chunk-tokens <n>` | Override the per-chunk/per-fold token budget. Default: `min(25000, model window budget)` — smaller than the window on purpose, since quality collapses well before the context limit and small chunks parallelize better. |
@@ -839,7 +839,7 @@ that already landed.
 **Worked examples:**
 
 ```bash
-# (a) Summarize the current project's most recently modified session — no
+# (a) Summarize the current project's most recent session — no
 #     flags needed, resolves the transcript automatically. Writes a report
 #     under reports/llm-externalizer/ and prints its path.
 llm-ext session-summary

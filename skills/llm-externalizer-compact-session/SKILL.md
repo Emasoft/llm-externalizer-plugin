@@ -23,10 +23,13 @@ using only FREE models — $0 by construction, and it never loads the file into 
 | `<slug>/<session-id>.jsonl` | `--transcript ~/.claude/projects/<slug>/<session-id>.jsonl` | **`--session_id` only resolves inside the CURRENT project**, so any other project needs the full path |
 | a bare session id / uuid | `--session_id <id>` | resolves to `~/.claude/projects/<current-slug>/<id>.jsonl` |
 | an absolute `.jsonl` path | `--transcript <path>` | wins over everything |
-| nothing | *(no target flag)* | defaults to the most recently modified transcript of the current project |
+| nothing | *(no target flag)* | defaults to the current project's most recent transcript, by its own last recorded event (not file mtime) |
 
 A project slug is its absolute path with every non-alphanumeric character replaced by `-`
 (e.g. `~/Code/foo` → `-Users-me-Code-foo`). To find one, list `~/.claude/projects/`.
+Both halves of that path are host-overridable: `CLAUDE_CONFIG_DIR` moves `~/.claude`, and
+`CLAUDE_CODE_PROJECT_DIR_NAME` (Claude Code 2.1.234) replaces the slug segment outright —
+`llm-ext` honors both, so listing the directory beats deriving the slug by hand.
 The CURRENT session's own transcript is a valid target — compacting the conversation you
 are in is the point when preparing for `/clear`.
 

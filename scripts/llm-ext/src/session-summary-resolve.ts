@@ -13,6 +13,10 @@
  * non-alphanumeric character replaced by `-` (verified empirically against
  * this project's own `~/.claude/projects/` entry — no other separator is
  * ever produced, so no other character needs escaping).
+ *
+ * Both halves of that path are overridable by the host: CLAUDE_CONFIG_DIR
+ * moves `~/.claude`, and CLAUDE_CODE_PROJECT_DIR_NAME (Claude Code 2.1.234)
+ * replaces the derived `<project-slug>` segment.
  */
 
 import { closeSync, existsSync, openSync, readdirSync, readSync, statSync } from "node:fs";
@@ -32,6 +36,12 @@ export function projectSlug(absProjectRoot: string): string {
  * directory can set CLAUDE_CODE_PROJECT_DIR_NAME to pick the per-project
  * transcript directory name directly, instead of it always being derived
  * from the project path via projectSlug(). Honor it verbatim when present.
+ *
+ * ASSUMPTION (not verifiable without a host that actually sets it): the
+ * changelog calls it "a short NAME for the per-project transcript directory",
+ * so it is treated as a single path SEGMENT joined under the projects root —
+ * not an absolute path and not a multi-segment fragment. If a host ever sets
+ * it to a full path, this join is where that breaks.
  */
 function resolveSessionDirName(projectRoot: string): string {
   const override = process.env.CLAUDE_CODE_PROJECT_DIR_NAME;
@@ -99,9 +109,11 @@ export interface ResolveTranscriptOptions {
 
 /**
  * Resolve the transcript to summarize: an explicit path, an explicit
- * session-id, or — the documented default — the most recently modified
- * `.jsonl` transcript for the current project. Fails fast with an
- * actionable message rather than silently summarizing the wrong session.
+ * session-id, or — the documented default — the current project's most
+ * recent `.jsonl` transcript, ranked by the transcript's own last recorded
+ * event rather than by file mtime (a touch or a mere reopen bumps mtime
+ * without the session advancing). Fails fast with an actionable message
+ * rather than silently summarizing the wrong session.
  */
 export function resolveTranscriptPath(options: ResolveTranscriptOptions = {}): string {
   if (options.transcriptPath) {

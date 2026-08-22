@@ -733,8 +733,8 @@ export function buildTools(limitsText: string) {
         "its daily cap mid-run, re-chunking the remaining work to the new model's context. " +
         "Checkpoints after every chunk/fold, so an interrupted run resumes instead of " +
         "restarting: re-run the same command and it picks up where it left off automatically. " +
-        "With neither transcript nor session_id, summarizes the most recently modified " +
-        "transcript for the current project.",
+        "With neither transcript nor session_id, summarizes the current project's most recent " +
+        "transcript, ranked by its own last recorded event rather than by file mtime.",
       inputSchema: {
         type: "object" as const,
         properties: {
