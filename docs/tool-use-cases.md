@@ -17,6 +17,10 @@ your context.
 | Your goal | Tool |
 |---|---|
 | Summarize / explain / translate / generate text from files | `chat` |
+| Summarize ONE text under a hard character budget | `summarize` |
+| Extract keywords / keyphrases / language (topics + themes) from a text | `topics` |
+| Deduplicate a bounded phrase list by MEANING (not literal match) | `sem_deduplicate` |
+| "What is this file, what is it for, how would it be used?" (any kind) | `describe` |
 | Find bugs in a handful of specific code files | `code_task` |
 | Audit a whole directory tree for issues | `scan_folder` |
 | "Is this feature/function already implemented anywhere?" (cross-file) | `search_existing_implementations` |

@@ -141,7 +141,21 @@ const PER_FILE_TOOLS = new Set([
 ]);
 
 /** Exactly one request per slot regardless of input size. */
-const SINGLE_CALL_TOOLS = new Set(["cluster_synonyms"]);
+const SINGLE_CALL_TOOLS = new Set([
+  "cluster_synonyms",
+  // The four single-call text tools (TRDD-VFXS2ZYY/9XOHSYFV/SYEH38AV/
+  // Q3ERXAAO): one request plus at most one corrective retry — the estimate
+  // quotes the single-call shape; the rare retry is bounded by the same size.
+  "summarize",
+  "topics",
+  "sem_deduplicate",
+  "describe",
+]);
+
+/** The text tools' own input contract: `input_file` | `input_content` — the
+ *  generic resolver only knows input_files_paths/folder_path, so these are
+ *  resolved by their own branch below. */
+const TEXT_TOOLS = new Set(["summarize", "topics", "sem_deduplicate", "describe"]);
 
 /** $0 by construction: local/config/read-only tools that never call an LLM. */
 const ZERO_COST_TOOLS = new Set([
@@ -261,12 +275,25 @@ export function estimateToolRun(
   const contentBytes =
     typeof args.input_files_content === "string"
       ? Buffer.byteLength(args.input_files_content)
-      : 0;
+      : typeof args.input_content === "string"
+        ? Buffer.byteLength(args.input_content)
+        : 0;
 
   let files: string[];
   let chatZeroFiles = false;
   if (comparePairs) {
     files = comparePairs.flat();
+  } else if (TEXT_TOOLS.has(toolName)) {
+    files =
+      typeof args.input_file === "string" && args.input_file.length > 0
+        ? [args.input_file]
+        : [];
+    if (files.length === 0 && contentBytes === 0) {
+      throw new Error("estimate aborted — input_file or input_content is required");
+    }
+    if (files.length === 0) {
+      notes.push("inline input_content only — one request per slot");
+    }
   } else {
     const resolved = deps.resolveFiles(args);
     // chat is billable with ZERO files (ultracode F8): instructions-only and

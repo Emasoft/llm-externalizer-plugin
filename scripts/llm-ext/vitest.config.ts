@@ -17,6 +17,9 @@ export default defineConfig({
     // Run live tests explicitly: npx vitest run src/live.test.ts
     include: [
       'src/index.test.ts',
+      // The four single-call text tools (TRDD-VFXS2ZYY/9XOHSYFV/SYEH38AV/
+      // Q3ERXAAO) — hermetic core tests over the injected-deps seam.
+      'src/text-tools/core.test.ts',
       // 'profile' command (TRDD-K3PW7Q2M) — read-only list/show against the
       // real compiled CLI + a throwaway multi-profile settings.yaml.
       'src/profile.test.ts',

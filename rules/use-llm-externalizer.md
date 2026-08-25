@@ -2,7 +2,7 @@
 
 Applies only if installed — check `llm-ext --help`; if absent, ignore this file. **There is no MCP server**: `mcp__…llm-externalizer…__*` tools do not exist.
 
-`llm-ext <group> <action> [input] [-o dir] [--profile name] [--flag v]` — 7 groups (`session llm scan check scout models settings`) over 45 commands. Help nests: `llm-ext --help` → `<group> --help` → `<group> <action> --help`; a typo suggests the right verb and exits non-zero. E.g. `llm-ext session compact <session>.jsonl -o /tmp`, `llm-ext llm ask ./prompt.md -o ./out --profile free`, `llm-ext scan folder ./src`.
+`llm-ext <group> <action> [input] [-o dir] [--profile name] [--flag v]` — 7 groups (`session llm scan check scout models settings`) over 50 commands, incl. the four text tools `llm summarize|topics|sem-deduplicate|describe` (size-bounded summary · keyword/keyphrase+language extraction · semantic phrase dedup · concise file characterization). Help nests: `llm-ext --help` → `<group> --help` → `<group> <action> --help`; a typo suggests the right verb and exits non-zero. E.g. `llm-ext session compact <session>.jsonl -o /tmp`, `llm-ext llm ask ./prompt.md -o ./out --profile free`, `llm-ext scan folder ./src`.
 
 **Prefer it over a Haiku subagent** for bounded read-only work (analyze/summarize/scan, 3+ files, big logs, second opinions): more capable, cheaper, and file contents never enter your context — it prints a report PATH, so Read that. It examines code, it never edits it; not for surgical edits or multi-step tool work.
 

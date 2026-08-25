@@ -130,6 +130,13 @@ import {
   runCodeTask,
   type CodeTaskDeps,
 } from "./code-task/core.js";
+import {
+  runDescribe,
+  runSemDeduplicate,
+  runSummarize,
+  runTopics,
+  type TextToolsDeps,
+} from "./text-tools/core.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -3537,6 +3544,37 @@ async function dispatchCallToolInner(
           modelOverride, // honours --free and credit-exhausted auto-fallback
         };
         return await runCodeTask(args as Record<string, unknown>, ctDeps);
+      }
+
+      case "summarize":
+      case "topics":
+      case "sem_deduplicate":
+      case "describe": {
+        // The four single-call text tools (TRDD-VFXS2ZYY / 9XOHSYFV /
+        // SYEH38AV / Q3ERXAAO) share one core module with injected deps,
+        // mirroring code-task/core.ts — this case only wires the
+        // server-stateful seams.
+        const ttDeps: TextToolsDeps = {
+          useEnsemble: backend.type === "openrouter",
+          defaultTemperature: DEFAULT_TEMPERATURE,
+          ensembleStreaming: (messages, options, ensemble) =>
+            ensembleStreaming(messages as ChatMessage[], options, ensemble),
+          formatFooter,
+          saveResponse,
+          resolveDefaultMaxTokens,
+          onProgress,
+          outputDir,
+          modelOverride,
+        };
+        const runner =
+          name === "summarize"
+            ? runSummarize
+            : name === "topics"
+              ? runTopics
+              : name === "sem_deduplicate"
+                ? runSemDeduplicate
+                : runDescribe;
+        return await runner(args as Record<string, unknown>, ttDeps);
       }
 
       case "rules_check": {

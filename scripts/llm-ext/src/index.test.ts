@@ -94,6 +94,12 @@ describe('tool catalog', () => {
       'high_quality_scan',
       'search_existing_implementations',
       'cluster_synonyms',
+      // text tools — 4 single-call tools sharing text-tools/core.ts
+      // (TRDD-VFXS2ZYY/9XOHSYFV/SYEH38AV/Q3ERXAAO)
+      'summarize',
+      'topics',
+      'sem_deduplicate',
+      'describe',
       // mass-scouting — 16 tools
       // (8 base + 3 Phase B + 2 Phase C2 + 2 Phase C3 + 1 Phase F)
       'mass_scout',

@@ -47,6 +47,10 @@ export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>
     ask: { command: "chat", positional: "input_files_paths" },
     code: { command: "code_task", positional: "input_files_paths" },
     cluster: { command: "cluster_synonyms", positional: "input_file" },
+    summarize: { command: "summarize", positional: "input_file" },
+    topics: { command: "topics", positional: "input_file" },
+    "sem-deduplicate": { command: "sem_deduplicate", positional: "input_file" },
+    describe: { command: "describe", positional: "input_file" },
   },
   scan: {
     folder: { command: "scan_folder", positional: "folder_path" },

@@ -1472,6 +1472,125 @@ export function buildTools(limitsText: string) {
         required: ["input_file", "output_dir"],
       },
     },
+    {
+      name: "summarize",
+      description:
+        "Summarize the input text with a hard size budget (TRDD-VFXS2ZYY). " +
+        "One LLM call plus at most one corrective retry when the summary exceeds " +
+        "max_chars; still over ⇒ FAILED (never silent truncation).\n\n" +
+        "OUTPUT: Saved to .md file, returns only the file path." +
+        limitsText,
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_file: {
+            type: "string",
+            description: "Path to the text file to summarize.",
+          },
+          input_content: {
+            type: "string",
+            description: "Inline text to summarize (alternative to input_file).",
+          },
+          max_chars: {
+            type: "number",
+            description:
+              "Hard maximum size of the summary in characters (default 1000, min 20).",
+          },
+          language: {
+            type: "string",
+            description:
+              "Output language for the summary. Default: same language as the input.",
+          },
+        },
+      },
+    },
+    {
+      name: "topics",
+      description:
+        "Extract keywords, keyphrases and the language from the input text " +
+        "(TRDD-9XOHSYFV): the topics, themes and arguments found in it. " +
+        "Strict-JSON output contract with one corrective retry.\n\n" +
+        "OUTPUT: Saved to .md file (readable list + JSON), returns only the file path." +
+        limitsText,
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_file: {
+            type: "string",
+            description: "Path to the text file to analyze.",
+          },
+          input_content: {
+            type: "string",
+            description: "Inline text to analyze (alternative to input_file).",
+          },
+          max_keywords: {
+            type: "number",
+            description: "Maximum number of keywords to return (default 15).",
+          },
+          max_keyphrases: {
+            type: "number",
+            description: "Maximum number of keyphrases to return (default 10).",
+          },
+        },
+      },
+    },
+    {
+      name: "sem_deduplicate",
+      description:
+        "Semantically deduplicate a list of phrases (TRDD-SYEH38AV): phrases " +
+        "that mean the same thing with different words ('computer programming' " +
+        "vs 'coding', 'rasterize' vs 'render to image') are collapsed to the " +
+        "single best phrase. Exact duplicates are removed in code first (no LLM " +
+        "tokens); every survivor is mechanically verified to be a verbatim input " +
+        "phrase — an invented/reworded entry fails the call.\n\n" +
+        "INPUT: one phrase per line, a JSON string array, or a comma-separated " +
+        "line — via input_file or input_content.\n\n" +
+        "For 10k+ item corpora use cluster_synonyms instead (checkpointed 3-phase " +
+        "pipeline); this is the light single-call path for bounded lists.\n\n" +
+        "OUTPUT: Saved to .md file (survivors + removed audit), returns only the file path." +
+        limitsText,
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_file: {
+            type: "string",
+            description:
+              "Path to the phrase list (one per line, JSON array, or comma-separated).",
+          },
+          input_content: {
+            type: "string",
+            description: "Inline phrase list (alternative to input_file).",
+          },
+        },
+      },
+    },
+    {
+      name: "describe",
+      description:
+        "Describe concisely a file's nature, intent, likely usage and scope " +
+        "(TRDD-Q3ERXAAO) — code or prose. A prompt .md ⇒ what the prompt aims " +
+        "at; a .csv ⇒ what the list is made of and for what context; a JSON " +
+        "config ⇒ configuration of what, with what intent; a CSS file ⇒ the " +
+        "visual intent and effect; code ⇒ what it does and why. Hard max_chars " +
+        "budget with one corrective retry; still over ⇒ FAILED.\n\n" +
+        "OUTPUT: Saved to .md file, returns only the file path." +
+        limitsText,
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          input_file: {
+            type: "string",
+            description: "Path to the file to describe (required).",
+          },
+          max_chars: {
+            type: "number",
+            description:
+              "Hard maximum size of the description in characters (default 500, min 50).",
+          },
+        },
+        required: ["input_file"],
+      },
+    },
   ];
   // Append the mass-scouting tool surface (8 tools — see TRDD §15).
   // These are thin shims around the CLI dispatcher in mass_scouting/cli.ts;

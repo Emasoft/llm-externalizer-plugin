@@ -79,6 +79,10 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 | Tool | Purpose | Default answer_mode |
 |------|---------|-------------------|
 | `chat` | General-purpose: summarize, compare, translate, generate (also handles custom_prompt calls) | 2 (merged) |
+| `summarize` | Size-bounded summary of ONE text (`input_file` \| `input_content`, `max_chars`, optional `language`). One call + one corrective retry when over budget; still over ⇒ FAILED (never silent truncation). | N/A |
+| `topics` | Keywords + keyphrases + language of ONE text, strict-JSON contract (`max_keywords`/`max_keyphrases`). | N/A |
+| `sem_deduplicate` | Semantic dedup of a bounded phrase list (line/JSON/comma input). Literal dupes removed in code first; every survivor mechanically verified to be a verbatim input phrase. For 10k+ corpora use `cluster_synonyms`. | N/A |
+| `describe` | Concise nature/intent/usage/scope of ONE file (prompt .md, .csv, JSON config, CSS, code, …) under `max_chars`. | N/A |
 | `code_task` | Code-optimized analysis with code-review system prompt | 2 (merged) |
 | `scan_folder` | Auto-discover files in a directory tree, process each with LLM | 0 (per-file) |
 | `compare_files` | Auto-compute diff between 2 files, LLM summarizes changes | N/A |
