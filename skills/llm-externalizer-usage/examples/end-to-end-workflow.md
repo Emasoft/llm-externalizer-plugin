@@ -17,7 +17,7 @@ Complete example showing tool selection, invocation, output reading, and acting 
 - Need to compare multiple file pairs? Use `compare-files` (batch mode with `--file_pairs`).
 - Need to compare between git commits? Use `compare-files` (git diff mode with `--git_repo` + `--from_ref` + `--to_ref`).
 
-For a directory scan: `scan-folder`. Folder scans can run long — use an extended Bash timeout or `run_in_background: true`.
+For a directory scan: `scan-folder`. Folder scans can run long — use an extended Bash timeout or `run_in_background: true` (on Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` can additionally cap a scan's memory).
 
 ### Step 2: Run the command
 

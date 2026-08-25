@@ -574,6 +574,46 @@ describe("driver: summarizeSession", () => {
     ).rejects.toThrow(/chunk token budget/);
   });
 
+  it("model-pool shift between runs: a resumed run adopts the checkpoint's chunking params instead of orphaning it", async () => {
+    const lines = Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `distinct request ${i} `.repeat(20)));
+    const p = writeTranscript(lines);
+    const cp = checkpointPath();
+
+    // Run 1: big-window model, DEFAULT chunk budget (derived from the model).
+    const callModel = vi.fn<CallModelFn>(async () => summaryFixture("SUMMARY"));
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+    const callsAfterRun1 = callModel.mock.calls.length;
+
+    // Run 2: the free pool shifted — a much smaller-window model is now
+    // candidate 0, so TODAY's derived default budget differs from the
+    // checkpoint's. Before stored-params adoption this threw
+    // /chunk token budget/, so an automated caller retrying against a
+    // checkpoint never converged (field report: ai-maestro-janitor,
+    // 2026-08-25). Explicit --max_chunk_tokens changes still fail fast —
+    // see the test above.
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: cp,
+      modelId: FREE_MODEL,
+      modelMaxContext: 20_000,
+      modelMaxCompletionTokens: 1_000,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+
+    expect(result.resumedFromCheckpoint).toBe(true);
+    // The completed run is fully reused — zero new model calls.
+    expect(callModel.mock.calls.length).toBe(callsAfterRun1);
+  });
+
   it("incremental compaction: the joined output over a grown transcript is byte-identical to a from-scratch run over the same final transcript", async () => {
     const initialLines = Array.from({ length: 3 }, (_, i) => userTurn(`u${i}`, `distinct request alpha ${i} `.repeat(20)));
     const p = writeTranscript(initialLines);

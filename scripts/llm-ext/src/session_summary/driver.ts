@@ -615,6 +615,34 @@ async function computeConsumedPrefix(path: string, byteLength: number): Promise<
   return { bytes: byteLength, sha256: await hashFilePrefix(path, byteLength) };
 }
 
+/** Best-effort peek at an existing checkpoint's stored identity, used by
+ *  `summarizeSession` to keep a resumed run's chunking params STABLE when the
+ *  free-model pool shifted between runs (see the adoption block there).
+ *  Returns null on ANY problem — a missing/corrupt/foreign checkpoint is
+ *  `loadCheckpoint`'s job to report; this peek must never fail a run. */
+function peekStoredChunkerParams(path: string): CheckpointIdentity | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf-8")) as Checkpoint;
+    const id = parsed?.identity;
+    if (
+      parsed?.version !== 1 ||
+      typeof id?.transcriptPath !== "string" ||
+      typeof id?.pruneLevel !== "string" ||
+      typeof id?.chunkerMaxTokens !== "number" ||
+      !Number.isFinite(id.chunkerMaxTokens) ||
+      id.chunkerMaxTokens < 1 ||
+      typeof id?.chunkerOverlapTurns !== "number" ||
+      !Number.isFinite(id.chunkerOverlapTurns) ||
+      id.chunkerOverlapTurns < 0
+    ) {
+      return null;
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
+
 /** Result of a checkpoint load that passed every check. `grew` distinguishes
  *  the two safe-to-resume shapes: `false` = the transcript is byte-identical
  *  to what the checkpoint was built from (today's plain resume — every slot
@@ -1215,18 +1243,19 @@ export async function summarizeSession(
   options: SummarizeSessionOptions,
 ): Promise<SummarizeSessionResult> {
   const pruneLevel = options.pruneLevel ?? "aggressive";
-  const overlapTurns = options.chunkOverlapTurns ?? DEFAULT_OVERLAP_TURNS;
+  let overlapTurns = options.chunkOverlapTurns ?? DEFAULT_OVERLAP_TURNS;
   const maxRetries = options.maxRetriesPerChunk ?? 2;
   const nowIso = options.now ?? (() => new Date().toISOString());
 
   // The ordered candidate list: the primary model first, then the caller's
   // fallback chain (already ranked biggest-context-first by P3's
-  // selectModels()). A KNOWN LIMITATION, documented rather than silently
-  // assumed away: a fallback switch is fully handled WITHIN this run, but a
-  // process crash mid-fallback + resume starts back over from candidate 0 —
-  // if it too is still unavailable, this run's identity check will refuse
-  // to resume against the checkpoint's now-different chunking params rather
-  // than replaying the switch silently (fail fast beats a wrong resume).
+  // selectModels()). A fallback switch is fully handled WITHIN this run; a
+  // process crash + resume under a DIFFERENT candidate 0 is handled by the
+  // stored-params adoption below — the resumed run re-uses the checkpoint's
+  // own chunking params, so a shifted model pool can no longer orphan a
+  // valid checkpoint (the pre-adoption behaviour: identity mismatch, hard
+  // throw, and an automated retry loop that never converges — field report
+  // ai-maestro-janitor, 2026-08-25).
   const models: EligibleModel[] = [
     { id: options.modelId, contextLength: options.modelMaxContext, maxCompletionTokens: options.modelMaxCompletionTokens },
     ...(options.fallbackModels ?? []),
@@ -1302,6 +1331,24 @@ export async function summarizeSession(
   }
 
   const resolvedTranscriptPath = resolve(options.transcriptPath);
+
+  // Adopt the checkpoint's stored chunking params when the caller left them
+  // at their DEFAULTS. The default budget is derived from whichever model is
+  // active TODAY (see budgetForModel), and free-pool availability shifts
+  // between runs (delistings, daily caps) — so re-deriving it would change
+  // the identity and make loadCheckpoint throw against a perfectly valid
+  // checkpoint, turning every automated retry into a dead end. Chunking is
+  // deterministic for the same (turns, params), so adopting the STORED
+  // params keeps every completed chunk summary valid; if they overshoot
+  // today's model window, the same in-run shrink/re-chunk path that handles
+  // a live fallback absorbs it. Explicit caller flags still win — a
+  // deliberate param change keeps its fail-fast identity mismatch.
+  const stored = peekStoredChunkerParams(options.checkpointPath);
+  if (stored && stored.transcriptPath === resolvedTranscriptPath && stored.pruneLevel === pruneLevel) {
+    if (options.maxChunkTokens === undefined) maxChunkTokens = stored.chunkerMaxTokens;
+    if (options.chunkOverlapTurns === undefined) overlapTurns = stored.chunkerOverlapTurns;
+  }
+
   const identity: CheckpointIdentity = {
     transcriptPath: resolvedTranscriptPath,
     pruneLevel,

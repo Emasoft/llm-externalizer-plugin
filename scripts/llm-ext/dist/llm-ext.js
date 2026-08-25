@@ -253857,6 +253857,18 @@ async function hashFilePrefix(path, byteLength) {
 async function computeConsumedPrefix(path, byteLength) {
   return { bytes: byteLength, sha256: await hashFilePrefix(path, byteLength) };
 }
+function peekStoredChunkerParams(path) {
+  try {
+    const parsed = JSON.parse(readFileSync27(path, "utf-8"));
+    const id = parsed?.identity;
+    if (parsed?.version !== 1 || typeof id?.transcriptPath !== "string" || typeof id?.pruneLevel !== "string" || typeof id?.chunkerMaxTokens !== "number" || !Number.isFinite(id.chunkerMaxTokens) || id.chunkerMaxTokens < 1 || typeof id?.chunkerOverlapTurns !== "number" || !Number.isFinite(id.chunkerOverlapTurns) || id.chunkerOverlapTurns < 0) {
+      return null;
+    }
+    return id;
+  } catch {
+    return null;
+  }
+}
 async function loadCheckpoint(path, identity, currentBytes) {
   let raw;
   try {
@@ -254089,7 +254101,7 @@ function collectRemainingTurns(chunks, fromIndex) {
 }
 async function summarizeSession(options) {
   const pruneLevel = options.pruneLevel ?? "aggressive";
-  const overlapTurns = options.chunkOverlapTurns ?? DEFAULT_OVERLAP_TURNS;
+  let overlapTurns = options.chunkOverlapTurns ?? DEFAULT_OVERLAP_TURNS;
   const maxRetries = options.maxRetriesPerChunk ?? 2;
   const nowIso = options.now ?? (() => (/* @__PURE__ */ new Date()).toISOString());
   const models = [
@@ -254125,6 +254137,11 @@ async function summarizeSession(options) {
     throw new Error(`session-summary: transcript is not a file: ${options.transcriptPath}`);
   }
   const resolvedTranscriptPath = resolve15(options.transcriptPath);
+  const stored = peekStoredChunkerParams(options.checkpointPath);
+  if (stored && stored.transcriptPath === resolvedTranscriptPath && stored.pruneLevel === pruneLevel) {
+    if (options.maxChunkTokens === void 0) maxChunkTokens = stored.chunkerMaxTokens;
+    if (options.chunkOverlapTurns === void 0) overlapTurns = stored.chunkerOverlapTurns;
+  }
   const identity = {
     transcriptPath: resolvedTranscriptPath,
     pruneLevel,
