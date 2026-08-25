@@ -1,6 +1,29 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.5.11] - 2026-08-25
+
+### Documentation
+
+- Docs: fix the mtime wording 966148d made false in 7 places
+
+- Docs: archive 15 terminal TRDDs — design/tasks/ must mean OPEN work
+
+
+### Fixed
+
+- Fix(session-summary): adopt checkpoint's chunking params on resume so a model-pool shift can't orphan it
+
+- Fix(claude-code): align with 2.1.233–2.1.240 behaviour changes
+
+- Fix(tests): remove every mkdtemp'd dir at file end — /tmp held 2,451 orphan test dirs
+
+
+### Testing
+
+- Test(tmpdir): fail the run if any llm-ext temp dir is left behind; track async mkdtemp too
+
+
 ## [13.5.10] - 2026-08-19
 
 ### Added
