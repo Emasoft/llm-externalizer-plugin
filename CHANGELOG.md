@@ -1,6 +1,25 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [13.6.0] - 2026-08-26
+
+### Added
+
+- Feat(benchmark): golden benchmarks for the 4 text tools (TRDD-VFXS2ZYY, TRDD-9XOHSYFV, TRDD-SYEH38AV, TRDD-Q3ERXAAO)
+
+- Feat: add summarize, topics, sem-deduplicate, describe text tools (TRDD-VFXS2ZYY, TRDD-9XOHSYFV, TRDD-SYEH38AV, TRDD-Q3ERXAAO)
+
+
+### Documentation
+
+- Docs: add TRDD-VFXS2ZYY/9XOHSYFV/SYEH38AV/Q3ERXAAO — 4 new llm text-tool commands (summarize, topics, sem-deduplicate, describe)
+
+
+### Fixed
+
+- Fix(commands): mass-scout doc names real subcommands, not a placeholder
+
+
 ## [13.5.11] - 2026-08-25
 
 ### Documentation
