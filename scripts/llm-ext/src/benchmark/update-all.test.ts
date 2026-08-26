@@ -192,10 +192,14 @@ describe("--update-all", () => {
       [
         "check_against_specs",
         "code_task",
+        "describe",
         "mass_scout",
         "scan_folder",
         "search_existing_implementations",
         "security_scan",
+        "sem_deduplicate",
+        "summarize",
+        "topics",
       ].sort(),
     );
     // Everything else carries `benchmark: null` in the registry — requirements only.
@@ -227,7 +231,17 @@ describe("--update-all", () => {
 
     expect(r.ok).toBe(true);
     expect(toolCalls.sort()).toEqual(
-      ["check_against_specs", "code_task", "scan_folder", "search_existing_implementations", "security_scan"].sort(),
+      [
+        "check_against_specs",
+        "code_task",
+        "describe",
+        "scan_folder",
+        "search_existing_implementations",
+        "security_scan",
+        "sem_deduplicate",
+        "summarize",
+        "topics",
+      ].sort(),
     );
 
     const doc = yamlParse(readFileSync(settingsPath, "utf-8"));
@@ -242,7 +256,7 @@ describe("--update-all", () => {
     expect(doc.profiles.ens.tool_models.chat).toBeUndefined();
     // Untouched keys survive.
     expect(doc.profiles.ens.api_key).toBe("sk-test-literal");
-    expect(r.toolsUpdated).toBe(5);
+    expect(r.toolsUpdated).toBe(9);
   });
 
   it("does NOT write a tool whose gate found no eligible same-or-cheaper passer", async () => {
@@ -567,7 +581,7 @@ describe("--update-all", () => {
 
     // Every tool that never ran is reported as SKIPPED — never as passing, never silently.
     const skipped = r.tools.filter((t) => t.note.includes("SKIPPED") || t.note.includes("ABORTED"));
-    expect(skipped).toHaveLength(2);
+    expect(skipped).toHaveLength(6);
     for (const t of skipped) {
       expect(t.winner).toBeNull();
       expect(t.written).toBe(false);
@@ -596,7 +610,7 @@ describe("--update-all", () => {
     const perToolSweeps = r.tools.filter(
       (x) => x.gate === "benchmark-proven" && x.benchmark !== "keyword-classification",
     );
-    expect(perToolSweeps).toHaveLength(5);
+    expect(perToolSweeps).toHaveLength(9);
     for (const t of perToolSweeps) {
       expect(t.note).toMatch(/dry-run — would benchmark \d+ model\(s\), worst case \$/);
       expect(t.written).toBe(false);
@@ -612,7 +626,7 @@ describe("--update-all", () => {
     const { deps } = spyDeps();
     const r = await runUpdateAll(baseOpts(), deps);
     expect(r.summary).toMatch(
-      /paid refresh complete: \d+ scanned \/ \d+ qualified \/ \d+ benchmarked, 6 benchmark-proven \+ 5 requirement-gated tool\(s\), \d+ tool\(s\) updated, \$[\d.]+ spent of the \$[\d.]+ cap/,
+      /paid refresh complete: \d+ scanned \/ \d+ qualified \/ \d+ benchmarked, 10 benchmark-proven \+ 5 requirement-gated tool\(s\), \d+ tool\(s\) updated, \$[\d.]+ spent of the \$[\d.]+ cap/,
     );
     expect(r.modelsScanned).toBe(CATALOG.length);
   });

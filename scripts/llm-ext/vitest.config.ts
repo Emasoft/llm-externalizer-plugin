@@ -285,6 +285,13 @@ export default defineConfig({
       'src/benchmark/check-specs/score.test.ts',
       'src/benchmark/check-specs/select.test.ts',
       'src/benchmark/check-specs/bench-runner.test.ts',
+      // Text-tools (summarize/topics/sem_deduplicate/describe) per-tool benchmarks —
+      // hand-curated concept-recall corpora (dataset.ts), a deterministic judge-free
+      // scorer (score.ts), and bench-runner.test.ts driving the REAL text-tools/core.ts
+      // pipeline functions through a fake FetchImpl seam only. No LLM, no network.
+      'src/benchmark/text-tools/dataset.test.ts',
+      'src/benchmark/text-tools/score.test.ts',
+      'src/benchmark/text-tools/bench-runner.test.ts',
       // Pre-flight workload descriptions (P4) — each derives callsPerModel /
       // promptCharsPerModel from that benchmark's REAL corpus on disk, so a corpus edit
       // moves the spend estimate automatically and a stale literal can never quietly

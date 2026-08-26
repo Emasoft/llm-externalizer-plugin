@@ -79,6 +79,22 @@ export interface CliOptions {
    *  tokens following the flag). When empty, the benchmark auto-discovers the
    *  same-or-cheaper candidate pool. */
   checkSpecsModels: string[];
+  /** Run the summarize text-tool benchmark instead of the keyword task. */
+  summarizeBenchmark: boolean;
+  /** Explicit model id(s) to assess in --summarize-benchmark mode (variadic). */
+  summarizeBenchmarkModels: string[];
+  /** Run the topics text-tool benchmark instead of the keyword task. */
+  topicsBenchmark: boolean;
+  /** Explicit model id(s) to assess in --topics-benchmark mode (variadic). */
+  topicsBenchmarkModels: string[];
+  /** Run the sem_deduplicate text-tool benchmark instead of the keyword task. */
+  semDedupBenchmark: boolean;
+  /** Explicit model id(s) to assess in --sem-dedup-benchmark mode (variadic). */
+  semDedupBenchmarkModels: string[];
+  /** Run the describe text-tool benchmark instead of the keyword task. */
+  describeBenchmark: boolean;
+  /** Explicit model id(s) to assess in --describe-benchmark mode (variadic). */
+  describeBenchmarkModels: string[];
   /** Ignore the per-model-per-day cache (currently only --security-triage). */
   force: boolean;
   /** Assess one model against EVERY tool's per-tool requirements (no LLM call). */
@@ -170,6 +186,14 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     scanFolderModels: [],
     checkSpecs: false,
     checkSpecsModels: [],
+    summarizeBenchmark: false,
+    summarizeBenchmarkModels: [],
+    topicsBenchmark: false,
+    topicsBenchmarkModels: [],
+    semDedupBenchmark: false,
+    semDedupBenchmarkModels: [],
+    describeBenchmark: false,
+    describeBenchmarkModels: [],
     force: false,
     assessModel: null,
     checkHealth: false,
@@ -312,6 +336,33 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.checkSpecs = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.checkSpecsModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--summarize-benchmark") {
+      // Variadic, exactly like --check-specs: `--summarize-benchmark a/b c/d`
+      // assesses those two; with no trailing tokens the benchmark auto-discovers
+      // the same-or-cheaper candidate pool.
+      opts.summarizeBenchmark = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.summarizeBenchmarkModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--topics-benchmark") {
+      opts.topicsBenchmark = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.topicsBenchmarkModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--sem-dedup-benchmark") {
+      opts.semDedupBenchmark = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.semDedupBenchmarkModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--describe-benchmark") {
+      opts.describeBenchmark = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.describeBenchmarkModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--model") {
@@ -565,6 +616,24 @@ export function printHelp(): void {
       "  Pass gate: micro-F1 >= 0.80 AND micro-recall >= 0.70 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
       "  which writes the winner into P's `tool_models.check_against_specs` (CLI-only).",
+      "",
+      "Text-tools benchmarks (separate tasks — one hand-curated corpus per tool, no LLM judge):",
+      "  --summarize-benchmark [ID...]",
+      "  --topics-benchmark [ID...]",
+      "  --sem-dedup-benchmark [ID...]",
+      "  --describe-benchmark [ID...]",
+      "                    Run the summarize / topics / sem_deduplicate / describe",
+      "                    single-call text-tool benchmark instead of the keyword task.",
+      "                    Drives the REAL tool pipeline (text-tools/core.ts) over a",
+      "                    hand-curated corpus (dataset.ts) and scores it",
+      "                    DETERMINISTICALLY: concept recall / budget compliance / JSON",
+      "                    validity — no LLM judge. Pass explicit model id(s) after the",
+      "                    flag to assess exactly those; with none, auto-discovers the",
+      "                    same-or-cheaper candidate pool. Writes a report under",
+      "                    reports/text-tools-benchmark/<tool>/. Composes with --force.",
+      "  Pass gate: mean concept score >= 0.60 AND <= 1 failed case.",
+      "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
+      "  which writes the winner into P's `tool_models.<tool>` (CLI-only).",
       "",
       "Cross-tool auto-replacement (TRDD-828238b5 A7 — the writer path):",
       "  --auto-replace    For every benchmarked tool (security_scan,",

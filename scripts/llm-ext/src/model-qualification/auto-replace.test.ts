@@ -190,16 +190,21 @@ describe("planToolReplacements — report shape", () => {
     });
     // Every tool the registry declares a DISPATCHABLE benchmark for must appear.
     // code_task joined in P2b (its code-audit corpus), scan_folder in P2c (its
-    // mass-search corpus) and check_against_specs in P2d (its spec-adherence corpus),
-    // so the planner now covers five tools — if a sixth benchmark ships, this list
-    // grows with it.
+    // mass-search corpus) and check_against_specs in P2d (its spec-adherence
+    // corpus); the four text tools (TRDD-VFXS2ZYY/9XOHSYFV/SYEH38AV/Q3ERXAAO)
+    // joined with their own golden corpora — nine tools. If a tenth benchmark
+    // ships, this list grows with it.
     expect(findings.map((f) => f.tool).sort()).toEqual(
       [
         "check_against_specs",
         "code_task",
+        "describe",
         "scan_folder",
         "search_existing_implementations",
         "security_scan",
+        "sem_deduplicate",
+        "summarize",
+        "topics",
       ].sort(),
     );
     for (const f of findings) {

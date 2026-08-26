@@ -141,6 +141,36 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
     benchmark: null,
     note: "General-purpose text. A loose general-quality benchmark is incremental.",
   },
+  summarize: {
+    tool: "summarize",
+    // Plain text output, one shot, no chain of inference — reasoning and
+    // structured output would only narrow the candidate pool for no benefit.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: "text-summarize",
+    note: "Single-call bounded summarization. Gated by a hand-curated concept-recall corpus (dataset.ts) scored deterministically — no LLM judge.",
+  },
+  topics: {
+    tool: "topics",
+    // Answer is a structured {language, keywords, keyphrases} JSON object.
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "text-topics",
+    note: "Single-call topic/keyword/language extraction. Gated by a hand-curated concept-recall + language-match corpus, scored deterministically — no LLM judge.",
+  },
+  sem_deduplicate: {
+    tool: "sem_deduplicate",
+    // Answer is a JSON array of surviving phrases — needs structured output,
+    // not reasoning (it is a meaning-equivalence grouping, not a chain of steps).
+    requirements: criteria({ requireReasoning: false }),
+    benchmark: "text-sem-dedup",
+    note: "Meaning-equivalence phrase deduplication. Gated by a hand-curated cluster corpus (dataset.ts), scored deterministically on exactly-one-survivor-per-cluster — no LLM judge.",
+  },
+  describe: {
+    tool: "describe",
+    // Plain text output describing one file's nature/intent/usage/scope.
+    requirements: criteria({ requireStructuredOutputs: false, requireReasoning: false }),
+    benchmark: "text-describe",
+    note: "Single-call bounded file description. Gated by a hand-curated concept-recall corpus across six file kinds (dataset.ts), scored deterministically — no LLM judge.",
+  },
 };
 
 /** Look up a tool's descriptor, or undefined for a pure-utility / unknown tool. */

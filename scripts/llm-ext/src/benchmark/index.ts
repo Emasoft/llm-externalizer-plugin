@@ -69,6 +69,12 @@ import { runCodeAuditBenchmark } from "./code-task/index.js";
 import { runScanFolderBenchmark } from "./scan-folder/index.js";
 import { runCheckSpecsBenchmark } from "./check-specs/index.js";
 import {
+  runDescribeBenchmark,
+  runSemDedupBenchmark,
+  runSummarizeBenchmark,
+  runTopicsBenchmark,
+} from "./text-tools/index.js";
+import {
   planEnsembleRotation,
   planToolReplacements,
   renderEnsembleRotationSection,
@@ -197,14 +203,18 @@ function validateCombinations(opts: CliOptions): void {
     opts.pickTopN === null &&
     !opts.codeTask &&
     !opts.scanFolder &&
-    !opts.checkSpecs
+    !opts.checkSpecs &&
+    !opts.summarizeBenchmark &&
+    !opts.topicsBenchmark &&
+    !opts.semDedupBenchmark &&
+    !opts.describeBenchmark
   ) {
-    // --code-task, --scan-folder and --check-specs are the legitimate single-winner
-    // consumers of --apply-profile: each produces ONE winner (not a top-N ensemble),
-    // which it writes into that profile's `tool_models.<tool>`. Everything else needs
-    // --pick-top-n to have anything to write.
+    // --code-task, --scan-folder, --check-specs and the four text-tool benchmark flags
+    // are the legitimate single-winner consumers of --apply-profile: each produces ONE
+    // winner (not a top-N ensemble), which it writes into that profile's
+    // `tool_models.<tool>`. Everything else needs --pick-top-n to have anything to write.
     throw new Error(
-      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder / --check-specs, which write their single winner into tool_models.code_task / tool_models.scan_folder / tool_models.check_against_specs)",
+      "--apply-profile requires --pick-top-n (or --code-task / --scan-folder / --check-specs / --summarize-benchmark / --topics-benchmark / --sem-dedup-benchmark / --describe-benchmark, which write their single winner into tool_models.<tool>)",
     );
   }
   if (opts.fromCache && opts.pickTopN === null) {
@@ -386,6 +396,22 @@ async function main(): Promise<CliResult> {
       for (const id of pool) {
         if (!opts.checkSpecsModels.includes(id)) opts.checkSpecsModels.push(id);
       }
+    } else if (opts.summarizeBenchmark) {
+      for (const id of pool) {
+        if (!opts.summarizeBenchmarkModels.includes(id)) opts.summarizeBenchmarkModels.push(id);
+      }
+    } else if (opts.topicsBenchmark) {
+      for (const id of pool) {
+        if (!opts.topicsBenchmarkModels.includes(id)) opts.topicsBenchmarkModels.push(id);
+      }
+    } else if (opts.semDedupBenchmark) {
+      for (const id of pool) {
+        if (!opts.semDedupBenchmarkModels.includes(id)) opts.semDedupBenchmarkModels.push(id);
+      }
+    } else if (opts.describeBenchmark) {
+      for (const id of pool) {
+        if (!opts.describeBenchmarkModels.includes(id)) opts.describeBenchmarkModels.push(id);
+      }
     } else if (opts.searchExisting || opts.autoReplace) {
       // Append (preserve any explicit ids the user passed after --search-existing).
       // --auto-replace forwards opts.searchExistingModels as its candidate pool,
@@ -455,6 +481,23 @@ async function main(): Promise<CliResult> {
   // commit that fixed the real violations, with no LLM judge.
   if (opts.checkSpecs) {
     return runCheckSpecsPhase(opts);
+  }
+
+  // The four text-tool benchmark flags route to the summarize/topics/sem_deduplicate/
+  // describe single-call benchmarks — each a wholly separate task (concept recall /
+  // budget compliance / JSON validity against a hand-curated corpus, not keyword
+  // classification), scored deterministically with no LLM judge.
+  if (opts.summarizeBenchmark) {
+    return runTextToolPhase("summarize", opts.summarizeBenchmarkModels, opts);
+  }
+  if (opts.topicsBenchmark) {
+    return runTextToolPhase("topics", opts.topicsBenchmarkModels, opts);
+  }
+  if (opts.semDedupBenchmark) {
+    return runTextToolPhase("sem_deduplicate", opts.semDedupBenchmarkModels, opts);
+  }
+  if (opts.describeBenchmark) {
+    return runTextToolPhase("describe", opts.describeBenchmarkModels, opts);
   }
 
   // --auto-replace routes to the cross-tool auto-replacement planner — for every
@@ -838,6 +881,22 @@ async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
           }
           case "check-specs": {
             const r = await runCheckSpecsBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "text-summarize": {
+            const r = await runSummarizeBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "text-topics": {
+            const r = await runTopicsBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "text-sem-dedup": {
+            const r = await runSemDedupBenchmark(common);
+            return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
+          }
+          case "text-describe": {
+            const r = await runDescribeBenchmark(common);
             return toolRun(r.recommendedModelId, r.changed, r.selection.eligible.length, r.costUsd, r.reportPath);
           }
           default:
@@ -1458,6 +1517,95 @@ async function runCheckSpecsPhase(opts: CliOptions): Promise<CliResult> {
     return {
       ok: true,
       summary: `${base} — applied to '${opts.applyProfile}'::tool_models.check_against_specs; run \`reset\` to reload`,
+      reportPath: result.reportPath,
+    };
+  } catch (err) {
+    // Exit 3 on a write failure, matching every other writer path in this CLI.
+    return {
+      ok: false,
+      code: 3,
+      summary: `--apply-profile failed: ${(err as Error).message}`,
+      reportPath: result.reportPath,
+    };
+  }
+}
+
+/** The four text-tool benchmark orchestrators, keyed by tool — one dispatch table
+ *  instead of four near-identical phase functions (see runTextToolPhase below). */
+const TEXT_TOOL_RUNNERS: Record<
+  "summarize" | "topics" | "sem_deduplicate" | "describe",
+  (opts: {
+    models?: string[];
+    force?: boolean;
+    onProgress?: (m: string) => void;
+  }) => ReturnType<typeof runSummarizeBenchmark>
+> = {
+  summarize: runSummarizeBenchmark,
+  topics: runTopicsBenchmark,
+  sem_deduplicate: runSemDedupBenchmark,
+  describe: runDescribeBenchmark,
+};
+
+/**
+ * --summarize-benchmark / --topics-benchmark / --sem-dedup-benchmark /
+ * --describe-benchmark phase: assess model(s) on one text-tool's hand-curated
+ * corpus (dataset.ts) and recommend the best same-or-cheaper passer. Scoring is
+ * DETERMINISTIC: concept recall / character-budget compliance / JSON validity
+ * against a hand-authored answer key (score.ts), with NO LLM judge anywhere.
+ * Writes JSON + markdown under reports/text-tools-benchmark/<tool>/.
+ *
+ * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
+ * P's `tool_models.<tool>` via applyToolModelToSettings — the same atomic,
+ * CLI-only writer --auto-replace --apply uses, which MUST NEVER be reachable from
+ * an MCP handler (see the guardrail comment at pick.ts:234). One function shared
+ * by all four tools — they differ only in which corpus and registry key they use,
+ * both of which are already parameterized in bench-runner.ts / registry.ts.
+ */
+async function runTextToolPhase(
+  tool: "summarize" | "topics" | "sem_deduplicate" | "describe",
+  models: string[],
+  opts: CliOptions,
+): Promise<CliResult> {
+  const label = tool.replace(/_/g, "-");
+  console.error(`[${label}] ${tool} text-tool model benchmark`);
+  const runner = TEXT_TOOL_RUNNERS[tool];
+  const result = await runner({
+    models: models.length > 0 ? models : undefined,
+    force: opts.force,
+    onProgress: (m) => console.error(`[${label}] ${m}`),
+  });
+  console.error("");
+  console.error(`[${label}] ${result.summaryLine}`);
+  console.error(`[${label}] spend: $${result.costUsd.toFixed(6)}`);
+  console.error(`[${label}] json:   ${result.jsonReportPath}`);
+  // stdout carries the machine-grep-able recommendation line.
+  process.stdout.write(`recommended_model=${result.recommendedModelId}\n`);
+
+  const base = `${label} benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`;
+
+  if (opts.applyProfile === null) {
+    return { ok: true, summary: `${base} — ADVISORY (pass --apply-profile P to adopt it)`, reportPath: result.reportPath };
+  }
+
+  // The winner is only worth writing when the gate actually produced a passer:
+  // with an empty eligible set the "recommendation" is just the incumbent kept
+  // in place, and rewriting tool_models to the value it already resolves to
+  // would masquerade as an adoption. Say so instead of quietly no-op'ing.
+  if (result.selection.eligible.length === 0) {
+    return {
+      ok: true,
+      summary: `${base} — no eligible same-or-cheaper passer, so nothing was written to '${opts.applyProfile}'`,
+      reportPath: result.reportPath,
+    };
+  }
+
+  try {
+    const r = applyToolModelToSettings(getSettingsPath(), opts.applyProfile, tool, result.recommendedModelId);
+    console.error(`[${label}] applied ${opts.applyProfile}::tool_models.${tool}: ${r.oldModelId || "—"}  →  ${r.newModelId}`);
+    console.error(`[${label}] Run the \`reset\` MCP tool or restart Claude Code to pick up the new model.`);
+    return {
+      ok: true,
+      summary: `${base} — applied to '${opts.applyProfile}'::tool_models.${tool}; run \`reset\` to reload`,
       reportPath: result.reportPath,
     };
   } catch (err) {

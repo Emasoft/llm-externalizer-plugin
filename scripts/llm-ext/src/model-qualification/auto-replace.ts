@@ -54,6 +54,12 @@ import { runSearchExistingBenchmark } from "../benchmark/search-existing/index.j
 import { runCodeAuditBenchmark } from "../benchmark/code-task/index.js";
 import { runScanFolderBenchmark } from "../benchmark/scan-folder/index.js";
 import { runCheckSpecsBenchmark } from "../benchmark/check-specs/index.js";
+import {
+  runDescribeBenchmark,
+  runSemDedupBenchmark,
+  runSummarizeBenchmark,
+  runTopicsBenchmark,
+} from "../benchmark/text-tools/index.js";
 
 /** A model the benchmark rejected (mirrors the selectors' RejectedCandidate). */
 export interface RejectedReplacement {
@@ -260,6 +266,42 @@ async function defaultBenchmarkRunner(
       rejected: r.selection.rejected,
     };
   }
+  if (benchmark === "text-summarize") {
+    const r = await runSummarizeBenchmark({ apiKey, models: candidates, incumbentModelId, onProgress });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
+  if (benchmark === "text-topics") {
+    const r = await runTopicsBenchmark({ apiKey, models: candidates, incumbentModelId, onProgress });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
+  if (benchmark === "text-sem-dedup") {
+    const r = await runSemDedupBenchmark({ apiKey, models: candidates, incumbentModelId, onProgress });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
+  if (benchmark === "text-describe") {
+    const r = await runDescribeBenchmark({ apiKey, models: candidates, incumbentModelId, onProgress });
+    return {
+      recommendedModelId: r.recommendedModelId,
+      changed: r.changed,
+      reason: r.selection.reason,
+      rejected: r.selection.rejected,
+    };
+  }
   throw new Error(
     `defaultBenchmarkRunner: no orchestrator wired for benchmark '${benchmark}' (tool '${tool}'). ` +
       `The model-qualification registry declared a benchmark the auto-replace dispatcher does not know — ` +
@@ -281,7 +323,11 @@ function benchmarkedTools(): { tool: string; benchmark: string }[] {
       descriptor.benchmark === "search-existing" ||
       descriptor.benchmark === "code-task" ||
       descriptor.benchmark === "scan-folder" ||
-      descriptor.benchmark === "check-specs"
+      descriptor.benchmark === "check-specs" ||
+      descriptor.benchmark === "text-summarize" ||
+      descriptor.benchmark === "text-topics" ||
+      descriptor.benchmark === "text-sem-dedup" ||
+      descriptor.benchmark === "text-describe"
     ) {
       out.push({ tool, benchmark: descriptor.benchmark });
     }

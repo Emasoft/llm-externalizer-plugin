@@ -73,6 +73,7 @@ import { describeWorkload as describeSearchExisting } from "./search-existing/in
 import { describeWorkload as describeCodeTask } from "./code-task/index.js";
 import { describeWorkload as describeScanFolder } from "./scan-folder/index.js";
 import { describeWorkload as describeCheckSpecs } from "./check-specs/index.js";
+import { describeWorkload as describeTextTool } from "./text-tools/index.js";
 
 /** free = zero-cost models only ($0, no key needed to be safe). paid = the priced
  *  catalog. both = the free phase first, then the paid phase, on ONE shared budget. */
@@ -215,6 +216,10 @@ const WORKLOAD_DESCRIBERS: Record<string, () => BenchmarkWorkload> = {
   "code-task": describeCodeTask,
   "scan-folder": describeScanFolder,
   "check-specs": describeCheckSpecs,
+  "text-summarize": () => describeTextTool("summarize"),
+  "text-topics": () => describeTextTool("topics"),
+  "text-sem-dedup": () => describeTextTool("sem_deduplicate"),
+  "text-describe": () => describeTextTool("describe"),
 };
 
 /**
