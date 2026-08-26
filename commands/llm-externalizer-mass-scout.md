@@ -6,7 +6,8 @@ description: |-
   fieldset -> JSON Schema, worker-pool fan-out, repair + validate,
   SQLite persist, markdown report). Pass an action word for everything
   else (register, estimate, search, export, diff, chain, ...); each
-  action maps 1:1 to `bin/llm-ext mass-scout-<action>`.
+  action maps 1:1 to a hyphenated CLI subcommand, e.g. register ->
+  `bin/llm-ext mass-scout-register`.
 allowed-tools:
   - Bash
 argument-hint: "[action] [flags] — actions: register | preclassify | estimate | (bare = scout run) | search | search-xjob | get | body-get | export | jobs-list | audit-sample | build-fieldset | propose-fieldset | list-bundled-fieldsets | diff | chain"
@@ -18,8 +19,16 @@ effort: high
 The FIRST word of the arguments selects the action. Map it to the CLI:
 
 ```bash
-${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-<action> <remaining flags>
+# Fold the action word into the subcommand name — e.g. action `register`:
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout-register <remaining flags>
+# No action word = the bare end-to-end scout run:
+${CLAUDE_PLUGIN_ROOT}/bin/llm-ext mass-scout <remaining flags>
 ```
+
+Every action follows that shape: `register`, `preclassify`, `estimate`,
+`search`, `search-xjob`, `get`, `body-get`, `export`, `jobs-list`,
+`audit-sample`, `build-fieldset`, `propose-fieldset`,
+`list-bundled-fieldsets`, `diff`, `chain`.
 
 **ALWAYS fold the action word into the hyphenated subcommand — never
 pass it through as a positional argument.** `llm-ext mass-scout search …`
@@ -29,14 +38,15 @@ form is always `llm-ext mass-scout-search …`.
 
 No action word = the **end-to-end scout run** (`llm-ext mass-scout`,
 documented below). The flag SSOT for every action is
-`bin/llm-ext mass-scout-<action> --help`; the pipeline guide (5 phases,
+that action's own `--help` (e.g. `bin/llm-ext mass-scout-register
+--help`); the pipeline guide (5 phases,
 token-efficiency rules, worked example) is the
 `llm-externalizer-mass-scouting` skill.
 
 > Until v13.5.8 each action was its own
 > `/llm-externalizer:llm-externalizer-mass-scout-<action>` command; the
 > 15 per-action menu entries were collapsed into this dispatcher
-> (TRDD-WIO13P1P). The `llm-ext mass-scout-*` CLI subcommands are
+> (TRDD-WIO13P1P). The hyphenated `mass-scout-*` CLI subcommands are
 > unchanged — only the slash-command surface moved.
 
 ## Actions
