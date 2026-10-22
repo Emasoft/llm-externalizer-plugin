@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.1.0] - 2026-10-22
+
+### Added
+
+- Feat: release 14.1.0 - dynamic free/paid/local profiles, provider routing, CLI reference skill, fixed statusline
+
+
 ### Highlights
 
 Curated notes for 14.1.0; the generated commit list follows.
