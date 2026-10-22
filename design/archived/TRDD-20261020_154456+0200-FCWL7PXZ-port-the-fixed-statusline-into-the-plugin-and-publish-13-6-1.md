@@ -1,10 +1,10 @@
 ---
 trdd-id: FCWL7PXZ
 title: Port the fixed statusline into the plugin and publish 13.6.1 from origin/main
-column: publish
-status: tasked
+column: complete
+status: archived
 created: 2026-10-20T15:44:56+0200
-updated: 2026-10-22T11:09:18+0200
+updated: 2026-10-22T11:46:35+0200
 current-owner: main-agent@llm-externalizer
 created-by: main-agent@llm-externalizer
 task-type: feature
@@ -630,7 +630,7 @@ Step 4's verification covers the local install only. These are the release-level
 - [x] (verified for v14.1.0, which replaced 13.6.1) A fresh `claude plugin install` yields a `scripts/statusline/statusline.py` that is
       byte-identical to `~/.claude/statusline.py`.
 - [x] (verified for v14.1.0, which replaced 13.6.1) `grep -c '<owner-login>' CHANGELOG.md` in the released tree returns 0.
-- [ ] The released `tests/test_statusline.py` contains the two behavioural tests from Step 2b,
+- [x] (verified for v14.1.1: test_log_tier_debug_is_gated_by_claude_statusline_debug is in the released file; CI run 39757155664 on 0e5fc3e9 green) The released `tests/test_statusline.py` contains the two behavioural tests from Step 2b,
       and they pass in the released tree.
 
 ## Risks
@@ -745,6 +745,7 @@ PORTED TO THE CORRECT BASE 2026-10-20: the fixes are now on the LOCAL redacted l
 
 - 2026-10-20T15:44:56+0200 — MANDATE issued by main-agent@llm-externalizer (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-22T11:06:48+0200 — column → publish by main-agent@llm-externalizer-plugin. 14.1.0 published and installed; acceptance box 7 waits for the next release to ship the gated debug test
+- 2026-10-22T11:46:35+0200 — COMPLETE by main-agent@llm-externalizer-plugin. Shipped as v14.1.0 and v14.1.1; every acceptance box verified; CI 39757155664 green on 0e5fc3e9; installed 14.1.1.
 
 ## CHANGE 2 — the measured facts (2026-10-20, second review round)
 
@@ -790,3 +791,4 @@ THE CODE COMMENT — scripts/publish.py's comment above the two CPV invocations 
 - 2026-10-22 PUBLISHED 14.1.0 (USER, verbatim: "consider me away and decide yourself. just base your decisions on verified facts. but publish and install the llm-externalizer plugin new version! with the new skill!"). Route: fast-forward squash, no history rewrite. A fresh clone (builds_dev/publish-14.1.0-ff) got one commit 4bdd9b1b on top of origin/main v13.6.0 whose tree equals local 62eb18cb; publish.py then added 8cbd288b chore(release): v14.1.0, tags v14.1.0 and llm-externalizer--v14.1.0, and the GitHub release. All gates passed (typecheck, lint, build, npm test, ruff, shellcheck, claude plugin validate, pytest, CPV). Verified after: both tags on origin; release v14.1.0 not draft; origin/main plugin.json 14.1.0; marketplace.json 14.1.0; claude plugin update installed 14.1.0 at user scope; skills/llm-externalizer-cli-reference present in the install; installed statusline.py byte-identical to ~/.claude/statusline.py after re-running install_statusline.py; owner login count 0 in the released CHANGELOG and tree; a shell without the session plugin bin resolves llm-ext 14.1.0 (this session still runs 13.6.0 until restart). Local: cherry-picked 8cbd288b as 54d72244, local tree now equals origin/main; COMMIT FREEZE LIFTED. CONSEQUENCE for every future publish: public and local histories have no common ancestor after v13.6.0 redaction differences, so publish again by the same squash route (fresh clone, commit-tree of the local tree on origin/main) or after DRRUTC2M rewrites public history. Left open as follow-ups: the card and branch still say 13.6.1; the 14.1.0 CHANGELOG Highlights sentence "the generated commit list follows" is inaccurate (cosmetic, fix in the next release).
 - 2026-10-22 Acceptance: boxes 1-6 ticked, each verified against v14.1.0 (the release that replaced the planned 13.6.1; evidence in the line above). Box 7 is NOT met: the released tests/test_statusline.py has the rotation test but its debug test (test_log_tier_debug_writes_under_its_own_folder_when_enabled) checks only the enabled case and passes with the gate deleted. The gate itself ships (statusline.py:537). Fix committed locally: test_log_tier_debug_is_gated_by_claude_statusline_debug, mutation-verified (gate removed in a scratch copy: it FAILS "wrote while gated"; unmutated: passes; full file 29 passed). Card parked in publish until the next release ships that test; then tick box 7 and close.
 - 2026-10-22 CORRECTION to the publish line above: "owner login count 0 in the released tree" checked only the exact macOS username. A broader case-insensitive sweep found ONE misspelled variant of the owner login in this card (line 140, a redaction-mapping description) in the published 14.1.0 tree; the CHANGELOG is clean, and v13.6.0 had shipped the exact login in its CHANGELOG. Redacted locally to <owner-login>; it leaves the published tree with the next release (both forms remain in public git history, which is TRDD-DRRUTC2M). Also: post-push CI on 8cbd288b FAILED, 22 tests in 5 files, all ENOENT mkdtemp under the macOS-only /private/tmp on the Linux runner (test portability, not product code); the local publish gate passed because it runs on macOS. Fix dispatched; ships in 14.1.1 with the gated debug test (box 7) and this redaction.
+- 2026-10-22 v14.1.1 PUBLISHED (squash 4b36c0c4 + release 0e5fc3e9; local cherry-pick 2a34fffa, local tree equals origin/main). Post-push runs on 0e5fc3e9 all green: CI 39757155664, Release 39757155492, Notify Marketplace 39757155635. Installed 14.1.0 -> 14.1.1 at user scope; statusline.py unchanged so the installer was not re-run. Name sweeps of tree, commit messages, identities and release body: 0. Box 7 ticked. Card and branch names still say 13.6.1: follow-up card filed.
