@@ -37,6 +37,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
+import { benchmarkSubReportDir } from "../report-dir.js";
 import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
@@ -47,9 +48,9 @@ import {
   qualify,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "../discover.js";
-import { getConfigDir, getActiveFreeOnly } from "../../config.js";
-import { resolveProjectMainRoot } from "../../project-root.js";
+import { getConfigDir, getActiveFreeOnly, getEnsemblePriceCeiling, loadSettings } from "../../config.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -76,6 +77,7 @@ import {
 } from "./select.js";
 import { readAndGroupFiles, buildPerFileSectionPrompt, DEFAULT_MAX_PAYLOAD_BYTES } from "../../scan-pipeline.js";
 import type { BenchmarkWorkload } from "../workload-types.js";
+import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
 
 // ── P4 pre-flight workload estimate ─────────────────────────────────────────
 
@@ -242,6 +244,16 @@ function cacheKey(modelId: string, date: string, datasetHash: string): string {
   return `${modelId}::${date}::${datasetHash}`;
 }
 
+/**
+ * ONE definition of the dataset fingerprint. The benchmark run and
+ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
+ * rows whose `datasetHash` equals today's — so if the two ever diverge the
+ * backfill silently matches nothing and reclaims no rows, with no error.
+ */
+function datasetFingerprint(cases: readonly SearchExistingCase[]): string {
+  return createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
+}
+
 function loadCache(): CacheFile {
   const p = cachePath();
   if (!existsSync(p)) return {};
@@ -276,11 +288,6 @@ function resolveApiKey(override?: string): string {
     );
   }
   return k;
-}
-
-function resolveMainRoot(override?: string): string {
-  // Single source of truth — see project-root.ts.
-  return resolveProjectMainRoot(override);
 }
 
 function today(): string {
@@ -337,14 +344,20 @@ export async function runSearchExistingBenchmark(
   // Hash the in-source dataset definition so a change to the cases invalidates
   // the per-day cache (the dataset is code, not a file path like security-triage's
   // dataset.jsonl, so we hash its JSON projection).
-  const datasetHash = createHash("sha1")
-    .update(JSON.stringify(cases))
-    .digest("hex")
-    .slice(0, 12);
+  const datasetHash = datasetFingerprint(cases);
   const thresholds = opts.thresholds ?? DEFAULT_SEARCH_EXISTING_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {});
   const freeOnly = getActiveFreeOnly();
+  // D0 (TRDD-AL8GIZYA, plan item 2a): SEARCH_EXISTING_CRITERIA's price fields
+  // only mirror DEFAULT_CRITERIA's DEFAULT ceiling; auto-discovered candidates
+  // must be filtered against the resolved, settings-overridable ceiling instead.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const discoveryCriteria: ModelCriteria = {
+    ...SEARCH_EXISTING_CRITERIA,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
 
   progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
 
@@ -409,7 +422,7 @@ export async function runSearchExistingBenchmark(
     // Auto-discovery: qualified candidates (the SAME qualify path the
     // security-triage orchestrator uses, via buildBenchmarkRoster +
     // SEARCH_EXISTING_CRITERIA), pre-filtered to NOT pricier than the incumbent.
-    const { candidates } = buildBenchmarkRoster(catalog, SEARCH_EXISTING_CRITERIA, []);
+    const { candidates } = buildBenchmarkRoster(catalog, discoveryCriteria, [], catalog, discoveryCeiling);
     const affordable = candidates.filter(
       (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9,
     );
@@ -456,15 +469,32 @@ export async function runSearchExistingBenchmark(
     }
   }
 
-  // Global price-cap fail-fast (explicit ids + incumbent; discovered already
-  // dropped by filterModels). Refuses before any send, $0 spent.
-  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Global price-cap fail-fast on AUTO-DISCOVERED candidates only (already
+  // dropped by discoveryCriteria above, so this is a safety net). USER
+  // 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX) exempts only an
+  // explicitly-named --include id — NOT the incumbent (REVIEW finding: the
+  // incumbent is auto-added by this orchestrator, not user-named in this
+  // invocation, so it is not covered by that USER decision and stays gated,
+  // matching pre-D0-flows behaviour).
+  const manualIds = new Set(opts.models ?? []);
+  const autoDiscovered = [...toAssess.values()]
+    .filter((v) => !manualIds.has(v.model.id))
+    .map((v) => v.model);
+  assertModelsUnderPriceCap(autoDiscovered, discoveryCeiling);
   assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 
   // 5. Run + score each model (sequential — avoids stacking rate-limit hits).
   const cache = loadCache();
+  // Reclaim already-paid benchmark scores. The per-day cache key embeds
+  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
+  // an earlier date is never looked up again and its `qualityPass` — the ONLY
+  // field that gives a ':free' model a verdict in the evidence fold — is never
+  // backfilled, despite the note at the write site promising it would be.
+  // Judging those rows from the score they already carry costs no model call.
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: SearchExistingAssessment[] = [];
   let totalCost = 0;
 
@@ -567,8 +597,11 @@ export async function runSearchExistingBenchmark(
   });
 
   // 7. Write the report (same conventions security-triage uses).
-  const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join(mainRoot, "reports", "search-existing-benchmark");
+  // Write-roots rule (2026-09-18): route the default through
+  // benchmarkSubReportDir() -> defaultOutputDir(), the only USER-approved
+  // report root, instead of hand-rolling mainRoot/"reports"/sub (that landed
+  // outside every approved write root). An explicit outputDir still wins.
+  const reportDir = opts.outputDir ?? benchmarkSubReportDir("search-existing-benchmark", opts.mainRoot);
   mkdirSync(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join(reportDir, `${stamp}-search-existing-benchmark.json`);
@@ -730,4 +763,20 @@ function buildReportMarkdown(args: {
       "profile; the benchmark never edits config.",
   );
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
+ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
+ * call). Same dataset-hash and pass predicate `runSearchExistingBenchmark` uses.
+ */
+export function backfillOwnLedger(): { tool: string; upgraded: number } {
+  const cases: readonly SearchExistingCase[] = SEARCH_EXISTING_CASES;
+  const datasetHash = datasetFingerprint(cases);
+  const thresholds = DEFAULT_SEARCH_EXISTING_THRESHOLDS;
+
+  const cache = loadCache();
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) saveCache(cache);
+  return { tool: "search_existing_implementations", upgraded };
 }

@@ -57,7 +57,7 @@ tool's benchmark.
    into precision/recall/F1. Cached per-model-per-day.
 4. **Applies the selection gate** and recommends the best eligible model.
 5. **Writes a JSON + markdown report** to
-   `<main-project-dir>/reports/search-existing-benchmark/` (anchored on
+   `<main-project-dir>/reports/llm-externalizer/search-existing-benchmark/` (anchored on
    `$CLAUDE_PROJECT_DIR`, then cwd — never git) and returns the
    recommendation + paths.
 
@@ -68,7 +68,7 @@ tool's benchmark.
 | `models` | no | Explicit OpenRouter model id(s) to assess. When omitted, auto-discover the same-or-cheaper candidate pool. |
 | `qualifying_top_n` | no | Cap the auto-discovered candidate pool after quality ranking (highest-scored first; cheapest tiebreak). Default 16. |
 | `force` | no | Ignore the per-model-per-day cache and re-run every model. |
-| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/search-existing-benchmark/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
+| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/llm-externalizer/search-existing-benchmark/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 
 ## The pass gate (how a model qualifies)
 

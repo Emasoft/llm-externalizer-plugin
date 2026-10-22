@@ -1,0 +1,7 @@
+{
+ "status": 400,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"error\":{\"message\":\"JSON parsing failed\",\"code\":400}}"
+}

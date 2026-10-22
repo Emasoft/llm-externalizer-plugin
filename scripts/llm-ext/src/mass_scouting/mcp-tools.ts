@@ -35,7 +35,7 @@ import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualific
 // rewrite its own settings. Adoption of a recommendation goes through the CLI
 // (`llm-ext-benchmark --auto-replace --apply`), never through any MCP tool.
 import { planToolReplacements } from "../model-qualification/auto-replace";
-import { resolveProjectMainRoot } from "../project-root";
+import { defaultOutputDir } from "../project-root";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -297,6 +297,11 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "under <main-project-dir>/reports/mass_scouting/ (override with " +
       "output_dir).\n\nRETURNS: " +
       "files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\n" +
+      "PROFILE: mass scouting takes its model from a `scouting`-type profile, " +
+      "whatever the active profile is (the free pool is never used). With the " +
+      "unpopulated `scouting` placeholder it refuses and the USER must run " +
+      "`llm-ext benchmark scout-accuracy`. `--profile` may name another " +
+      "scouting-type profile; a profile of another type is refused.\n\n" +
       "ENV: $OPENROUTER_API_KEY must be set.",
     inputSchema: {
       type: "object",
@@ -315,7 +320,17 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         },
         model: {
           type: "string",
-          description: "Default: qwen/qwen-2.5-7b-instruct.",
+          description:
+            "Must be scout-accuracy-verified (ledger PASS under the current " +
+            "dataset hash) — see the scouting profile.",
+        },
+        allow_untested_model: {
+          type: "boolean",
+          description:
+            "Force ONE invocation with a model that has no scout-accuracy " +
+            "PASS. Runs a structural schema probe first, AT AN EXTRA " +
+            "PER-INVOCATION PROBE COST; the probe never marks the model " +
+            "verified, and the run output is stamped UNTESTED MODEL.",
         },
         workers: {
           type: "number",
@@ -651,7 +666,16 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         model: {
           type: "string",
           description:
-            "Model id used to compose the fieldset. Default: qwen/qwen-2.5-7b-instruct.",
+            "Must be scout-accuracy-verified (ledger PASS under the current " +
+            "dataset hash) — see the scouting profile.",
+        },
+        allow_untested_model: {
+          type: "boolean",
+          description:
+            "Force ONE invocation with a model that has no scout-accuracy " +
+            "PASS. Runs a structural schema probe first, AT AN EXTRA " +
+            "PER-INVOCATION PROBE COST; the probe never marks the model " +
+            "verified, and the run output is stamped UNTESTED MODEL.",
         },
         out: {
           type: "string",
@@ -722,7 +746,17 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         },
         model: {
           type: "string",
-          description: "Model id to use for the new job.",
+          description:
+            "Must be scout-accuracy-verified (ledger PASS under the current " +
+            "dataset hash) — see the scouting profile.",
+        },
+        allow_untested_model: {
+          type: "boolean",
+          description:
+            "Force ONE invocation with a model that has no scout-accuracy " +
+            "PASS. Runs a structural schema probe first, AT AN EXTRA " +
+            "PER-INVOCATION PROBE COST; the probe never marks the model " +
+            "verified, and the run output is stamped UNTESTED MODEL.",
         },
         workers: {
           type: "number",
@@ -840,7 +874,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report/export dir; defaults to <main-root>/reports/security_scan/.",
+            "Report/export dir; defaults to <main-root>/reports/llm-externalizer/security_scan/.",
         },
         workers: { type: "number", description: "Concurrent judge calls. Default 8." },
         max_retries: {
@@ -881,7 +915,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/security-triage-benchmark/.",
+            "Report dir; defaults to <main-root>/reports/llm-externalizer/security-triage-benchmark/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -931,7 +965,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/search-existing-benchmark/.",
+            "Report dir; defaults to <main-root>/reports/llm-externalizer/search-existing-benchmark/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -1043,7 +1077,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/auto-replace/.",
+            "Report dir; defaults to <main-root>/reports/llm-externalizer/auto-replace/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -1090,6 +1124,7 @@ export async function dispatchMassScoutTool(
             "max-context-pct-register": num(args.max_context_pct_register),
             "git-diff": str(args.git_diff),
             "no-gitignore": bool(args.no_gitignore),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1101,6 +1136,7 @@ export async function dispatchMassScoutTool(
             db: str(args.db_path),
             reclassify: bool(args.reclassify),
             limit: num(args.limit),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1123,6 +1159,7 @@ export async function dispatchMassScoutTool(
             "output-price-per-m": num(args.output_price_per_m),
             "context-window": num(args.context_window),
             "live-context": bool(args.live_context),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1136,6 +1173,7 @@ export async function dispatchMassScoutTool(
             "job-id": str(args.job_id),
             "source-root": str(args.source_root),
             model: str(args.model),
+            "allow-untested-model": bool(args.allow_untested_model),
             workers: num(args.workers),
             "max-retries": num(args.max_retries),
             bucket: str(args.bucket),
@@ -1144,6 +1182,7 @@ export async function dispatchMassScoutTool(
             "max-context-pct-scout": num(args.max_context_pct_scout),
             "output-dir": str(args.output_dir),
             "live-context": bool(args.live_context),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1264,7 +1303,9 @@ export async function dispatchMassScoutTool(
             goal: str(args.goal),
             samples: arrJoin(args.samples),
             model: str(args.model),
+            "allow-untested-model": bool(args.allow_untested_model),
             out: str(args.out),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1291,8 +1332,10 @@ export async function dispatchMassScoutTool(
             "new-fields-file": str(args.new_fields_file),
             filter: str(args.filter),
             model: str(args.model),
+            "allow-untested-model": bool(args.allow_untested_model),
             workers: num(args.workers),
             "max-retries": num(args.max_retries),
+            profile: str(args.profile),
           }),
           opts,
         ),
@@ -1306,6 +1349,10 @@ export async function dispatchMassScoutTool(
           opts,
         ),
       );
+    // FREE-FORBIDDEN: drives LLM completions on the profile's head
+    // (cli.ts runSecurityScanCli fills an absent `model` from the active
+    //  profile's `tool_models.security_scan`, then judge.ts fans completions
+    //  out over every finding group).
     case "security_scan": {
       // The rich input (nested targets[] + category_rubrics) can't ride flat
       // flags, so we JSON-encode the recognized fields into --input-json and
@@ -1508,8 +1555,12 @@ export async function dispatchMassScoutTool(
               apiKey: opts.apiKey,
             }),
         );
-        const root = opts.mainRoot ?? resolveProjectMainRoot();
-        const dir = str(args.output_dir) ?? join(root, "reports", "auto-replace");
+        // write-roots fix (c9b, 2026-09-18): the old default was
+        // `<root>/reports/auto-replace/`, OUTSIDE the USER-approved
+        // `reports/llm-externalizer/` tree; defaultOutputDir(opts.mainRoot)
+        // also honors LLM_EXT_OUTPUT_DIR the same way every other report
+        // writer does (README/docs already documented the correct path).
+        const dir = str(args.output_dir) ?? join(defaultOutputDir(opts.mainRoot), "auto-replace");
         mkdirSync(dir, { recursive: true });
         const reportPath = join(dir, `${compactStamp()}-auto-replace.md`);
         writeFileSync(reportPath, reportMarkdown);

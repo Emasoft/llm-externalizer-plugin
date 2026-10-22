@@ -75,6 +75,22 @@ jobs:
       - name: Lint Python scripts
         run: uv run --no-project --with ruff ruff check scripts/
 
+      # TRDD-CCS6ENHU: tests/*.py previously ran ONLY in release.yml, gated
+      # behind an actual release — a regression here reached CI green and
+      # shipped before anyone saw a failure. Mirrors release.yml's own
+      # marker filter exactly so both pipelines agree on what "passing"
+      # means. `--extra dev` is REQUIRED: pytest is an optional-dependency,
+      # not a base [project] dependency, so a bare `uv run pytest` on a
+      # clean runner with no pytest elsewhere on PATH dies with
+      # "Failed to spawn: pytest — No such file or directory" (verified
+      # empirically under a PATH stripped of every pre-installed pytest;
+      # mirrors release.yml's `uv sync --extra dev`). `--ignore=tests/dogfood`
+      # excludes the CLI harness module (no test_* functions, so it
+      # contributes zero test items either way) from collection so an
+      # unrelated future import there can't affect this run.
+      - name: Python tests
+        run: uv run --extra dev pytest tests/ --ignore=tests/dogfood -v -m "not integration and not slow"
+
       - name: Validate plugin manifest
         run: python3 -c "import json, pathlib; json.loads(pathlib.Path('.claude-plugin/plugin.json').read_text(encoding='utf-8'))"
 

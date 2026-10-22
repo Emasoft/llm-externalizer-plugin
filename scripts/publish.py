@@ -37,12 +37,19 @@ Steps (in order — validate is FIRST, no skipping):
 
 import argparse
 import json
+import os
 import re
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+# CPV's integrity self-check bypass — the ONLY environment override this
+# pipeline passes to a child process. The VALUE is printed and written to the
+# on-disk report, not just the key: an auditor must be able to see the
+# EFFECTIVE value of the disable in the artifact.
+CPV_INTEGRITY_BYPASS = "PLUGIN_SKIP_GITHUB_INTEGRITY"
 
 
 def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> bool:
@@ -86,8 +93,26 @@ def run(
     check: bool = True,
     capture: bool = True,
     cwd: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run a command, printing it first. Fail-fast on error."""
+    """Run a command, printing it first. Fail-fast on error.
+
+    ``env`` REPLACES the child's whole environment — subprocess.run does
+    not merge it with the parent's. When ``env`` is given it must therefore
+    be a COMPLETE environment for the child (the parent environment plus the
+    overrides), never a delta: a partial dict would silently strip PATH (and
+    every other inherited variable) from every child process. ``env=None``
+    means "inherit the parent environment", which is why every call site
+    other than the two CPV ones is unaffected.
+    THE CONCRETE SYMPTOM of a partial env is a FileNotFoundError (or
+    "command not found") for the EXECUTABLE ITSELF: the child's PATH
+    REPLACES the parent's, so subprocess resolves the executable against the
+    DEFAULT path ('/bin', '/usr/bin') rather than the parent's, and the
+    failure names the missing binary rather than the bug that stripped the
+    environment — so the symptom appears ONLY IF that binary is not in the
+    default path (uvx under /opt/homebrew/bin is not; ls under /bin is).
+    Look there first when a call site passes ``env``.
+    """
     print(f"  $ {shlex.join(cmd)}")
     return subprocess.run(
         cmd,
@@ -96,6 +121,7 @@ def run(
         text=True,
         encoding="utf-8",
         cwd=cwd,
+        env=env,
     )
 
 
@@ -245,6 +271,7 @@ REQUIRED_TOOLS: list[tuple[str, str]] = [
     ("npx", "comes with Node.js"),
     ("gh", "brew install gh  OR  https://cli.github.com/"),
     ("uvx", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
+    ("uv", "curl -LsSf https://astral.sh/uv/install.sh | sh"),
     ("ruff", "uv tool install ruff"),
     ("shellcheck", "brew install shellcheck"),
     ("git-cliff", "brew install git-cliff  OR  cargo install git-cliff"),
@@ -293,6 +320,10 @@ def run_checks(repo_root: Path) -> bool:
       7. shellcheck       — lint all .sh files in the main tree
       8. plugin.json parse — manifest must be valid JSON
       9. claude plugin validate — authoritative Claude Code plugin validator
+      10. uv run pytest   — Python test suite under tests/ (mirrors the
+          release workflow's marker filter; TRDD-CCS6ENHU: these tests
+          previously ran only at release time, after the artifact was
+          already being shipped, so a regression here reached CI unnoticed)
     """
     mcp_dir = str(repo_root / "scripts" / "llm-ext")
     reports = _reports_dir(repo_root)
@@ -397,6 +428,26 @@ def run_checks(repo_root: Path) -> bool:
     if not _run_check(
         "claude-plugin-validate",
         ["claude", "plugin", "validate", "."],
+        str(repo_root),
+        repo_root,
+    ):
+        return False
+
+    # 10. Python test suite under tests/ (TRDD-CCS6ENHU). Mirrors
+    # .github/workflows/release.yml's marker filter exactly, so a test
+    # that would fail the release workflow fails the local gate first —
+    # before CCS6ENHU these 200+ tests ran only at release time, after
+    # the artifact was already being shipped. `--extra dev` is REQUIRED:
+    # pytest lives only in pyproject.toml's optional "dev"/"test" extras,
+    # not a base [project] dependency, so a bare `uv run pytest` fails
+    # with "Failed to spawn: pytest" on a machine with no pytest elsewhere
+    # on PATH (verified empirically under a stripped PATH) — a machine with
+    # pytest elsewhere on PATH masks this. `--ignore=tests/dogfood` excludes the CLI
+    # harness module (no test_* functions, contributes zero test items
+    # either way) from collection.
+    if not _run_check(
+        "pytest",
+        ["uv", "run", "--extra", "dev", "pytest", "tests/", "--ignore=tests/dogfood", "-m", "not integration and not slow"],
         str(repo_root),
         repo_root,
     ):
@@ -534,6 +585,16 @@ def _format_finding(finding: dict) -> str:
     return f"[{finding.get('level')}] {finding.get('message', '')}{file_info}{line_info}"
 
 
+def _cpv_env() -> dict[str, str]:
+    """Environment for the two CPV invocations — see the comment at the call site.
+
+    It is a COMPLETE environment (the parent environment plus the bypass),
+    because subprocess.run REPLACES the child's environment rather than
+    merging into it.
+    """
+    return {**os.environ, CPV_INTEGRITY_BYPASS: "1"}
+
+
 def run_cpv_validation(repo_root: Path) -> bool:
     """Run CPV remote validation. Fail if any CRITICAL or MAJOR issue found.
 
@@ -550,10 +611,105 @@ def run_cpv_validation(repo_root: Path) -> bool:
     If --json parsing fails for ANY reason we fall back to the strict
     returncode decision — never fail open.
     """
+    # ONE environment snapshot for BOTH invocations below: the text run and
+    # the --json run must be the SAME validator run, so they share one env.
+    cpv_env = _cpv_env()
+    # The bypass record is built ONCE and written to BOTH sinks (stdout and
+    # the on-disk report), so the audit trail can never depend on whether the
+    # operator's shell already exported the flag.
+    bypass_note = (
+        f"CPV INTEGRITY SELF-CHECK DISABLED via {CPV_INTEGRITY_BYPASS}=1 "
+        f"— CPV's GitHub-anchored hash check was NOT run for this validation"
+    )
+    # ---------------------------------------------------------------------
+    # DISABLE (not a workaround): CPV's GitHub integrity self-check is
+    # skipped on the two CPV invocations below, via the env var
+    # PLUGIN_SKIP_GITHUB_INTEGRITY=1 — a deliberate DISABLE of a check that
+    # cannot pass under the `uvx --from git+...` transport.
+    # CPV's own classification: "a defence against tampering, NOT a publish
+    # gate" (generate_plugin_repo.py:3408; env var exempt at :3437) — as of
+    # v5.22.0, 2026-10-21. What it verifies: CPV's OWN validator tree
+    # against CPV's OWN GitHub manifest (_plugin_verify_hashes.py:320;
+    # plugin_root defaults to CPV's own package dir at :369; manifest from
+    # REPO_RAW_TAG_URL at :73) — same version/date. No CPV call site ever
+    # passes OUR plugin's root, so no check of our bytes is skipped — none
+    # existed. Measured mismatch totals: 3495 at v3.19.1 and 3403 at v5.22.0
+    # under the uvx transport; 2 and 7 from a clone — CPV's own source
+    # files and site-packages, not our plugin's bytes.
+    # WHAT THE DISABLED CHECK WOULD HAVE CAUGHT: it compares the INSTALLED
+    # tree against the manifest published for the TAG being installed — so it
+    # is what would detect a MOVED TAG or a tampered local uv cache, not
+    # merely wrong bytes. A TAG IS MOVABLE; A COMMIT SHA IS NOT. Pinning
+    # the SHA (v5.22.0's release commit) is what closes that exposure: the
+    # transport's provenance is fixed by the ref itself rather than by the
+    # check that is disabled. RESIDUAL EXPOSURE that remains: the local uv
+    # cache could be tampered with.
+    # WHY A SHA AND NOT A TAG: a tag's target can be moved under us, so the
+    # pin would silently change meaning; a commit SHA is immutable. The SHA
+    # must be UPDATED by hand whenever the pin moves — the pin-bump
+    # policy's trigger is unchanged (upstream #243 / #256), and the order
+    # rule still holds: remove the bypass FIRST, then update the SHA.
+    # THE TRANSPORT RESOLVES THE SHA — MEASURED, not assumed, under BOTH
+    # transports the gate can use.
+    # (1) FRESH VENV (uv venv <path> --python 3.12; VIRTUAL_ENV=<path> uv pip
+    # install "git+https://github.com/Emasoft/claude-plugins-validation@d5d6149735c4f0055bb3b83a56b28036079682ad")
+    # leaves an installed dist-info whose direct_url.json records BOTH
+    # "requested_revision" AND "commit_id" equal to the pinned SHA. uv does
+    # NOT silently resolve a SHA-ref to a branch tip: the SHA-ref is fetched
+    # AS that commit. (Measured 2026-10-21, fresh venv.)
+    # (2) UVX — the transport the pipeline ACTUALLY uses. Running the gate's
+    # own command (PLUGIN_SKIP_GITHUB_INTEGRITY=1 uvx --from
+    # git+https://github.com/Emasoft/claude-plugins-validation@d5d6149735c4f0055bb3b83a56b28036079682ad
+    # --with pyyaml cpv-remote-validate --help) installs a dist-info whose
+    # direct_url.json records BOTH "requested_revision" AND "commit_id" equal
+    # to the pinned SHA. The SHA PINS under uvx too. By contrast, this
+    # machine's uv cache holds SEVEN entries whose requested_revision is the
+    # TAG "v5.22.0" and whose commit_id is the OTHER commit
+    # 77b3762f0691a4d97d6f31226366a992f5dab439 — plus one tag entry that
+    # resolved to d5d61497 (the tag's current target). So under uvx the TAG
+    # resolved to BOTH commits at different times, while the SHA resolved
+    # to exactly one. (Measured 2026-10-21: the SHA-pinned uvx install
+    # above records commit_id = requested_revision = the pinned SHA; a
+    # fresh-cache uvx install of the TAG recorded commit_id d5d61497 and
+    # requested_revision "v5.22.0".)
+    # THE OPERATOR CAN CHECK IT — and the PATH DIFFERS between the two
+    # transports, so look in the right place: under the fresh venv it is the
+    # installed dist-info's direct_url.json in that venv's site-packages
+    # (<venv>/lib/python*/site-packages/claude_plugins_validation-*.dist-info/direct_url.json);
+    # under uvx it is the installed dist-info's direct_url.json inside uv's
+    # CACHE archive directory
+    # (~/.cache/uv/archive-v0/*/lib/python*/site-packages/claude_plugins_validation-*.dist-info/direct_url.json),
+    # because uvx keeps its tool environment in the cache, not in a venv the
+    # operator holds. That file is how anyone confirms WHICH validator
+    # actually ran, so the comment names the path rather than leaving the
+    # evidence implicit.
+    # Without the bypass the validator sys.exit(2)s BEFORE its first phase
+    # (validate_plugin.py:9361 -> _plugin_verify_hashes.py:508), producing NO
+    # findings and NO --json output. SHARED ROOT CAUSE: the `uvx --from
+    # git+...` transport can never satisfy a whole-repo manifest — in CI and
+    # locally alike; CI has set PLUGIN_SKIP_GITHUB_INTEGRITY=1 since commit
+    # cde97948 (release.yml:71): PRECEDENT, not the reason.
+    # COST of the pin: ZERO today — v5.22.0 IS CPV's newest tag and no tag
+    # of any vintage passes the uvx transport, so the pin changes no local
+    # behaviour today; the cost is purely future (no upstream fix reaches the
+    # gate until the pin moves). REMOVAL CONDITION: remove this disable when
+    # upstream ships a wheel-scoped / transport-correct integrity manifest
+    # (upstream #243, fix proposed in #256) so the check can pass under the
+    # uvx transport. SCOPE: only the two CPV invocations below; every other
+    # run() call site is unaffected because env defaults to None.
+    # ORDER OF OPERATIONS: remove the bypass FIRST, then move the pin (i.e.
+    # update the SHA). Moving the pin first would make the gate abort again
+    # with NO verdict — the new ref would still ship a whole-repo manifest, so
+    # the integrity check would still exit(2) before its first phase and the
+    # release would have NO gate at all.
+    # TRACKER: this debt is tracked by card TRDD-PQW0XDS1 (PROJECT scope), so
+    # the removal condition is visible to anyone who clones this repo and not
+    # only to whoever remembers the upstream issue numbers.
+    # ---------------------------------------------------------------------
     base_cmd = [
         "uvx",
         "--from",
-        "git+https://github.com/Emasoft/claude-plugins-validation",
+        "git+https://github.com/Emasoft/claude-plugins-validation@d5d6149735c4f0055bb3b83a56b28036079682ad",  # v5.22.0
         "--with",
         "pyyaml",
         "cpv-remote-validate",
@@ -561,12 +717,16 @@ def run_cpv_validation(repo_root: Path) -> bool:
         str(repo_root),
     ]
 
-    # Run 1 — human-readable text, always written to reports/cpv.log exactly
-    # as before (the on-disk audit artifact is unchanged).
-    cpv_result = run(base_cmd, capture=True, check=False)
+    # Run 1 — human-readable text, always written to the CPV report file
+    # (reports_dev/publish/cpv.log under the repo root — a gitignored
+    # artifact, never a committed file).
+    cpv_result = run(base_cmd, capture=True, check=False, env=cpv_env)
     report = _reports_dir(repo_root) / "cpv.log"
     output = (cpv_result.stdout or "") + (cpv_result.stderr or "")
-    report.write_text(output, encoding="utf-8")
+    # The bypass record leads the artifact: an auditor opening the report
+    # sees the disable at the top, not only in the release log on stdout.
+    print(f"  cpv: {bypass_note}")
+    report.write_text(f"# {bypass_note}\n{output}", encoding="utf-8")
 
     # Clean run (CPV exit 0) — nothing to classify, pass exactly as today.
     if cpv_result.returncode == 0:
@@ -582,7 +742,29 @@ def run_cpv_validation(repo_root: Path) -> bool:
 
     # Opt-in present → Run 2 with --json so we can classify findings. cpv's
     # `plugin` validator forwards unknown args, so --json reaches it.
-    json_result = run([*base_cmd, "--json"], capture=True, check=False)
+    json_result = run([*base_cmd, "--json"], capture=True, check=False, env=cpv_env)
+    # The --json run's payload is the EVIDENCE the gate's verdict rests on:
+    # classify_cpv_findings parses it and its finding counts decide pass or
+    # fail. cpv.log holds only the TEXT run's output, so without this second
+    # artifact an auditor sees the disable and the prose but not the
+    # classified findings — and on a FAILING release not even the blocking
+    # ones. Write it WHENEVER the --json run happens (it is the evidence of a
+    # PASSING gate too). The --json run happens ONLY when the
+    # skillaudit-advisory opt-in is present, so on the STRICT path (opt-in
+    # absent) the --json run never happens and NO findings artifact is
+    # written at all: there cpv.log alone is the record, and the ABSENCE of a
+    # sibling findings file is EXPECTED, not a bug. The write is placed
+    # BEFORE the parse_ok check below, so a parse-fail DOES still leave the
+    # --json payload on disk. The file leads with the same bypass note as
+    # cpv.log, so BOTH artifacts carry the disable record. It is a gitignored
+    # artifact (reports_dev/), never a committed file.
+    # The leading note line makes this file invalid JSON, so the extension is
+    # .txt and NOT .json: a .json file that json.loads rejects is a trap for
+    # whoever reaches for jq first.
+    findings_report = _reports_dir(repo_root) / "cpv-findings.txt"
+    findings_report.write_text(
+        f"# {bypass_note}\n{json_result.stdout or ''}", encoding="utf-8"
+    )
     parse_ok, advisory, blocking = classify_cpv_findings(
         json_result.stdout or "", skillaudit_advisory=skillaudit_advisory
     )

@@ -322,3 +322,30 @@ describe("makeBudgetedGlobalFetch — the same guard, for the keyword/ensemble r
     expect(resp.status).toBe(204);
   });
 });
+
+describe("SpendLedger onBook (design §2.5 — the daily-spend wiring point)", () => {
+  it("fires with each BOOKED (actual) amount as record() runs", () => {
+    const booked: number[] = [];
+    const l = new SpendLedger(5, { onBook: (usd) => booked.push(usd) });
+    l.record("v/a", 0.1);
+    l.record("v/b", 0.2);
+    expect(booked).toEqual([0.1, 0.2]);
+  });
+
+  it("is never called for a $0 record (nothing to book)", () => {
+    const booked: number[] = [];
+    const l = new SpendLedger(5, { onBook: (usd) => booked.push(usd) });
+    l.record("v/free", 0);
+    expect(booked).toEqual([]);
+  });
+
+  it("a throwing onBook never breaks record() — the sink's failure is its own problem", () => {
+    const l = new SpendLedger(5, {
+      onBook: () => {
+        throw new Error("sink exploded");
+      },
+    });
+    expect(() => l.record("v/a", 0.1)).not.toThrow();
+    expect(l.spentUsd).toBeCloseTo(0.1, 10);
+  });
+});

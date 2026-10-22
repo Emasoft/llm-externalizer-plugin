@@ -113,7 +113,7 @@ describe("assertModelValidated — the send-time chokepoint", () => {
   it("refuses an unvalidated paid model with a copy-pasteable validate command", () => {
     let msg = "";
     try {
-      assertModelValidated("x/unvalidated", "code_task", "openrouter");
+      assertModelValidated("x/unvalidated", "code_task", true);
     } catch (e) {
       msg = (e as Error).message;
     }
@@ -126,24 +126,24 @@ describe("assertModelValidated — the send-time chokepoint", () => {
 
   it("REFUSES on a missing ledger — cost-safety does not fail open", () => {
     // No ledger files written at all.
-    expect(() => assertModelValidated("x/paid", "code_task", "openrouter")).toThrow(/IRON RULE/);
+    expect(() => assertModelValidated("x/paid", "code_task", true)).toThrow(/IRON RULE/);
   });
 
   it("allows a validated paid model", () => {
     writeDeterministic("code-task-results.json", { "ok/model": { failureReasons: [] } });
-    expect(() => assertModelValidated("ok/model", "code_task", "openrouter")).not.toThrow();
+    expect(() => assertModelValidated("ok/model", "code_task", true)).not.toThrow();
   });
 
   it("is a NO-OP for a local backend and for a ':free' model (exempt)", () => {
-    expect(() => assertModelValidated("anything/paid", "code_task", "local")).not.toThrow();
-    expect(() => assertModelValidated("anything:free", "code_task", "openrouter")).not.toThrow();
+    expect(() => assertModelValidated("anything/paid", "code_task", false)).not.toThrow();
+    expect(() => assertModelValidated("anything:free", "code_task", true)).not.toThrow();
   });
 
   it("the test-only bypass suppresses the gate, and resets cleanly", () => {
     setValidationBypassForTests(true);
-    expect(() => assertModelValidated("x/paid", "code_task", "openrouter")).not.toThrow();
+    expect(() => assertModelValidated("x/paid", "code_task", true)).not.toThrow();
     setValidationBypassForTests(false);
-    expect(() => assertModelValidated("x/paid", "code_task", "openrouter")).toThrow(/IRON RULE/);
+    expect(() => assertModelValidated("x/paid", "code_task", true)).toThrow(/IRON RULE/);
   });
 
   it("the BENCHMARK exemption suppresses the gate, and resets cleanly", () => {
@@ -152,9 +152,9 @@ describe("assertModelValidated — the send-time chokepoint", () => {
     // would refuse the candidate the run exists to score, and no paid model could
     // ever become validated for it.
     setBenchmarkValidationExempt(true);
-    expect(() => assertModelValidated("x/paid", "security_scan", "openrouter")).not.toThrow();
+    expect(() => assertModelValidated("x/paid", "security_scan", true)).not.toThrow();
     setBenchmarkValidationExempt(false);
-    expect(() => assertModelValidated("x/paid", "security_scan", "openrouter")).toThrow(/IRON RULE/);
+    expect(() => assertModelValidated("x/paid", "security_scan", true)).toThrow(/IRON RULE/);
   });
 });
 
@@ -219,5 +219,55 @@ describe("validated — the rank-0 ledger accumulates (a later sweep cannot revo
     clearValidatedMemo();
     expect(validatedForTool("noschema/ledger", "chat")).toBe(false);
     expect(validatedForTool("noschema/snap", "chat")).toBe(false);
+  });
+
+  // D4 review F2 (TRDD-90DM5YHO): the sweep's record point is scope-aware. A
+  // CERTAIN payment error on a PAID sweep is the key's credit failing, not the
+  // model — recording the fail verdict would poison the pool (the ledger is
+  // latest-wins; the only cure is a re-benchmark that itself needs credit). On
+  // a FREE sweep a certain 402 is the model stopping being free — a fact about
+  // the model that the ledger MUST record (D3c-2 review F1).
+  it("a certain-402 row on a PAID sweep records NO verdict — the model keeps its prior verdict", () => {
+    recordGeneralKeywordPasses(
+      [{ modelId: "poison/paid", ok: true, pass: true, schemaCompliant: true }],
+      "2026-07-20T10:00:00.000Z",
+      "paid",
+    );
+    expect(validatedForTool("poison/paid", "chat")).toBe(true);
+
+    // The key runs out mid-sweep: rows come back with the certain-402 error.
+    recordGeneralKeywordPasses(
+      [
+        {
+          modelId: "poison/paid",
+          ok: false,
+          pass: false,
+          schemaCompliant: false,
+          error: "api error 402: Provider a report insufficient credits for using the poison/paid model",
+        },
+      ],
+      "2026-07-21T10:00:00.000Z",
+      "paid",
+    );
+    clearValidatedMemo();
+    expect(validatedForTool("poison/paid", "chat")).toBe(true);
+  });
+
+  it("a certain-402 row on a FREE sweep RECORDS the fail verdict — the model stopped being free", () => {
+    recordGeneralKeywordPasses(
+      [
+        {
+          modelId: "was/free",
+          ok: false,
+          pass: false,
+          schemaCompliant: false,
+          error: "api error 402: Provider a report insufficient credits for using the was/free model",
+        },
+      ],
+      "2026-07-21T10:00:00.000Z",
+      "free",
+    );
+    clearValidatedMemo();
+    expect(validatedForTool("was/free", "chat")).toBe(false);
   });
 });

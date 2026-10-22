@@ -8,6 +8,12 @@
  * unchanged; this module only engages when argv[0] matches a group name.
  */
 
+import { DECISION_SPECS } from "../classifiers/catalog/index.js";
+import { INPUT_FLAGS, SHARED_FLAGS } from "../classifiers/shared-flags.js";
+import type { AnySpec } from "../classifiers/catalog/spec.js";
+import type { ArgvDeps, ExitCode } from "../classifiers/run-decision.js";
+import { classifyToolName } from "../tools/definitions.js";
+
 interface JsonSchemaProp {
   type?: string;
   description?: string;
@@ -39,7 +45,7 @@ export interface ActionSpec {
  * by `launcher.test.ts` against `buildTools()`, so a typo here fails the
  * build/test rather than silently 404ing at runtime.
  */
-export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>>> = {
+const FIXED_GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>>> = {
   session: {
     compact: { command: "session_summary", positional: "transcript" },
   },
@@ -100,6 +106,80 @@ export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>
     "scan-local": { command: "scan_local_llm_services" },
   },
 };
+
+// C4-03 (TRDD-4Q1IVJOE): the classify group is GENERATED from the decision registry, one action per spec id, so a 15th spec appears with no edit here.
+// WHY no `positional`: a classify command takes its JSON by --input or stdin only; there is no bare input argument.
+export function classifyActions(specs: readonly AnySpec[] = DECISION_SPECS): Record<string, ActionSpec> {
+  return Object.fromEntries(specs.map((s) => [s.id, { command: classifyToolName(s.id) }]));
+}
+
+export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>>> = { ...FIXED_GROUPS, classify: classifyActions() };
+
+/** The registry spec behind a classify tool name (`classify_filter`), or undefined for any other tool. */
+export function classifySpecFor(toolName: string, specs: readonly AnySpec[] = DECISION_SPECS): AnySpec | undefined {
+  return specs.find((s) => classifyToolName(s.id) === toolName);
+}
+
+/**
+ * Spellings of a classify command line -> what runDecisionArgv parses.
+ * WHY: the tool schema (and so --help) names flags in snake_case like every other tool (`--max_budget`, `--output_dir`), the generic launcher rewrites `-o` to `--output_dir` (resolveInvocation below),
+ * but the runner accepts only its own flags: kebab-case `--max-budget` and `-o dir`. Threshold keys are kebab already and contain no underscore (definitions-classify.test.ts).
+ * WHY the value tracking: only a FLAG NAME is rewritten or dropped. The token after a value flag is a value (`--default --quiet`, a file called `--x_y`) and passes through untouched.
+ * `--quiet` is the one global flag the grouped CLI advertises; classify prints no banner, so in flag position it is dropped rather than refused.
+ */
+export function classifyArgv(argv: readonly string[]): string[] {
+  // WHY the INPUT_FLAGS too: `--lines app.log` must not take app.log as the value of --lines.
+  // WHY the boolean spec flags too (rank --all): a valueless flag treated as value-taking would swallow the next flag name unrewritten.
+  const booleanFlags = new Set([...SHARED_FLAGS, ...INPUT_FLAGS, ...DECISION_SPECS.flatMap((s) => s.flags ?? [])].filter((f) => ("type" in f ? f.type === "boolean" : false)).map((f) => f.flag));
+  const out: string[] = [];
+  let valueNext = false;
+  for (const t of argv) {
+    if (valueNext) { out.push(t); valueNext = false; continue; }
+    if (t === "-o") { out.push(t); valueNext = true; continue; }
+    if (t.startsWith("-o=")) { out.push("-o", t.slice(3)); continue; }
+    if (!t.startsWith("--")) { out.push(t); continue; }
+    const eq = t.indexOf("=");
+    const name = (eq === -1 ? t : t.slice(0, eq)).replaceAll("_", "-");
+    if (name === "--quiet" && eq === -1) continue;
+    if (name === "--output-dir") {
+      out.push("-o");
+      if (eq === -1) valueNext = true; else out.push(t.slice(eq + 1));
+      continue;
+    }
+    out.push(eq === -1 ? name : `${name}${t.slice(eq)}`);
+    if (eq === -1 && !booleanFlags.has(name)) valueNext = true;
+  }
+  return out;
+}
+
+// C4-03 review: decisions whose command line cannot work yet. WHY one set and one note: the help of exactly these actions says so, and landing the missing piece removes the id here and nowhere else.
+export const NOT_YET_USABLE_CLASSIFY_IDS: ReadonlySet<string> = new Set<string>(); // extract left the set when its regex step was wired (XZZ2NSWY); the set stays for the next decision that is declared before its command line works
+export const NOT_YET_USABLE_NOTE = "Not usable from the command line yet: the regex step is not wired.";
+
+/** The one-line help note of a classify tool that cannot run from the command line yet, else undefined. */
+export function classifyHelpNote(toolName: string): string | undefined {
+  const spec = classifySpecFor(toolName);
+  return spec !== undefined && NOT_YET_USABLE_CLASSIFY_IDS.has(spec.id) ? NOT_YET_USABLE_NOTE : undefined;
+}
+
+/**
+ * Runs one classify action through the one runner.
+ * WHY no PT-03 call here or in main.ts: the runner's selectClassifierProfile applies profileSelectionRefusal itself, to `--profile` or else `active_classifier:`, with `active:` left out on purpose (classify never reads it), before any request. A second check here would only re-add the `active:` refusal the runner avoids.
+ * WHY a dynamic import: the runner chain (transport, fan-out, planner, report) must not load at the start of every other command.
+ * WHY --profile is re-injected: main.ts strips it from every argv, and the runner reads it as its own flag.
+ * WHY --estimate/--preview are refused here: they are stripped by main.ts for other commands; for classify the dry run is a later card (C4-08), and "unknown option" would read as a typo.
+ */
+export async function runClassifyCommand(spec: AnySpec, argv: readonly string[], profileFlag: string | undefined, deps: ArgvDeps): Promise<ExitCode> {
+  const unavailable = argv.find((t) => t === "--estimate" || t === "--preview");
+  if (unavailable !== undefined) {
+    deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
+    return 1;
+  }
+  const { runDecisionArgv } = await import("../classifiers/run-decision.js");
+  const args = classifyArgv(argv);
+  if (profileFlag !== undefined) args.push("--profile", profileFlag);
+  return runDecisionArgv(spec, args, deps);
+}
 
 /** True when `name` is a known group — the launcher only engages then. */
 export function isGroupName(name: string): boolean {

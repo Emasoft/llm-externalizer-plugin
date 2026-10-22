@@ -36,7 +36,7 @@ Codebase scan via the `llm-ext` CLI, active profile (default: `remote-ensemble`,
 
 1. Parse `$ARGUMENTS` for **target** (default `.`), **focus**, `free` flag.
 2. `llm-ext discover`. Abort `[FAILED] — offline` if offline.
-3. Pick the command: duplicate-check → `search-existing-implementations`; folder audit → `scan-folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `code-task` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `code-task`; **reviewing recent changes only** → add a diff mode to `scan-folder`/`code-task` (`--diff_workspace true`, or `--diff_from <ref> --diff_to <ref>`, or `--diff_commit <sha>`) — scope shrinks to the changed files, resolution delegated to git. Per-path rubrics come from `.llm-ext/rules.yaml` automatically (`rules-check <file>` shows which rule fires). Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
+3. Pick the command: duplicate-check → `search-existing-implementations`; folder audit → `scan-folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `code-task` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `code-task`; **reviewing recent changes only** → add a diff mode to `scan-folder`/`code-task` (`--diff_workspace true`, or `--diff_from <ref> --diff_to <ref>`, or `--diff_commit <sha>`) — scope shrinks to the changed files, resolution delegated to git. Per-path rubrics come from `.llm-ext/rules.yaml` automatically (`rules-check <file>` shows which rule fires). Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`. Background commands are capped at 30 min (max 2 h) in unattended sessions (`-p`, CI); interactive sessions are uncapped. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
 4. **Paid profile? Estimate first.** If `discover` shows free mode OFF, run the exact
    command with `--estimate` prepended to its flags — a ~3s dry-run (zero LLM sends) that
    prints `expected` and `ceiling` USD. Proceed only when the ceiling is acceptable; report
@@ -68,7 +68,7 @@ On failure: `[FAILED] scan-<label> — <one-line reason>`
 |-------|-----|
 | Service offline | Check network/API status; abort |
 | Auth 401 | Set `userConfig.openrouter_api_key` or `$OPENROUTER_API_KEY` |
-| Credit 402 | Server auto-falls back to free Nemotron |
+| Credit 402 | Falls back to the next model of the selected profile; exhausted profile → blocking dynamic update, then exit non-zero if it still fails. No switch to free |
 | Empty response | Server auto-retries up to 15× (2s backoff) |
 | No files found | Verify target path and `--use_gitignore` |
 

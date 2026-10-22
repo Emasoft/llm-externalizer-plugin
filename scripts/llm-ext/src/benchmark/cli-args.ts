@@ -10,7 +10,7 @@
 
 import { DEFAULT_CRITERIA } from "./discover.js";
 import { DEFAULT_BUDGET_USD } from "./budget.js";
-import { DEFAULT_PROFILE_NAMES, isDefaultProfileName, type DefaultProfileName } from "../config.js";
+import { DYNAMIC_PROFILE_NAMES, isDynamicProfileName, type DynamicProfileName } from "../config.js";
 
 export interface CliOptions {
   includeIds: string[];
@@ -52,6 +52,9 @@ export interface CliOptions {
   allowPaidModelsTests: boolean;
   /** Run the security_scan TRIAGE benchmark instead of the keyword task. */
   securityTriage: boolean;
+  /** Run the scout-accuracy benchmark (TRDD-FKAR9VPK D2) and write the STATIC
+   *  scouting profile the mass-scout CLI's require gate reads. */
+  scoutAccuracy: boolean;
   /** Explicit model id(s) to assess in --security-triage mode (repeatable).
    *  When empty, the triage benchmark auto-discovers the candidate pool. */
   triageModels: string[];
@@ -105,8 +108,8 @@ export interface CliOptions {
   newArrivals: boolean;
   /** With --new-arrivals, report only arrivals that meet ≥1 tool's requirements. */
   qualifyingOnly: boolean;
-  /** Auto-fill the candidate set from the active profile's free pool (TRDD-f1510055).
-   *  Resolves to the active profile's `free_models` if set; falls back to
+  /** Auto-fill the candidate set from the selected profile's (--profile) free pool (TRDD-f1510055).
+   *  Resolves to the selected profile's (--profile) `free_models` if set; falls back to
    *  `FREE_POOL_SEED`. Adds each id to `includeIds` (keyword mode) or
    *  `triageModels` (security-triage mode). Lets the user benchmark the free
    *  pool with one flag instead of N `--include` invocations. */
@@ -128,8 +131,22 @@ export interface CliOptions {
   adoptModel: string | null;
   /** Where --adopt puts it: an ensemble slot, or `tool:<name>`. */
   adoptInto: string | null;
-  /** Profile --adopt writes to. Default: the active profile. */
+  /** Profile --adopt writes to. Default: `--profile`, else `active:` in
+   *  settings.yaml, else the built-in default (see `profile`'s own doc). */
   adoptProfile: string | null;
+  /**
+   * The profile every write in this CLI targets when the command does not name
+   * one of its own (P6b-fix2 B-1).
+   *
+   * WHY it exists: the writing commands used to resolve their target from the
+   * settings.yaml `active:` key, which P6 briefly RETIRED for selection.
+   * row99 fix-queue item 7 (S7): 5502ca5/c1646e6 (TRDD-G6XT3AY9, 14.1.0)
+   * REINSTATED `active:` as the live default-profile pointer, so this field's
+   * resolution now mirrors index.ts's benchmarkTargetProfile() / config.ts's
+   * effectiveProfileName(): `--profile` (this field) wins when given, else
+   * `active:` in settings.yaml, else the built-in DEFAULT_PROFILE_NAME.
+   */
+  profile: string | null;
   /** Run the WHOLE refresh in one command (P3): discover → requirement-gate →
    *  benchmark → rank + write → report. Zero decisions left to a human or an agent. */
   updateAll: boolean;
@@ -144,14 +161,18 @@ export interface CliOptions {
   /** HARD spend cap for --update-all, in USD (P4). Enforced twice: a pre-flight estimate
    *  aborts before the first call, and budget.ts reserves each call before sending it. */
   budgetUsd: number;
-  /** Populate ONE named machine-managed default profile ('free' | 'free-ensemble' |
-   *  'paid' | 'paid-ensemble' | 'paid-mass-scout') — unlike --update-all (which
-   *  writes whatever `settings.active` happens to be plus every registered tool),
-   *  this writes exactly the named default profile and nothing else ('free' and
-   *  'free-ensemble' share one sweep). `--budget-usd` bounds the three paid names
-   *  (paid, paid-ensemble, paid-mass-scout); 'free'/'free-ensemble' are provably
-   *  $0 regardless. */
-  populateDefaultProfile: DefaultProfileName | null;
+  /** Populate ONE named machine-managed profile — 'free' or 'paid', the only
+   *  two llm-ext owns (P6c-a: the three retired names are no longer accepted).
+   *  Unlike --update-all (which writes the effective profile plus every
+   *  registered tool), this writes exactly the named profile and nothing else.
+   *  `--budget-usd` bounds 'paid'; 'free' is provably $0 regardless. */
+  populateDefaultProfile: DynamicProfileName | null;
+  /** C2b-wire (TRDD-OE27RD7I): the detached DETECTOR's own argv, spawned by
+   *  default-profiles-runner.ts's spawnDetachedDetector (never typed by a
+   *  human) — a cheap fingerprint-only check, never a full benchmark/write.
+   *  See detectProfileChangesArgs in default-profiles-runner.ts, the single
+   *  source for the exact flag spelling both sides must agree on. */
+  detectProfileChanges: DynamicProfileName | null;
 }
 
 /** `--free` (default) | `--paid` | `--both`. */
@@ -174,9 +195,11 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     pickTopN: null,
     qualifyingTopN: DEFAULT_QUALIFYING_TOP_N,
     applyProfile: null,
+    profile: null,
     fromCache: false,
     minMeanF1: 0.95,
     securityTriage: false,
+    scoutAccuracy: false,
     triageModels: [],
     searchExisting: false,
     searchExistingModels: [],
@@ -210,6 +233,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     updateMode: "free",
     budgetUsd: DEFAULT_BUDGET_USD,
     populateDefaultProfile: null,
+    detectProfileChanges: null,
   };
   // The mode flags are mutually exclusive: `--free --paid` has no coherent meaning, and
   // silently letting the last one win would decide — without saying so — whether the run
@@ -289,6 +313,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     } else if (a === "--apply-profile") {
       opts.applyProfile = takeValue(a, i);
       i++;
+    } else if (a === "--profile") {
+      opts.profile = takeValue(a, i);
+      i++;
     } else if (a === "--from-cache") {
       opts.fromCache = true;
     } else if (a === "--min-f1") {
@@ -302,6 +329,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.allowPaidModelsTests = true;
     } else if (a === "--security-triage") {
       opts.securityTriage = true;
+    } else if (a === "--scout-accuracy") {
+      opts.scoutAccuracy = true;
     } else if (a === "--search-existing") {
       // Variadic: consume every following non-flag token as a model id, so
       // `--search-existing a/b c/d` assesses exactly those two; with no trailing
@@ -390,12 +419,27 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     } else if (a === "--populate-default-profile") {
       const raw = takeValue(a, i);
       i++;
-      if (!isDefaultProfileName(raw)) {
+      // P6c-a item 5: only the two names llm-ext still owns. A retired name
+      // now fails HERE, with the accepted list, rather than being accepted and
+      // then writing a profile section nothing reads.
+      if (!isDynamicProfileName(raw)) {
         throw new Error(
-          `--populate-default-profile must be one of ${DEFAULT_PROFILE_NAMES.join(", ")}, got '${raw}'`,
+          `--populate-default-profile must be one of ${DYNAMIC_PROFILE_NAMES.join(", ")}, got '${raw}'`,
         );
       }
       opts.populateDefaultProfile = raw;
+    } else if (a === "--detect-profile-changes") {
+      const raw = takeValue(a, i);
+      i++;
+      // Same accepted-name guard as --populate-default-profile above — this
+      // flag is only ever spawned by our own detectProfileChangesArgs(), but
+      // an unrecognized name must still fail loudly, not silently no-op.
+      if (!isDynamicProfileName(raw)) {
+        throw new Error(
+          `--detect-profile-changes must be one of ${DYNAMIC_PROFILE_NAMES.join(", ")}, got '${raw}'`,
+        );
+      }
+      opts.detectProfileChanges = raw;
     } else if (a === "--free") {
       setMode("free");
     } else if (a === "--paid") {
@@ -428,15 +472,41 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     throw new Error("--free / --paid / --both / --budget-usd only apply to --update-all");
   }
   // --populate-default-profile carves an EXCEPTION out of the rule above for
-  // --budget-usd only: it bounds the two paid default-profile names exactly like it
+  // --budget-usd only: it bounds the `paid` profile's sweep exactly like it
   // bounds --update-all's paid phase. --free/--paid/--both select a WHOLE-refresh mode
   // that --populate-default-profile has no use for — its mode is implied by the target
   // profile name — so those three stay refused even with --populate-default-profile set.
   if (!opts.updateAll && opts.populateDefaultProfile !== null && modeFlag !== null) {
     throw new Error("--free / --paid / --both only apply to --update-all (not --populate-default-profile — its mode is implied by the profile name)");
   }
+  // NOTE: --dry-run + a sub-task benchmark was REFUSED here between 771c984 and
+  // TRDD-ZZV1XL3C, because the flag reached no sub-task phase and they billed
+  // real money (TRDD-29VF8RWK). It is accepted again now that index.ts honours it
+  // for all nine at their shared dispatch chokepoint. Deliberately NOT reinstated
+  // as a belt-and-braces check: a refusal here would make the flag unreachable and
+  // the plan-only path dead code, which is how a guard outlives its reason.
   return opts;
 }
+
+/**
+ * P6c-a2a item 35. Every flag that WRITES a profile section refuses the two
+ * generated dynamic names at `refuseDynamicProfileWrite` (pick.ts) and at
+ * `refuseGeneratedProfileTarget` (benchmark/index.ts) — but the help text said
+ * so for `--profile` alone, so the other four flags advertised a target they
+ * throw on. A user reads the help, types the command, and gets a runtime error
+ * about a profile they were never told was off limits.
+ *
+ * Derived from DYNAMIC_PROFILE_NAMES rather than retyped, so adding or renaming
+ * a dynamic profile cannot leave five help entries naming the old pair. The
+ * remedy is on the second line because a refusal with no way forward is a dead
+ * end (the same rule default-profiles-runner's `remedy` field follows).
+ */
+const GENERATED_PROFILE_REFUSAL_HELP: readonly string[] = [
+  `                    REFUSED for the generated ${DYNAMIC_PROFILE_NAMES.map((n) => `'${n}'`).join(
+    " / ",
+  )} profiles — only`,
+  "                    `--populate-default-profile NAME` writes those.",
+];
 
 export function printHelp(): void {
   console.log(
@@ -477,6 +547,11 @@ export function printHelp(): void {
       "                    model/second_model/third_model are the top-N picks. Atomic",
       "                    (tmp + rename); other profiles preserved verbatim. Requires",
       "                    --pick-top-n.",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
+      "  --profile NAME    The profile --update-all / --auto-replace --apply / --adopt",
+      "                    write to (default: `active:` in settings.yaml, else",
+      "                    the built-in default profile).",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
       "  --from-cache      Skip benchmarking; pick straight from the cached results",
       "                    at ~/.llm-externalizer/benchmark-results.json. Useful for",
       "                    re-applying a fresh selection without burning more calls.",
@@ -490,6 +565,8 @@ export function printHelp(): void {
       "                    the winners: the ensemble (model/second/third), each",
       "                    tool_models.<tool>, and the free_models pool. Atomic. CLI-only.",
       "                    Ends with ONE [OK]/[FAILED] line + a report path.",
+      "                    Writes whatever --profile names, and so is",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
       "",
       "  --free            DEFAULT. Sweep only ZERO-COST models. Provably $0 — the free_only",
       "                    chokepoint refuses a priced model BEFORE the request is sent, so a",
@@ -508,21 +585,23 @@ export function printHelp(): void {
       "",
       "Populate ONE named default profile (unlike --update-all, writes ONLY that profile):",
       `  --populate-default-profile NAME`,
-      `                    NAME is one of: ${DEFAULT_PROFILE_NAMES.join(", ")}. Sweeps and`,
-      "                    writes exactly that machine-managed default profile — nothing",
-      "                    else (no other profile, no tool_models); 'free' and 'free-ensemble'",
-      "                    share one sweep. 'free'/'free-ensemble' run under the same free_only",
-      "                    chokepoint as --update-all --free (provably $0). 'paid',",
-      "                    'paid-ensemble' and 'paid-mass-scout' are PAID: bounded by the same",
-      "                    worst-case pre-flight estimate + --budget-usd cap as --update-all",
-      "                    (aborts before the first call if the estimate exceeds the cap).",
+      `                    NAME is one of: ${DYNAMIC_PROFILE_NAMES.join(", ")} — the two profiles`,
+      "                    llm-ext generates, and the ONLY two any other write flag",
+      "                    refuses. This is the remedy those refusals name.",
+      "                    Sweeps and writes exactly that profile,",
+      "                    nothing else (no other profile). 'free' runs under the same",
+      "                    free_only chokepoint as --update-all --free (provably $0).",
+      "                    'paid' is PAID: bounded by the same worst-case pre-flight",
+      "                    estimate + --budget-usd cap as --update-all (aborts before the",
+      "                    first call if the estimate exceeds the cap).",
       "                    --dry-run prints the plan and spends/writes nothing.",
       "",
       "Free-pool sweep (TRDD-f1510055):",
-      "  --bench-free-pool Auto-fill the candidate set from the active profile's",
-      "                    free_models list (or the bundled FREE_POOL_SEED if the",
-      "                    profile doesn't pin one). Equivalent to repeating --include",
-      "                    once per pool entry. Refuses to run if any pool id is not",
+      "  --bench-free-pool Auto-fill the candidate set from the selected",
+      "                    profile's (--profile) free_models list (or the",
+      "                    bundled FREE_POOL_SEED if the profile doesn't pin",
+      "                    one). Equivalent to repeating --include once per",
+      "                    pool entry. Refuses to run if any pool id is not",
       "                    a ':free' model — the flag is a cost-safety chokepoint.",
       "                    Composes with --security-triage (fills --model instead).",
       "  --apply-free-pool P",
@@ -530,6 +609,7 @@ export function printHelp(): void {
       "                    `free_models` list to exactly the ':free' models that PASSED",
       "                    (best meanF1 first). Atomic. The scripted replacement for",
       "                    hand-editing the pool. Fails (exit 2) if none passed.",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
       "",
       "Adoption — write ONE model into the config (the scripted new-arrival path):",
       "  --adopt ID        Adopt model ID into the config after checking it against the",
@@ -539,6 +619,7 @@ export function printHelp(): void {
       "                    second/third are refused unless the profile is remote-ensemble",
       "                    (those keys are ignored otherwise — a silent no-op).",
       "  --adopt-profile P Profile to write. Default: the active profile.",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
       "",
       "security_scan TRIAGE benchmark (separate task — verdict adjudication):",
       "  --security-triage Run the security_scan triage benchmark instead of the",
@@ -549,6 +630,15 @@ export function printHelp(): void {
       "  --model ID        Assess this specific model (repeatable). Without it the",
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
+      "",
+      "scout-accuracy benchmark (TRDD-FKAR9VPK — mass-scout scouting profile):",
+      "  --scout-accuracy  Probe cheap paid models on the positional fixture and",
+      "                    write the STATIC 'scouting' profile the mass-scout CLI",
+      "                    requires. Candidates: paid models under the scouting",
+      "                    price ceiling (scout_price_ceiling_usd_per_million),",
+      "                    cost-ascending, stop at 3 survivors. Threshold/size:",
+      "                    scout_accuracy_threshold / scout_accuracy_target_bytes.",
+      "                    Spend bounded by the existing daily paid-benchmark cap.",
       "",
       "search_existing_implementations benchmark (separate task — duplicate-impl match):",
       "  --search-existing [ID...]",
@@ -654,6 +744,7 @@ export function printHelp(): void {
       "                    --auto-replace. Run `reset` afterwards to pick up the",
       "                    change. --force re-runs benchmarks even on a healthy",
       "                    ledger. Honors free_only (zero-spend on the free pool).",
+      ...GENERATED_PROFILE_REFUSAL_HELP,
       "",
       "Cross-tool requirements assessment (free — no LLM call, no API key):",
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
@@ -682,8 +773,8 @@ export function printHelp(): void {
       `  - max_completion_tokens >= ${DEFAULT_CRITERIA.minOutputTokens.toLocaleString()}`,
       `  - structured_outputs or response_format supported`,
       `  - reasoning or include_reasoning supported`,
-      `  - $/M in <  ${DEFAULT_CRITERIA.maxInputDollarsPerMillion.toFixed(2)}   (strictly less)`,
-      `  - $/M out <  ${DEFAULT_CRITERIA.maxOutputDollarsPerMillion.toFixed(2)}   (strictly less)`,
+      `  - $/M in <= ${DEFAULT_CRITERIA.maxInputDollarsPerMillion.toFixed(2)}`,
+      `  - $/M out <= ${DEFAULT_CRITERIA.maxOutputDollarsPerMillion.toFixed(2)}`,
       `  - :free tier excluded`,
       "",
       "API key resolution order: OPENROUTER_API_KEY env, then $CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY.",

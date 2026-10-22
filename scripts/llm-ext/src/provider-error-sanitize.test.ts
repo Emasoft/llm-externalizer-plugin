@@ -91,3 +91,35 @@ describe("sanitizeProviderError — privacy-safe provider error collapse (TRDD-5
     expect(out).not.toContain("user_LEAK999");
   });
 });
+
+describe("sanitizeProviderError — openrouter_metadata stripped (L0-06, E15)", () => {
+  // Truncated envelope: JSON.parse fails, so the raw text is the fallback and must be scrubbed of the metadata object.
+  it("strips openrouter_metadata and its user_id from a truncated body", () => {
+    const truncated = `{"error":{"message":"Rate limit exceeded: free-models-per-min.","code":429},"openrouter_metadata":{"user_id":"user_LEAK777","generation_id":"gen-LEAK777"}`;
+    const out = sanitizeProviderError(truncated);
+    expect(out).toContain("Rate limit exceeded: free-models-per-min.");
+    expect(out).not.toContain("openrouter_metadata");
+    expect(out).not.toContain("user_LEAK777");
+    expect(out).not.toContain("gen-LEAK777");
+  });
+
+  // No message, provider or upstream detail: the fallback renders the whole envelope, so the metadata object must not be in it.
+  it("strips openrouter_metadata when the JSON envelope yields no message", () => {
+    const blob = JSON.stringify({ openrouter_metadata: { user_id: "user_LEAK777", generation_id: "gen-LEAK777" } });
+    const out = sanitizeProviderError(blob);
+    expect(out).not.toContain("openrouter_metadata");
+    expect(out).not.toContain("user_LEAK777");
+    expect(out).not.toContain("gen-LEAK777");
+  });
+
+  it("keeps the message and drops openrouter_metadata from a well-formed envelope", () => {
+    const blob = JSON.stringify({
+      error: { message: "Provider returned error", code: 429, metadata: { provider_name: "Google AI Studio" } },
+      openrouter_metadata: { user_id: "user_LEAK777" },
+    });
+    const out = sanitizeProviderError(blob);
+    expect(out).toContain("Provider returned error");
+    expect(out).not.toContain("openrouter_metadata");
+    expect(out).not.toContain("user_LEAK777");
+  });
+});

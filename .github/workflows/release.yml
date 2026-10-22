@@ -62,8 +62,12 @@ jobs:
       # source of truth: if the local gate's semantics change, this job
       # follows automatically and cannot silently drift apart from it.
       #
-      # CPV is PINNED to a tag so a stricter future CPV release cannot break
-      # the release gate with no change to this plugin.
+      # CPV is PINNED to a COMMIT SHA so a stricter future CPV release cannot
+      # break the release gate with no change to this plugin. A tag is
+      # MOVABLE; a commit SHA is not — the SHA fixes the transport's
+      # provenance by the ref itself. The SHA must be updated by hand when
+      # the pin moves (upstream #243 / #256); remove the integrity bypass
+      # FIRST, then update the SHA.
       - name: Run full plugin validation (remote CPV)
         env:
           # Skip the GitHub-anchored integrity fetch on a fresh-checkout runner
@@ -81,12 +85,35 @@ jobs:
           # blocking finding, produced entirely by this step, on every release.
           REPORT_TXT="${RUNNER_TEMP:-/tmp}/cpv-validation-report.txt"
           REPORT_JSON="${RUNNER_TEMP:-/tmp}/cpv-validation.json"
+          # The bypass note is written ONCE, here, BEFORE the text run — so the
+          # clean-run path (which exits this step early) and the JSON branch
+          # below both have it. The note text is the same one the local gate
+          # writes into cpv.log.
+          BYPASS_NOTE="${RUNNER_TEMP:-/tmp}/cpv-bypass-note.txt"
+          printf '%s\n' "# CPV INTEGRITY SELF-CHECK DISABLED via PLUGIN_SKIP_GITHUB_INTEGRITY=1 — CPV's GitHub-anchored hash check was NOT run for this validation" > "$BYPASS_NOTE"
           set +e
-          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
+          # v5.22.0
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@d5d6149735c4f0055bb3b83a56b28036079682ad \
               --with pyyaml \
               cpv-remote-validate plugin . > "$REPORT_TXT" 2>&1
           text_exit=$?
           set -e
+          # The bypass record leads the artifact, exactly as the local gate's
+          # cpv.log does — the same note text in both, so the two artifacts
+          # say the same thing. The CI artifact is the one that actually
+          # gated the release and it is shipped as the validation-report.txt
+          # release asset, so without this the shipped evidence carries no
+          # record of the disable. Prepended AFTER the text run has FINISHED
+          # and BEFORE the `cp` below, so it is safe: the scan already ran
+          # against the un-prefixed report and no half-written file is put
+          # under the scanner. The console `cat` comes AFTER the prepend, so
+          # the console log carries the note too. The NOTE FILE ITSELF is
+          # created BEFORE the text run, not here: the clean-run path exits
+          # this step early, so a note file created after that branch would
+          # never exist on the clean path — and the JSON branch below needs
+          # it too. Creating it here means BOTH branches have it.
+          cat "$BYPASS_NOTE" "$REPORT_TXT" > "${REPORT_TXT}.with-note"
+          mv "${REPORT_TXT}.with-note" "$REPORT_TXT"
           cat "$REPORT_TXT"
           # Publish-side copy: SHA256SUMS, the release upload and the provenance
           # attestation all expect ./validation-report.txt. Copying it back AFTER
@@ -101,11 +128,18 @@ jobs:
           # Non-zero: re-run with --json so the findings can be classified with
           # the same rule the local gate uses.
           set +e
-          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@v3.19.1 \
+          # v5.22.0
+          uvx --from git+https://github.com/Emasoft/claude-plugins-validation@d5d6149735c4f0055bb3b83a56b28036079682ad \
               --with pyyaml \
               cpv-remote-validate plugin . --json > "$REPORT_JSON" 2>/dev/null
           json_exit=$?
           set -e
+          # The JSON report carries NO note line of its own: the classifier below
+          # does json.loads() on it, so prepending a "#" comment would make it
+          # unparseable and the gate would fail closed for the wrong reason.
+          # The note therefore travels as a SEPARATE file, written BESIDE the
+          # JSON so the two live together.
+          cp "$BYPASS_NOTE" "${REPORT_JSON}.bypass-note.txt"
           if [ ! -s "$REPORT_JSON" ]; then
             echo "::error::CPV produced no --json output (exit ${json_exit}) — the validator FAILED TO RUN (infra/network/install failure), this is NOT a findings verdict. See the log above."
             exit 1
@@ -158,7 +192,13 @@ jobs:
       - name: Run tests
         # Integration- and slow-marked tests need a live backend / API credit,
         # which a release runner has neither of; every other test must pass.
-        run: uv run pytest tests/ -v -m "not integration and not slow"
+        # --ignore=tests/dogfood: a CLI harness module, not a pytest suite (no
+        # test_* functions) — excluded from collection so it can't affect this
+        # run even if it grows a side-effecting import later. --extra dev:
+        # pytest lives only in pyproject.toml's optional dev extra, not a base
+        # [project] dependency (TRDD-CCS6ENHU, bc01f2c) — keeps this
+        # invocation textually identical to ci.yml's and publish.py gate 10's.
+        run: uv run --extra dev pytest tests/ --ignore=tests/dogfood -v -m "not integration and not slow"
 
       - name: Lint Python scripts
         run: uv run ruff check scripts/

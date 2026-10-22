@@ -84,10 +84,23 @@ reading the code.
 
 ## Rebuilding it
 
+Extract into a TEMP DIR, not into the plugin tree — the CPV in-plugin write
+guard polices writes under the plugin, so the staging copy must not land here.
+`git archive` preserves each file's repo-relative path inside the tarball, and
+`tar -x -C <dir>` extracts it under that dir, so the `cp` below reads the
+staged path.
+
 ```bash
-git show 31ce212^:mcp-server/src/test-helpers.ts > src/b816534/test-helpers.ts
-# …one `git show <blob>:<path>` per row of the table above.
+STAGE="$(mktemp -d)"
+
+# For each row of the table above: extract the source at its own repo-relative
+# path into the staging dir, then copy it to the row's destination.
+git archive 31ce212^ mcp-server/src/test-helpers.ts | tar -x -C "$STAGE"
+cp "$STAGE/mcp-server/src/test-helpers.ts" src/b816534/test-helpers.ts
 cp mcp-server/TESTING.md spec/TESTING.md
+
+# …one `git archive <rev> <path>` + one `cp` per row of the table above.
+rm -rf "$STAGE"
 ```
 
 These files live OUTSIDE `mcp-server/src/`, so `tsc`, `eslint` and `vitest`

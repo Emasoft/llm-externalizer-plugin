@@ -154,6 +154,9 @@ describe("selectSecurityTriageModel", () => {
     expect(SECURITY_TRIAGE_CRITERIA.requireReasoning).toBe(false);
     expect(SECURITY_TRIAGE_CRITERIA.requireStructuredOutputs).toBe(true);
     expect(SECURITY_TRIAGE_CRITERIA.minContextTokens).toBeLessThanOrEqual(32_000);
-    expect(SECURITY_TRIAGE_CRITERIA.maxInputDollarsPerMillion).toBe(1.0);
+    // USER 2026-09-18 "one ceiling, <=" (TRDD d3a-price-ceiling): inherited
+    // from DEFAULT_CRITERIA, which now mirrors config.ts's default ensemble
+    // price ceiling (1.3), not a distinct hard-coded $1.00.
+    expect(SECURITY_TRIAGE_CRITERIA.maxInputDollarsPerMillion).toBe(1.3);
   });
 });

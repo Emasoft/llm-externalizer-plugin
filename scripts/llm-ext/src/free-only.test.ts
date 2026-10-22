@@ -51,7 +51,7 @@ function freeProfile(over: Partial<Profile> = {}): Profile {
 
 describe("resolveProfile — free_only derives the ensemble from free_models", () => {
   it("uses free_models[0..2] as model/secondModel/thirdModel, ignoring the premium model", () => {
-    const r = resolveProfile("free", freeProfile());
+      const r = resolveProfile("my-free-only", freeProfile());
     expect(r.freeOnly).toBe(true);
     expect(r.model).toBe(FREE[0]);
     expect(r.secondModel).toBe(FREE[1]);
@@ -75,42 +75,44 @@ describe("resolveProfile — free_only derives the ensemble from free_models", (
 
 describe("validateProfile — free_only zero-spend invariants", () => {
   it("accepts a well-formed free_only ensemble profile", () => {
-    expect(validateProfile("free", freeProfile()).valid).toBe(true);
+      expect(validateProfile("my-free-only", freeProfile()).valid).toBe(true);
   });
 
   it("accepts free_only WITHOUT a model field (free_models supplies it)", () => {
     const p = { ...freeProfile() } as Partial<Profile>;
     delete p.model;
-    expect(validateProfile("free", p as Profile).valid).toBe(true);
+    expect(validateProfile("my-free-only", p as Profile).valid).toBe(true);
   });
 
   it("REJECTS a non-':free' entry in free_models (would bill)", () => {
-    const r = validateProfile("free", freeProfile({ free_models: [...FREE, "openai/gpt-5.4-nano"] }));
+      const r = validateProfile("my-free-only", freeProfile({ free_models: [...FREE, "openai/gpt-5.4-nano"] }));
     expect(r.valid).toBe(false);
     expect(r.errors.join("\n")).toMatch(/gpt-5\.4-nano/);
     expect(r.errors.join("\n")).toMatch(/:free/);
   });
 
   it("REJECTS an empty free_models list", () => {
-    const r = validateProfile("free", freeProfile({ free_models: [] }));
+      const r = validateProfile("my-free-only", freeProfile({ free_models: [] }));
     expect(r.valid).toBe(false);
     expect(r.errors.join("\n")).toMatch(/non-empty 'free_models'/);
   });
 
   it("REJECTS free_only on a local preset (':free' is OpenRouter-only)", () => {
-    const r = validateProfile("free", freeProfile({ mode: "local", api: "lmstudio-local", url: undefined }));
+      const r = validateProfile("my-free-only", freeProfile({ mode: "local", api: "lmstudio-local", url: undefined }));
     expect(r.valid).toBe(false);
     expect(r.errors.join("\n")).toMatch(/remote \(OpenRouter\)/);
   });
 
   it("REJECTS free_only + remote-ensemble with only ONE free model", () => {
-    const r = validateProfile("free", freeProfile({ free_models: ["qwen/qwen3-coder:free"] }));
+      const r = validateProfile("my-free-only", freeProfile({ free_models: ["qwen/qwen3-coder:free"] }));
     expect(r.valid).toBe(false);
-    expect(r.errors.join("\n")).toMatch(/at least 2 free_models/);
+    // D5: reserved slots count toward the 2-member minimum, so the sentence
+    // names "ensemble members", not "free_models".
+    expect(r.errors.join("\n")).toMatch(/at least 2 ensemble members/);
   });
 
   it("accepts free_only + mode 'remote' (single free model, no ensemble)", () => {
-    const r = validateProfile("free", freeProfile({ mode: "remote", free_models: ["qwen/qwen3-coder:free"] }));
+      const r = validateProfile("my-free-only", freeProfile({ mode: "remote", free_models: ["qwen/qwen3-coder:free"] }));
     expect(r.valid).toBe(true);
   });
 
@@ -118,16 +120,53 @@ describe("validateProfile — free_only zero-spend invariants", () => {
     // YAML scalar instead of a list — the runtime value is a string. Must be
     // reported, not throw (and must not spread into single characters).
     const bad = { ...freeProfile(), free_models: "qwen/qwen3-coder:free" as unknown as string[] };
-    const r = validateProfile("free", bad);
+    const r = validateProfile("my-free-only", bad);
     expect(r.valid).toBe(false);
     expect(r.errors.join("\n")).toMatch(/free_models must be a YAML list/);
   });
 
   it("resolveProfile coerces a malformed free_models to [] (no char-spread, no throw)", () => {
     const bad = { ...freeProfile(), free_models: "qwen/qwen3-coder:free" as unknown as string[] };
-    const r = resolveProfile("free", bad);
+    const r = resolveProfile("my-free-only", bad);
     expect(r.freeModels).toEqual([]); // NOT ['q','w','e','n', ...]
     expect(r.model).toBe(""); // no free_models[0] to derive from
+  });
+
+  // A DYNAMIC free_only profile ("free") keeps tool_models populated after
+  // resolve (unlike a STATIC one, which is blanked to {}) — see the
+  // resolveModelForTool describe block below. So the free_models pool being
+  // clean is not enough: a paid model id sitting in tool_models would still
+  // reach resolveModelForTool unblocked unless validateProfile also gates it.
+  it("REJECTS a non-':free' model in tool_models on the dynamic 'free' profile (would bill)", () => {
+    const r = validateProfile(
+      "free",
+      freeProfile({ tool_models: { code_task: "openai/gpt-5.4-nano" } as Record<string, string> }),
+    );
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/tool_models/);
+    expect(r.errors.join("\n")).toMatch(/gpt-5\.4-nano/);
+  });
+
+  it("ACCEPTS a ':free' model in tool_models on the dynamic 'free' profile, and resolveModelForTool honours it", () => {
+    const p = freeProfile({ tool_models: { code_task: "qwen/qwen3-coder:free" } as Record<string, string> });
+    expect(validateProfile("free", p).valid).toBe(true);
+    const r = resolveProfile("free", p);
+    expect(resolveModelForTool(r, "code_task")).toBe("qwen/qwen3-coder:free");
+  });
+
+  it("ACCEPTS a non-':free' tool_models id served by a non-billable 'providers[]' route (b.ai)", () => {
+    const r = validateProfile(
+      "free",
+      freeProfile({
+        tool_models: { code_task: "glm-5.3-flash" } as Record<string, string>,
+        // Direct key value, same reasoning as freeProfile()'s own api_key: the
+        // binding's own auth requirement is unrelated to this test (the point
+        // under test is the tool_models cost gate), so it must not depend on
+        // $BAI_API_KEY being set in the environment.
+        providers: [{ api: "chat-b-ai-remote", models: ["glm-5.3-flash"], api_key: "test-key-direct-value" }],
+      }),
+    );
+    expect(r.valid).toBe(true);
   });
 });
 
@@ -405,29 +444,47 @@ describe("callEnsembleSlotWithRotation — free-model fallback rotation (Phase 3
 // model is unreachable under free_only. All pure + offline.
 
 describe("assertFreeOnlyModel — airtight chokepoint guard (TRDD-97ef8b63)", () => {
-  it("THROWS on a non-':free' model under free_only + openrouter (cost-safety)", () => {
-    expect(() => assertFreeOnlyModel(true, "openrouter", "deepseek/deepseek-v4-pro")).toThrow(/cost-safety/);
-    expect(() => assertFreeOnlyModel(true, "openrouter", "openai/gpt-5.4-nano")).toThrow(/non-free model/);
+  // Param 2 is now `billable: boolean`, not a backend-type string. The old
+  // signature conflated "which request format" with "can this charge me", which
+  // is what let a remote openai_api preset (type "local") bypass the guard.
+  it("THROWS on a non-':free' model under free_only + a BILLABLE endpoint", () => {
+    expect(() => assertFreeOnlyModel(true, true, "deepseek/deepseek-v4-pro")).toThrow(/cost-safety/);
+    expect(() => assertFreeOnlyModel(true, true, "openai/gpt-5.4-nano")).toThrow(/non-free model/);
   });
 
   it("ALLOWS a ':free' model under free_only", () => {
-    expect(() => assertFreeOnlyModel(true, "openrouter", "qwen/qwen3-coder:free")).not.toThrow();
-    expect(() => assertFreeOnlyModel(true, "openrouter", "nvidia/nemotron-3-super-120b-a12b:free")).not.toThrow();
+    expect(() => assertFreeOnlyModel(true, true, "qwen/qwen3-coder:free")).not.toThrow();
+    expect(() => assertFreeOnlyModel(true, true, "nvidia/nemotron-3-super-120b-a12b:free")).not.toThrow();
   });
 
   it("is a NO-OP when free_only is off (paid model allowed on a paid profile)", () => {
-    expect(() => assertFreeOnlyModel(false, "openrouter", "deepseek/deepseek-v4-pro")).not.toThrow();
+    expect(() => assertFreeOnlyModel(false, true, "deepseek/deepseek-v4-pro")).not.toThrow();
   });
 
-  it("is a NO-OP for local backends (':free' is OpenRouter-only; local is $0)", () => {
-    expect(() => assertFreeOnlyModel(true, "local", "qwen3:14b")).not.toThrow();
+  it("is a NO-OP for a NON-billable endpoint (a local server is $0)", () => {
+    expect(() => assertFreeOnlyModel(true, false, "qwen3:14b")).not.toThrow();
+  });
+
+  it("ALLOWS any id from a free-by-nature provider (b.ai has no ':free' suffix)", () => {
+    // The 4th arg is the provider's free claim. Without it this id would be
+    // refused for lacking a suffix that its provider does not use.
+    expect(() => assertFreeOnlyModel(true, false, "glm-5.3-flash", true)).not.toThrow();
+  });
+
+  it("lets the free-provider claim OVERRIDE billable — so the claim must be voided upstream", () => {
+    // Precedence, stated as a test because it is load-bearing: isFreeProvider
+    // short-circuits BEFORE the billable check. A wrong `true` here is therefore
+    // a spend bypass, which is exactly why overridesEndpoint() voids the claim at
+    // resolve time when a url: redirects the host or scheme. Once a claim reaches
+    // this guard it wins — the enforcement point is the resolver, not here.
+    expect(() => assertFreeOnlyModel(true, true, "openai/gpt-4o", true)).not.toThrow();
   });
 });
 
-describe("resolveModelForTool — free_only overrides every per-tool choice (TRDD-97ef8b63)", () => {
+describe("resolveModelForTool — static free_only profile overrides every per-tool choice (TRDD-97ef8b63)", () => {
   it("ignores tool_models AND the caller fallback — the top free model wins", () => {
     const r = resolveProfile(
-      "free",
+      "my-free-only",
       freeProfile({ tool_models: { security_scan: "openai/gpt-5.4-nano" } as Record<string, string> }),
     );
     // Even a PAID tool_models override AND a PAID caller fallback are overridden:
@@ -437,10 +494,10 @@ describe("resolveModelForTool — free_only overrides every per-tool choice (TRD
 
   it("clears resolved toolModels under free_only (no active per-tool overrides)", () => {
     const r = resolveProfile(
-      "free",
+      "my-free-only",
       freeProfile({ tool_models: { security_scan: "openai/gpt-5.4-nano" } as Record<string, string> }),
     );
-    expect(r.toolModels).toEqual({}); // the file keeps tool_models; the RESOLVED profile drops them
+    expect(r.toolModels).toEqual({}); // static free_only: the resolved profile still drops tool_models
   });
 
   it("a NON-free profile still honours tool_models + fallback (behaviour unchanged)", () => {
@@ -489,20 +546,43 @@ describe("benchmark runner — free_only enforcement at the real spend site (TRD
     }) as unknown as QualifiedModel;
 
   it("SKIPS a non-':free' model under free_only — RunError, never reaches the network", async () => {
+    // Row 92 fix-queue: the gate now reads options.freeOnly, not the module
+    // global — pass it directly instead of set/reset-ing setActiveFreeOnly
+    // around the call (no global state to leak into other tests any more).
+    // apiKey is deliberately bogus: if the guard FAILED to short-circuit, the
+    // real fetch would run and this test would hang/network-error instead of
+    // returning a clean cost-safety RunError.
+    const out = await runBenchmarkOnModel(paid("openai/gpt-5.4-nano"), ["a", "b", "c"], [], {
+      apiKey: "unused-because-guard-skips-before-fetch",
+      freeOnly: true,
+      timeoutMs: 2000,
+    });
+    expect(out.ok).toBe(false);
+    expect((out as { error: string }).error).toMatch(/cost-safety/);
+    expect((out as { error: string }).error).toMatch(/gpt-5\.4-nano/);
+  });
+
+  it("row 92 fix-queue: a PAID call runs its own gate from options.freeOnly, never the leaked global", async () => {
+    // Deliberately leave the global TRUE (as a previous free sweep in the same
+    // process would) and pass freeOnly: false explicitly — before the fix this
+    // model would have been skipped by getActiveFreeOnly() regardless of what
+    // this call actually asked for. Red on HEAD: options.freeOnly did not exist,
+    // so the gate read the global above and returned the cost-safety RunError
+    // instead of reaching fetchImpl.
     setActiveFreeOnly(true);
     try {
-      // apiKey is deliberately bogus: if the guard FAILED to short-circuit, the
-      // real fetch would run and this test would hang/network-error instead of
-      // returning a clean cost-safety RunError.
+      const body = {
+        choices: [{ message: { content: JSON.stringify({ kw1_functions: [], kw2_functions: [], kw3_functions: [] }) }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      };
       const out = await runBenchmarkOnModel(paid("openai/gpt-5.4-nano"), ["a", "b", "c"], [], {
-        apiKey: "unused-because-guard-skips-before-fetch",
-        timeoutMs: 2000,
+        apiKey: "unused-fetch-is-stubbed",
+        freeOnly: false,
+        fetchImpl: async () => new Response(JSON.stringify(body), { status: 200 }),
       });
-      expect(out.ok).toBe(false);
-      expect((out as { error: string }).error).toMatch(/cost-safety/);
-      expect((out as { error: string }).error).toMatch(/gpt-5\.4-nano/);
+      expect(out.ok).toBe(true);
     } finally {
-      setActiveFreeOnly(false); // reset global so later tests are unaffected
+      setActiveFreeOnly(false); // never leak into other tests
     }
   });
 });

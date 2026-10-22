@@ -72,6 +72,10 @@ function opts(overrides: Partial<JudgeOptions> = {}): JudgeOptions {
     model: TEST_MODEL,
     apiKey: "test-key",
     pricing: TEST_PRICING,
+    // Row 101 fix-queue: freeOnly is now REQUIRED. TEST_MODEL ends in ':free',
+    // so the cost-safety guard is a no-op regardless of this value (see the
+    // TEST_MODEL comment above) — false matches prior behaviour.
+    freeOnly: false,
     apiUrl: "https://example.invalid/api",
     workers: 1,
     maxRetries: 5,

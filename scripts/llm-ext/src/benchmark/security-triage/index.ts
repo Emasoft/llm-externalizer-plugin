@@ -23,6 +23,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { benchmarkSubReportDir } from "../report-dir.js";
 import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
@@ -33,16 +34,17 @@ import {
   qualify,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "../discover.js";
 import { setBenchmarkValidationExempt } from "../validated.js";
-import { getConfigDir, getActiveFreeOnly } from "../../config.js";
+import { getConfigDir, getActiveFreeOnly, getEnsemblePriceCeiling, loadSettings } from "../../config.js";
 import { FreeModeSkipError, isFreeSuffixModelId } from "../free-mode.js";
-import { resolveProjectMainRoot } from "../../project-root.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
 import { buildSystemPrompt, buildUserMessage, makeNonce, preScanInjection } from "../../security_scan/prompt.js";
 import { ASSUMED_MAX_OUTPUT_TOKENS } from "../budget.js";
+import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
 import type { BenchmarkWorkload } from "../workload-types.js";
 
 import { BENCHMARK_RUBRICS, loadDataset, resolveDatasetPath, type SecurityTriageCase } from "./dataset.js";
@@ -144,6 +146,16 @@ function cacheKey(modelId: string, date: string, datasetHash: string): string {
   return `${modelId}::${date}::${datasetHash}`;
 }
 
+/**
+ * ONE definition of the dataset fingerprint. The benchmark run and
+ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
+ * rows whose `datasetHash` equals today's — so if the two ever diverge the
+ * backfill silently matches nothing and reclaims no rows, with no error.
+ */
+function datasetFingerprint(datasetPath: string): string {
+  return createHash("sha1").update(readFileSync(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+}
+
 function loadCache(): CacheFile {
   const p = cachePath();
   if (!existsSync(p)) return {};
@@ -207,6 +219,84 @@ export function benchmarkFailedModels(): Set<string> {
   return failedModelsFromCache(loadCache());
 }
 
+/**
+ * Latest-wins extraction of proven-PASSING models from a benchmark cache
+ * (PURE, testable) — the symmetric counterpart to failedModelsFromCache.
+ * Same latest-date-wins per model; PASS only on a CONCLUSIVE positive verdict
+ * (an inconclusive latest run is neither a proven pass nor a proven fail, so
+ * it counts as neither here — TRDD-FDI9NYAS D3c: "no model should be used
+ * unless it pass the benchmark" means an ABSENT or inconclusive verdict must
+ * NOT be read as a pass; only a genuine `pass: true` does).
+ */
+export function passedModelsFromCache(
+  cache: Record<string, { date: string; score: { pass: boolean; inconclusive: boolean } }>,
+): Set<string> {
+  const latest = new Map<string, { date: string; pass: boolean; inconclusive: boolean }>();
+  for (const [key, entry] of Object.entries(cache)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latest.get(modelId);
+    if (!prev || entry.date > prev.date) {
+      latest.set(modelId, {
+        date: entry.date,
+        pass: entry.score.pass,
+        inconclusive: entry.score.inconclusive,
+      });
+    }
+  }
+  const passed = new Set<string>();
+  for (const [modelId, v] of latest) {
+    if (!v.inconclusive && v.pass) passed.add(modelId);
+  }
+  return passed;
+}
+
+/**
+ * Models with a RECORDED PASSING security-triage benchmark (reads the real
+ * cache) — TRDD-FDI9NYAS D3c: the "requires a RECORDED pass" gate for every
+ * auto-picked free model reads this, not the absence of a recorded FAIL
+ * (benchmarkFailedModels alone is lenient on a never-benchmarked id by
+ * design — see filterFreeModels; this is the strict counterpart used where a
+ * catalog id is about to become SERVABLE, not merely a benchmark candidate).
+ */
+export function benchmarkPassedModels(): Set<string> {
+  return passedModelsFromCache(loadCache());
+}
+
+/**
+ * Ids with a recorded FAILING security-triage benchmark whose LATEST verdict
+ * is older than `maxAgeMs` (design §5's 7-day re-probe, addendum row
+ * "stale-failed-id"): a FAIL from long ago should not block a model forever
+ * — the provider may have fixed it. Only ever ENLARGES what a caller may
+ * re-queue for benchmark; never removes anything from `unusable` itself (a
+ * stale FAIL is still a FAIL until re-probed and it passes).
+ */
+export function staleFailedModelIds(maxAgeMs: number, nowMs: number = Date.now()): Set<string> {
+  const cache = loadCache();
+  const failed = failedModelsFromCache(cache);
+  // P6b-fix2 N-2: `string | undefined`, because that is what actually goes in.
+  // `cache` is JSON parsed off disk, so a row can carry no `date` at all
+  // despite CacheEntry declaring it required — and storing that `undefined` is
+  // exactly what makes the `d !== undefined` guard below fail CLOSED (an
+  // undated FAIL is never "stale", so it is never re-queued on no evidence).
+  // Declared as Map<string,string>, that guard read as dead code covering only
+  // an absent key, and the next simplifier would have deleted it.
+  const latestDateByModel = new Map<string, string | undefined>();
+  for (const [key, entry] of Object.entries(cache)) {
+    const modelId = key.split("::")[0];
+    if (!modelId) continue;
+    const prev = latestDateByModel.get(modelId);
+    if (!prev || entry.date > prev) latestDateByModel.set(modelId, entry.date);
+  }
+  const cutoff = new Date(nowMs - maxAgeMs).toISOString().slice(0, 10);
+  const out = new Set<string>();
+  for (const id of failed) {
+    const d = latestDateByModel.get(id);
+    if (d !== undefined && d < cutoff) out.add(id);
+  }
+  return out;
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────
 
 function resolveApiKey(override?: string): string {
@@ -220,11 +310,6 @@ function resolveApiKey(override?: string): string {
     );
   }
   return k;
-}
-
-function resolveMainRoot(override?: string): string {
-  // Single source of truth — see project-root.ts.
-  return resolveProjectMainRoot(override);
 }
 
 function today(): string {
@@ -279,11 +364,20 @@ export async function runSecurityTriageBenchmark(
   const apiKey = resolveApiKey(opts.apiKey);
   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
   const cases = loadDataset(datasetPath);
-  const datasetHash = createHash("sha1").update(readFileSync(datasetPath, "utf-8")).digest("hex").slice(0, 12);
+  const datasetHash = datasetFingerprint(datasetPath);
   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? (() => {});
   const freeOnly = getActiveFreeOnly();
+  // D0 (TRDD-AL8GIZYA, plan item 2a): SECURITY_TRIAGE_CRITERIA's price fields
+  // only mirror DEFAULT_CRITERIA's DEFAULT ceiling; auto-discovered candidates
+  // must be filtered against the resolved, settings-overridable ceiling instead.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const discoveryCriteria: ModelCriteria = {
+    ...SECURITY_TRIAGE_CRITERIA,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
 
   progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
 
@@ -342,7 +436,7 @@ export async function runSecurityTriageBenchmark(
   } else {
     // Auto-discovery: qualified candidates, pre-filtered to NOT pricier than the
     // incumbent (the gate would reject pricier ones — don't spend budget on them).
-    const { candidates } = buildBenchmarkRoster(catalog, SECURITY_TRIAGE_CRITERIA, []);
+    const { candidates } = buildBenchmarkRoster(catalog, discoveryCriteria, [], catalog, discoveryCeiling);
     const affordable = candidates.filter(
       (c) => c.inputDollarsPerMillion <= incumbentIn + 1e-9 && c.outputDollarsPerMillion <= incumbentOut + 1e-9,
     );
@@ -409,15 +503,40 @@ export async function runSecurityTriageBenchmark(
     );
   }
 
-  // Global price-cap fail-fast (explicit ids + incumbent; discovered already
-  // dropped by filterModels). Refuses before any send, $0 spent.
-  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Global price-cap fail-fast on AUTO-DISCOVERED candidates only (already
+  // dropped by discoveryCriteria above, so this is a safety net). USER
+  // 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX) exempts only an
+  // explicitly-named --include id — NOT the incumbent (REVIEW finding: the
+  // incumbent is auto-added by this orchestrator, not user-named in this
+  // invocation, so it is not covered by that USER decision and stays gated,
+  // matching pre-D0-flows behaviour).
+  const manualIds = new Set(opts.models ?? []);
+  const autoDiscovered = [...toAssess.values()]
+    .filter((v) => !manualIds.has(v.model.id))
+    .map((v) => v.model);
+  assertModelsUnderPriceCap(autoDiscovered, discoveryCeiling);
   assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 
   // 5. Run + score each model (sequential — avoids stacking rate-limit hits).
   const cache = loadCache();
+
+  // Reclaim already-paid scores. The cache key embeds today()
+  // (`cacheKey(model.id, today(), datasetHash)`), so a row written on an
+  // earlier date is never looked up again — and `qualityPass`, the ONLY field
+  // that can give a ':free' model a verdict in the evidence fold (`qualified`
+  // is false for the whole ':free' class by design), is therefore never
+  // backfilled, despite the note at the write site promising it would be.
+  // Judging those rows from the score they already carry costs no model call.
+  // An INCONCLUSIVE run abstains — same rule as the write site above.
+  const upgraded = backfillLegacyQualityPass(
+    cache,
+    datasetHash,
+    (s: TriageScore) => (s.inconclusive ? undefined : s.pass),
+  );
+  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
+
   const assessments: CandidateAssessment[] = [];
   const scores: TriageScore[] = [];
   const freeOnlySkipped: string[] = [];
@@ -480,6 +599,7 @@ export async function runSecurityTriageBenchmark(
           {
             apiKey,
             pricing: pricingFromModel(model),
+            freeOnly,
             perCallTimeoutMs: opts.perCallTimeoutMs ?? 45_000,
             maxRetries: opts.maxRetries ?? 0,
             workers: opts.workers,
@@ -541,8 +661,11 @@ export async function runSecurityTriageBenchmark(
   });
 
   // 7. Write the report.
-  const mainRoot = resolveMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join(mainRoot, "reports", "security-triage-benchmark");
+  // Write-roots rule (2026-09-18): route the default through
+  // benchmarkSubReportDir() -> defaultOutputDir(), the only USER-approved
+  // report root, instead of hand-rolling mainRoot/"reports"/sub (that landed
+  // outside every approved write root). An explicit outputDir still wins.
+  const reportDir = opts.outputDir ?? benchmarkSubReportDir("security-triage-benchmark", opts.mainRoot);
   mkdirSync(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join(reportDir, `${stamp}-security-triage-benchmark.json`);
@@ -781,4 +904,25 @@ function buildReportMarkdown(args: {
       "surfaced for the operator to adopt via the security_scan `model` parameter.",
   );
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
+ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
+ * call). Same dataset-hash and pass predicate `runSecurityTriageBenchmark` uses
+ * — `undefined` for an inconclusive run, never a false demotion.
+ */
+export function backfillOwnLedger(): { tool: string; upgraded: number } {
+  const datasetPath = resolveDatasetPath();
+  loadDataset(datasetPath);
+  const datasetHash = datasetFingerprint(datasetPath);
+
+  const cache = loadCache();
+  const upgraded = backfillLegacyQualityPass(
+    cache,
+    datasetHash,
+    (s: TriageScore) => (s.inconclusive ? undefined : s.pass),
+  );
+  if (upgraded > 0) saveCache(cache);
+  return { tool: "security_scan", upgraded };
 }

@@ -29,6 +29,24 @@ The installer:
 
    `refreshInterval: 3` makes the bar re-tier within 3 s of a terminal resize.
 
+4. **Preserves an existing agentlenspro capture wrap.** `statusLine` holds
+   exactly **one** command — Claude Code keeps element `[0]` of an array,
+   silently discards the rest, and rewrites `settings.json` back to the object
+   form — so our bar and agentlenspro's capture cannot be sibling entries: one
+   must wrap the other, and **agentlenspro is the wrapper**
+   (`--install-statusline` "WRAPS the command already there ... passes its
+   stdout + exit code through byte-for-byte").
+
+   So the installer writes our command **plain**, then — only if a wrap was
+   already present and `agentlenspro` is on PATH — re-applies it by invoking
+   `agentlenspro --install-statusline`, its own idempotent, transactional entry
+   point. Result: exactly one wrap, however many times you re-run.
+
+   Do **not** hand-compose `agentlenspro statusline --inner '<cmd>'`: `--inner`
+   is undocumented and internal, and pre-wrapping makes agentlenspro wrap the
+   wrap (measured: `--inner` count 2). With no wrap present the statusline is
+   installed standalone and the installer just prints how to add capture.
+
 What the statusline shows (each section is in its own try/except, so a partial failure can never blank the bar):
 
 - 🤖 Model name + Claude Code version (cached 1 h) + `·max` effort + 🧠 thinking

@@ -36,6 +36,7 @@ import {
   aggregateModelHealth,
   assessModelPersistence,
   readModelEvents,
+  zeroByKind,
   type AggregateOptions,
   type ModelHealthSummary,
   type ModelPersistenceVerdict,
@@ -155,13 +156,20 @@ export interface AutoReplaceOptions {
  */
 function defaultSettingsReader(profileNameOverride?: string): ToolSettingsReader {
   const settings = loadSettings();
-  if (!settings || !settings.active) {
+  // P6b-fix3 S-5': the early return must not key on `settings.active` once an
+  // override is supplied. P6 retired that key for selection and TELLS the user
+  // it is ignored, so a user may simply delete it — and this early return then
+  // resolved EVERY incumbent to DEFAULT_MODEL while still labelling the report
+  // with the override's name, so `--auto-replace --profile ens --apply` adopted
+  // verdicts taken about a model `ens` does not use. The `!settings` arm stays:
+  // with no settings.yaml at all there is no profile to resolve either way.
+  if (!settings || (profileNameOverride === undefined && !settings.active)) {
     return {
       profileName: profileNameOverride ?? "(unconfigured)",
       toolModel: () => DEFAULT_MODEL,
     };
   }
-  const profileName = profileNameOverride ?? settings.active;
+  const profileName = profileNameOverride ?? (settings.active as string);
   const profile = settings.profiles[profileName];
   if (!profile) {
     return {
@@ -373,15 +381,7 @@ export async function planToolReplacements(
     const health: ModelHealthSummary = healthByModel.get(incumbentModelId) ?? {
       model: incumbentModelId,
       total: 0,
-      byKind: {
-        param_drop: 0,
-        reasoning_downgrade: 0,
-        rate_limit_429: 0,
-        schema_heal: 0,
-        truncation_retry: 0,
-        empty_response: 0,
-        non_retryable_failure: 0,
-      },
+      byKind: zeroByKind(), // WHY: one source for the kind list, so a new ModelEventKind cannot leave this literal stale
       degraded: false,
       reasons: [],
     };
@@ -475,30 +475,50 @@ export interface EnsembleRotationOptions {
   eventsPath?: string;
   /** Rotation-threshold overrides (window / min-consecutive / clock). */
   persistence?: PersistenceOptions;
+  /** P6b-fix3 B-1': restrict the slot read to a named profile (default: the
+   *  disk `active:` key). The caller that also WRITES must pass the profile it
+   *  writes — see defaultEnsembleReader. */
+  profileName?: string;
   /** Test seam — resolve the ensemble's configured slots. */
   settingsReader?: () => EnsembleReader;
 }
 
 /**
- * Default ensemble reader: the ACTIVE profile's resolved slots. Under `free_only`
- * the ensemble is served from the `free_models` pool rather than these three keys,
- * so resolveProfile's model/secondModel/thirdModel already reflect whichever source
- * is authoritative — we read the RESOLVED values, not the raw YAML, so the verdict
+ * Default ensemble reader: the NAMED profile's resolved slots (the disk `active:`
+ * key only when no name is supplied). Under `free_only` the ensemble is served
+ * from the `free_models` pool rather than these three keys, so resolveProfile's
+ * model/secondModel/thirdModel already reflect whichever source is
+ * authoritative — we read the RESOLVED values, not the raw YAML, so the verdict
  * is about the models actually being CALLED.
+ *
+ * P6b-fix3 B-1': `profileNameOverride` exists because this reader had no profile
+ * parameter at all while `--auto-replace --apply` writes the RESOLVED target
+ * (benchmark/index.ts). On the shipped config (`active: "free"`) that made
+ * `--auto-replace --apply --profile ens` decide WHETHER to rotate, and the
+ * re-pick ARITY (`topN = ensemble.slots.length`, which becomes the written
+ * profile's `mode`), from `profiles.free`'s slot health — then write both into
+ * `profiles.ens`. A verdict about one profile adopted into another. Same
+ * `profileNameOverride` shape `defaultSettingsReader` (the tool half) already
+ * has, so both halves of one command name one profile.
  */
-function defaultEnsembleReader(): EnsembleReader {
+function defaultEnsembleReader(profileNameOverride?: string): EnsembleReader {
   const settings = loadSettings();
-  if (!settings || !settings.active) return { profileName: "(unconfigured)", slots: [] };
-  const profile = settings.profiles[settings.active];
-  if (!profile) return { profileName: settings.active, slots: [] };
-  const resolved = resolveProfile(settings.active, profile);
+  // Mirrors defaultSettingsReader's S-5' rule: an override must not be discarded
+  // because the (retired, deletable) `active:` key is absent.
+  if (!settings || (profileNameOverride === undefined && !settings.active)) {
+    return { profileName: profileNameOverride ?? "(unconfigured)", slots: [] };
+  }
+  const profileName = profileNameOverride ?? (settings.active as string);
+  const profile = settings.profiles[profileName];
+  if (!profile) return { profileName, slots: [] };
+  const resolved = resolveProfile(profileName, profile);
   const bySlot: Record<EnsembleSlot, string> = {
     model: resolved.model,
     second_model: resolved.secondModel,
     third_model: resolved.thirdModel,
   };
   const slots = ENSEMBLE_SLOTS.filter((s) => !!bySlot[s]).map((s) => ({ slot: s, modelId: bySlot[s] }));
-  return { profileName: settings.active, slots };
+  return { profileName, slots };
 }
 
 /**
@@ -508,7 +528,11 @@ function defaultEnsembleReader(): EnsembleReader {
  * healthy: a brand-new or simply quiet model must NEVER trigger a rotation.
  */
 export function planEnsembleRotation(opts: EnsembleRotationOptions = {}): EnsembleRotationPlan {
-  const reader = (opts.settingsReader ?? defaultEnsembleReader)();
+  // P6b-fix3 B-1': the injected test seam keeps its zero-argument shape; only
+  // the default reader is told which profile to read.
+  const reader = opts.settingsReader
+    ? opts.settingsReader()
+    : defaultEnsembleReader(opts.profileName);
   const events = readModelEvents({ path: opts.eventsPath });
   const verdicts = assessModelPersistence(events, opts.persistence);
   const windowHours = opts.persistence?.windowHours ?? 24;

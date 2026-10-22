@@ -12,13 +12,22 @@ opt-in reader `_read_skillaudit_advisory_optin` in isolation. No real CPV is
 invoked — CPV's --json shape (`results[].{level,message,file,line}`, with the
 skillaudit tag `[skillaudit:<category> <rule_id>]` embedded in `message`) is
 reproduced as fixture JSON.
+
+The last section guards the increment-3 wiring: the scoped integrity bypass
+(PLUGIN_SKIP_GITHUB_INTEGRITY=1) rides on ONE environment snapshot shared by
+both CPV invocations, and EVERY gate in the repo names the SAME pinned CPV ref.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 _PUBLISH_PATH = Path(__file__).resolve().parent.parent / "scripts" / "publish.py"
 _spec = importlib.util.spec_from_file_location("publish", _PUBLISH_PATH)
@@ -245,3 +254,299 @@ def test_classify_preamble_with_real_finding_still_blocks() -> None:
     assert parse_ok is True
     assert len(advisory) == 1
     assert len(blocking) == 1
+
+
+
+# ── the increment-3 wiring: the shared env snapshot and the one pinned ref ──
+# Increment 3 added a scoped integrity bypass (PLUGIN_SKIP_GITHUB_INTEGRITY=1
+# on the two local CPV invocations) and pinned BOTH gates to one CPV ref.
+# These tests guard the properties that make the change honest: the two
+# invocations are the SAME validator run (one env snapshot, full environment
+# with the bypass set), the local gate and CI really name one ref, and the
+# bypass record reaches the ON-DISK report and not only stdout.
+
+# The SHA both gates are pinned to: CPV v5.22.0's release commit.
+_PINNED_CPV_SHA = "d5d6149735c4f0055bb3b83a56b28036079682ad"
+
+
+def _recording_run(calls: list[tuple[list[str], dict | None]]):
+    """A stand-in for subprocess.run that RECORDS each CPV invocation."""
+
+    def fake_run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+        calls.append((cmd, kwargs.get("env")))
+        if "--json" in cmd:
+            return subprocess.CompletedProcess(cmd, 2, _cpv_json([_skillaudit("MAJOR")]), "")
+        return subprocess.CompletedProcess(cmd, 1, "phase lines\n", "")
+
+    return fake_run
+
+
+def _opt_in(tmp_path: Path) -> None:
+    """Enable the skillaudit-advisory opt-in so the gate reaches run 2."""
+    (tmp_path / ".claude-plugin").mkdir(exist_ok=True)
+    (tmp_path / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"cpv": {"skillaudit_advisory": True}})
+    )
+
+
+def _tracked_entries(repo_root: Path) -> list[tuple[str, str]]:
+    """Every TRACKED entry in the repo, relative to the root, with its MODE.
+
+    Tracked, not merely present: an untracked path is not part of the
+    release, so it cannot be a gate. `git ls-files` is the enumeration, and
+    `git ls-files -s` adds the MODE: 120000 is a symlink, 160000 is a
+    gitlink (a submodule), 100644/100755 are ordinary files. The mode is
+    what lets the caller SEE the entries a plain read_text() would
+    silently skip.
+    """
+    out = subprocess.run(
+        ["git", "ls-files", "-s", "-z"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    entries: list[tuple[str, str]] = []
+    for record in out.stdout.split("\0"):
+        if not record:
+            continue
+        meta, _, rel = record.partition("\t")
+        if not rel:
+            continue
+        mode = meta.split(" ", 1)[0]
+        entries.append((rel, mode))
+    return entries
+
+
+def _yaml_env_blocks(workflow_src: str) -> list[str]:
+    """The TEXT of every `env:` mapping block in a workflow file.
+
+    A workflow's `env:` block is an indented mapping under a key named
+    `env`. This extracts the block's own lines so an assertion can search
+    INSIDE it — a COMMENT elsewhere in the file that happens to contain the
+    same text must not satisfy a flag assertion.
+    """
+    blocks: list[str] = []
+    lines = workflow_src.splitlines()
+    for idx, line in enumerate(lines):
+        if not re.match(r"^\s*env:\s*$", line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        body: list[str] = []
+        for follow in lines[idx + 1 :]:
+            if follow.strip() == "":
+                body.append(follow)
+                continue
+            follow_indent = len(follow) - len(follow.lstrip())
+            if follow_indent <= indent:
+                break
+            body.append(follow)
+        blocks.append("\n".join(body))
+    return blocks
+
+
+def test_cpv_invocations_share_one_env_snapshot_with_bypass_set(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The two CPV invocations share ONE env snapshot, bypass set, full env."""
+    calls: list[tuple[list[str], dict | None]] = []
+    monkeypatch.setattr(publish.subprocess, "run", _recording_run(calls))
+    # FAIL FAST if the interception seam ever breaks: if publish.py stopped
+    # calling subprocess.run, the REAL uvx validator would run over the
+    # network inside this unit test. Popen is the other way in, so block it.
+    def _no_popen(*args, **kwargs):
+        raise AssertionError("real subprocess.Popen invoked — the interception seam is broken")
+
+    monkeypatch.setattr(publish.subprocess, "Popen", _no_popen)
+    _opt_in(tmp_path)
+
+    verdict = publish.run_cpv_validation(tmp_path)
+
+    assert verdict is True, "the gate must return True when only skillaudit FPs remain"
+    cpv_calls = [c for c in calls if "cpv-remote-validate" in c[0]]
+    assert len(cpv_calls) == 2, cpv_calls
+    for cmd, env in cpv_calls:
+        assert env is not None
+        assert env.get("PLUGIN_SKIP_GITHUB_INTEGRITY") == "1", env
+        # A FULL environment, not a delta — independent of the ambient shell.
+        assert len(env) >= len(os.environ), "the child must get a FULL environment, not a delta"
+    assert cpv_calls[0][1] is cpv_calls[1][1], "both invocations share ONE env snapshot"
+
+
+def test_both_gates_pin_the_same_cpv_ref() -> None:
+    """EVERY gate in the repo names the SAME pinned CPV commit SHA.
+
+    The property under test is repo-wide, not two-file: a THIRD gate
+    anywhere in the repo could name a different ref and the two-file scan
+    would never see it. So the scan enumerates the TRACKED files (an
+    untracked path is not part of the release) and asserts that EVERY
+    literal CPV ref a GATE-bearing file carries is the one pinned SHA.
+
+    THE COST IS DELIBERATE: the scan reads EVERY tracked file on EVERY
+    test run, so it costs more than a two-file check. That is the price
+    of catching a third gate ANYWHERE — a scan of only the two known
+    files could never find the gate nobody thought of, which is the
+    whole point of the property.
+
+    The TRDD corpus under design/ is excluded from the "every ref" sweep:
+    those cards are PROSE that must record the pre-pin tag measurement
+    (the tag-pinned run this change replaced) and the upstream tag that
+    resolves to one of two commits — they document refs, they do not
+    install one, so a card naming a tag is not a drifting gate. The
+    two-file scan above still holds both real gates to the SHA.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    publish_src = (repo_root / "scripts" / "publish.py").read_text(encoding="utf-8")
+    workflow_src = (repo_root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    # Narrow to the LITERAL URL so a prose mention of another version in a
+    # comment cannot break the match.
+    pattern = r"git\+https://github\.com/Emasoft/claude-plugins-validation@([0-9a-f]{7,40}|[^\s'\"#]+)"
+    local_refs = set(re.findall(pattern, publish_src))
+    ci_refs = set(re.findall(pattern, workflow_src))
+    assert local_refs, "no CPV ref found in scripts/publish.py"
+    assert ci_refs, "no CPV ref found in .github/workflows/release.yml"
+    assert local_refs == ci_refs, (
+        f"the two gates name different refs — scripts/publish.py: {local_refs}, "
+        f".github/workflows/release.yml: {ci_refs}"
+    )
+    for ref in local_refs:
+        assert re.fullmatch(r"[0-9a-f]{40}", ref), (
+            f"the CPV ref must be a 40-hex COMMIT SHA, not a tag: {ref}"
+        )
+    assert local_refs == {_PINNED_CPV_SHA}, (
+        f"both gates must name the pinned CPV SHA {_PINNED_CPV_SHA}, found {local_refs}"
+    )
+
+    # REPO-WIDE: every tracked, gate-bearing file that names the CPV URL
+    # must name the SAME SHA. A third gate anywhere in the repo is caught
+    # here; the TRDD corpus (design/) is prose, not a gate — see the
+    # docstring.
+    url = "git+https://github.com/Emasoft/claude-plugins-validation@"
+    offenders: list[str] = []
+    scanned: list[str] = []
+    # TRACKED symlinks and gitlinks are the scan's BLIND SPOT: read_text()
+    # on a symlink FOLLOWS the link (reading outside the repo, or raising
+    # OSError on a broken link) and on a gitlink it raises IsADirectoryError
+    # (an OSError subclass). Either way the entry is silently skipped — so
+    # a CPV gate living inside one would never be seen. Enumerate them
+    # EXPLICITLY and make the blind spot a VISIBLE failure instead of a
+    # silent pass.
+    unscannable: list[str] = []
+    for rel, mode in _tracked_entries(repo_root):
+        if mode in ("120000", "160000"):
+            unscannable.append(f"{rel} (mode {mode})")
+            continue
+        if rel.startswith("design/"):
+            continue  # prose that documents refs, not a gate that installs one
+        path = repo_root / rel
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue  # not a text file — nothing to scan
+        if url not in text:
+            continue
+        scanned.append(rel)
+        for ref in re.findall(pattern, text):
+            if ref != _PINNED_CPV_SHA:
+                offenders.append(f"{rel}: {ref}")
+    assert "scripts/publish.py" in scanned, scanned
+    assert ".github/workflows/release.yml" in scanned, scanned
+    assert not offenders, (
+        "these tracked files name a CPV ref other than the pinned SHA "
+        f"{_PINNED_CPV_SHA}: {offenders}"
+    )
+    assert not unscannable, (
+        "this repo tracks SYMLINKS or GITLINKS that the repo-wide scan "
+        "cannot see into (git ls-files -s modes 120000/160000): "
+        f"{unscannable}. The scan cannot read a CPV gate inside one, so a "
+        "human must check each by hand. Add an explicit check here, or "
+        "remove the entry, before shipping a gate that claims to be "
+        "repo-wide."
+    )
+
+
+def test_ci_workflow_sets_the_integrity_bypass_flag() -> None:
+    """CI sets PLUGIN_SKIP_GITHUB_INTEGRITY=1, like the local gate does.
+
+    The local gate sets the bypass through `_cpv_env()` and CI sets it
+    through the job's `env:` block; nothing tied them together, so a future
+    edit could change one and not the other and the two gates would then
+    disagree about whether the integrity check ran. This assertion closes
+    that drift.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    workflow_src = (repo_root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    env_blocks = _yaml_env_blocks(workflow_src)
+    assert env_blocks, "no env: block found in the CI workflow"
+    flag = re.compile(
+        r"^\s*PLUGIN_SKIP_GITHUB_INTEGRITY:\s*[\"\x27]1[\"\x27]\s*$", re.MULTILINE
+    )
+    assert any(flag.search(block) for block in env_blocks), (
+        "the CI workflow must set PLUGIN_SKIP_GITHUB_INTEGRITY to \"1\" inside "
+        "an env: block — the same bypass the local gate sets via _cpv_env()"
+    )
+    # The local gate's own key must be the same string the CI sets.
+    assert publish.CPV_INTEGRITY_BYPASS == "PLUGIN_SKIP_GITHUB_INTEGRITY", (
+        f"the local gate's bypass key drifted: {publish.CPV_INTEGRITY_BYPASS}"
+    )
+
+
+def test_bypass_record_reaches_the_on_disk_report(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The bypass record lands in the on-disk report, flag exported or not.
+
+    Also asserts the GATE'S VERDICT and the SECOND artifact: the --json run's
+    payload is the evidence the verdict rests on, so it must reach disk too
+    (and must carry the same bypass note). Asserting the verdict here closes
+    the asymmetry with the sibling test in this file, which already did: a
+    change that broke the gate's DECISION would otherwise still pass this
+    test on file contents alone. The fake --json run returns a single MAJOR
+    skillaudit finding, which with the opt-in enabled classifies as
+    ADVISORY, so the gate returns True.
+    """
+    for already_exported in (False, True):
+        calls: list[tuple[list[str], dict | None]] = []
+        monkeypatch.setattr(publish.subprocess, "run", _recording_run(calls))
+        _opt_in(tmp_path)
+        if already_exported:
+            # The MAJOR 2 regression case: with the flag already in the
+            # operator's environment a delta-based print goes SILENT. The
+            # record must still be written.
+            monkeypatch.setenv("PLUGIN_SKIP_GITHUB_INTEGRITY", "1")
+
+        verdict = publish.run_cpv_validation(tmp_path)
+
+        assert verdict is True, (
+            "the gate must return True when only skillaudit FPs remain — the "
+            f"artifact must exist AND the decision must be recorded "
+            f"(flag already exported: {already_exported})"
+        )
+        report = publish._reports_dir(tmp_path) / "cpv.log"
+        assert report.exists(), f"the CPV report file was not written: {report}"
+        content = report.read_text(encoding="utf-8")
+        assert "CPV INTEGRITY SELF-CHECK DISABLED" in content, (
+            f"the bypass record is missing from {report} "
+            f"(flag already exported: {already_exported})"
+        )
+        assert "PLUGIN_SKIP_GITHUB_INTEGRITY=1" in content, (
+            f"the bypass record must name the EFFECTIVE value, not just the key: {report}"
+        )
+        # The --json run's payload — the evidence the verdict was decided on —
+        # must reach disk as its own artifact, and carry the same note.
+        findings = publish._reports_dir(tmp_path) / "cpv-findings.txt"
+        assert findings.exists(), (
+            f"the CPV findings artifact was not written: {findings} "
+            f"(flag already exported: {already_exported})"
+        )
+        findings_content = findings.read_text(encoding="utf-8")
+        assert "CPV INTEGRITY SELF-CHECK DISABLED" in findings_content, (
+            f"the bypass record is missing from {findings} "
+            f"(flag already exported: {already_exported})"
+        )
+        assert "PLUGIN_SKIP_GITHUB_INTEGRITY=1" in findings_content, (
+            f"the bypass record must name the EFFECTIVE value, not just the key: {findings}"
+        )
+        monkeypatch.delenv("PLUGIN_SKIP_GITHUB_INTEGRITY", raising=False)

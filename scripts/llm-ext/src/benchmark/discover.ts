@@ -9,18 +9,20 @@
  *   - top_provider.max_completion_tokens >= 64K tokens
  *   - supported_parameters includes `structured_outputs` OR `response_format`
  *   - supported_parameters includes `reasoning` OR `include_reasoning`
- *   - pricing.prompt     <  $1.0 / 1M tokens    (STRICTLY less — hard ceiling)
- *   - pricing.completion <  $1.0 / 1M tokens    (STRICTLY less — hard ceiling)
+ *   - pricing.prompt     <= the ensemble price ceiling (config.ts's
+ *     getEnsemblePriceCeiling, default $1.3/M, settings-overridable)
+ *   - pricing.completion <= the same ceiling
  *   - `:free` tier excluded by default (opt in with allowFree)
  *
- * The $1/M ceiling is intentionally aggressive: ensemble runs touch
- * three models per request, so a $2/M model triples the per-call cost.
- * Models like gemini-3-flash-preview that just clear the bar at $0.60
- * out remain in scope; gemini-3.1-flash-lite-preview at $1.50 out is
- * excluded by this filter even though it's "cheap" relative to flagship
- * frontier models. If the user wants such a model in the ensemble they
- * can still --include it explicitly — the filter only governs the
- * *auto-discovered* candidate pool.
+ * USER 2026-09-18 "one ceiling, <=": the auto-select cap is no longer a
+ * hard-coded $1.0/M distinct from the ensemble ceiling — DEFAULT_CRITERIA's
+ * maxInput/OutputDollarsPerMillion mirror config.ts's
+ * DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M (this module cannot import
+ * config.ts directly -- config -> registry -> discover would close a cycle,
+ * see the import comment below), and a model priced exactly at the ceiling
+ * is ADMITTED, not rejected. Callers that hold the real, settings-resolved
+ * ceiling (e.g. benchmark/index.ts's runPopulatePaidDefaultProfile) override
+ * these fields with the live value instead of relying on the default.
  *
  * Models that are manually requested via `includeIds` bypass the
  * cost/capability filters — useful for benchmarking the current
@@ -88,12 +90,17 @@ export const DEFAULT_CRITERIA: ModelCriteria = {
   category: "programming",
   minContextTokens: 128_000,
   minOutputTokens: 64_000,
-  // Hard caps for auto-selection: STRICTLY less than $1/M for both
-  // input AND output. Anything at or above is rejected from the
-  // candidate pool. The `qualify()` predicate enforces this with `<`
-  // (not `<=`) so $1.00 itself is out. Override only via --include.
-  maxInputDollarsPerMillion: 1.0,
-  maxOutputDollarsPerMillion: 1.0,
+  // USER 2026-09-18 "one ceiling, <=": no more hard-coded $1.00 distinct
+  // from the ensemble price ceiling. This default MIRRORS config.ts's
+  // DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M (1.3) -- kept as a literal, not
+  // an import, because config.ts -> registry.ts -> discover.ts would close
+  // an import cycle (see the leaf-module comment on the paid-switch.js
+  // import below). A caller holding the real settings-resolved ceiling
+  // (getEnsemblePriceCeiling) must override both fields with it; the
+  // `qualify()` predicate admits a price exactly AT the cap, not just below.
+  // Override only via --include, or by overriding these two fields.
+  maxInputDollarsPerMillion: 1.3,
+  maxOutputDollarsPerMillion: 1.3,
   requireStructuredOutputs: true,
   requireReasoning: true,
   allowFree: false,
@@ -107,24 +114,37 @@ export const DEFAULT_CRITERIA: ModelCriteria = {
 // binds EXPLICITLY-named models (`--code-task <id>`, `--include <id>`, an MCP
 // `models:[...]`), which bypass `qualify()` entirely. A model whose input OR
 // output price exceeds this is NEVER benchmarked — the run refuses before any
-// send. $1.25/M is the user's stated ceiling; it is deliberately a touch above
-// DEFAULT_CRITERIA's $1.0 auto-select cap so an explicit, slightly-pricier
-// choice is allowed, but a genuinely expensive model can never burn budget.
-export const MAX_BENCHMARK_PRICE_PER_M = 1.25;
+// send.
+//
+// USER 2026-09-18 "one ceiling, <=": this is no longer its own hard-coded
+// $1.25/M distinct from the ensemble price ceiling. `MAX_BENCHMARK_PRICE_PER_M`
+// below is only the DEFAULT (mirrors config.ts's
+// DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, 1.3 -- literal, not imported, same
+// cycle reason as DEFAULT_CRITERIA above); both `overBenchmarkPriceCap` and
+// `assertModelsUnderPriceCap` take an optional `ceiling` so a caller holding
+// the real settings-resolved ceiling can pass it, and a $2.00 custom ceiling
+// therefore admits a model up to $2.00, not just up to this default.
+export const MAX_BENCHMARK_PRICE_PER_M = 1.3;
 
-/** True when a model's input OR output price exceeds the global benchmark cap.
- *  Pure + structural (no QualifiedModel dependency) so every candidate path —
- *  discovered or explicit — can gate on it. `> cap` (not `>=`): $1.25 itself is
- *  allowed, matching the user's "must be ≤ $1.25/1M". A non-finite price
- *  (unknown / unpriced) is treated as OVER the cap: we never benchmark a paid
- *  model whose cost we cannot bound. */
-export function overBenchmarkPriceCap(m: {
-  inputDollarsPerMillion: number;
-  outputDollarsPerMillion: number;
-}): boolean {
+/** True when a model's input OR output price exceeds the benchmark cap (the
+ *  configurable ensemble price ceiling; MAX_BENCHMARK_PRICE_PER_M when the
+ *  caller has no settings-resolved value to pass). Pure + structural (no
+ *  QualifiedModel dependency) so every candidate path — discovered or
+ *  explicit — can gate on it. `> ceiling` (not `>=`): the ceiling itself is
+ *  allowed, matching the user's "each price must be under $1.3" ("under"
+ *  resolved to <=, USER 2026-09-18). A non-finite price (unknown / unpriced)
+ *  is treated as OVER the cap: we never benchmark a paid model whose cost we
+ *  cannot bound. */
+export function overBenchmarkPriceCap(
+  m: {
+    inputDollarsPerMillion: number;
+    outputDollarsPerMillion: number;
+  },
+  ceiling: number = MAX_BENCHMARK_PRICE_PER_M,
+): boolean {
   const { inputDollarsPerMillion: i, outputDollarsPerMillion: o } = m;
   if (!Number.isFinite(i) || !Number.isFinite(o)) return true;
-  return i > MAX_BENCHMARK_PRICE_PER_M || o > MAX_BENCHMARK_PRICE_PER_M;
+  return i > ceiling || o > ceiling;
 }
 
 export interface QualifiedModel {
@@ -196,21 +216,30 @@ export async function fetchProgrammingModels(category?: string): Promise<OpenRou
 /**
  * Apply the criteria to a raw model list and return only the qualifying
  * entries, decorated with the parsed numeric fields.
+ *
+ * D0 (TRDD-AL8GIZYA, plan item 2a): `ceiling` MUST be threaded through from
+ * every settings-aware caller. Before D0 this backstop always fell back to
+ * the literal MAX_BENCHMARK_PRICE_PER_M, so raising
+ * profiles.paid.selection.price_ceiling_usd_per_million above the default
+ * silently had NO effect on auto-discovered candidates — this backstop kept
+ * rejecting them at the old literal regardless of the caller's own criteria.
  */
 export function filterModels(
   models: readonly OpenRouterModel[],
   criteria: ModelCriteria = DEFAULT_CRITERIA,
+  ceiling: number = MAX_BENCHMARK_PRICE_PER_M,
 ): QualifiedModel[] {
   const out: QualifiedModel[] = [];
   for (const m of models) {
     const q = qualify(m, criteria);
     // Global price-cap backstop on DISCOVERED candidates: even if a per-tool
-    // ModelCriteria set a cost gate above $1.25/M, no auto-discovered model over
-    // the global cap is ever benchmarked. Silent here (the user never named these
-    // — they were discovered); explicit ids get a fail-fast instead (see
-    // assertModelsUnderPriceCap). qualify() already dropped anything above the
-    // per-tool criteria caps, so this only bites when a criteria cap exceeds $1.25.
-    if (q && !overBenchmarkPriceCap(q)) out.push(q);
+    // ModelCriteria set a cost gate above the ceiling, no auto-discovered model
+    // over the resolved, settings-aware ceiling is ever benchmarked. Silent here
+    // (the user never named these — they were discovered); explicit ids get a
+    // fail-fast instead (see assertModelsUnderPriceCap). qualify() already
+    // dropped anything above the per-tool criteria caps, so this only bites when
+    // a criteria cap exceeds the resolved ceiling.
+    if (q && !overBenchmarkPriceCap(q, ceiling)) out.push(q);
   }
   return out;
 }
@@ -338,8 +367,11 @@ export function assertPaidBenchmarkAllowed(models: readonly OverCapModel[]): voi
  * API call ($0 spent). Mirrors the `--bench-free-pool` non-$0 fail-fast. No-op
  * when every id is within the cap.
  */
-export function assertModelsUnderPriceCap(models: readonly OverCapModel[]): void {
-  const over = models.filter(overBenchmarkPriceCap);
+export function assertModelsUnderPriceCap(
+  models: readonly OverCapModel[],
+  ceiling: number = MAX_BENCHMARK_PRICE_PER_M,
+): void {
+  const over = models.filter((m) => overBenchmarkPriceCap(m, ceiling));
   if (over.length === 0) return;
   const list = over
     .map(
@@ -348,8 +380,8 @@ export function assertModelsUnderPriceCap(models: readonly OverCapModel[]): void
     )
     .join("; ");
   throw new Error(
-    `benchmark price cap: refusing to benchmark model(s) priced over $${MAX_BENCHMARK_PRICE_PER_M}/1M ` +
-      `(input AND output must be ≤ $${MAX_BENCHMARK_PRICE_PER_M}/1M): ${list}. ` +
+    `benchmark price cap: refusing to benchmark model(s) priced over $${ceiling}/1M ` +
+      `(input AND output must be ≤ $${ceiling}/1M): ${list}. ` +
       `No API call was made, $0 spent. Remove the over-cap id(s) or pick a cheaper model.`,
   );
 }
@@ -392,13 +424,13 @@ export function disqualifyReason(m: OpenRouterModel, criteria: ModelCriteria): s
 
   const inputDollarsPerMillion = promptPerToken * 1_000_000;
   const outputDollarsPerMillion = completionPerToken * 1_000_000;
-  // STRICTLY less than the cap (>= rejects), per the auto-selection rule
-  // recorded in the llm-externalizer-ensemble-autoselect skill.
-  if (inputDollarsPerMillion >= criteria.maxInputDollarsPerMillion) {
-    return `input $${inputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria.maxInputDollarsPerMillion.toFixed(3)}/M`;
+  // USER 2026-09-18 "one ceiling, <=": AT the cap is admitted, only ABOVE it
+  // rejects (`>`, not `>=`) -- matches config.ts's withinPriceCeiling.
+  if (inputDollarsPerMillion > criteria.maxInputDollarsPerMillion) {
+    return `input $${inputDollarsPerMillion.toFixed(3)}/M > cap $${criteria.maxInputDollarsPerMillion.toFixed(3)}/M`;
   }
-  if (outputDollarsPerMillion >= criteria.maxOutputDollarsPerMillion) {
-    return `output $${outputDollarsPerMillion.toFixed(3)}/M >= cap $${criteria.maxOutputDollarsPerMillion.toFixed(3)}/M`;
+  if (outputDollarsPerMillion > criteria.maxOutputDollarsPerMillion) {
+    return `output $${outputDollarsPerMillion.toFixed(3)}/M > cap $${criteria.maxOutputDollarsPerMillion.toFixed(3)}/M`;
   }
   return null;
 }
@@ -456,8 +488,17 @@ export function buildBenchmarkRoster(
   criteria: ModelCriteria,
   includeIds: readonly string[],
   baselineLookupPool: readonly OpenRouterModel[] = candidatePool,
+  // D0 (TRDD-AL8GIZYA): defaults to filterModels's own default
+  // (MAX_BENCHMARK_PRICE_PER_M) — REVIEW FINDING: this must stay independent
+  // of `criteria.maxInputDollarsPerMillion`. The backstop is deliberately a
+  // GLOBAL cap that catches a per-tool criteria set too loose, so a caller
+  // that wants the resolved, settings-aware ceiling enforced here must pass
+  // it explicitly (every settings-aware caller in this codebase does). A
+  // silent default of criteria's own price would change this function's
+  // contract for every future caller, not just the ones audited for D0.
+  ceiling?: number,
 ): { candidates: QualifiedModel[]; baselines: QualifiedModel[] } {
-  const candidates = filterModels(candidatePool, criteria);
+  const candidates = filterModels(candidatePool, criteria, ceiling);
   const inRoster = new Set(candidates.map((m) => m.id));
   // The docstring promises "no double-counting" — but a duplicate id in
   // `includeIds` (e.g. ["openai/gpt-5", "openai/gpt-5"]) used to push the

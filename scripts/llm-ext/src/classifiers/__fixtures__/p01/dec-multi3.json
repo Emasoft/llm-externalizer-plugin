@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"model\":\"typesafe/jev-1.13-20260917\",\"answers\":{\"is_bug\":{\"type\":\"noul\",\"noul\":0.94},\"team\":{\"type\":\"choice\",\"choice\":\"opt0\",\"probabilities\":{\"opt0\":0.58,\"opt1\":0.33,\"opt2\":0.09},\"confidence\":0.37},\"urgency\":{\"type\":\"score\",\"score\":1.91,\"legend\":{\"0\":\"level 0\",\"1\":\"level 1\",\"2\":\"level 2\"},\"probabilities\":{\"0\":0.01,\"1\":0.08,\"2\":0.91},\"confidence\":0.85}},\"usage\":{\"input_tokens\":418,\"output_tokens\":74,\"cost\":0.000017556},\"provider\":\"TypeSafe\"}"
+}

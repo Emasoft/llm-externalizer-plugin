@@ -45,7 +45,7 @@ For each target it:
    A flagged snippet may never be auto-classified `not_threat` at high
    confidence unless the model explicitly explains benign provenance.
 5. **Report** — aggregates per-item rows + a summary, writes JSON + markdown
-   to `<main-project-dir>/reports/security_scan/` (anchored on
+   to `<main-project-dir>/reports/llm-externalizer/security_scan/` (anchored on
    `$CLAUDE_PROJECT_DIR`, then cwd — never git), and returns only the
    paths + a one-line counter.
 
@@ -60,7 +60,7 @@ For each target it:
 | `model` | no | OpenRouter model id. Resolution order (TRDD-f45eeaa0): this `model` arg → `tool_models.security_scan` in your active settings.yaml profile → the built-in default `qwen/qwen-2.5-7b-instruct`. |
 | `git_diff_ref` | no | For `path_glob` targets, restrict to files changed since this git ref. Shape-validated against injection. |
 | `folder_root` | no | Root for relative `path_glob` / `git_diff_ref`. Default cwd. |
-| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/security_scan/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
+| `output_dir` | no | Report directory. Default `<main-project-dir>/reports/llm-externalizer/security_scan/` (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never git). |
 | `workers` | no | Concurrent judge calls. Default 8. |
 | `max_retries` | no | Per-call validation retries. Default 1. |
 

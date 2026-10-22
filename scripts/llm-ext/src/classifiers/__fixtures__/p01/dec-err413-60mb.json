@@ -1,0 +1,7 @@
+{
+ "status": 413,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"error\":{\"message\":\"Request body of 60000122 bytes exceeds the maximum allowed size of 52428800 bytes\",\"code\":413}}"
+}

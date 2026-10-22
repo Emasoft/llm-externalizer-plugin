@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"model\":\"typesafe/jev-1.13-20260917\",\"answers\":{\"q\":{\"type\":\"noul\",\"noul\":1}},\"usage\":{\"input_tokens\":30275,\"output_tokens\":20,\"cost\":0.00127155},\"provider\":\"TypeSafe\"}"
+}

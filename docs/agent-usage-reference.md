@@ -57,8 +57,9 @@ in other batches.
 **Ensemble vs free/local:**
 - **Ensemble mode** (`remote-ensemble`) — each file is reviewed by **3 different
   LLMs** in parallel, so every file receives **3 distinct responses**.
-- **Free mode** (`free: true`, Nemotron 120B free tier) and **local mode** (LM
-  Studio, Ollama, etc.) — each file receives **1 response** from a single model.
+- **Free mode** (`free: true` — the selected profile's own first `:free`
+  model) and **local mode** (LM Studio, Ollama, etc.) — each file receives
+  **1 response** from a single model.
 
 **If you need cross-file analysis across the whole codebase** (e.g. "find
 duplicate function declarations", "does this feature exist anywhere in the
@@ -118,7 +119,7 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 > flags). It is not the CLI surface for `assess_model` / `check_model_health` /
 > `discover_new_models` / the two per-tool benchmarks above — those are plain
 > `llm-ext <command>` subcommands.
-| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports/auto-replace/` + returns its path; NEVER writes settings (`llm-ext` cannot self-rewrite its config). Adopt by hand-editing `~/.llm-externalizer/settings.yaml` with the recommended model id, then `llm-ext reset` — configuration stays user-only. |
+| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports/llm-externalizer/auto-replace/` + returns its path; NEVER writes settings (`llm-ext` cannot self-rewrite its config). Adopt by hand-editing `~/.llm-externalizer/settings.yaml` with the recommended model id, then `llm-ext reset` — configuration stays user-only. |
 
 ### Per-tool model selection (`tool_models`)
 
@@ -232,9 +233,10 @@ defining a complete LLM backend setup.
 | `llamacpp-local` | OpenAI-compatible | `http://localhost:8080` | (none) |
 | `generic-local` | OpenAI-compatible | (url required) | `$LM_API_TOKEN` |
 | `openrouter-remote` | OpenRouter API | `https://openrouter.ai/api` | `$OPENROUTER_API_KEY` |
+| `chat-b-ai-remote` | OpenAI-compatible | `https://api.b.ai` | `$BAI_API_KEY` |
 
 All local backends must support structured output (`response_format:
-json_schema`). Only OpenRouter is supported for remote.
+json_schema`). OpenRouter and chat.b.ai are supported for remote.
 
 ### Auth — auto-detected from environment
 Auth is **automatic** when env vars are set. Each `llm-ext` invocation resolves
@@ -249,6 +251,7 @@ rc / the environment the calling process (e.g. Claude Code's Bash tool) starts
 |---------|---------|
 | `LM_API_TOKEN` | `lmstudio-local`, `generic-local` presets |
 | `OPENROUTER_API_KEY` | `openrouter-remote` preset |
+| `BAI_API_KEY` | `chat-b-ai-remote` preset |
 | `VLLM_API_KEY` | `vllm-local` preset |
 
 Profile fields `api_key` / `api_token` can override the default env var with
@@ -278,11 +281,13 @@ to look at.
 1. **Inspect** — run `llm-ext get-settings` for a read-only copy's path, or open
    `~/.llm-externalizer/settings.yaml` directly. (Back it up first: a YAML
    indent typo breaks *every* profile, not just the one you changed.)
-2. **Edit** the real file. Two top-level keys: `active` (string) and `profiles`
-   (map). Each profile needs 3 required fields:
+2. **Edit** the real file. Top-level key `profiles` (map); `active:` is a
+   single line naming the default profile (precedence: `--profile <name>` >
+   `active: <name>` > built-in `free`). Each profile needs 3 required fields:
 
    ```yaml
-   active: my-profile-name       # must match a key under profiles:
+   # active: <profile-name>  — the default profile when --profile is omitted;
+   # a fresh install writes `active: free`
 
    profiles:
      my-profile-name:
@@ -304,9 +309,10 @@ to look at.
    `settings.yaml` from disk. Run `llm-ext reset` only to also purge caches.
 5. **Verify** with `llm-ext discover`.
 
-**Change model** — edit the `model:` field. **Switch active profile** — edit the
-top-level `active:` line. **Remove a profile** — delete its block (you cannot
-remove the one named by `active:`).
+**Change model** — edit the `model:` field. **Switch profile for a call** — pass
+`--profile <name>`; there is no persistent default switch. **Remove a profile**
+— delete its block (the built-in `free`/`paid` names cannot be removed; llm-ext
+regenerates them).
 
 **The file on disk IS the config.** Every profile you want to keep must be
 present — a missing profile is a deleted profile after reload.
@@ -315,7 +321,7 @@ present — a missing profile is a deleted profile after reload.
 - `active` must reference an existing profile key
 - `mode` must be `local`, `remote`, or `remote-ensemble`
 - `api` must be a valid preset name
-- `local` mode requires a `-local` preset; `remote`/`remote-ensemble` requires `openrouter-remote`
+- `local` mode requires a `-local` preset; `remote`/`remote-ensemble` requires `openrouter-remote` or `chat-b-ai-remote`
 - `remote-ensemble` requires `second_model`
 - Remote presets require a resolvable `api_key`
 - Numeric fields must be non-negative finite numbers
@@ -428,12 +434,14 @@ Custom output directory for reports. Default:
 `<main-project-dir>/reports/llm-externalizer/`. Must be an absolute path.
 
 ### `free` (boolean, all content tools)
-Use the free Nemotron 3 Super model (`nvidia/nemotron-3-super-120b-a12b:free`)
-instead of the ensemble. No cost, single model, 262K context. **LOW QUALITY**:
-this model has significantly lower intelligence than the ensemble models —
-expect more false positives, missed bugs, and shallow analysis. Use only for
-quick rough checks on non-critical code. **WARNING**: prompts are logged by the
-provider — do not use with sensitive/proprietary code.
+Use the selected profile's own first `:free` model in its chain, instead of
+the ensemble. No cost, single model. Fails with an error if the selected
+profile has no `:free` model (use `--profile free`, or add a `:free` model to
+this profile). **LOW QUALITY**: a free model has significantly lower
+intelligence than the ensemble models — expect more false positives, missed
+bugs, and shallow analysis. Use only for quick rough checks on non-critical
+code. **WARNING**: prompts are logged by the provider — do not use with
+sensitive/proprietary code.
 
 ### `temperature`
 Fixed at 0.1 for all models. Not configurable.

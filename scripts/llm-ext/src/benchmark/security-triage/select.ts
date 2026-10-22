@@ -32,9 +32,12 @@ import type { TriageScore } from "./score.js";
  * Per-tool requirements for the security_scan triage path. Differs from the
  * keyword-ensemble DEFAULT_CRITERIA: triage snippets are small and the verdict
  * output is ~200 bytes, so it needs structured output but neither a 128K context
- * nor 64K completion nor reasoning. The cost ceiling (< $1/M in AND out) is
- * inherited unchanged. This is exactly the "each tool has its own requirements"
- * the user asked for; #97 extracts a registry of these.
+ * nor 64K completion nor reasoning. The cost ceiling (DEFAULT_CRITERIA's
+ * DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M mirror, input AND output each <=)
+ * is inherited unchanged; the orchestrator (index.ts) overrides it per-call
+ * with the resolved, settings-aware ceiling before discovery (D0, TRDD-AL8GIZYA)
+ * — this constant is stale otherwise. This is exactly the "each tool has its
+ * own requirements" the user asked for; #97 extracts a registry of these.
  */
 export const SECURITY_TRIAGE_CRITERIA: ModelCriteria = {
   category: DEFAULT_CRITERIA.category,

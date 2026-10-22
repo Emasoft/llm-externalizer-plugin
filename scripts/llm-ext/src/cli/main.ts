@@ -19,18 +19,22 @@
  *            was malformed.
  */
 
+// WHY a lazy import and not a static one: loading ../index.js reads settings.yaml and may write it (default file, migration) at import time. `classify --help`, its typo errors and the other help paths of a classify command must touch no settings file (C4-03), so the engine is loaded only once a command is actually going to run.
+const loadEngine = () => import("../index.js");
 import {
-  boot,
-  buildEstimateDeps,
-  dispatchCallTool,
-  limitsBlock,
-  overrideActiveProfile,
-  warmEstimatePricing,
-  writeBootBanner,
-} from "../index.js";
+  CLI_TOOLS_WITHOUT_RESOLVED_PROFILE,
+  DEFAULT_PROFILE_NAME,
+  effectiveProfileName,
+  shouldFailProfileSelection,
+  type ProfileType,
+} from "../config.js";
+import { describeAcceptedTypes, profileSelectionRefusal } from "../profile-accept.js";
+import { selectedChatProfileErrors } from "../classifiers/profile-checks.js";
 import { estimateToolRun, renderEstimate } from "../estimate.js";
 import { buildTools } from "../tools/definitions.js";
-import { GROUPS, isGroupName, resolveInvocation, suggestCommand } from "./launcher.js";
+import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, isGroupName, resolveInvocation, runClassifyCommand, suggestCommand } from "./launcher.js";
+import { readFileSync } from "node:fs";
+import type { GlobalFetch } from "../classifiers/l0/transport.js";
 
 /**
  * The published version, and the anchor `scripts/publish.py` rewrites on every
@@ -50,6 +54,9 @@ const VERSION = "13.6.0";
 interface JsonSchemaProp {
   type?: string;
   description?: string;
+  default?: number;
+  minimum?: number;
+  maximum?: number;
   items?: JsonSchemaProp;
   oneOf?: JsonSchemaProp[];
 }
@@ -57,6 +64,7 @@ interface JsonSchemaProp {
 interface ToolDef {
   name: string;
   description: string;
+  acceptedProfileTypes: readonly ProfileType[];
   inputSchema?: {
     type?: string;
     properties?: Record<string, JsonSchemaProp>;
@@ -202,7 +210,14 @@ interface ParsedArgs {
   quiet: boolean;
 }
 
-function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
+/**
+ * `invocation` is the form the user actually typed (`scout run` when reached
+ * through a group, the flat name otherwise). Errors quote it for the same
+ * reason `--help` does: telling someone who typed `llm-ext scout run` that
+ * "'mass-scout' requires --db_path" names a command they did not run and
+ * re-exposes the internal name the grouped surface exists to hide.
+ */
+function parseFlags(argv: string[], tool: ToolDef, invocation: string): ParsedArgs {
   const props = tool.inputSchema?.properties ?? {};
   const out: Record<string, unknown> = {};
   let quiet = false;
@@ -235,8 +250,8 @@ function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
     const prop = props[key];
     if (!prop) {
       die(
-        `unknown flag --${flag} for '${toKebab(tool.name)}'. ` +
-          `Run 'llm-ext ${toKebab(tool.name)} --help' to see its parameters.`,
+        `unknown flag --${flag} for '${invocation}'. ` +
+          `Run 'llm-ext ${invocation} --help' to see its parameters.`,
       );
     }
 
@@ -266,7 +281,7 @@ function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
   const missing = (tool.inputSchema?.required ?? []).filter((r) => !(r in out));
   if (missing.length > 0) {
     die(
-      `'${toKebab(tool.name)}' requires ${missing.map((m) => `--${m}`).join(", ")}`,
+      `'${invocation}' requires ${missing.map((m) => `--${m}`).join(", ")}`,
     );
   }
 
@@ -277,7 +292,78 @@ function parseFlags(argv: string[], tool: ToolDef): ParsedArgs {
 
 function firstLine(text: string): string {
   const line = text.split("\n").find((l) => l.trim().length > 0) ?? "";
-  return line.length > 96 ? `${line.slice(0, 93)}...` : line;
+  if (line.length <= 96) return line;
+  // Cut at a WORD boundary. A blind slice(0,93) ends mid-word ("Filter..."),
+  // which reads as a rendering glitch rather than as an abbreviation. Fall
+  // back to the hard slice when the first 93 chars contain no space at all.
+  const cut = line.slice(0, 93);
+  const lastSpace = cut.lastIndexOf(" ");
+  return `${(lastSpace > 40 ? cut.slice(0, lastSpace) : cut).trimEnd()}...`;
+}
+
+/**
+ * Placeholder shown for a group action's positional argument.
+ *
+ * Keyed by the `positional` flag name in GROUPS, so an example is DERIVED from
+ * the same table that decides what the positional actually writes to — it
+ * cannot drift out of sync the way a hand-written per-command example does.
+ * A positional this map does not know still renders (`<name>`), it just reads
+ * less concretely; that is why the fallback exists rather than a throw.
+ */
+const EXAMPLE_ARG: Readonly<Record<string, string>> = {
+  file_path: "./notes.md",
+  folder_path: "./src",
+  input_file: "./notes.md",
+  input_files_paths: "./src/api.ts",
+  model: "z-ai/glm-5.2:free",
+  spec_file_path: "./spec.md",
+  transcript: "./session.jsonl",
+};
+
+/** The concrete example argument for a positional, or a readable placeholder. */
+function exampleArgFor(positional: string | undefined): string {
+  if (positional === undefined) return "";
+  return EXAMPLE_ARG[positional] ?? `<${positional}>`;
+}
+
+/**
+ * Would `llm-ext <invocation> <positional>` actually run?
+ *
+ * Only when every SCHEMA-required flag is the positional itself — otherwise the
+ * printed one-liner dies in parseFlags before reaching the tool. `llm-ext scout
+ * run` shipped as an "Example" while mass_scout requires four flags, so pasting
+ * it produced `'mass-scout' requires --db_path, --fields_file, --job_id,
+ * --source_root`. An example that cannot run is worse than no example.
+ *
+ * A few handlers refuse on a flag the SCHEMA does not mark required, so the
+ * schema check alone is not enough: `llm-ext scan folder ./src` passed it and
+ * still died with "FAILED: instructions or instructions_files_paths is
+ * required." Those tools are listed explicitly below rather than by
+ * re-implementing each handler's validation here: the list duplicates only the
+ * FACT that a requirement exists, not the validation itself.
+ *
+ * It is fail-SILENT in both directions and nothing warns you. A sixth handler
+ * that grows a requirement is not listed, so its example quietly breaks again;
+ * an entry whose handler drops its requirement suppresses a good example
+ * forever. The paired test in grouped-help-shape.test.ts only catches a listed
+ * tool LEAKING BACK into an example — it cannot catch either drift above.
+ * Adding a handler-level `required` check means adding a line here.
+ */
+const HANDLER_REQUIRES_BEYOND_SCHEMA: ReadonlySet<string> = new Set([
+  "chat", // src/index.ts — instructions | instructions_files_paths
+  "code_task", // src/code-task/core.ts — same pair
+  "scan_folder", // src/scan-folder/core.ts — same pair
+  "search_existing_implementations", // src/search-existing/core.ts — feature_description
+  // NOT check_against_specs: its handler demands spec_file_path, which IS its
+  // positional (GROUPS: check specs), so the schema check already covers it.
+  // Listing it here would suppress a perfectly good example.
+]);
+
+function exampleIsRunnable(tool: ToolDef, positional: string | undefined): boolean {
+  if (HANDLER_REQUIRES_BEYOND_SCHEMA.has(tool.name)) return false;
+  // WHY: a classify command needs a JSON input (--input or stdin) that no schema field marks required, so a bare one-liner would wait on stdin.
+  if (classifySpecFor(tool.name) !== undefined) return false;
+  return (tool.inputSchema?.required ?? []).every((r) => r === positional);
 }
 
 function printGlobalHelp(tools: ToolDef[]): void {
@@ -301,6 +387,18 @@ function printGlobalHelp(tools: ToolDef[]): void {
       `  ${group.padEnd(groupWidth)}  ${Object.keys(actions).join(", ")}\n`,
     );
   }
+  // Every line here is run before it is edited. `llm ask ./prompt.md --profile
+  // free` used to sit in this block and failed twice over: `chat` refuses
+  // without --instructions, and `free` is only present when settings.yaml was
+  // machine-generated — a hand-authored one has no such profile and the call
+  // dies with "unknown profile 'free'".
+  process.stdout.write(
+    "\nExamples:\n" +
+      "  llm-ext llm summarize ./notes.md --max_chars 500\n" +
+      '  llm-ext scan folder ./src --instructions "list the exported symbols"\n' +
+      "  llm-ext session compact ./session.jsonl -o /tmp\n" +
+      '  llm-ext llm ask ./src/api.ts --instructions "explain this file"\n',
+  );
   process.stdout.write(
     "\nReports are written to <project>/reports/llm-externalizer/ and the path " +
       "is printed on stdout.\n",
@@ -316,13 +414,38 @@ function printGlobalHelp(tools: ToolDef[]): void {
   }
 }
 
-function printGroupHelp(group: string): void {
+/**
+ * Per-group help.
+ *
+ * Lists each action with WHAT IT DOES, taken from the catalog description —
+ * the same source `--help --all` uses. It previously printed `action ->
+ * flat-command-name`, which exposed an internal name the grouped syntax does
+ * not even accept, and told the reader nothing about the action's purpose.
+ */
+function printGroupHelp(group: string, tools: ToolDef[]): void {
   const actions = GROUPS[group];
   process.stdout.write(`llm-ext ${group} <action>\n\nActions:\n`);
   const width = Math.max(...Object.keys(actions).map((a) => a.length));
   for (const [action, spec] of Object.entries(actions)) {
+    const tool = resolveCommand(spec.command, tools);
     process.stdout.write(
-      `  ${action.padEnd(width)}  -> ${toKebab(spec.command)}\n`,
+      // A blank cell would HIDE a group-table/catalog desync, while the
+      // action-help path die()s loudly on the identical condition. Same fault,
+      // same visibility.
+      `  ${action.padEnd(width)}  ${tool ? firstLine(tool.description) : "(missing from catalog — group table out of sync)"}\n`,
+    );
+  }
+  // One worked example, from the first action whose positional alone satisfies
+  // every required flag — so the line is one the reader can literally paste.
+  // Groups where no action qualifies (every action needs explicit flags) get no
+  // Example rather than a decorative one that fails.
+  const runnable = Object.entries(actions)
+    .map(([action, spec]) => ({ action, spec, tool: resolveCommand(spec.command, tools) }))
+    .find((e) => e.tool && exampleIsRunnable(e.tool, e.spec.positional));
+  if (runnable) {
+    const arg = exampleArgFor(runnable.spec.positional);
+    process.stdout.write(
+      `\nExample:\n  llm-ext ${group} ${runnable.action}${arg ? ` ${arg}` : ""}\n`,
     );
   }
   process.stdout.write(
@@ -384,10 +507,54 @@ const PROFILE_AWARE_TOOLS = new Set([
   "check_tool_replacements",
 ]);
 
-function printToolHelp(tool: ToolDef): void {
+/** The default and range of a numeric parameter that declares them (classify thresholds), else nothing. */
+function rangeNote(prop: JsonSchemaProp): string {
+  if (prop.default === undefined || prop.minimum === undefined || prop.maximum === undefined) return "";
+  return ` (default ${prop.default}, range ${prop.minimum}..${prop.maximum})`;
+}
+
+/**
+ * Per-action help.
+ *
+ * `inv` is the GROUPED invocation the user actually typed (`llm-ext llm
+ * summarize`). It is load-bearing, not decoration: without it this printed the
+ * flat catalog name (`llm-ext summarize`) as the header even when reached via
+ * a group — a usage line naming a command form the grouped syntax rejects. The
+ * flat path passes no `inv` and still legitimately shows the flat name, which
+ * is what that path accepts.
+ */
+function printToolHelp(
+  tool: ToolDef,
+  inv?: { group: string; action: string },
+): void {
   const props = tool.inputSchema?.properties ?? {};
   const required = new Set(tool.inputSchema?.required ?? []);
-  process.stdout.write(`llm-ext ${toKebab(tool.name)}\n\n${tool.description}\n`);
+  const invocation = inv ? `${inv.group} ${inv.action}` : toKebab(tool.name);
+  const positional = inv ? GROUPS[inv.group]?.[inv.action]?.positional : undefined;
+  process.stdout.write(`llm-ext ${invocation}\n\n${tool.description}\n`);
+  const note = classifyHelpNote(tool.name);
+  if (note !== undefined) process.stdout.write(`${note}\n`);
+  // Usage + example. The positional is otherwise INVISIBLE in help: the reader
+  // sees only `--input_file` and cannot tell the same value may be passed
+  // bare, which is how every doc and skill actually calls these commands.
+  const arg = exampleArgFor(positional);
+  process.stdout.write(
+    `\nUsage:\n  llm-ext ${invocation}` +
+      (positional ? ` [${positional}]` : "") +
+      " [--flag value ...]\n",
+  );
+  if (exampleIsRunnable(tool, positional)) {
+    process.stdout.write(
+      `\nExample:\n  llm-ext ${invocation}${arg ? ` ${arg}` : ""}\n`,
+    );
+  }
+  if (positional) {
+    process.stdout.write(
+      `  (the bare argument is written to --${positional})\n`,
+    );
+  }
+  // WHY printed for every command (not only profile-aware ones): these are the types the runtime check enforces, so the reader sees them before meeting a refusal.
+  process.stdout.write(`\nAccepted profile types: ${describeAcceptedTypes(tool.acceptedProfileTypes)}\n`);
   const keys = Object.keys(props);
   const showProfile = PROFILE_AWARE_TOOLS.has(tool.name);
   if (keys.length === 0 && !showProfile) {
@@ -400,13 +567,19 @@ function printToolHelp(tool: ToolDef): void {
     const prop = props[key];
     const tag = required.has(key) ? " (required)" : "";
     process.stdout.write(
-      `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}\n`,
+      `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}${rangeNote(prop)}\n`,
     );
   }
   if (showProfile) {
     process.stdout.write(
-      `  --${"profile".padEnd(width)}  [string] Use this settings profile for this invocation only ` +
-        "(built-in, or a key under `profiles:` in ~/.llm-externalizer/settings.yaml). " +
+      `  --${"profile".padEnd(width)}  [string] Selects the settings profile for this invocation only ` +
+        // WHY (TRDD-G6XT3AY9): state the precedence explicitly -- flag beats
+        // `active:`, `active:` beats the built-in default -- so a user who
+        // omits --profile knows WHY a given profile ran without re-deriving
+        // it from effectiveProfileName()'s source.
+        "(a key under `profiles:` in ~/.llm-externalizer/settings.yaml). " +
+        "When omitted, the `active:` key in settings.yaml decides, and " +
+        `'${DEFAULT_PROFILE_NAME}' is used when that is missing too. ` +
         "Never modifies settings.yaml. An unknown name fails fast and lists the available profiles.\n",
     );
   }
@@ -440,10 +613,37 @@ function extractProfileFlag(argv: string[]): { argv: string[]; profile?: string 
   return { argv };
 }
 
+async function readAllStdin(): Promise<Buffer> {
+  // WHY fail fast: with no --input and a terminal on stdin the command would wait for typing that never comes.
+  if (process.stdin.isTTY) throw new Error("no --input given and stdin is a terminal; pass --input <file.json>, pipe the JSON, or name files (- reads stdin)");
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  // WHY the raw Buffer (IN-01): the file reader sniffs NUL bytes and reports invalid UTF-8, which a decoded string has already lost; the JSON path decodes it.
+  return Buffer.concat(chunks);
+}
+
+/** First token that is not a global `--profile <name>` / `--profile=<name>` pair or a global boolean flag: the command word as the user typed it. */
+function leadingToken(argv: string[]): string | undefined {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--profile") { i++; continue; }
+    if (argv[i].startsWith("--profile=")) continue;
+    // WHY skip the global boolean flags: `llm-ext --quiet classify --help` must stay inert; a leading --quiet made the command word look like a non-classify one, so the engine loaded and the settings file was touched.
+    if (GLOBAL_BOOLEAN_FLAGS.has(argv[i])) continue;
+    return argv[i];
+  }
+  return undefined;
+}
+
+const isClassifyWord = (word: string | undefined): boolean =>
+  word === "classify" || (word !== undefined && classifySpecFor(word.replaceAll("-", "_")) !== undefined);
+
 async function main(): Promise<void> {
+  // WHY the engine is loaded HERE for every non-classify command: the static import it replaces loaded it before main() ran, so settings were read/created/migrated before any usage error (`--profile` with no value) or help. Only a classify command defers it (see loadEngine).
+  // WHY "" for a classify command's tool list: its descriptions carry no limits text, and limitsBlock() needs the engine.
+  let engine = isClassifyWord(leadingToken(process.argv.slice(2))) ? undefined : await loadEngine();
   const { argv, profile: profileOverride } = extractProfileFlag(process.argv.slice(2));
   // The catalog's descriptions are backend-dependent, so build it per run.
-  const tools = buildTools(limitsBlock()) as ToolDef[];
+  const tools = buildTools(engine ? engine.limitsBlock() : "") as ToolDef[];
 
   if (argv.length === 0 || argv[0] === "--help" || argv[0] === "-h") {
     printGlobalHelp(tools);
@@ -461,11 +661,15 @@ async function main(): Promise<void> {
   // unchanged flat path below untouched.
   let commandName: string;
   let rest: string[];
+  // Set only on the grouped path — the form the user typed, for error messages.
+  // `argv[0] argv[1]` IS that form: resolveInvocation only reaches "dispatch"
+  // after argv[1] resolved to a real action of the argv[0] group.
+  let groupedInvocation: string | undefined;
   if (isGroupName(argv[0])) {
     const resolved = resolveInvocation(argv, tools);
     switch (resolved.kind) {
       case "group-help":
-        printGroupHelp(resolved.group);
+        printGroupHelp(resolved.group, tools);
         return;
       case "action-help": {
         const actionTool = resolveCommand(resolved.command, tools);
@@ -479,7 +683,10 @@ async function main(): Promise<void> {
               `'${resolved.command}' — the group table is out of sync with the catalog.`,
           );
         }
-        printToolHelp(actionTool);
+        printToolHelp(actionTool, {
+          group: resolved.group,
+          action: resolved.action,
+        });
         return;
       }
       case "error": {
@@ -495,6 +702,7 @@ async function main(): Promise<void> {
       case "dispatch":
         commandName = resolved.command;
         rest = resolved.argv;
+        groupedInvocation = `${argv[0]} ${argv[1]}`;
         break;
     }
   } else {
@@ -526,12 +734,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  // WHY here: a classify command is parsed by the runner itself (kebab flags, `-o`, its own refusals), so the generic flag parser and the --estimate/--preview strip below must not see it; the runner refuses those two as unknown options.
+  const classifySpec = classifySpecFor(tool.name);
+
   // --estimate (task #187): dry-run the invocation and print the predicted
   // cost INSTEAD of dispatching. Stripped before parseFlags because it is a
   // global flag, not part of any tool's schema. The paid-mode rules/skills
   // tell agents to run this before every paid operation. Global boolean flags
   // stripped here MUST also be listed in GLOBAL_BOOLEAN_FLAGS (launcher.ts).
-  const estimateIdx = rest.indexOf("--estimate");
+  const estimateIdx = classifySpec ? -1 : rest.indexOf("--estimate");
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);
 
@@ -539,21 +750,82 @@ async function main(): Promise<void> {
   // candidate's verdict — included, or excluded WITH the reason — via the
   // same walker the real run uses. Composes with --estimate (selection +
   // price in one dry-run). Zero LLM sends either way.
-  const previewIdx = rest.indexOf("--preview");
+  const previewIdx = classifySpec ? -1 : rest.indexOf("--preview");
   const wantPreview = previewIdx !== -1;
   if (wantPreview) rest.splice(previewIdx, 1);
 
-  const { args, quiet } = parseFlags(rest, tool);
+  const { args, quiet } = classifySpec ? { args: {} as Record<string, unknown>, quiet: false } : parseFlags(rest, tool, groupedInvocation ?? toKebab(tool.name));
 
   // --profile <name>: apply BEFORE boot() so publishFreeState()/the boot
   // banner and every downstream getCurrentBackend()/activeResolved read
   // reflect the override for the whole invocation. Never mutates
   // settings.yaml — see overrideActiveProfile()'s doc comment in index.ts.
-  if (profileOverride !== undefined) {
-    const result = overrideActiveProfile(profileOverride);
-    if (!result.ok) die(result.error);
+  // WHY (TRDD-G6XT3AY9): precedence is --profile flag > `active:` in
+  // settings.yaml > the built-in default -- effectiveProfileName() is the
+  // one place that implements "active: ?? free", so this and every other
+  // reader (validateSettings, settings show/status) agree.
+  // WHY a snapshot here: overrideActiveProfile() below overwrites the live `active` with the selected name (index.ts applyNewSettings), so the PT-03 check must read the settings as loaded from disk.
+  engine ??= await loadEngine();
+  const { boot, buildEstimateDeps, dispatchCallTool, getActiveSettings, overrideActiveProfile, isScoutingOnlyTool, warmEstimatePricing, writeBootBanner } = engine;
+  const settingsAsLoaded = getActiveSettings();
+  // WHY (PT-05 follow-up): --profile on a scouting-only command names the SCOUTING profile mass scouting resolves its model from; a scouting profile is not a valid `active:`, so the active text profile is left alone and the name travels as the tool argument `profile`.
+  const scoutingOnly = isScoutingOnlyTool(tool.name);
+  // WHY (C4-03): a classify command takes a CLASSIFIER profile, which is never a valid `active:` (a text profile), so like a scouting command it leaves the active text profile alone; the name travels to the runner as its own --profile flag.
+  const activeOverride = scoutingOnly || classifySpec ? undefined : profileOverride;
+  if (scoutingOnly && profileOverride !== undefined) args.profile = profileOverride;
+  const effectiveProfile = activeOverride ?? effectiveProfileName(getActiveSettings());
+  // WHY skipped for classify: the text profile chain is not used by a decision, and a dangling `active:` must not stop a command that never reads it.
+  if (!classifySpec) {
+    const result = overrideActiveProfile(
+      effectiveProfile,
+      activeOverride !== undefined ? "flag" : "default",
+    );
+    // WHY (TRDD-G6XT3AY9 amendment): a dangling `active:` fails the
+    // invocation ONLY when it is what got selected (no --profile -- an
+    // explicit --profile typo always fails here) AND the tool actually needs
+    // a resolved profile. `settings show`/`settings status`/`discover`/
+    // `settings profile` fall through and run on whatever boot() resolved
+    // (null `activeResolved`, handled by each of them already) so the user
+    // can see and fix the broken key instead of the CLI dying before it
+    // even dispatches. shouldFailProfileSelection is exported from config.ts
+    // (not defined here) so the gate is unit-testable -- this file runs
+    // `main().catch()` at import and can never be imported by a test.
+    if (!result.ok && shouldFailProfileSelection(result.ok, tool.name, activeOverride !== undefined)) {
+      die(result.error);
+    }
   }
 
+  // WHY here, before boot() and every dispatch: PT-03 refuses a profile whose type the command does not accept before any model call can happen (E80, E81, E81i); the table is tool.acceptedProfileTypes (tools/definitions.ts).
+  // WHY not for classify: the runner applies the same check (profileSelectionRefusal) to `--profile`, else `active_classifier:`, and deliberately ignores `active:`; checking `active:` here refused the default invocation.
+  if (!classifySpec) {
+    const refusal = profileSelectionRefusal({
+      command: groupedInvocation ?? toKebab(tool.name),
+      accepted: tool.acceptedProfileTypes,
+      viewsSettings: CLI_TOOLS_WITHOUT_RESOLVED_PROFILE.has(tool.name),
+      profileFlag: profileOverride,
+      settings: settingsAsLoaded,
+    });
+    if (refusal !== undefined) die(refusal);
+  }
+
+  // C4-03: a classify command runs the one decision runner. What is and is not loaded: the engine (index.ts) IS loaded above, so settings.yaml is read/created/migrated and its messages go to stderr; boot() is NOT called (it only publishes the free-mode state and installs the usage rule, which a decision never reads); no estimate/preview, no tool dispatch. stdout carries only the envelope. process.exitCode, not process.exit, so stdout is flushed and the runner's code (0, 1, 3, 4, 5, Ctrl-C) reaches the shell unchanged.
+  if (classifySpec) {
+    process.exitCode = await runClassifyCommand(classifySpec, rest, profileOverride, {
+      settings: settingsAsLoaded,
+      fetch: globalThis.fetch as GlobalFetch,
+      readFile: (path) => readFileSync(path, "utf8"),
+      readStdin: readAllStdin,
+      stdout: (text) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`),
+      stderr: (line) => process.stderr.write(`${line}\n`),
+    });
+    return;
+  }
+
+  // WHY here, after the PT-03 type check and before boot(): a free, paid or scouting profile whose model is a decisions model cannot answer chat requests (PF-02). The guard reads the cached catalog only, so selecting a profile never touches the network; the classifier checks run in the classifier resolver.
+  {
+    const guard = await selectedChatProfileErrors(getActiveSettings(), profileOverride ?? effectiveProfile, tool.acceptedProfileTypes, globalThis.fetch);
+    if (guard.length > 0) die(guard.join("\n"));
+  }
   // boot() publishes the free-mode state; dispatchCallTool refuses without it.
   await boot();
 

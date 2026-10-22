@@ -64,6 +64,19 @@ export interface SecurityScanDeps {
   jobId?: string;
   /** Progress callback forwarded to the judge loop. */
   onProgress?: (done: number, total: number, message?: string) => void;
+  /**
+   * C4c (review of 21a2d20): REQUIRED, no module-global fallback. The prior
+   * `deps.freeOnly ?? getActiveFreeOnly()` let a caller silently inherit
+   * whatever the LAST reload published to the global, which is exactly the
+   * failure mode this review fixed in mass_scouting/cli.ts's
+   * runSecurityScanCli — a settings hiccup there used to leave freeOnly
+   * undefined and paper over it with this same fallback. The ONE production
+   * caller (mass_scouting/cli.ts's runSecurityScanCli) always resolves the
+   * active profile's cost-safety chokepoint (getActiveFreeOnly(), which
+   * already tracks the allow_paid_models master switch and --profile) and
+   * passes it explicitly; every test does the same.
+   */
+  freeOnly: boolean;
 }
 
 // ── Fallback pricing for unknown models ──────────────────────────────────
@@ -90,7 +103,7 @@ function err(text: string): SecurityScanRunResult {
 
 export async function runSecurityScan(
   rawInput: unknown,
-  deps: SecurityScanDeps = {},
+  deps: SecurityScanDeps,
 ): Promise<SecurityScanRunResult> {
   // 1. Validate (the only hard-error path — §3.7).
   const validation = validateInput(rawInput);
@@ -118,6 +131,13 @@ export async function runSecurityScan(
   // 2. Resolve API key. Missing key is a fail-safe scenario, NOT a hard error:
   //    we still produce a report where every item is the default verdict.
   const apiKey = deps.apiKey ?? process.env.OPENROUTER_API_KEY;
+  // C4c (review of 21a2d20): freeOnly is now REQUIRED on SecurityScanDeps — no
+  // more `?? getActiveFreeOnly()` fallback. That fallback was the same failure
+  // shape the review fixed in mass_scouting/cli.ts's runSecurityScanCli: a
+  // caller could silently inherit whichever profile the module-global last
+  // published to, instead of the value IT resolved. The one production caller
+  // always resolves it explicitly now, so this is a straight read, not a gate.
+  const freeOnly = deps.freeOnly;
   const pricing = resolvePricing(input.model, deps.pricing);
   const fetchImpl = deps.fetchImpl ?? realFetch;
   const jobId = deps.jobId ?? `security-scan-${Date.now()}`;
@@ -227,6 +247,7 @@ export async function runSecurityScan(
       {
         model: input.model,
         apiKey,
+        freeOnly,
         pricing,
         workers: input.workers,
         maxRetries: input.max_retries,

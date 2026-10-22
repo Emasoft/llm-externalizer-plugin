@@ -38,12 +38,14 @@ const MULTI_PROFILE_SETTINGS_YAML = [
   "    model: model-a",
   "    url: http://127.0.0.1:1",
   "    timeout: 5",
+  "    profile-type: local",
   "  local-b:",
   "    mode: local",
   "    api: generic-local",
   "    model: model-b",
   "    url: http://127.0.0.1:1",
   "    timeout: 5",
+  "    profile-type: local",
   "  remote-free:",
   "    mode: remote",
   "    api: openrouter-remote",
@@ -51,6 +53,7 @@ const MULTI_PROFILE_SETTINGS_YAML = [
   "    free_models:",
   "      - vendor/model-x:free",
   "      - vendor/model-y:free",
+  "    profile-type: free",
   "",
 ].join("\n");
 
@@ -64,10 +67,13 @@ interface RunResult {
 async function runCliWithSettings(
   settingsYaml: string,
   args: string[],
+  opts: { migrated?: boolean } = {},
 ): Promise<RunResult & { configDir: string; settingsPath: string }> {
   const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_settingsgrp_cfg_");
   const settingsPath = join(tmpConfigDir, "settings.yaml");
   writeFileSync(settingsPath, settingsYaml, "utf-8");
+  // The 14.1.0 migration is a one-time step of the first command after an upgrade (profile.test.ts "design" test); a test about what a COMMAND does to the file records it as already applied.
+  if (opts.migrated) writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added"] }), "utf-8");
   const outputDir = mkdtempSync("/tmp/__llm_ext_settingsgrp_out_");
 
   try {
@@ -75,18 +81,37 @@ async function runCliWithSettings(
       env: {
         ...process.env,
         LLM_EXT_CONFIG_DIR: tmpConfigDir,
-        LLM_OUTPUT_DIR: outputDir,
+        LLM_EXT_OUTPUT_DIR: outputDir,
         LLM_EXT_INSTALL_RULE: "0",
       },
-      timeout: 15_000,
+      // 60s, not 15s: this spawns a cold Node process running the real CLI, and
+      // the gate that runs it (publish.py) runs it while the machine is also
+      // type-checking, linting and building. A 15s budget failed there while
+      // passing every time in isolation. See c0a3b6f6 — the same fix, applied
+      // to the file that hit it first; these never received it.
+      timeout: 60_000,
       maxBuffer: 8 * 1024 * 1024,
     });
     return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0, configDir: tmpConfigDir, settingsPath };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; code?: number | null };
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      code?: number | null;
+      signal?: string | null;
+      killed?: boolean;
+    };
+    // A timeout kill sets `signal` and leaves `code` undefined, so the old
+    // `e.code ?? null` turned "we killed it after N seconds" into a bare
+    // `exitCode: null` and the assertion read "expected null to be +0" — a
+    // message that names neither the timeout nor the command. Say what happened.
+    const stderrText = (e.stderr ?? "").trim();
     return {
       stdout: (e.stdout ?? "").trim(),
-      stderr: (e.stderr ?? "").trim(),
+      stderr: e.signal
+        ? `${stderrText}\n[test harness] child killed by ${e.signal}` +
+          `${e.killed ? " (timeout)" : ""} — args: ${args.join(" ")}`
+        : stderrText,
       exitCode: e.code ?? null,
       configDir: tmpConfigDir,
       settingsPath,
@@ -123,12 +148,19 @@ describe("settings group replaces config (no backward-compat alias)", () => {
   });
 });
 
-describe("settings show — prints the ACTIVE profile's resolved settings", () => {
-  it("prints the active profile's fields to stdout (not just a file path)", async () => {
-    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, ["settings", "show"]);
+describe("settings show — prints the EFFECTIVE profile's resolved settings", () => {
+  it("prints the effective profile's fields to stdout (not just a file path)", async () => {
+    // P6 item 2/3: the effective profile is --profile, never the now-inert
+    // active: key — pass it explicitly to keep testing local-b's own fields.
+    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, [
+      "settings",
+      "show",
+      "--profile",
+      "local-b",
+    ]);
     tmpDirsToClean.push(result.configDir);
     expect(result.exitCode).toBe(0);
-    // local-b is 'active' in the fixture.
+    expect(result.stdout).toMatch(/Effective profile: local-b \(source: --profile\)/);
     expect(result.stdout).toMatch(/Profile: local-b \(ACTIVE\)/);
     expect(result.stdout).toMatch(/Model: model-b/);
     expect(result.stdout).toMatch(/Mode: local/);
@@ -136,8 +168,16 @@ describe("settings show — prints the ACTIVE profile's resolved settings", () =
     expect(result.stdout).toMatch(/settings_edit\.yaml/);
   });
 
-  it("never mutates settings.yaml on disk", async () => {
-    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, ["settings", "show"]);
+  it("never mutates an already-present STATIC profile's own section on disk", async () => {
+    // --profile local-b (a pre-existing STATIC profile) keeps this on the
+    // true read-only contract; the first-run creation of 'free'/'paid' when
+    // ABSENT (item 2) is a separate, already-tested, deliberate exception.
+    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, [
+      "settings",
+      "show",
+      "--profile",
+      "local-b",
+    ], { migrated: true });
     tmpDirsToClean.push(result.configDir);
     expect(result.exitCode).toBe(0);
     const after = readFileSync(result.settingsPath, "utf-8");
@@ -145,9 +185,14 @@ describe("settings show — prints the ACTIVE profile's resolved settings", () =
   });
 });
 
-describe("settings profiles — lists every profile, marks exactly one active", () => {
-  it("lists every profile from the fixture and marks exactly local-b active", async () => {
-    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, ["settings", "profiles"]);
+describe("settings profiles — lists every profile, marks exactly the effective one", () => {
+  it("lists every profile from the fixture and marks exactly local-b effective", async () => {
+    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, [
+      "settings",
+      "profiles",
+      "--profile",
+      "local-b",
+    ]);
     tmpDirsToClean.push(result.configDir);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toMatch(/local-a/);
@@ -165,8 +210,13 @@ describe("settings profiles — lists every profile, marks exactly one active", 
     expect(inactiveA).toMatch(/^ {2}/);
   });
 
-  it("never mutates settings.yaml on disk", async () => {
-    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, ["settings", "profiles"]);
+  it("never mutates settings.yaml on disk (STATIC profile, explicit --profile)", async () => {
+    const result = await runCliWithSettings(MULTI_PROFILE_SETTINGS_YAML, [
+      "settings",
+      "profiles",
+      "--profile",
+      "local-b",
+    ], { migrated: true });
     tmpDirsToClean.push(result.configDir);
     expect(result.exitCode).toBe(0);
     const after = readFileSync(result.settingsPath, "utf-8");
@@ -232,17 +282,15 @@ describe("settings profiles — machine-managed vs user, and unpopulated renderi
     "    free_models: []",
     "    model: placeholder/unpopulated-default-profile",
     "    api_key: $OPENROUTER_API_KEY",
-    // paid-ensemble is NOT free_only, so its unpopulated state is carried by the
+    // `paid` is NOT free_only, so its unpopulated state is carried by the
     // sentinel `model` itself. This is the profile that actually exercised the
     // bug: the old renderer printed the model slots verbatim, so the raw
     // `placeholder/...` id appeared in the listing. A free_only profile alone
     // would NOT have caught it — it rendered as "free_only (0 models)".
-    "  paid-ensemble:",
-    "    mode: remote-ensemble",
+    "  paid:",
+    "    mode: remote",
     "    api: openrouter-remote",
     "    model: placeholder/unpopulated-default-profile",
-    "    second_model: placeholder/unpopulated-default-profile",
-    "    third_model: placeholder/unpopulated-default-profile",
     "    api_key: $OPENROUTER_API_KEY",
     "  my-own:",
     "    mode: local",
@@ -258,7 +306,7 @@ describe("settings profiles — machine-managed vs user, and unpopulated renderi
     expect(text).toMatch(/not benchmarked yet/i);
   });
 
-  it("labels a machine-managed default but NOT a user profile — only the 5 machine-managed default profiles refresh themselves", async () => {
+  it("labels a machine-managed default but NOT a user profile — only the 2 generated profiles refresh themselves", async () => {
     const text = await listingFor(UNPOPULATED_DEFAULTS);
     const freeLine = text.split("\n").find((l) => l.includes("free —") || l.includes("free ["));
     const userLine = text.split("\n").find((l) => l.includes("my-own"));

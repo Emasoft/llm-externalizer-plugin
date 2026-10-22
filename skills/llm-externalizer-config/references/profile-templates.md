@@ -9,6 +9,7 @@
 - [Local generic](#local-generic-custom-url)
 - [Remote single model (OpenRouter)](#remote-single-model-openrouter)
 - [Remote single model (Claude)](#remote-single-model-claude)
+- [Remote single model (chat.b.ai)](#remote-single-model-chatbai)
 - [Remote ensemble](#remote-ensemble-three-models-in-parallel)
 - [Complete settings.yaml example](#complete-settingsyaml-example)
 
@@ -90,6 +91,16 @@ No auth needed.
     api_key: $OPENROUTER_API_KEY
 ```
 
+## Remote single model (chat.b.ai)
+
+```yaml
+  remote-chatbai:
+    mode: remote
+    api: chat-b-ai-remote
+    model: "glm-5.3-flash"
+    api_key: $BAI_API_KEY
+```
+
 ## Remote ensemble (three models in parallel)
 
 ```yaml
@@ -105,7 +116,8 @@ No auth needed.
 ## Complete settings.yaml example
 
 ```yaml
-active: remote-ensemble
+# pass --profile <name> per call (e.g. --profile remote-ensemble), or set
+# active: <name> in settings.yaml as the standing default; omit both to use free.
 
 profiles:
   local-lmstudio:

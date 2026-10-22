@@ -5,8 +5,9 @@
  * finding/verdict objects and asserts on the real string/structure produced.
  *
  * Coverage notes: writeReport (FS side-effects) and the report-dir default
- * (resolveProjectMainRoot) are intentionally NOT exercised here — they are I/O,
- * not pure logic. resolveReportDir's explicit-output_dir branches ARE covered.
+ * (defaultOutputDir, project-root.ts) are intentionally NOT exercised here —
+ * they are I/O, not pure logic. resolveReportDir's explicit-output_dir and
+ * mainRoot-override branches ARE covered.
  */
 
 import { describe, it, expect } from "vitest";
@@ -136,10 +137,14 @@ describe("isoTimestampLocal", () => {
 // ── resolveReportDir ───────────────────────────────────────────────────────
 
 describe("resolveReportDir", () => {
-  it("uses an explicit absolute output_dir verbatim, else <mainRoot>/reports/security_scan", () => {
+  it("uses an explicit absolute output_dir verbatim, else <mainRoot>/reports/llm-externalizer/security_scan", () => {
+    // Routed through defaultOutputDir() (project-root.ts) — the shared
+    // project-report-root resolver — so security_scan reports land under
+    // the SAME reports/llm-externalizer/ tree as every other llm-ext
+    // report (write-roots rule, 2026-09-18), not a bare reports/security_scan/.
     expect(resolveReportDir("/abs/out", "/root")).toBe("/abs/out");
-    expect(resolveReportDir(undefined, "/root")).toBe("/root/reports/security_scan");
-    expect(resolveReportDir("", "/root")).toBe("/root/reports/security_scan");
+    expect(resolveReportDir(undefined, "/root")).toBe("/root/reports/llm-externalizer/security_scan");
+    expect(resolveReportDir("", "/root")).toBe("/root/reports/llm-externalizer/security_scan");
   });
 });
 

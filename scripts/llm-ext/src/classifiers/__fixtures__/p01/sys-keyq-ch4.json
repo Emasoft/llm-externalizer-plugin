@@ -1,0 +1,7 @@
+{
+ "status": 400,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"error\":{\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_key\\\",\\n    \\\"origin\\\": \\\"record\\\",\\n    \\\"issues\\\": [\\n      {\\n        \\\"origin\\\": \\\"string\\\",\\n        \\\"code\\\": \\\"too_small\\\",\\n        \\\"minimum\\\": 1,\\n        \\\"inclusive\\\": true,\\n        \\\"path\\\": [],\\n        \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n      }\\n    ],\\n    \\\"path\\\": [\\n      \\\"questions\\\",\\n      \\\"\\\"\\n    ],\\n    \\\"message\\\": \\\"Invalid key in record\\\"\\n  }\\n]\",\"code\":400}}"
+}

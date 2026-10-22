@@ -1,8 +1,11 @@
-// Unit tests for model-select.ts — OpenRouter free-model eligibility filter
-// for session-summary. Pure function tests only; fetchCatalog (network IO) is
-// never exercised here.
-
+// Eligibility unit tests and persisted-exclusion integration through a real local catalog server.
 import { describe, it, expect } from "vitest";
+import { createServer } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { getCooldownStore } from "../free-rotation.js";
+import { GONE_EVICT_STRIKES, GONE_EVICT_TTL_MS, recordUnavailable, resetCooldownCacheForTests, resetRunUnusableForTests } from "../free-rotation.js";
+import { selectModels } from "./model-select.js";
 import {
   selectEligibleModels,
   DEFAULT_MIN_CONTEXT,
@@ -86,6 +89,62 @@ const SUBSTRING_TRAP: CatalogModel = {
 
 const CATALOG: CatalogModel[] = [NEMOTRON, LYRIA_PRO, PAID_BIG_CONTEXT, FREE_SMALL_CONTEXT];
 
+describe("selectModels persisted exclusions", () => {
+  it.each([false, true])("honors real persisted strikes with expired=%s", async (expired) => {
+    const previous = process.env.LLM_EXT_CONFIG_DIR;
+    const dir = mkdtempSync(join("/tmp", "llm-ext-selector-"));
+    const originalFetch = globalThis.fetch;
+    let catalog = [NEMOTRON, FREE_SMALL_CONTEXT, LYRIA_PRO, PAID_BIG_CONTEXT];
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ data: catalog }));
+    });
+    try {
+      process.env.LLM_EXT_CONFIG_DIR = dir;
+      resetCooldownCacheForTests();
+      resetRunUnusableForTests();
+      await new Promise<void>((resolve, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", resolve); });
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("missing local catalog address");
+      globalThis.fetch = (input, init) => {
+        if (input !== "https://openrouter.ai/api/v1/models") throw new Error("unexpected fetch URL");
+        return originalFetch(`http://127.0.0.1:${address.port}`, init);
+      };
+      const now = Date.now();
+      const at = expired ? now - GONE_EVICT_TTL_MS - 60_000 : now;
+      for (let i = 0; i < GONE_EVICT_STRIKES; i++) {
+        recordUnavailable(NEMOTRON.id, "API error 403: only available on agentic harnesses", at);
+        resetCooldownCacheForTests();
+        resetRunUnusableForTests();
+      }
+      recordUnavailable(FREE_SMALL_CONTEXT.id, "API error 403: only available on agentic harnesses", now);
+      recordUnavailable(LYRIA_PRO.id, "free-models-per-day limit reached", now);
+      resetCooldownCacheForTests();
+      resetRunUnusableForTests();
+      const persisted = getCooldownStore().goneStrikes?.[NEMOTRON.id];
+      expect(persisted?.strikes).toBeGreaterThanOrEqual(GONE_EVICT_STRIKES);
+      expect(persisted?.lastAt).toBe(at);
+      expect((await selectModels()).map((model) => model.id)).toEqual(expired
+        ? [LYRIA_PRO.id, NEMOTRON.id, FREE_SMALL_CONTEXT.id]
+        : [LYRIA_PRO.id, FREE_SMALL_CONTEXT.id]);
+      if (!expired) {
+        catalog = [NEMOTRON, PAID_BIG_CONTEXT];
+        await expect(selectModels()).rejects.toThrow("all otherwise eligible free models are excluded by persisted gone verdicts");
+      }
+    } finally {
+      globalThis.fetch = originalFetch;
+      try {
+        if (server.listening) await new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); });
+      } finally {
+        if (previous === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+        else process.env.LLM_EXT_CONFIG_DIR = previous;
+        resetCooldownCacheForTests();
+        resetRunUnusableForTests();
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+});
 describe("selectEligibleModels", () => {
   it("with no minContext, returns every eligible free model, biggest context first (no implicit floor)", () => {
     const result = selectEligibleModels(CATALOG);

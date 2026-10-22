@@ -30,6 +30,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { defaultOutputDir } from "../project-root.js";
 
 import {
   rankByQualityIndex,
@@ -66,12 +67,15 @@ import {
 } from "./budget.js";
 import type { BenchmarkWorkload } from "./workload-types.js";
 import type { FetchImpl } from "../security_scan/judge.js";
-import { setActiveFreeOnly } from "../config.js";
+import { setActiveFreeOnly, isDynamicProfileName } from "../config.js";
 
 import { describeWorkload as describeSecurityTriage } from "./security-triage/index.js";
 import { describeWorkload as describeSearchExisting } from "./search-existing/index.js";
 import { describeWorkload as describeCodeTask } from "./code-task/index.js";
 import { describeWorkload as describeScanFolder } from "./scan-folder/index.js";
+import { describeWorkload as describeCheckImports } from "./check-imports/bench-runner.js";
+import { describeWorkload as describeCompareFiles } from "./compare-files/bench-runner.js";
+import { describeWorkload as describeCheckReferences } from "./check-references/bench-runner.js";
 import { describeWorkload as describeCheckSpecs } from "./check-specs/index.js";
 import { describeWorkload as describeTextTool } from "./text-tools/index.js";
 
@@ -144,6 +148,14 @@ export type EnsembleSweepRunner = (args: {
   restrictToModels: boolean;
   fetchImpl: GlobalFetch;
   topN: number;
+  /**
+   * Row 92 fix-queue: THIS phase's own free_only (`isFree` in the loop below),
+   * threaded through explicitly so runner.ts's cost gate no longer has to read
+   * the module global — the global stays published for the tool benchmarks
+   * that still read it (out of scope here), but the keyword sweep is a
+   * separate call graph and now carries its own value end to end.
+   */
+  freeOnly: boolean;
   onProgress: (m: string) => void;
 }) => Promise<EnsembleSweepRun>;
 
@@ -180,7 +192,15 @@ export interface UpdateAllOptions {
   /** Ensemble slots to re-pick (the profile's current slot count). */
   ensembleTopN: number;
   force: boolean;
-  mainRoot: string;
+  /**
+   * Explicit report-root override. Optional (review of 43e3694, S5):
+   * writeReport()'s defaultOutputDir(mainRoot) treats ANY non-empty value
+   * here as an override that BYPASSES the LLM_EXT_OUTPUT_DIR env check — the
+   * real CLI (runUpdateAllPhase in index.ts) now leaves this unset so
+   * --update-all honours LLM_EXT_OUTPUT_DIR exactly like --auto-replace does;
+   * only a test that wants a fixed report root injects one directly.
+   */
+  mainRoot?: string;
   onProgress?: (m: string) => void;
 }
 
@@ -215,6 +235,9 @@ const WORKLOAD_DESCRIBERS: Record<string, () => BenchmarkWorkload> = {
   "search-existing": describeSearchExisting,
   "code-task": describeCodeTask,
   "scan-folder": describeScanFolder,
+  "check-imports": describeCheckImports,
+  "compare-files": describeCompareFiles,
+  "check-references": describeCheckReferences,
   "check-specs": describeCheckSpecs,
   "text-summarize": () => describeTextTool("summarize"),
   "text-topics": () => describeTextTool("topics"),
@@ -227,7 +250,10 @@ const WORKLOAD_DESCRIBERS: Record<string, () => BenchmarkWorkload> = {
  *
  * A tool carrying this id (today: `mass_scout`) IS benchmark-proven — the keyword sweep
  * is its golden dataset — but it has no separate sweep and no `tool_models` write: it is
- * served by whatever the ensemble resolves to. It therefore falls through the per-tool
+ * served by whatever the ensemble resolves to.
+ * (TRDD-FKAR9VPK D6: the mass-scout DISPATCH model now comes from the 'scouting'
+ * profile / scout-accuracy ledger — this slot is no longer the mass-scout dispatch
+ * head; it stays written by the paid maintainer.) It therefore falls through the per-tool
  * plan loop, and until this constant existed it fell out of the REPORT ENTIRELY: the
  * summary read "5 benchmark-proven + 5 requirement-gated" against an 11-tool registry,
  * and nobody could see that a tool was missing. A silently-omitted tool is the exact
@@ -284,6 +310,24 @@ export async function runUpdateAll(
 ): Promise<UpdateAllResult> {
   const progress = opts.onProgress ?? ((): void => {});
   const ledger = new SpendLedger(opts.budgetUsd);
+
+  // P6b-fix2 B-1: refuse a GENERATED target before anything is fetched, spent
+  // or written. This function writes settings THREE times (the ensemble, the
+  // free pool, each tool head), and pick.ts's writers now throw for a dynamic
+  // profile name — so without this the run wrote the ensemble, then died with
+  // a stack trace at the second writer, leaving settings.yaml half-updated.
+  // An aborted RESULT, not a throw: the CLI turns it into a clean exit 2 and
+  // still writes the report that says why.
+  if (isDynamicProfileName(opts.profileName)) {
+    return abortResult(
+      opts,
+      ledger,
+      0,
+      `--update-all refused: '${opts.profileName}' is a GENERATED dynamic profile — llm-ext owns that ` +
+        `section. Use 'llm-ext-benchmark --populate-default-profile ${opts.profileName}', or pass ` +
+        `--profile <name> to target a static profile. Nothing was written.`,
+    );
+  }
 
   // ── 1. DISCOVER ────────────────────────────────────────────────────────────
   progress("discover: fetching the live OpenRouter catalog…");
@@ -520,6 +564,7 @@ export async function runUpdateAll(
         restrictToModels: isFree,
         fetchImpl: budgetedGlobal,
         topN: opts.ensembleTopN,
+        freeOnly: isFree,
         onProgress: progress,
       });
     } catch (err) {
@@ -590,6 +635,9 @@ export async function runUpdateAll(
     // The ensemble-gated tools (mass_scout): benchmark-PROVEN by the keyword sweep that
     // just ran, but served by the ensemble default — no separate sweep, no tool_models
     // write. They get an explicit row so the report accounts for EVERY registered tool.
+    // (TRDD-FKAR9VPK D6: the mass-scout DISPATCH model comes from the 'scouting'
+    // profile / scout-accuracy ledger — this row's no-override note is about the
+    // ensemble sweep only, never the dispatch head.)
     for (const d of ensembleGatedTools()) {
       tools.push({
         tool: d.tool,
@@ -962,8 +1010,19 @@ export function renderUpdateAllReport(r: UpdateAllResult, opts: UpdateAllOptions
   return L.join("\n") + "\n";
 }
 
+/**
+ * The report directory writeReport() writes into. Exported (review of
+ * 43e3694, S4) so a unit test can prove the path nests under
+ * <root>/reports/llm-externalizer/update-all/ without spawning the CLI —
+ * the same direct-import pattern report-dir.test.ts uses for
+ * benchmarkSubReportDir.
+ */
+export function updateAllReportDir(mainRoot?: string): string {
+  return join(defaultOutputDir(mainRoot), "update-all");
+}
+
 function writeReport(r: UpdateAllResult, opts: UpdateAllOptions): string {
-  const path = join(opts.mainRoot, "reports", "update-all", `${stamp()}-update-all.md`);
+  const path = join(updateAllReportDir(opts.mainRoot), `${stamp()}-update-all.md`);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;

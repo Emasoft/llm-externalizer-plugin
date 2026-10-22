@@ -143,11 +143,15 @@ box once any one source is set.
    gated repos (Llama / Gemma / Mistral) run `hf auth login` first (free token).
 3. **Write a profile** in `~/.llm-externalizer/settings.yaml` (templates below),
    matching the preset + port to your runner.
-4. **Set `active:`** to your new profile name.
-5. **Reload** — nothing to restart: every `llm-ext` invocation is a fresh
+4. **Reload** — nothing to restart: every `llm-ext` invocation is a fresh
    process that re-reads `settings.yaml` from disk. Run `llm-ext reset` only to
    also purge the on-disk caches (model list, concurrency, LM Studio detection).
-6. **Verify** — `llm-ext discover` should show the profile with `service_health: ok`.
+5. **Verify** — `llm-ext discover --profile <your-profile-name>` should show the
+   profile with `service_health: ok`. Precedence for the default profile is
+   `--profile <name>` > `active: <name>` in settings.yaml > the built-in
+   `free` profile: pass `--profile <name>` on every call, set `active:
+   <your-profile-name>` to make it the standing default, or omit both to use
+   `free`.
 
 ---
 
@@ -157,10 +161,49 @@ Path: `~/.llm-externalizer/settings.yaml` (override the directory with
 `$LLM_EXT_CONFIG_DIR`). YAML, **not** JSON. Two top-level keys:
 
 ```yaml
-active: <profile-name>     # must match a key under profiles:
+# active: <profile-name>   # the default profile when --profile is omitted;
+                            # a fresh install writes `active: free`
 profiles:
   <profile-name>: { … }    # one block per profile
 ```
+
+`free`, `paid`, and `local` are three built-in **DYNAMIC** profiles: llm-ext owns
+their sections (the maintainer regenerates them as soon as a change is detected —
+new/removed/repriced models for `free`/`paid`, new or updated local endpoints for
+`local`). A command may spawn one background change check for its profile, at most
+once per minute; a detected change starts one background update, which finishes on
+its own; no check or update starts without a command. A dynamic profile whose whole
+validated list has failed, or has no model yet, prints "updating the profile due to
+changes" and waits for the update to finish -- if an update is already running in
+another process, the command waits for it to finish, at most 120 minutes (the update
+lock's limit), before continuing from the refreshed profile; if the refreshed
+profile also fails, it exits with the same error as a static profile. Precedence
+is `--profile <name>` > `active: <name>` > the built-in
+`free` profile. Every other profile name is **STATIC** — used exactly as written,
+never modified by llm-ext. See "Built-in dynamic profiles" in the README for the
+full behaviour.
+
+### Paid benchmark spend bounds
+
+The paid daily spend cap (`paid_benchmark_daily_cap_usd`, default `0.50`), the 6-hour
+floor between sweeps, the failure cooldown, and the lock over the generated
+sections all live under `LLM_EXT_CONFIG_DIR` — the `$0.50`/day bound is per config
+directory, not per machine or account.
+
+With `allow_paid_models: true`, **any** dispatch — even one made with `--profile free`
+— can spawn the paid benchmark in the background, bounded by that same daily cap,
+6-hour sweep floor, and failure cooldown; this is new, observable spend beyond what a
+`--profile paid` call by itself would cause.
+
+`allow_paid_models` applies to chat profiles only (`free`, `paid`, `local`, `scouting`). A classifier profile
+(`profile-type: classifier`, for the `classify` and `browse` commands) has no paid gate and no `allow_paid` field:
+classifier calls are billed by design, whatever `allow_paid_models` says, and the only spend cap is the opt-in
+`--max-budget=<usd>` flag of each run.
+
+A STATIC `free_only` profile no longer gets `benchmark-results.json` auto-populated at
+boot (the retired auto-bench mechanism used to do that); the benchmark-failure filter reads that
+file to exclude free models with a proven-failing benchmark verdict. Run
+`llm-ext-benchmark --profile <name> --bench-free-pool` for that profile to populate it.
 
 ### Modes
 | Mode | Behavior |
@@ -178,9 +221,10 @@ profiles:
 | `llamacpp-local` | OpenAI-compatible | `http://localhost:8080` | (none) |
 | `generic-local` | OpenAI-compatible | (set `url`) | `$LM_API_TOKEN` |
 | `openrouter-remote` | OpenRouter | `https://openrouter.ai/api` | `$OPENROUTER_API_KEY` |
+| `chat-b-ai-remote` | OpenAI-compatible | `https://api.b.ai` | `$BAI_API_KEY` |
 
-Local presets require `mode: local`; `openrouter-remote` requires `remote` or
-`remote-ensemble`. All local backends must support `response_format: json_schema`.
+Local presets require `mode: local`; `openrouter-remote` and `chat-b-ai-remote` require
+`remote` or `remote-ensemble`. All local backends must support `response_format: json_schema`.
 
 ### Profile fields
 | Field | Required | Description |
@@ -225,7 +269,6 @@ exported to every `llm-ext` invocation as `CLAUDE_PLUGIN_OPTION_OPENROUTER_API_K
 and mapped to `$OPENROUTER_API_KEY` automatically).
 
 ### Validation (checked at load / `reset`; a bad profile becomes unusable)
-- `active` references an existing profile key
 - `mode` ∈ {local, remote, remote-ensemble}
 - `api` is a valid preset; mode/preset must agree (local↔`-local`, remote↔openrouter)
 - `remote-ensemble` requires `second_model`
@@ -239,22 +282,29 @@ after reload. Back up before editing; one indent typo breaks every profile.
 | Variable | Purpose |
 |---|---|
 | `OPENROUTER_API_KEY` | OpenRouter auth (openrouter-remote) |
+| `BAI_API_KEY` | chat.b.ai auth (chat-b-ai-remote) |
 | `LM_API_TOKEN` | LM Studio / generic-local auth |
 | `VLLM_API_KEY` | vLLM auth |
 | `LLM_EXT_CONFIG_DIR` | Override settings dir (default `~/.llm-externalizer`) |
-| `LLM_OUTPUT_DIR` | Override report output dir (default `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim) |
-| `LLM_EXT_FREE_BELOW_USD` | OpenRouter balance (USD) below which the server auto-engages free mode for **every** tool (default `1.00`; non-finite/≤0 → `1.00`). See "B2. OpenRouter free-only ensemble" in the README. |
-| `LLM_EXT_FREE_MODEL_ID` | Single `:free` model for the `free: true` flag + the 402 single-retry (default `poolside/laguna-m.1:free`). A non-`:free` value is rejected; the ensemble paths use the rotating free pool. |
+| `LLM_EXT_OUTPUT_DIR` | Override report output dir (default `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim) |
+| `LLM_EXT_FREE_BELOW_USD` | No longer used — the automatic free mode on low balance is removed (14.1.0). A paid profile falls back only within its own pool; free is used only when explicitly selected with `--profile free` or `active: free`. |
+| `LLM_EXT_FREE_MODEL_ID` | No longer used — the `free: true` flag resolves to the selected profile's own first `:free` chain entry now, never a single hard-coded id (14.1.0, fix-queue 98(2)). |
 | `LLM_EXT_REASONING_EFFORT` | Reasoning effort for OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). Reasoning tokens are billed even though the trace is discarded; `mass_scout` / `cluster_synonyms` never reason. |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/`. |
+| `LLM_EXT_DEBUG` | Set to `1` or `true` (any other value, including empty and `0`, is off) to make `classify` print, to stderr, the stack of the FIRST unexpected (non-API) error of a run, which is otherwise reported only as a failed request ("internal error in this request (TypeError): ..."). The API key is redacted from it, but reply text that appears in an error message may not be. |
 | `LLM_EXT_DUMP_REQUESTS` | Cost-audit hook: set to a file path to append the exact wire payload (model + byte size + full JSON body) of every request, for prompt/file-inflation auditing. Off unless set; the file holds your prompt + file content — treat as sensitive. |
+| `LLM_EXT_CATALOG_TTL_MS` | How long the OpenRouter catalog snapshot is trusted before the `free`/`paid` maintainer re-checks it (default `600000` = 10 min). Replaces the retired reconcile-interval env var from 13.x. |
+| `LLM_EXT_DISABLE_AUTO_RECONCILE` | Set to `1` to turn off ALL dynamic maintenance of the `free`/`paid` profiles for this run (no availability/price re-checks, no background benchmarking) — the single opt-out for every mechanism in this section. |
+| `LLM_EXT_SETTINGS_LOCK_WAIT_MS` | Test-only knob: overrides how long a `settings.yaml` writer (the dynamic-profile maintainer, a benchmark run) waits for `settings.write.lock` before giving up. The production default (30 s) is unchanged; production code never sets this variable — leave it unset outside a test harness. |
+| `LLM_EXT_NO_PATH_SHIM` | Set to `1` to skip installing/refreshing the `~/.local/bin/llm-ext` wrapper. |
 
 ---
 
 ## Profile templates
 
 ```yaml
-active: remote-ensemble
+# pass --profile <name> per call (e.g. --profile remote-ensemble), or set
+# active: <name> in settings.yaml as the standing default; omit both to use free.
 
 profiles:
   # Local — Ollama
@@ -294,6 +344,13 @@ profiles:
     api: openrouter-remote
     model: "anthropic/claude-sonnet-4"
     api_key: $OPENROUTER_API_KEY
+
+  # Remote — chat.b.ai (free, OpenAI-compatible)
+  remote-chatbai:
+    mode: remote
+    api: chat-b-ai-remote
+    model: "glm-5.3-flash"
+    api_key: $BAI_API_KEY
 
   # Remote — free Nemotron (logs prompts; open-source code only)
   remote-free:

@@ -43,7 +43,12 @@ export type ModelEventKind =
   | "schema_heal" // a non-conforming JSON response had to be repaired
   | "truncation_retry" // a truncated response triggered a continuation retry
   | "empty_response" // the model returned an empty body
-  | "non_retryable_failure"; // a 4xx (non-429) / unrecoverable error for this model
+  | "non_retryable_failure" // a 4xx (non-429) / unrecoverable error for this model
+  // Catalog drift (DW-01): written by the decisions-catalog diff (DW-02), not by a failing call.
+  | "canonical_slug_change" // the model's canonical_slug moved
+  | "alias_target_change" // an alias (e.g. ~typesafe/jev-latest) now resolves to another build
+  | "price_change" // the catalog price changed
+  | "presence_change"; // the model appeared in or vanished from the catalog
 
 /** Every legal kind, for validation + exhaustive zero-initialisation. */
 export const MODEL_EVENT_KINDS: readonly ModelEventKind[] = [
@@ -54,7 +59,24 @@ export const MODEL_EVENT_KINDS: readonly ModelEventKind[] = [
   "truncation_retry",
   "empty_response",
   "non_retryable_failure",
+  "canonical_slug_change",
+  "alias_target_change",
+  "price_change",
+  "presence_change",
 ] as const;
+
+/**
+ * The kinds that describe the CATALOG changing, not the model misbehaving.
+ * WHY a separate list: health totals and degradation thresholds must never count
+ * them (a repriced model is not an unhealthy one), so readers filter on it.
+ */
+export const DRIFT_EVENT_KINDS: readonly ModelEventKind[] = [
+  "canonical_slug_change",
+  "alias_target_change",
+  "price_change",
+  "presence_change",
+] as const;
+const DRIFT_SET = new Set<string>(DRIFT_EVENT_KINDS);
 
 const KIND_SET = new Set<string>(MODEL_EVENT_KINDS);
 
@@ -83,25 +105,32 @@ function sanitizeField(s: string): string {
  * Append one model-health event. Best-effort: any failure (unwritable dir,
  * full disk, EACCES) is swallowed so logging can NEVER break the tool call.
  * POSIX O_APPEND makes a single sub-PIPE_BUF line write atomic across
- * processes.
+ * processes. Returns the event actually written (or null on failure) so a
+ * caller that also maintains an in-memory recent-events cache (free-
+ * rotation.ts's noteOwnModelEvent, P2 amendment item 3) can update it without
+ * re-reading the file — existing callers all ignored the old `void` return,
+ * so widening it is non-breaking.
  */
 export function appendModelEvent(
   model: string,
   kind: ModelEventKind,
   detail = "",
-): void {
+): ModelEvent | null {
   try {
     const safeModel = sanitizeField(String(model || "unknown"));
     let safeDetail = redactSecrets(String(detail ?? "")).redacted.replace(/[\r\n]+/g, " ").trim();
     if (safeDetail.length > MAX_DETAIL) {
       safeDetail = safeDetail.slice(0, MAX_DETAIL - 1) + "…";
     }
-    const line = `${localIsoTimestamp()} - ${safeModel} - ${kind} - ${safeDetail}`;
+    const timestamp = localIsoTimestamp();
+    const line = `${timestamp} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
     mkdirSync(dir, { recursive: true });
     appendFileSync(getModelEventsPath(), line + "\n", { flag: "a" });
+    return { timestamp, model: safeModel, kind, detail: safeDetail };
   } catch {
     // Fail-open on LOGGING only — never on the actual work.
+    return null;
   }
 }
 
@@ -172,7 +201,7 @@ export interface AggregateOptions {
   schemaHealThreshold?: number;
 }
 
-function zeroByKind(): Record<ModelEventKind, number> {
+export function zeroByKind(): Record<ModelEventKind, number> {
   const r = {} as Record<ModelEventKind, number>;
   for (const k of MODEL_EVENT_KINDS) r[k] = 0;
   return r;
@@ -194,6 +223,7 @@ export function aggregateModelHealth(
 
   const byModel = new Map<string, ModelHealthSummary>();
   for (const ev of events) {
+    if (DRIFT_SET.has(ev.kind)) continue; // catalog drift is not model ill-health (DW-01)
     let s = byModel.get(ev.model);
     if (!s) {
       s = { model: ev.model, total: 0, byKind: zeroByKind(), degraded: false, reasons: [] };

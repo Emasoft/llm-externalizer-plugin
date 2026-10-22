@@ -5,7 +5,9 @@
  *     Used by the scout layer for per-file events (start/end/repair/error).
  *   • `summariseJob` + `renderMarkdownReport` — read the registry, aggregate
  *     per-field stats, and emit the human-readable `.md` deliverable that
- *     ends up under `<repo-root>/reports/mass_scouting/`.
+ *     ends up under `<repo-root>/reports/llm-externalizer/mass_scouting/` (c9b,
+ *     2026-09-18 — the writer is CALLER-supplied, this comment just documents
+ *     the default resolveReportDir()/cli.ts now applies).
  *
  * Token-frugality: aggregates are computed in TypeScript over rows the
  * registry already gives us. We never re-parse the body cache here.

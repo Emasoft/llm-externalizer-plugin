@@ -27,6 +27,24 @@ After install, exit and relaunch Claude Code once if the new bar doesn't
 appear immediately — settings changes can require a session restart to
 register.
 
+## Where it keeps its files
+
+The statusline is INDEPENDENT of llm-externalizer: it reads no llm-ext config
+(no `$LLM_EXT_CONFIG_DIR`, no `~/.llm-externalizer`) and writes only under its
+own folder, `/tmp/claude`, which it creates itself.
+
+This is a deliberate exception to the 2026-09-18 write-roots rule, by USER
+instruction of 2026-10-20 ("the statusline script file must be independent from
+llm-externalizer. it must use its own folders and create them by its own").
+The rule bounds where the llm-ext CLI writes; it does not apply to a standalone
+script that is not the CLI. `/tmp/claude` is also where the CLI writes its stats
+file, so the 🔌 CLI row below works.
+
+Note: `/tmp` may be cleared by the OS (macOS's periodic reaper, Linux's
+`systemd-tmpfiles`, a reboot). The two caches there — the usage snapshot and
+the OpenRouter budget — are re-fetched when missing; only the display is
+affected, not the underlying accounts.
+
 ## What it shows
 
 | Section | Source | Notes |
@@ -39,7 +57,7 @@ register.
 | 🌳 worktree | `workspace.git_worktree` → `worktree.name` | only inside a worktree |
 | 🌿 branch | `git branch --show-current` | red `*` if dirty |
 | 📊 token bar | `context_window.used_percentage` (preferred) → manual sum | `current/size %` + 8-char bar |
-| 🔌 CLI | `~/.cache/claude/llm-externalizer-stats.json` | tokens + cost |
+| 🔌 CLI | `/tmp/claude/llm-externalizer-stats.json` | tokens + cost |
 | 🏦 OpenRouter | OpenRouter `/credits` API | cached 5min |
 | ⏱️ 5h | `rate_limits.five_hour.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset time |
 | 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time |

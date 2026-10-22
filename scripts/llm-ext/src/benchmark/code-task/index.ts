@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { benchmarkSubReportDir } from "../report-dir.js";
 import {
   buildBenchmarkRoster,
   rankByQualityIndex,
@@ -34,9 +35,9 @@ import {
   paidBenchmarkWouldRefuse,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "../discover.js";
-import { getConfigDir, getActiveFreeOnly } from "../../config.js";
-import { resolveProjectMainRoot } from "../../project-root.js";
+import { getConfigDir, getActiveFreeOnly, getEnsemblePriceCeiling, loadSettings } from "../../config.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -67,6 +68,7 @@ import {
   type CodeTaskCandidate,
   type CodeTaskSelectionResult,
 } from "./select.js";
+import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
 
 /**
  * code_task has no per-tool default model of its own — it runs on the active
@@ -130,7 +132,7 @@ interface CacheEntry {
   failureReasons: string[];
   /** The GOLDEN-DATASET verdict (passesThresholds at write time). `qualified`
    *  records only the catalog-requirements gate — which rejects the ':free'
-   *  class by design — so without this field the free-ensemble bench-evidence
+   *  class by design — so without this field the free-pool bench-evidence
    *  ranking (free-rotation.ts parseBenchEvidence) could never see a quality
    *  verdict for the pool it ranks (ultracode F0, 2026-08-05). */
   qualityPass?: boolean;
@@ -143,6 +145,16 @@ function cachePath(): string {
 
 function cacheKey(modelId: string, date: string, datasetHash: string): string {
   return `${modelId}::${date}::${datasetHash}`;
+}
+
+/**
+ * ONE definition of the dataset fingerprint. The benchmark run and
+ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
+ * rows whose `datasetHash` equals today's — so if the two ever diverge the
+ * backfill silently matches nothing and reclaims no rows, with no error.
+ */
+function datasetFingerprint(cases: readonly CodeAuditCase[]): string {
+  return createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
 }
 
 function loadCache(): CacheFile {
@@ -236,11 +248,20 @@ export async function runCodeAuditBenchmark(
   validateDataset(cases);
 
   // Hash the ground truth so an edit to the corpus invalidates the per-day cache.
-  const datasetHash = createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
+  const datasetHash = datasetFingerprint(cases);
   const thresholds = opts.thresholds ?? DEFAULT_CODE_AUDIT_THRESHOLDS;
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? ((): void => {});
   const freeOnly = getActiveFreeOnly();
+  // D0 (TRDD-AL8GIZYA, plan item 2a): CODE_TASK_CRITERIA's price fields only
+  // mirror DEFAULT_CRITERIA's DEFAULT ceiling; auto-discovered candidates must
+  // be filtered against the resolved, settings-overridable ceiling instead.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const discoveryCriteria: ModelCriteria = {
+    ...CODE_TASK_CRITERIA,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
 
   progress(`Loaded ${cases.length} golden cases (dataset ${datasetHash}).`);
 
@@ -299,7 +320,7 @@ export async function runCodeAuditBenchmark(
       }
     }
   } else {
-    const { candidates } = buildBenchmarkRoster(catalog, CODE_TASK_CRITERIA, []);
+    const { candidates } = buildBenchmarkRoster(catalog, discoveryCriteria, [], catalog, discoveryCeiling);
     const affordable = candidates.filter(
       (c) =>
         c.inputDollarsPerMillion <= incumbentIn + 1e-9 &&
@@ -353,17 +374,32 @@ export async function runCodeAuditBenchmark(
     }
   }
 
-  // Global price-cap fail-fast on the FINAL candidate set (explicit ids +
-  // incumbent; discovered were already dropped by filterModels). Refuses BEFORE
-  // any send if any model exceeds $1.25/1M — $0 spent. This is the path the user
-  // actually hit (`--code-task <ids>`), so the cap binds here first.
-  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Global price-cap fail-fast on AUTO-DISCOVERED candidates only (already
+  // dropped by discoveryCriteria above, so this is a safety net). USER
+  // 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX) exempts only an
+  // explicitly-named `--code-task <id>` — NOT the incumbent (REVIEW finding:
+  // the incumbent is auto-added by this orchestrator, not user-named in this
+  // invocation, so it is not covered by that USER decision and stays gated,
+  // matching pre-D0-flows behaviour).
+  const manualIds = new Set(opts.models ?? []);
+  const autoDiscovered = [...toAssess.values()]
+    .filter((v) => !manualIds.has(v.model.id))
+    .map((v) => v.model);
+  assertModelsUnderPriceCap(autoDiscovered, discoveryCeiling);
   // Then the paid opt-in: a paid (non-free) candidate needs --allow-paid-models-tests.
   assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
 
   const cache = loadCache();
+  // Reclaim already-paid benchmark scores. The per-day cache key embeds
+  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
+  // an earlier date is never looked up again and its `qualityPass` — the ONLY
+  // field that gives a ':free' model a verdict in the evidence fold — is never
+  // backfilled, despite the note at the write site promising it would be.
+  // Judging those rows from the score they already carry costs no model call.
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: CodeAuditAssessment[] = [];
   let totalCost = 0;
 
@@ -480,8 +516,11 @@ export async function runCodeAuditBenchmark(
     incumbentOutputDollarsPerMillion: incumbentOut,
   });
 
-  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join(mainRoot, "reports", "code-task-benchmark");
+  // Write-roots rule (2026-09-18): route the default through
+  // benchmarkSubReportDir() -> defaultOutputDir(), the only USER-approved
+  // report root, instead of hand-rolling mainRoot/"reports"/sub (that landed
+  // outside every approved write root). An explicit outputDir still wins.
+  const reportDir = opts.outputDir ?? benchmarkSubReportDir("code-task-benchmark", opts.mainRoot);
   mkdirSync(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join(reportDir, `${stamp}-code-task-benchmark.json`);
@@ -699,4 +738,21 @@ export function describeWorkload(): BenchmarkWorkload {
     promptCharsPerModel,
     maxOutputTokensPerCall: CODE_TASK_MAX_OUTPUT_TOKENS,
   };
+}
+
+/**
+ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
+ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
+ * call). Same dataset-hash and pass predicate `runCodeAuditBenchmark` uses.
+ */
+export function backfillOwnLedger(): { tool: string; upgraded: number } {
+  const cases: readonly CodeAuditCase[] = loadDataset();
+  validateDataset(cases);
+  const datasetHash = datasetFingerprint(cases);
+  const thresholds = DEFAULT_CODE_AUDIT_THRESHOLDS;
+
+  const cache = loadCache();
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) saveCache(cache);
+  return { tool: "code_task", upgraded };
 }

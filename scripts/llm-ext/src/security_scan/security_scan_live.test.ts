@@ -80,7 +80,7 @@ describe.skipIf(!LIVE)("T10 real-model smoke (cheap model, no mocking)", () => {
           workers: 3,
           max_retries: 2,
         },
-        { mainRoot: tmp },
+        { mainRoot: tmp, freeOnly: false },
       );
 
       expect(out.exitCode).toBe(0);

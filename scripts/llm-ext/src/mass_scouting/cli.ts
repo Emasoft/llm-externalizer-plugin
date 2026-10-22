@@ -13,7 +13,7 @@
  *                    Honors --budget-usd as a hard gate.
  *   scout          — actually call OpenRouter on every eligible file
  *                    with the compiled JSON Schema. Writes a markdown
- *                    report under reports/mass_scouting/.
+ *                    report under reports/llm-externalizer/mass_scouting/.
  *   search         — per-job search (FTS5 + structured + regex bypass).
  *   search-xjob    — cross-job federated search.
  *   get            — pretty-print a single file's row by short_id.
@@ -65,6 +65,12 @@ import {
   resolveModelForTool,
   assertFreeOnlyModel,
   getActiveFreeOnly,
+  getActiveBillableForModel,
+  shouldForceFreeMode,
+  inferProfileType,
+  builtinProfileType,
+  effectiveProfileName,
+  isPlaceholderProfile,
 } from "../config";
 import type { OpenRouterModel } from "../benchmark/discover";
 import {
@@ -73,7 +79,23 @@ import {
   withFreeRotation,
 } from "../free-rotation";
 import { assertModelValidated } from "../benchmark/validated.js";
-import { resolveProjectMainRoot } from "../project-root";
+import { defaultOutputDir } from "../project-root";
+import {
+  OPENROUTER_BASE_URL,
+  buildPositionalSchema,
+  classifyPositional,
+  generateFixture,
+  MIN_FIXTURE_BYTES,
+} from "./scout-accuracy-fixture";
+import {
+  passedModelIds,
+  recordScoutAccuracy,
+  scoutAccuracyHash,
+} from "./scout-accuracy-ledger";
+import {
+  scoutAccuracyTargetBytes,
+  scoutAccuracyThreshold,
+} from "../config";
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -156,26 +178,68 @@ function parseFlags(args: string[]): { flags: Record<string, string>; positional
 }
 
 /**
- * The model a mass_scout CLI command should use. free_only (TRDD-97ef8b63)
- * overrides EVERY customized choice: under a free_only active profile the free
- * pool's top model wins over `--model` and DEFAULT_MODEL, so mass_scout actually
- * RUNS on a free model instead of throwing at the cost-safety guard. Non-free
- * profiles keep the exact prior behaviour (`--model` else DEFAULT_MODEL).
+ * PT-05 (D34): the model of every mass-scouting action comes from a `scouting`-type
+ * profile, never from the active profile. WHY: with a free profile active the old
+ * code ran mass scouting on the free pool; scouting profiles may not hold `:free`
+ * ids (scout-accuracy.ts), so mass scouting on free models ends here. `--profile`
+ * reaches this function as `flags.profile` and may name another scouting profile.
+ * A placeholder (unpopulated) profile yields `head: undefined`.
  */
-function resolveCliModel(flags: Record<string, string>): string {
-  if (getActiveFreeOnly()) {
-    try {
-      const s = loadSettings();
-      const active = s?.profiles[s.active];
-      if (s && active) {
-        const r = resolveProfile(s.active, active);
-        if (r.model) return r.model; // free_models[0] (validated ':free')
-      }
-    } catch {
-      /* settings unreadable — fall through; the guard still blocks paid spend */
-    }
+function scoutingHead(
+  flags: Record<string, string>,
+  s: ReturnType<typeof loadSettings>,
+): { head: string | undefined } | { error: string } {
+  const name = flags["profile"] ?? SCOUTING_PROFILE_NAME;
+  const profile = s?.profiles?.[name];
+  if (!profile && flags["profile"] !== undefined) {
+    const available = Object.entries(s?.profiles ?? {})
+      .filter(([n, p]) => inferProfileType(n, p) === "scouting")
+      .map(([n]) => n);
+    return {
+      error: `profile '${name}' does not exist; available scouting-type profiles: ${available.length > 0 ? available.join(", ") : "(none)"}.`,
+    };
   }
-  return flags["model"] ?? DEFAULT_MODEL;
+  if (profile && inferProfileType(name, profile) !== "scouting") {
+    return {
+      error: `profile '${name}' is not a scouting profile; mass scouting accepts only the scouting profile type.`,
+    };
+  }
+  // PT-04: the fresh-install `scouting` is a placeholder whose model is the sentinel id; treating it as a head would report "no PASS" for a model nobody chose, so it counts as "no scouting profile" and gets the benchmark hint.
+  const head =
+    profile && typeof profile.model === "string" && !isPlaceholderProfile(profile)
+      ? profile.model
+      : undefined;
+  return { head };
+}
+
+/**
+ * The model register/estimate use to price and size files (they send nothing):
+ * `--model`, else the scouting profile's model, else DEFAULT_MODEL so these two
+ * local commands still work before the benchmark has populated `scouting`.
+ */
+function resolveCliModel(
+  flags: Record<string, string>,
+): { model: string; unpopulated?: true } | { error: string } {
+  if (flags["model"]) return { model: flags["model"] };
+  const scouting = scoutingHead(flags, loadSettings());
+  if ("error" in scouting) return scouting;
+  // unpopulated: the run will never use DEFAULT_MODEL, so estimate must say its price is a stand-in.
+  return scouting.head === undefined ? { model: DEFAULT_MODEL, unpopulated: true } : { model: scouting.head };
+}
+
+/**
+ * Whether a scouting send may bill: `allow_paid_models` read from settings.yaml, unreadable
+ * or absent = not allowed (fail closed). WHY not the process global getAllowPaidModels():
+ * it is unset (false) in the standalone CLI and direct runMassScoutCli() calls and is not the
+ * file's value, so it could disagree with settings.yaml; and not getActiveFreeOnly(), which
+ * follows the ACTIVE profile and would block the paid model a free-active user configured.
+ */
+function scoutingPaidAllowed(s: ReturnType<typeof loadSettings>): boolean {
+  return s?.allow_paid_models === true;
+}
+
+function scoutingFreeOnly(): boolean {
+  return shouldForceFreeMode(scoutingPaidAllowed(loadSettings()), "remote", "scouting");
 }
 
 function requireFlag(
@@ -199,35 +263,22 @@ function ok(stdout: string): CliResult {
 }
 
 /**
- * Resolve the main repo root used to anchor `reports/mass_scouting/` writes.
- *
- * Resolution order, designed so a packaged MCP server never writes reports
- * into its own install cache:
- *   1. `CLAUDE_PROJECT_DIR` — Claude Code 2.1.139+ sets this in the
- *      MCP-stdio environment (officially documented in that release). It
- *      is the only signal that points at the user's project rather than
- *      the plugin install.
- *   2. `git worktree list` — the enclosing repo, UNLESS that path is inside
- *      a plugin install cache (`/.claude/plugins/`), which means we are the
- *      packaged server with no project context.
- *   3. `process.cwd()` — last resort for a direct CLI run outside a repo.
- *
- * The previous "walk up three dirs from this source file" fallback is gone:
- * for an installed plugin it resolved straight into the plugin cache, which
- * is exactly the bug this ordering fixes.
- */
-function defaultMainRoot(): string {
-  // Single source of truth — see project-root.ts (CLAUDE_PROJECT_DIR verbatim →
-  // cwd; no git).
-  return resolveProjectMainRoot();
-}
-
-/**
  * Resolve the directory a report / export file is written to. An explicit
  * `--output-dir` wins verbatim (a relative value resolves against cwd);
- * otherwise the file lands under `<main-repo-root>/reports/mass_scouting/`.
+ * otherwise the file lands under `<main-repo-root>/reports/llm-externalizer/mass_scouting/`.
  * Callers running as an MCP server should pass `--output-dir` so the report
  * lands inside the project the agent is actually working on.
+ *
+ * write-roots fix (c9c, 2026-09-18): the removed defaultMainRoot() helper
+ * ALWAYS returned a non-empty root (CLAUDE_PROJECT_DIR or cwd, never
+ * empty), so defaultOutputDir(mainRoot) always received a non-empty
+ * override and silently ignored LLM_EXT_OUTPUT_DIR -- defaultOutputDir
+ * treats any non-empty override as an explicit caller root, bypassing the
+ * env check by design (see project-root.ts). Passing opts.mainRoot
+ * straight through fixes production (undefined falls through to
+ * defaultOutputDir own LLM_EXT_OUTPUT_DIR-then-resolveProjectMainRoot
+ * chain -- the exact fallback defaultMainRoot() used to hardcode) while
+ * leaving the test-injection path byte-for-byte unchanged.
  */
 function resolveReportDir(
   outputDirFlag: string | undefined,
@@ -238,8 +289,7 @@ function resolveReportDir(
       ? outputDirFlag
       : resolve(process.cwd(), outputDirFlag);
   }
-  const mainRoot = opts.mainRoot ?? defaultMainRoot();
-  return join(mainRoot, "reports", "mass_scouting");
+  return join(defaultOutputDir(opts.mainRoot), "mass_scouting");
 }
 
 /**
@@ -522,6 +572,177 @@ function adaptFetchForContext(
     });
 }
 
+// ── The scouting-profile require gate (TRDD-FKAR9VPK D5, A3 tree) ───────────
+
+/** The static scouting profile written ONLY by `llm-ext benchmark scout-accuracy`. */
+export const SCOUTING_PROFILE_NAME = "scouting";
+
+export interface ResolvedScoutModel {
+  model: string;
+  /** True when the model was admitted per-invocation via --allow-untested-model
+   *  (A4): the invocation output must stamp it. */
+  untested?: boolean;
+}
+
+/**
+ * The ONE decision tree (A3) for every LLM-driving mass-scout handler —
+ * scout / chain / propose-fieldset ONLY. register/estimate call resolveCliModel
+ * (pricing only, nothing is sent). PT-05: the head always comes from a scouting-type
+ * profile (see scoutingHead); there is no free-mode path.
+ *
+ *   no scouting profile AND no --model      -> refuse "run scout-accuracy"
+ *   no profile AND --model AND flag         -> schema probe, allow (stamped)
+ *   no profile AND --model WITHOUT flag     -> refuse "not scout-accuracy-verified"
+ *   profile exists, no --model              -> head must be ledger-PASSED
+ *                                              under the CURRENT hash
+ *   profile exists, --model                 -> PASSED ? use it : (flag ? probe
+ *                                              + allow + stamp : refuse with
+ *                                              coverage message)
+ *
+ * The --allow-untested-model probe (A4) is the STRUCTURAL schema-compliance
+ * check only (one classifyPositional call at the minimum fixture that must
+ * return parseable positional JSON) — never a full accuracy run. Its ledger
+ * row is {pass:false, inconclusive:true}: it NEVER authorizes a later
+ * invocation; the grant is per-invocation and the probe cost recurs.
+ */
+async function resolveScoutModel(
+  flags: Record<string, string>,
+  opts: CliRunOptions,
+): Promise<ResolvedScoutModel | { error: string }> {
+  const gate = await admitScoutModel(flags, opts);
+  if ("error" in gate) return gate;
+  // Paid-run notice: a free or local ACTIVE profile never bills, so without this line the user
+  // would not see that this run does. Printed once, before the first send.
+  const s = loadSettings();
+  const active = s ? effectiveProfileName(s) : undefined;
+  const activeProfile = active !== undefined ? s?.profiles?.[active] : undefined;
+  const activeType = active === undefined ? undefined : activeProfile ? inferProfileType(active, activeProfile) : builtinProfileType(active);
+  if (activeType === "free" || activeType === "local") {
+    process.stderr.write(
+      `Notice: this run is BILLED: scouting profile '${flags["profile"] ?? SCOUTING_PROFILE_NAME}' model '${gate.model}' bills although the active profile '${active}' (type ${activeType}) does not.\n`,
+    );
+  }
+  return gate;
+}
+
+async function admitScoutModel(
+  flags: Record<string, string>,
+  opts: CliRunOptions,
+): Promise<ResolvedScoutModel | { error: string }> {
+  // Refusals address the USER, never an agent reader (closure-review F1):
+  // the benchmark spends paid API credits and the card migration ruling
+  // is "no auto-benchmark spend" — an unattended session obeying an
+  // imperative refusal would defeat it.
+  // PT-05 (D34): no free-mode delegation any more. Whatever the active profile is
+  // (free, paid, local), the model of a scouting action comes from a scouting-type
+  // profile, so mass scouting on the free pool ends; a placeholder `scouting`
+  // profile (E81b) refuses below with the benchmark hint.
+  const modelFlag = flags["model"];
+  const allowUntested = flags["allow-untested-model"];
+  const s = loadSettings();
+  const scouting = scoutingHead(flags, s);
+  if ("error" in scouting) return scouting;
+  const head = scouting.head;
+  // Early spend refusal (before the probe, registration, sampling or any work): every scouting
+  // send bills on this model, and allow_paid_models gates billed calls (D36).
+  const billedModel = modelFlag ?? head;
+  if (billedModel !== undefined && !scoutingPaidAllowed(s)) {
+    return {
+      error: `mass scouting bills on the scouting profile's model '${billedModel}'; allow_paid_models is off; turn it on in settings.yaml to run it.`,
+    };
+  }
+  const threshold = scoutAccuracyThreshold(s);
+  const targetBytes = scoutAccuracyTargetBytes(s);
+  const hash = scoutAccuracyHash(threshold, targetBytes);
+  const passed = passedModelIds(hash);
+  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+  const fetchImpl = opts.fetchImpl ?? realFetch;
+
+  /** A4: one structural probe at the minimum fixture. The inconclusive row is
+   *  recorded BEFORE any outcome decision — recording it is what keeps the
+   *  probe from ever authorizing a later invocation. */
+  const schemaProbe = async (
+    modelId: string,
+  ): Promise<{ error: string } | { ok: true }> => {
+    if (!apiKey) {
+      return {
+        error:
+          "--allow-untested-model probe needs OPENROUTER_API_KEY. Export it or pass opts.apiKey.",
+      };
+    }
+    const fixture = generateFixture(1, MIN_FIXTURE_BYTES);
+    const probe = await classifyPositional(
+      modelId,
+      OPENROUTER_BASE_URL,
+      apiKey,
+      fixture,
+      buildPositionalSchema(fixture.recordCount),
+      { fetchImpl },
+    );
+    recordScoutAccuracy(modelId, hash, {
+      pass: false,
+      inconclusive: true,
+      accuracy: 0,
+    });
+    if (probe.error !== null || probe.predicted.length === 0) {
+      return {
+        error:
+          `--allow-untested-model: model ${JSON.stringify(modelId)} failed the structural schema probe ` +
+          `(${probe.error ?? "no positional output"}) — not admitted. The probe is PER-INVOCATION: ` +
+          "it never marks the model scout-accuracy-verified.",
+      };
+    }
+    return { ok: true };
+  };
+
+  if (!head && !modelFlag) {
+    return {
+      error:
+        "no scouting profile — the USER must run: llm-ext benchmark scout-accuracy " +
+        "(profiles.scouting is missing or still the unpopulated placeholder) " +
+        "(or pass --model <id> --allow-untested-model). Do not run the benchmark " +
+        "yourself: it spends paid API credits.",
+    };
+  }
+  if (!head && modelFlag) {
+    if (allowUntested !== "true") {
+      return {
+        error:
+          `model ${JSON.stringify(modelFlag)} is not scout-accuracy-verified — ` +
+          "the USER must run llm-ext benchmark scout-accuracy, or pass --allow-untested-model",
+      };
+    }
+    const probe = await schemaProbe(modelFlag);
+    if ("error" in probe) return probe;
+    return { model: modelFlag, untested: true };
+  }
+  // Profile exists from here on: head is defined.
+  if (!modelFlag) {
+    if (!passed.has(head!)) {
+      return {
+        error:
+          `scouting profile head ${JSON.stringify(head)} has no PASS under the CURRENT scout-accuracy ` +
+          "dataset (threshold/size/fixture-version) — the USER must re-run scout-accuracy",
+      };
+    }
+    return { model: head! };
+  }
+  if (passed.has(modelFlag)) {
+    return { model: modelFlag };
+  }
+  if (allowUntested === "true") {
+    const probe = await schemaProbe(modelFlag);
+    if ("error" in probe) return probe;
+    return { model: modelFlag, untested: true };
+  }
+  return {
+    error:
+      `model ${JSON.stringify(modelFlag)} is not scout-accuracy-verified — the scouting benchmark ` +
+      `covers: ${passed.size > 0 ? [...passed].sort().join(", ") : "(nothing yet)"} — ` +
+      "the USER must run llm-ext benchmark scout-accuracy, or pass --allow-untested-model",
+  };
+}
+
 // ── Sub-commands ───────────────────────────────────────────────────────
 
 /**
@@ -618,7 +839,9 @@ function runRegister(args: string[]): CliResult {
   }
 
   // Resolve per-file size cap from optional --model.
-  const model = resolveCliModel(flags);
+  const resolved = resolveCliModel(flags);
+  if ("error" in resolved) return err(resolved.error);
+  const model = resolved.model;
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
   const registerCap = bytesCapFromPct(
@@ -726,7 +949,10 @@ async function runEstimate(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = resolveCliModel(flags);
+  const resolved = resolveCliModel(flags);
+  if ("error" in resolved) return err(resolved.error);
+  const model = resolved.model;
+  const unpopulated = "unpopulated" in resolved;
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 
@@ -781,6 +1007,9 @@ async function runEstimate(
 
   const lines = [
     `model=${model}  context_window=${pricing.context_window}`,
+    ...(unpopulated
+      ? [`no scouting profile yet; priced with ${DEFAULT_MODEL}, the real run uses the model \`benchmark scout-accuracy\` selects`]
+      : []),
     `files_eligible=${est.files_eligible}`,
     `files_skipped_too_big=${est.files_skipped_too_big}`,
     `files_over_register_cap=${est.files_over_register_cap}`,
@@ -805,7 +1034,7 @@ async function runEstimate(
 
 /**
  * scout — fan out OpenRouter calls. On success, generates a markdown
- * report under <main-root>/reports/mass_scouting/ and prints the path.
+ * report under <main-root>/reports/llm-externalizer/mass_scouting/ and prints the path.
  */
 async function runScout(
   args: string[],
@@ -824,7 +1053,20 @@ async function runScout(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = resolveCliModel(flags);
+  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — scout is
+  // one of the three LLM-driving handlers this gate owns.
+  const gate = await resolveScoutModel(flags, opts);
+  if ("error" in gate) return err(gate.error);
+  const model = gate.model;
+  const untestedStamp = gate.untested
+    ? "model_status=UNTESTED MODEL (--allow-untested-model)"
+    : undefined;
+  // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
+  // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
+  // itself. Captured ONCE here, right beside the model resolution it's
+  // paired with, and threaded through below.
+  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+  const freeOnly = scoutingFreeOnly();
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 
@@ -867,6 +1109,7 @@ async function runScout(
         pricing,
         model,
         apiKey,
+        freeOnly,
         workers: flags["workers"] ? Number(flags["workers"]) : undefined,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : undefined,
         bucket: flags["bucket"],
@@ -923,6 +1166,7 @@ async function runScout(
   return ok(
     [
       `job_id=${jobId}`,
+      ...(untestedStamp ? [untestedStamp] : []),
       `files_total=${result.filesTotal}`,
       `files_ok=${result.filesOk}`,
       `files_failed=${result.filesFailed}`,
@@ -1149,13 +1393,32 @@ async function runProposeFieldset(
     );
   }
   const fetchImpl = opts.fetchImpl ?? realFetch;
-  const model = resolveCliModel(flags);
+  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) —
+  // propose-fieldset is one of the three LLM-driving handlers this gate owns.
+  const gate = await resolveScoutModel(flags, opts);
+  if ("error" in gate) return err(gate.error);
+  const model = gate.model;
+  if (gate.untested) {
+    // stdout is the fieldset JSON — the stamp goes to stderr (A4).
+    process.stderr.write("model_status=UNTESTED MODEL (--allow-untested-model)\n");
+  }
+  // Row 101 fix-queue: captured ONCE right beside the model resolution it's
+  // paired with, instead of reading getActiveFreeOnly() fresh at the assert
+  // call below — same explicit-value treatment as runScoutJob/judgeGroups
+  // (4d160a8), applied here since this call has no separate Options struct.
+  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+  const freeOnly = scoutingFreeOnly();
   // Airtight free_only cost-safety (TRDD-97ef8b63). propose-fieldset makes its own
   // OpenRouter call; under free_only a non-':free' model throws BEFORE the request.
-  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", model);
+  // Route-aware billable (item 1/A1): do NOT hardcode `true` — this call always
+  // hits OpenRouter itself, but `model` may still be routed to a non-billable
+  // provider (e.g. b.ai) under a `providers:` profile, same derivation
+  // resolveConnection uses (config.ts's getActiveBillableForModel).
+  const billable = getActiveBillableForModel(model);
+  assertFreeOnlyModel(freeOnly, billable, model);
   // IRON RULE (TRDD-8b6b3646): a PAID propose-fieldset model must be validated
   // (mass_scout is rank 0 — any pass validates), else refuse. Exempt for ':free'.
-  assertModelValidated(model, "mass_scout", "openrouter");
+  assertModelValidated(model, "mass_scout", billable);
   const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
 
   // Read sample files (if any) so the LLM can see actual content.
@@ -1489,7 +1752,20 @@ async function runChain(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const model = resolveCliModel(flags);
+  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — chain is
+  // one of the three LLM-driving handlers this gate owns.
+  const gate = await resolveScoutModel(flags, opts);
+  if ("error" in gate) return err(gate.error);
+  const model = gate.model;
+  const untestedStamp = gate.untested
+    ? "model_status=UNTESTED MODEL (--allow-untested-model)"
+    : undefined;
+  // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
+  // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
+  // itself. Captured ONCE here, right beside the model resolution it's
+  // paired with, and threaded through below.
+  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+  const freeOnly = scoutingFreeOnly();
   const pricing = resolvePricing(model, flags);
   if ("error" in pricing) return err(pricing.error);
 
@@ -1586,6 +1862,7 @@ async function runChain(
         pricing,
         model,
         apiKey,
+        freeOnly,
         workers,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : 1,
         bucket: SENTINEL,
@@ -1618,6 +1895,7 @@ async function runChain(
     [
       `source_job=${sourceJob}`,
       `new_job=${newJob}`,
+      ...(untestedStamp ? [untestedStamp] : []),
       `matched=${eligible.length}`,
       `files_ok=${okCount}`,
       `files_failed=${failed}`,
@@ -1872,11 +2150,10 @@ async function runSecurityScanCli(
   ) {
     try {
       const settings = loadSettings();
-      const active = settings?.active
-        ? settings.profiles[settings.active]
-        : undefined;
-      if (settings && active) {
-        const resolved = resolveProfile(settings.active, active);
+      const activeName = settings ? effectiveProfileName(settings) : undefined;
+      const active = settings && activeName ? settings.profiles[activeName] : undefined;
+      if (settings && active && activeName) {
+        const resolved = resolveProfile(activeName, active);
         const perTool = resolveModelForTool(resolved, "security_scan", "");
         if (perTool) (parsed as Record<string, unknown>).model = perTool;
       }
@@ -1885,11 +2162,24 @@ async function runSecurityScanCli(
     }
   }
 
+  // C4c (review of 21a2d20): freeOnly MUST come from the same chokepoint every
+  // other gate uses (scout/chain/propose-fieldset all read getActiveFreeOnly()
+  // directly, row 101 fix-queue). The prior try/catch here re-resolved the
+  // active profile's OWN freeOnly, which silently drops two things the global
+  // already accounts for: the allow_paid_models master switch (index.ts
+  // isFreeModeActive() ORs it in) and a `--profile` override (publishFreeState()
+  // runs on every applyNewSettings — boot AND overrideActiveProfile — so the
+  // global reflects --profile too). A paid judge model could have run under
+  // allow_paid_models:false. No settings re-read, no fallback: this is the
+  // single value every other cost-safety gate in this file already trusts.
+  const freeOnly = getActiveFreeOnly();
+
   const result = await runSecurityScan(parsed, {
     fetchImpl: opts.fetchImpl,
     apiKey: opts.apiKey,
     mainRoot: opts.mainRoot,
     onProgress: opts.onProgress,
+    freeOnly,
   });
   return {
     stdout: result.stdout,
@@ -1983,7 +2273,7 @@ Subcommands:
                            --bucket <name>  --no-smoke-test  --no-resume
                            --max-context-pct-scout <0..1>
                            --output-dir <path>   (report directory; default
-                                            <main-repo-root>/reports/mass_scouting/)
+                                            <main-repo-root>/reports/llm-externalizer/mass_scouting/)
                            --live-context   (see estimate)
                  Env:      OPENROUTER_API_KEY
 
@@ -2014,7 +2304,7 @@ Subcommands:
                  Required: --db <path>  --job-id <id>
                  Optional: --format jsonl|csv  (default: jsonl)
                            --output-dir <path>  (default
-                                            <main-repo-root>/reports/mass_scouting/)
+                                            <main-repo-root>/reports/llm-externalizer/mass_scouting/)
 
   jobs-list      List every scout job in the DB.
                  Required: --db <path>
@@ -2056,6 +2346,12 @@ Subcommands:
                  Env:      OPENROUTER_API_KEY
 
 Notes:
+  * scout / chain / propose-fieldset require the STATIC 'scouting' profile:
+    run 'llm-ext benchmark --scout-accuracy' to build and verify it. A
+    --model <id> must be scout-accuracy-PASSED (ledger, current dataset
+    hash); --allow-untested-model forces one invocation past that gate after
+    a structural schema probe, AT AN EXTRA PER-INVOCATION PROBE COST, and
+    the run output is stamped UNTESTED MODEL.
   * --fields-file accepts EITHER an absolute path to a JSON file you
     wrote, OR a 'bundled:<name>' shorthand. Run 'list-bundled-fieldsets'
     to see what ships with the plugin (code-audit, skill-audit,

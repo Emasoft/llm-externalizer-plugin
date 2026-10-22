@@ -355,4 +355,46 @@ describe("runDescribe", () => {
     expect(h.calls).toHaveLength(0);
     expect(h.saved).toHaveLength(0);
   });
+
+  it("describes a real file and saves the description under the describe tool", async () => {
+    const h = makeHarness(["A CSS file setting the page background to black."]);
+    const cssFile = join(tmpDir, "theme.css");
+    writeFileSync(cssFile, "body { background: #000; }\n", "utf-8");
+    const result = await runDescribe({ input_file: cssFile, max_chars: 500 }, h.deps);
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toBe(FAKE_REPORT_PATH);
+    expect(h.calls).toHaveLength(1);
+    // The filename is a deliberate prompt hint — describe must tell a .css from
+    // a .csv, and it only can if the name reaches the model alongside the body.
+    expect(h.calls[0][1].content).toContain("theme.css");
+    expect(h.saved[0].tool).toBe("describe");
+    expect(h.saved[0].content).toBe("A CSS file setting the page background to black.");
+  });
+});
+
+// The response gate (core.ts:417) sits in the retry loop SHARED by all four
+// tools, so exercising it once on one tool covers the shared path — but only
+// the shared path. A per-tool gate regression would have to come from a tool
+// bypassing the loop, which none currently does.
+describe("response gate — shared retry loop", () => {
+  it("rejects an empty answer and fails after the retry also comes back empty", async () => {
+    const h = makeHarness(["   \n\t  "]);
+    const result = await runSummarize(
+      { input_content: "Alpha beta gamma delta epsilon zeta.", max_chars: 200 },
+      h.deps,
+    );
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("LLM returned empty response");
+    expect(h.calls).toHaveLength(2);
+    expect(h.saved).toHaveLength(0);
+  });
+
+  it("rejects an answer that echoes the input back instead of summarizing it", async () => {
+    const source = "Alpha beta gamma delta epsilon zeta eta theta iota kappa.";
+    const h = makeHarness([source]);
+    const result = await runSummarize({ input_content: source, max_chars: 200 }, h.deps);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain("LLM echoed its input back instead of answering");
+    expect(h.saved).toHaveLength(0);
+  });
 });

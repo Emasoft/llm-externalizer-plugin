@@ -1,0 +1,651 @@
+diff --git a/scripts/llm-ext/src/benchmark/backfill-ledgers.test.ts b/scripts/llm-ext/src/benchmark/backfill-ledgers.test.ts
+new file mode 100644
+index 0000000..4e0553c
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/backfill-ledgers.test.ts
+@@ -0,0 +1,115 @@
++import { describe, it, expect, beforeEach, afterEach } from "vitest";
++import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
++import { join } from "node:path";
++import { createHash } from "node:crypto";
++
++import { backfillAllLedgers } from "./backfill-ledgers.js";
++
++import { loadDataset as loadCodeTaskCases, validateDataset as validateCodeTaskCases } from "./code-task/dataset.js";
++import { SCAN_FOLDER_CASES, datasetFingerprint as scanFolderFingerprint } from "./scan-folder/dataset.js";
++import { CHECK_SPECS_FIXTURES, datasetFingerprint as checkSpecsFingerprint } from "./check-specs/dataset.js";
++import { SEARCH_EXISTING_CASES } from "./search-existing/dataset.js";
++import { loadDataset as loadTriageCases, resolveDatasetPath as resolveTriageDatasetPath } from "./security-triage/dataset.js";
++
++// Each helper reproduces the SAME expression the production run function uses
++// to compute datasetHash (backfillOwnLedger's own contract) — so a real
++// matching-hash row can be constructed without hardcoding a hash the fixtures
++// could drift out from under.
++function codeTaskDatasetHash(): string {
++  const cases = loadCodeTaskCases();
++  validateCodeTaskCases(cases);
++  return createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
++}
++function scanFolderDatasetHash(): string {
++  void SCAN_FOLDER_CASES; // fixtures fingerprinted on disk, not the case list
++  return scanFolderFingerprint();
++}
++function checkSpecsDatasetHash(): string {
++  void CHECK_SPECS_FIXTURES;
++  return checkSpecsFingerprint();
++}
++function searchExistingDatasetHash(): string {
++  return createHash("sha1").update(JSON.stringify(SEARCH_EXISTING_CASES)).digest("hex").slice(0, 12);
++}
++function triageDatasetHash(): string {
++  const path = resolveTriageDatasetPath();
++  loadTriageCases(path);
++  return createHash("sha1").update(readFileSync(path, "utf-8")).digest("hex").slice(0, 12);
++}
++
++const TOOLS: {
++  tool: string;
++  file: string;
++  hash: () => string;
++  passScore: Record<string, unknown>;
++}[] = [
++  { tool: "code_task", file: "code-task-results.json", hash: codeTaskDatasetHash, passScore: { macroF1: 0.9, microRecall: 0.9, failedCases: 0 } },
++  { tool: "scan_folder", file: "scan-folder-results.json", hash: scanFolderDatasetHash, passScore: { microF1: 0.95, microRecall: 0.95, coverage: 0.95 } },
++  { tool: "check_against_specs", file: "check-specs-results.json", hash: checkSpecsDatasetHash, passScore: { microF1: 0.95, microRecall: 0.95, coverage: 0.95 } },
++  { tool: "search_existing_implementations", file: "search-existing-results.json", hash: searchExistingDatasetHash, passScore: { microF1: 0.95, microRecall: 0.95, coverage: 0.95 } },
++  { tool: "security_scan", file: "security-triage-results.json", hash: triageDatasetHash, passScore: { pass: true, inconclusive: false } },
++];
++
++let configDir: string;
++const ORIGINAL_CONFIG_DIR = process.env.LLM_EXT_CONFIG_DIR;
++
++beforeEach(() => {
++  // config.ts's getConfigDir() only allows a dir under $HOME or /private/tmp
++  // (macOS's canonicalized /tmp) — os.tmpdir() resolves under /var/folders/…
++  // and gets rejected, so anchor explicitly in the allowed tree.
++  configDir = mkdtempSync(join("/private/tmp", "llm-ext-backfill-test-"));
++  process.env.LLM_EXT_CONFIG_DIR = configDir;
++});
++
++afterEach(() => {
++  if (ORIGINAL_CONFIG_DIR === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
++  else process.env.LLM_EXT_CONFIG_DIR = ORIGINAL_CONFIG_DIR;
++  rmSync(configDir, { recursive: true, force: true });
++});
++
++describe("backfillAllLedgers", () => {
++  it("upgrades a matching-hash row, leaves a mismatched-hash row and an already-judged row alone, no network calls", () => {
++    for (const t of TOOLS) {
++      const hash = t.hash();
++      const cache = {
++        [`m/match::2026-05-01::${hash}`]: { date: "2026-05-01", datasetHash: hash, score: t.passScore },
++        [`m/mismatch::2026-05-01::OLDHASH`]: { date: "2026-05-01", datasetHash: "OLDHASH", score: t.passScore },
++        [`m/already-judged::2026-05-01::${hash}`]: {
++          date: "2026-05-01",
++          datasetHash: hash,
++          score: t.passScore,
++          qualityPass: false,
++        },
++      };
++      writeFileSync(join(configDir, t.file), JSON.stringify(cache), "utf-8");
++    }
++
++    const results = backfillAllLedgers();
++    expect(results).toHaveLength(5);
++    expect(results.map((r) => r.tool).sort()).toEqual(TOOLS.map((t) => t.tool).sort());
++    for (const r of results) expect(r.upgraded).toBe(1);
++
++    for (const t of TOOLS) {
++      const hash = t.hash();
++      const cache = JSON.parse(readFileSync(join(configDir, t.file), "utf-8")) as Record<
++        string,
++        { qualityPass?: boolean }
++      >;
++      expect(cache[`m/match::2026-05-01::${hash}`].qualityPass).toBeDefined();
++      expect(cache[`m/mismatch::2026-05-01::OLDHASH`].qualityPass).toBeUndefined();
++      expect(cache[`m/already-judged::2026-05-01::${hash}`].qualityPass).toBe(false); // untouched, never overwritten
++    }
++
++    // Second pass over the now-upgraded ledgers upgrades nothing further.
++    const second = backfillAllLedgers();
++    for (const r of second) expect(r.upgraded).toBe(0);
++  });
++
++  it("touches no file and upgrades nothing when the config dir has no ledgers yet", () => {
++    const results = backfillAllLedgers();
++    for (const r of results) expect(r.upgraded).toBe(0);
++    for (const t of TOOLS) {
++      expect(existsSync(join(configDir, t.file))).toBe(false);
++    }
++  });
++});
+diff --git a/scripts/llm-ext/src/benchmark/backfill-ledgers.ts b/scripts/llm-ext/src/benchmark/backfill-ledgers.ts
+new file mode 100644
+index 0000000..b8307dc
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/backfill-ledgers.ts
+@@ -0,0 +1,30 @@
++/**
++ * Standalone, zero-network backfill across all five benchmark ledgers.
++ * Each tool's `backfillOwnLedger()` already gates on its own datasetHash and
++ * predicate (see backfill-quality-pass.ts) — this just fans out to all five
++ * and keeps one failing tool from aborting the rest.
++ */
++
++import { backfillOwnLedger as backfillCodeTask } from "./code-task/index.js";
++import { backfillOwnLedger as backfillScanFolder } from "./scan-folder/index.js";
++import { backfillOwnLedger as backfillCheckSpecs } from "./check-specs/index.js";
++import { backfillOwnLedger as backfillSearchExisting } from "./search-existing/index.js";
++import { backfillOwnLedger as backfillSecurityTriage } from "./security-triage/index.js";
++
++export function backfillAllLedgers(): { tool: string; upgraded: number }[] {
++  const runners: { tool: string; run: () => { tool: string; upgraded: number } }[] = [
++    { tool: "code_task", run: backfillCodeTask },
++    { tool: "scan_folder", run: backfillScanFolder },
++    { tool: "check_against_specs", run: backfillCheckSpecs },
++    { tool: "search_existing_implementations", run: backfillSearchExisting },
++    { tool: "security_scan", run: backfillSecurityTriage },
++  ];
++  return runners.map(({ tool, run }) => {
++    try {
++      return run();
++    } catch (e) {
++      // One tool's dataset/cache being broken must not stop the others.
++      return { tool: `${tool} (failed: ${(e as Error).message})`, upgraded: 0 };
++    }
++  });
++}
+diff --git a/scripts/llm-ext/src/benchmark/backfill-quality-pass.test.ts b/scripts/llm-ext/src/benchmark/backfill-quality-pass.test.ts
+new file mode 100644
+index 0000000..78ed455
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/backfill-quality-pass.test.ts
+@@ -0,0 +1,78 @@
++import { describe, it, expect } from "vitest";
++import { backfillLegacyQualityPass, type BackfillableRow } from "./backfill-quality-pass.js";
++
++interface Score {
++  macroF1: number;
++}
++/** Annotate every fixture: a bare literal infers WITHOUT `qualityPass`, so the
++ *  assertions that read it back would not type-check (vitest still ran them). */
++type Rows<S> = Record<string, BackfillableRow<S>>;
++const passes = (s: Score): boolean => s.macroF1 >= 0.5;
++
++describe("backfillLegacyQualityPass", () => {
++  it("judges a legacy row from the score it already carries, with no model call", () => {
++    const cache: Rows<Score> = {
++      "m/a:free::2026-05-24::HASH": { datasetHash: "HASH", score: { macroF1: 0.9 } },
++      "m/b:free::2026-08-02::HASH": { datasetHash: "HASH", score: { macroF1: 0.0 } },
++    };
++    expect(backfillLegacyQualityPass(cache, "HASH", passes)).toBe(2);
++    expect(cache["m/a:free::2026-05-24::HASH"].qualityPass).toBe(true);
++    expect(cache["m/b:free::2026-08-02::HASH"].qualityPass).toBe(false);
++  });
++
++  it("never overwrites a verdict written at benchmark time", () => {
++    const cache: Rows<Score> = {
++      k: { datasetHash: "HASH", score: { macroF1: 0.0 }, qualityPass: true },
++    };
++    expect(backfillLegacyQualityPass(cache, "HASH", passes)).toBe(0);
++    expect(cache.k.qualityPass).toBe(true);
++  });
++
++  it("leaves a row from a different dataset unjudged — a score is only valid against its own dataset", () => {
++    const cache: Rows<Score> = { k: { datasetHash: "OLD", score: { macroF1: 0.9 } } };
++    expect(backfillLegacyQualityPass(cache, "NEW", passes)).toBe(0);
++    expect(cache.k.qualityPass).toBeUndefined();
++  });
++
++  it("skips a row with no score rather than inventing a verdict", () => {
++    const cache: Record<string, { datasetHash?: string; score?: Score; qualityPass?: boolean }> = {
++      k: { datasetHash: "HASH" },
++    };
++    expect(backfillLegacyQualityPass(cache, "HASH", passes)).toBe(0);
++    expect(cache.k.qualityPass).toBeUndefined();
++  });
++
++  it("a malformed score does not abort the run — that row is skipped, later rows still upgrade", () => {
++    const boom = (s: Score): boolean => {
++      if ((s as unknown as { bad?: boolean }).bad) throw new Error("malformed");
++      return s.macroF1 >= 0.5;
++    };
++    const cache: Rows<Score> = {
++      bad: { datasetHash: "H", score: { bad: true } as unknown as Score },
++      good: { datasetHash: "H", score: { macroF1: 0.8 } },
++    };
++    expect(backfillLegacyQualityPass(cache, "H", boom)).toBe(1);
++    expect(cache.bad.qualityPass).toBeUndefined();
++    expect(cache.good.qualityPass).toBe(true);
++  });
++
++  it("an abstaining predicate leaves the row unjudged, never records a false", () => {
++    // security-triage's shape: an `inconclusive` run judged nothing, and
++    // writing `false` would demote a model the benchmark never scored.
++    interface Triage { pass: boolean; inconclusive?: boolean }
++    const verdict = (s: Triage): boolean | undefined => (s.inconclusive ? undefined : s.pass);
++    const cache: Rows<Triage> = {
++      incon: { datasetHash: "H", score: { pass: false, inconclusive: true } as Triage },
++      real: { datasetHash: "H", score: { pass: false } as Triage },
++    };
++    expect(backfillLegacyQualityPass(cache, "H", verdict)).toBe(1);
++    expect(cache.incon.qualityPass).toBeUndefined();
++    expect(cache.real.qualityPass).toBe(false);
++  });
++
++  it("is idempotent — a second pass upgrades nothing", () => {
++    const cache: Rows<Score> = { k: { datasetHash: "H", score: { macroF1: 0.9 } } };
++    expect(backfillLegacyQualityPass(cache, "H", passes)).toBe(1);
++    expect(backfillLegacyQualityPass(cache, "H", passes)).toBe(0);
++  });
++});
+diff --git a/scripts/llm-ext/src/benchmark/backfill-quality-pass.ts b/scripts/llm-ext/src/benchmark/backfill-quality-pass.ts
+new file mode 100644
+index 0000000..c4540ea
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/backfill-quality-pass.ts
+@@ -0,0 +1,72 @@
++/**
++ * Backfill `qualityPass` onto LEGACY ledger rows, using the score those rows
++ * already carry — no model call, no cost.
++ *
++ * WHY THIS EXISTS
++ * ---------------
++ * `free-rotation.ts::parseBenchEvidence` ranks the free pool from a per-model
++ * verdict, and for a ':free' model that verdict can ONLY come from
++ * `qualityPass`: layer 2 falls back to `qualified`, which is `false` for the
++ * entire ':free' class by design (allowFree:false), with a `disqualifyReason`
++ * that `isNonQualityReason()` then skips. So a row without `qualityPass`
++ * contributes nothing to ranking, whatever it scored.
++ *
++ * Each tool's runner already writes `qualityPass` on cache HITS as well as
++ * misses, and its comment promises "legacy rows backfill on the next benchmark
++ * run without a --force". That promise cannot be kept: the cache key is
++ * `cacheKey(model.id, today(), datasetHash)`, so a row written on an EARLIER
++ * DATE is never looked up again. A run today allocates a new key and pays for a
++ * fresh live call; the old row stays inert forever.
++ *
++ * Measured on this machine 2026-08-29: 86 ledger rows across the five per-tool
++ * files, 81 of them ':free', every one carrying a full `score` — and ZERO
++ * carrying `qualityPass`. The evidence fold was therefore empty for exactly the
++ * pool it exists to rank, which is what left a name-substring heuristic
++ * (`looksLikeClassifier`) as the whole safety property (see TRDD-6HGJFPDR).
++ *
++ * This walks the ledger by VALUE rather than by today's key, so a row's own
++ * persisted score decides its own verdict. Gated on `datasetHash`: a score is
++ * only meaningful against the dataset it was produced from, so a row from an
++ * older dataset is left alone rather than judged by today's threshold.
++ */
++
++/** The minimum row shape this needs; the real rows carry more. */
++export interface BackfillableRow<S> {
++  datasetHash?: string;
++  score?: S;
++  qualityPass?: boolean;
++}
++
++/**
++ * Set `qualityPass` on every row that lacks it, was produced from
++ * `datasetHash`, and carries a score. Returns how many rows were upgraded.
++ *
++ * Never overwrites an existing `qualityPass` — a verdict written at benchmark
++ * time was computed with that run's own thresholds and stays authoritative.
++ */
++export function backfillLegacyQualityPass<S>(
++  cache: Record<string, BackfillableRow<S>>,
++  datasetHash: string,
++  passes: (score: S) => boolean | undefined,
++): number {
++  let upgraded = 0;
++  for (const row of Object.values(cache)) {
++    if (!row || typeof row !== "object") continue;
++    if (row.qualityPass !== undefined) continue; // already judged — leave it
++    if (row.datasetHash !== datasetHash) continue; // different dataset — not comparable
++    if (row.score === undefined || row.score === null) continue; // nothing to judge
++    try {
++      // `undefined` is the predicate ABSTAINING, not a failure: security-triage
++      // marks a run `inconclusive`, and recording that as `false` would demote a
++      // model the benchmark never actually judged.
++      const verdict = passes(row.score);
++      if (verdict === undefined) continue;
++      row.qualityPass = verdict;
++      upgraded++;
++    } catch {
++      // A malformed legacy score must not abort the run that was about to
++      // benchmark real models. Leave the row unjudged and carry on.
++    }
++  }
++  return upgraded;
++}
+diff --git a/scripts/llm-ext/src/benchmark/check-specs/index.ts b/scripts/llm-ext/src/benchmark/check-specs/index.ts
+index 644ce84..d5e03c4 100644
+--- a/scripts/llm-ext/src/benchmark/check-specs/index.ts
++++ b/scripts/llm-ext/src/benchmark/check-specs/index.ts
+@@ -69,6 +69,7 @@ import {
+   type CheckSpecsCandidate,
+   type CheckSpecsSelectionResult,
+ } from "./select.js";
++import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+ 
+ /**
+  * check_against_specs has no per-tool default model of its own — it runs on the active
+@@ -423,6 +424,14 @@ export async function runCheckSpecsBenchmark(
+   progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions…`);
+ 
+   const cache = loadCache();
++  // Reclaim already-paid benchmark scores. The per-day cache key embeds
++  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
++  // an earlier date is never looked up again and its `qualityPass` — the ONLY
++  // field that gives a ':free' model a verdict in the evidence fold — is never
++  // backfilled, despite the note at the write site promising it would be.
++  // Judging those rows from the score they already carry costs no model call.
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
+   const assessments: CheckSpecsAssessment[] = [];
+   let totalCost = 0;
+ 
+@@ -734,3 +743,20 @@ function buildReportMarkdown(args: {
+   );
+   return lines.join("\n") + "\n";
+ }
++
++/**
++ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
++ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
++ * call). Same dataset-hash and pass predicate `runCheckSpecsBenchmark` uses.
++ */
++export function backfillOwnLedger(): { tool: string; upgraded: number } {
++  const fixtures: readonly SpecFixture[] = CHECK_SPECS_FIXTURES;
++  validateDataset(fixtures);
++  const datasetHash = datasetFingerprint();
++  const thresholds = DEFAULT_CHECK_SPECS_THRESHOLDS;
++
++  const cache = loadCache();
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) saveCache(cache);
++  return { tool: "check_against_specs", upgraded };
++}
+diff --git a/scripts/llm-ext/src/benchmark/code-task/index.ts b/scripts/llm-ext/src/benchmark/code-task/index.ts
+index 31becbc..1089126 100644
+--- a/scripts/llm-ext/src/benchmark/code-task/index.ts
++++ b/scripts/llm-ext/src/benchmark/code-task/index.ts
+@@ -67,6 +67,7 @@ import {
+   type CodeTaskCandidate,
+   type CodeTaskSelectionResult,
+ } from "./select.js";
++import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+ 
+ /**
+  * code_task has no per-tool default model of its own — it runs on the active
+@@ -145,6 +146,16 @@ function cacheKey(modelId: string, date: string, datasetHash: string): string {
+   return `${modelId}::${date}::${datasetHash}`;
+ }
+ 
++/**
++ * ONE definition of the dataset fingerprint. The benchmark run and
++ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
++ * rows whose `datasetHash` equals today's — so if the two ever diverge the
++ * backfill silently matches nothing and reclaims no rows, with no error.
++ */
++function datasetFingerprint(cases: readonly CodeAuditCase[]): string {
++  return createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
++}
++
+ function loadCache(): CacheFile {
+   const p = cachePath();
+   if (!existsSync(p)) return {};
+@@ -236,7 +247,7 @@ export async function runCodeAuditBenchmark(
+   validateDataset(cases);
+ 
+   // Hash the ground truth so an edit to the corpus invalidates the per-day cache.
+-  const datasetHash = createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
++  const datasetHash = datasetFingerprint(cases);
+   const thresholds = opts.thresholds ?? DEFAULT_CODE_AUDIT_THRESHOLDS;
+   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+   const progress = opts.onProgress ?? ((): void => {});
+@@ -364,6 +375,14 @@ export async function runCodeAuditBenchmark(
+   progress(`Assessing ${toAssess.size} model(s) over ${cases.length} cases…`);
+ 
+   const cache = loadCache();
++  // Reclaim already-paid benchmark scores. The per-day cache key embeds
++  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
++  // an earlier date is never looked up again and its `qualityPass` — the ONLY
++  // field that gives a ':free' model a verdict in the evidence fold — is never
++  // backfilled, despite the note at the write site promising it would be.
++  // Judging those rows from the score they already carry costs no model call.
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
+   const assessments: CodeAuditAssessment[] = [];
+   let totalCost = 0;
+ 
+@@ -700,3 +719,20 @@ export function describeWorkload(): BenchmarkWorkload {
+     maxOutputTokensPerCall: CODE_TASK_MAX_OUTPUT_TOKENS,
+   };
+ }
++
++/**
++ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
++ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
++ * call). Same dataset-hash and pass predicate `runCodeAuditBenchmark` uses.
++ */
++export function backfillOwnLedger(): { tool: string; upgraded: number } {
++  const cases: readonly CodeAuditCase[] = loadDataset();
++  validateDataset(cases);
++  const datasetHash = datasetFingerprint(cases);
++  const thresholds = DEFAULT_CODE_AUDIT_THRESHOLDS;
++
++  const cache = loadCache();
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) saveCache(cache);
++  return { tool: "code_task", upgraded };
++}
+diff --git a/scripts/llm-ext/src/benchmark/scan-folder/index.ts b/scripts/llm-ext/src/benchmark/scan-folder/index.ts
+index ef5d53f..efe3804 100644
+--- a/scripts/llm-ext/src/benchmark/scan-folder/index.ts
++++ b/scripts/llm-ext/src/benchmark/scan-folder/index.ts
+@@ -76,6 +76,7 @@ import {
+   type ScanFolderCandidate,
+   type ScanFolderSelectionResult,
+ } from "./select.js";
++import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+ 
+ /**
+  * scan_folder has no per-tool default model of its own — it runs on the active
+@@ -420,6 +421,14 @@ export async function runScanFolderBenchmark(
+   progress(`Assessing ${toAssess.size} model(s) over ${fileDecisions} file decisions…`);
+ 
+   const cache = loadCache();
++  // Reclaim already-paid benchmark scores. The per-day cache key embeds
++  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
++  // an earlier date is never looked up again and its `qualityPass` — the ONLY
++  // field that gives a ':free' model a verdict in the evidence fold — is never
++  // backfilled, despite the note at the write site promising it would be.
++  // Judging those rows from the score they already carry costs no model call.
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
+   const assessments: ScanFolderAssessment[] = [];
+   let totalCost = 0;
+ 
+@@ -709,3 +718,20 @@ function buildReportMarkdown(args: {
+   );
+   return lines.join("\n") + "\n";
+ }
++
++/**
++ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
++ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
++ * call). Same dataset-hash and pass predicate `runScanFolderBenchmark` uses.
++ */
++export function backfillOwnLedger(): { tool: string; upgraded: number } {
++  const cases: readonly ScanFolderCase[] = SCAN_FOLDER_CASES;
++  validateDataset(cases);
++  const datasetHash = datasetFingerprint();
++  const thresholds = DEFAULT_SCAN_FOLDER_THRESHOLDS;
++
++  const cache = loadCache();
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) saveCache(cache);
++  return { tool: "scan_folder", upgraded };
++}
+diff --git a/scripts/llm-ext/src/benchmark/search-existing/index.ts b/scripts/llm-ext/src/benchmark/search-existing/index.ts
+index f02f4e8..b1d24aa 100644
+--- a/scripts/llm-ext/src/benchmark/search-existing/index.ts
++++ b/scripts/llm-ext/src/benchmark/search-existing/index.ts
+@@ -76,6 +76,7 @@ import {
+ } from "./select.js";
+ import { readAndGroupFiles, buildPerFileSectionPrompt, DEFAULT_MAX_PAYLOAD_BYTES } from "../../scan-pipeline.js";
+ import type { BenchmarkWorkload } from "../workload-types.js";
++import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+ 
+ // ── P4 pre-flight workload estimate ─────────────────────────────────────────
+ 
+@@ -242,6 +243,16 @@ function cacheKey(modelId: string, date: string, datasetHash: string): string {
+   return `${modelId}::${date}::${datasetHash}`;
+ }
+ 
++/**
++ * ONE definition of the dataset fingerprint. The benchmark run and
++ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
++ * rows whose `datasetHash` equals today's — so if the two ever diverge the
++ * backfill silently matches nothing and reclaims no rows, with no error.
++ */
++function datasetFingerprint(cases: readonly SearchExistingCase[]): string {
++  return createHash("sha1").update(JSON.stringify(cases)).digest("hex").slice(0, 12);
++}
++
+ function loadCache(): CacheFile {
+   const p = cachePath();
+   if (!existsSync(p)) return {};
+@@ -337,10 +348,7 @@ export async function runSearchExistingBenchmark(
+   // Hash the in-source dataset definition so a change to the cases invalidates
+   // the per-day cache (the dataset is code, not a file path like security-triage's
+   // dataset.jsonl, so we hash its JSON projection).
+-  const datasetHash = createHash("sha1")
+-    .update(JSON.stringify(cases))
+-    .digest("hex")
+-    .slice(0, 12);
++  const datasetHash = datasetFingerprint(cases);
+   const thresholds = opts.thresholds ?? DEFAULT_SEARCH_EXISTING_THRESHOLDS;
+   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+   const progress = opts.onProgress ?? (() => {});
+@@ -465,6 +473,14 @@ export async function runSearchExistingBenchmark(
+ 
+   // 5. Run + score each model (sequential — avoids stacking rate-limit hits).
+   const cache = loadCache();
++  // Reclaim already-paid benchmark scores. The per-day cache key embeds
++  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
++  // an earlier date is never looked up again and its `qualityPass` — the ONLY
++  // field that gives a ':free' model a verdict in the evidence fold — is never
++  // backfilled, despite the note at the write site promising it would be.
++  // Judging those rows from the score they already carry costs no model call.
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
+   const assessments: SearchExistingAssessment[] = [];
+   let totalCost = 0;
+ 
+@@ -731,3 +747,19 @@ function buildReportMarkdown(args: {
+   );
+   return lines.join("\n") + "\n";
+ }
++
++/**
++ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
++ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
++ * call). Same dataset-hash and pass predicate `runSearchExistingBenchmark` uses.
++ */
++export function backfillOwnLedger(): { tool: string; upgraded: number } {
++  const cases: readonly SearchExistingCase[] = SEARCH_EXISTING_CASES;
++  const datasetHash = datasetFingerprint(cases);
++  const thresholds = DEFAULT_SEARCH_EXISTING_THRESHOLDS;
++
++  const cache = loadCache();
++  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
++  if (upgraded > 0) saveCache(cache);
++  return { tool: "search_existing_implementations", upgraded };
++}
+diff --git a/scripts/llm-ext/src/benchmark/security-triage/index.ts b/scripts/llm-ext/src/benchmark/security-triage/index.ts
+index f4bf0c1..3bd58bb 100644
+--- a/scripts/llm-ext/src/benchmark/security-triage/index.ts
++++ b/scripts/llm-ext/src/benchmark/security-triage/index.ts
+@@ -43,6 +43,7 @@ import type { FetchImpl } from "../../security_scan/judge.js";
+ import { DEFAULT_MODEL } from "../../security_scan/types.js";
+ import { buildSystemPrompt, buildUserMessage, makeNonce, preScanInjection } from "../../security_scan/prompt.js";
+ import { ASSUMED_MAX_OUTPUT_TOKENS } from "../budget.js";
++import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+ import type { BenchmarkWorkload } from "../workload-types.js";
+ 
+ import { BENCHMARK_RUBRICS, loadDataset, resolveDatasetPath, type SecurityTriageCase } from "./dataset.js";
+@@ -144,6 +145,16 @@ function cacheKey(modelId: string, date: string, datasetHash: string): string {
+   return `${modelId}::${date}::${datasetHash}`;
+ }
+ 
++/**
++ * ONE definition of the dataset fingerprint. The benchmark run and
++ * `backfillOwnLedger` both key the ledger by it, and a backfill only matches
++ * rows whose `datasetHash` equals today's — so if the two ever diverge the
++ * backfill silently matches nothing and reclaims no rows, with no error.
++ */
++function datasetFingerprint(datasetPath: string): string {
++  return createHash("sha1").update(readFileSync(datasetPath, "utf-8")).digest("hex").slice(0, 12);
++}
++
+ function loadCache(): CacheFile {
+   const p = cachePath();
+   if (!existsSync(p)) return {};
+@@ -279,7 +290,7 @@ export async function runSecurityTriageBenchmark(
+   const apiKey = resolveApiKey(opts.apiKey);
+   const datasetPath = opts.datasetPath ?? resolveDatasetPath();
+   const cases = loadDataset(datasetPath);
+-  const datasetHash = createHash("sha1").update(readFileSync(datasetPath, "utf-8")).digest("hex").slice(0, 12);
++  const datasetHash = datasetFingerprint(datasetPath);
+   const thresholds = opts.thresholds ?? DEFAULT_TRIAGE_THRESHOLDS;
+   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
+   const progress = opts.onProgress ?? (() => {});
+@@ -418,6 +429,22 @@ export async function runSecurityTriageBenchmark(
+ 
+   // 5. Run + score each model (sequential — avoids stacking rate-limit hits).
+   const cache = loadCache();
++
++  // Reclaim already-paid scores. The cache key embeds today()
++  // (`cacheKey(model.id, today(), datasetHash)`), so a row written on an
++  // earlier date is never looked up again — and `qualityPass`, the ONLY field
++  // that can give a ':free' model a verdict in the evidence fold (`qualified`
++  // is false for the whole ':free' class by design), is therefore never
++  // backfilled, despite the note at the write site promising it would be.
++  // Judging those rows from the score they already carry costs no model call.
++  // An INCONCLUSIVE run abstains — same rule as the write site above.
++  const upgraded = backfillLegacyQualityPass(
++    cache,
++    datasetHash,
++    (s: TriageScore) => (s.inconclusive ? undefined : s.pass),
++  );
++  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
++
+   const assessments: CandidateAssessment[] = [];
+   const scores: TriageScore[] = [];
+   const freeOnlySkipped: string[] = [];
+@@ -782,3 +809,24 @@ function buildReportMarkdown(args: {
+   );
+   return lines.join("\n") + "\n";
+ }
++
++/**
++ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
++ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
++ * call). Same dataset-hash and pass predicate `runSecurityTriageBenchmark` uses
++ * — `undefined` for an inconclusive run, never a false demotion.
++ */
++export function backfillOwnLedger(): { tool: string; upgraded: number } {
++  const datasetPath = resolveDatasetPath();
++  loadDataset(datasetPath);
++  const datasetHash = datasetFingerprint(datasetPath);
++
++  const cache = loadCache();
++  const upgraded = backfillLegacyQualityPass(
++    cache,
++    datasetHash,
++    (s: TriageScore) => (s.inconclusive ? undefined : s.pass),
++  );
++  if (upgraded > 0) saveCache(cache);
++  return { tool: "security_scan", upgraded };
++}

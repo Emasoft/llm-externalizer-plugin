@@ -13,8 +13,8 @@
 //   • PAID models — detected only. A dead paid model is WARNED about (so the user
 //     runs `--update-all --paid`); a new/cheaper paid model is never
 //     auto-benchmarked or auto-adopted, because benchmarking a paid model SENDS
-//     billable requests. The user's credit balance, not a benchmark, is the paid
-//     budget — spending it is the credit-driven paid→free switch, not this.
+//     billable requests. Detection only: the profile picked at command start
+//     stays fixed for the whole command — no paid→free switch, no borrow.
 //
 // This module is the PURE CORE: `computeReconcile` takes plain data (the live
 // catalog id-set, the configured models, the qualified free arrivals) and returns
@@ -28,17 +28,20 @@ import { join } from "node:path";
 
 import {
   getConfigDir,
-  getSettingsPath,
+  isDynamicProfileName,
   loadSettings,
   resolveProfile,
+  effectiveProfileName,
 } from "./config.js";
 import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
-import { filterFreeModels, type FreeModelCatalogEntry } from "./free-rotation.js";
+import {
+  filterFreeModels,
+  goneEvictedModels,
+  type FreeModelCatalogEntry,
+} from "./free-rotation.js";
 import { fetchProgrammingModels } from "./benchmark/discover.js";
-import { applyFreePoolToSettings } from "./benchmark/pick.js";
-import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
+import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/security-triage/index.js";
 import type { CatalogPriceSnapshot } from "./default-profiles.js";
-import { maybeTriggerFreePoolBench } from "./free-pool-auto-bench.js";
 
 // ── Shapes ──────────────────────────────────────────────────────────────
 
@@ -64,6 +67,27 @@ export interface ReconcileInput {
   catalogFreeQualified: readonly string[];
   /** Models with a recorded FAILING benchmark — never adopted, dropped if present. */
   benchmarkFailed: ReadonlySet<string>;
+  /**
+   * Models with a RECORDED PASSING benchmark (TRDD-FDI9NYAS D3c). A catalog
+   * arrival must be IN this set to be newly adopted into `newFreeModels` —
+   * "no model should be used unless it pass the benchmark" (USER). Distinct
+   * from `benchmarkFailed`: an id in neither set is simply never benchmarked
+   * yet, and is excluded from adoption exactly the same as a proven failure
+   * (never served, whichever reason). This only gates NEW arrivals — an
+   * already-KEPT configured id is unaffected (still dropped only by
+   * `benchmarkFailed` or going dead in the catalog), because the profile
+   * write that put it there already required a pass at the time.
+   */
+  benchmarkPassed: ReadonlySet<string>;
+  /**
+   * TRDD-W9XLU1HD AC3: free ids with >= GONE_EVICT_STRIKES persisted "gone"
+   * strikes (goneEvictedModels(), free-rotation.ts) — reconcile must NOT
+   * re-adopt these into newFreeModels, and must DROP them from the kept
+   * pool, until their strike record expires (GONE_EVICT_TTL_MS). Optional
+   * (defaults empty) so existing callers that predate the eviction gate
+   * keep compiling; the production callers pass it.
+   */
+  goneEvicted?: ReadonlySet<string>;
   /** Upper bound on the recomputed free pool, so it can't grow without limit. */
   maxFreePool?: number;
 }
@@ -88,10 +112,16 @@ export interface ReconcileVerdict {
 // Free models die often (daily rate-limit caps), so the rotation needs a DEEP
 // bench of fallbacks — 50, not a dozen (USER 2026-07-15). Cost-safety holds at any
 // size: only ':free' ids ever enter (isFreeSuffixModelId), and only models the
-// benchmark has NOT failed (filterFreeModels drops benchmarkFailed). Newly-adopted
-// models are validated by the $0 free-pool benchmark the reconcile fires on every
-// pool change, and any that FAIL it are pruned on the next reconcile — so a bigger
-// pool means more validated fallbacks, never more token-wasting garbage models.
+// benchmark has NOT failed (filterFreeModels drops benchmarkFailed). An
+// already-KEPT id that later FAILS is pruned on the next reconcile pass, same
+// as before — but TRDD-FDI9NYAS D3c retired the "adopt a brand-new arrival
+// provisionally, prune it later if the $0 bench fails" shape this comment used
+// to describe: a NEW arrival now needs a RECORDED PASS (benchmarkPassed)
+// before newFreeModels adopts it at all (USER: "no model should be used
+// unless it pass the benchmark") — it stays a benchmark CANDIDATE, never a
+// served model, until then. A bigger pool still means more validated
+// fallbacks, never more token-wasting garbage models; it just no longer means
+// "validated eventually" for a fresh arrival.
 const DEFAULT_MAX_FREE_POOL = 50;
 
 // ── Pure core ───────────────────────────────────────────────────────────
@@ -111,6 +141,8 @@ export function computeReconcile(input: ReconcileInput): ReconcileVerdict {
     configuredToolModels,
     catalogFreeQualified,
     benchmarkFailed,
+    benchmarkPassed,
+    goneEvicted = new Set<string>(),
     maxFreePool = DEFAULT_MAX_FREE_POOL,
   } = input;
 
@@ -144,11 +176,23 @@ export function computeReconcile(input: ReconcileInput): ReconcileVerdict {
   const deadFreeModels = deadModels.filter(isFreeSuffixModelId);
   const deadPaidModels = deadModels.filter((id) => !isFreeSuffixModelId(id));
 
-  // New = a qualified ':free' arrival not already pooled and not benchmark-failed.
+  // New = a qualified ':free' arrival not already pooled, not benchmark-failed,
+  // AND with a RECORDED PASS (TRDD-FDI9NYAS D3c) — a never-benchmarked catalog
+  // arrival is no longer auto-adopted provisionally; it stays a candidate for
+  // the benchmark queue until it has actually passed.
   const pooled = new Set(configuredFreePool);
+  // TRDD-W9XLU1HD AC3: an id with an in-force eviction record never re-enters
+  // the pool — neither as a NEW adoption nor (below) as a kept entry. This is
+  // the enforcement point for the persisted strike count in
+  // free-cooldowns.json; goneEvictedModels() already applied its own TTL, so
+  // an expired record simply isn't in the set and the model may return.
   const newFreeModels = catalogFreeQualified.filter(
     (id) =>
-      isFreeSuffixModelId(id) && !pooled.has(id) && !benchmarkFailed.has(id),
+      isFreeSuffixModelId(id) &&
+      !pooled.has(id) &&
+      !benchmarkFailed.has(id) &&
+      !goneEvicted.has(id) &&
+      benchmarkPassed.has(id),
   );
 
   // Recompute: keep the user's existing order first (their stated preference),
@@ -157,7 +201,7 @@ export function computeReconcile(input: ReconcileInput): ReconcileVerdict {
   // impossible for a non-':free' id (e.g. the $0 router pseudo-model
   // `openrouter/free`) to reach the pool the cost-safety chokepoint will send.
   const kept = configuredFreePool.filter(
-    (id) => !deadSet.has(id) && !benchmarkFailed.has(id),
+    (id) => !deadSet.has(id) && !benchmarkFailed.has(id) && !goneEvicted.has(id),
   );
   const newFreePool = [...kept, ...newFreeModels]
     .filter(isFreeSuffixModelId)
@@ -207,7 +251,6 @@ export function shouldReconcile(
   if (lastRunMs === null) return true;
   // 0 is a valid interval meaning "always" (nowMs - lastRunMs >= 0). Only a
   // NEGATIVE or non-finite interval is nonsense → fall back to the default.
-  // This must agree with parseReconcileInterval, which also lets 0 through.
   const interval =
     Number.isFinite(intervalMs) && intervalMs >= 0
       ? intervalMs
@@ -215,18 +258,11 @@ export function shouldReconcile(
   return nowMs - lastRunMs >= interval;
 }
 
-/** Parse LLM_EXT_RECONCILE_INTERVAL_MS. `0` DISABLES throttling (reconcile every
- *  call — for tests/debugging); a bad value → the default. Empty/unset → default. */
-export function parseReconcileInterval(raw: string | undefined): number {
-  if (raw === undefined || raw.trim() === "") return DEFAULT_RECONCILE_INTERVAL_MS;
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n < 0) return DEFAULT_RECONCILE_INTERVAL_MS;
-  return n; // 0 is intentionally allowed → "always reconcile"
-}
-
+/** LLM_EXT_RECONCILE_INTERVAL_MS is retired (design addendum F): the catalog
+ *  disk cache (catalog-cache.ts, LLM_EXT_CATALOG_TTL_MS) is now the fetch-cost
+ *  throttle, so this env var no longer configures anything — reconcile always
+ *  uses DEFAULT_RECONCILE_INTERVAL_MS. */
 export const DISABLE_RECONCILE_ENV = "LLM_EXT_DISABLE_AUTO_RECONCILE";
-export const RECONCILE_INTERVAL_ENV = "LLM_EXT_RECONCILE_INTERVAL_MS";
-
 // ── Throttle-state file (shared by the MCP server AND the CLI) ───────────
 // One tiny JSON file records when a full reconcile last ran. Both processes read
 // it so that a CLI run right after an MCP run doesn't re-fetch the catalog, and
@@ -273,6 +309,14 @@ export interface ReconcileConfigured {
   freePool: string[];
   /** Distinct tool_models values. */
   toolModels: string[];
+  /**
+   * True iff the active profile is a STATIC (non-machine-managed) profile —
+   * gates the dead-id warning above. Optional so an existing caller that
+   * builds this object without the field (e.g. the MCP surface, wired
+   * separately) simply never triggers that warning yet — never a type
+   * break, never a false claim either way (undefined ⇒ treated as false).
+   */
+  isStatic?: boolean;
 }
 
 export interface ReconcileDeps {
@@ -291,6 +335,8 @@ export interface ReconcileDeps {
    *  catalog to reconcile against) or no profile is resolved. */
   getConfigured: () => ReconcileConfigured | null;
   benchmarkFailed: () => Set<string>;
+  /** TRDD-FDI9NYAS D3c — see ReconcileInput.benchmarkPassed. */
+  benchmarkPassed: () => Set<string>;
   /** Persist the recomputed free pool to settings AND update the in-memory pool
    *  the current run reads. Returns true iff a write actually happened. */
   applyFreePool: (pool: string[]) => boolean;
@@ -318,8 +364,17 @@ export interface ReconcileOutcome {
  *   3. not OpenRouter / no profile → skip.
  *   4. catalog fetch fails / empty → record the timestamp (we DID look) and skip
  *      the effects: fail-open, the run proceeds on the existing config.
- *   5. otherwise: compute the verdict, and ONLY when the free class changed,
- *      write settings + launch the $0 benchmark; always surface paid warnings.
+ *   5. a STATIC profile (`cfg.isStatic`) is WARNED about (dead ids), never
+ *      written — see "Rule 5 for STATIC profiles" below.
+ *   6. otherwise: compute the verdict, and ONLY when the free class changed
+ *      AND `deps.applyFreePool` actually writes, launch the $0 benchmark;
+ *      always surface paid warnings. `makeCliReconcileDeps`'s OWN
+ *      `applyFreePool` is a permanent no-op (`() => false`) — a DYNAMIC
+ *      profile ('free'/'paid') is maintained by decideDynamicProfile's own
+ *      $0 patch (default-profiles.ts) instead, outside this function
+ *      entirely — so for the CLI wiring, step 6's write+relaunch branch
+ *      never actually fires. It stays in `ReconcileDeps`'s generic contract
+ *      for any OTHER implementer that still wants it.
  *
  * Every effect is injected, so this is fully offline-testable. It never throws
  * into the caller — a reconcile failure must never break the tool the user ran.
@@ -331,8 +386,10 @@ export async function reconcileModelsBeforeWork(
     return { outcome: "skipped", reason: "disabled via env", verdict: null };
   }
   const now = deps.now();
-  const interval = parseReconcileInterval(deps.env[RECONCILE_INTERVAL_ENV]);
-  if (!shouldReconcile(deps.readLastRunMs(), now, interval)) {
+  // LLM_EXT_RECONCILE_INTERVAL_MS is retired (design addendum F) — the
+  // catalog's own disk-cache TTL (catalog-cache.ts) is the fetch-cost
+  // throttle now; this call's own interval is fixed at the default.
+  if (!shouldReconcile(deps.readLastRunMs(), now, DEFAULT_RECONCILE_INTERVAL_MS)) {
     return { outcome: "skipped", reason: "throttled", verdict: null };
   }
   const cfg = deps.getConfigured();
@@ -357,6 +414,12 @@ export async function reconcileModelsBeforeWork(
     configuredToolModels: cfg.toolModels,
     catalogFreeQualified: catalog.freeQualified,
     benchmarkFailed: deps.benchmarkFailed(),
+    benchmarkPassed: deps.benchmarkPassed(),
+    // TRDD-W9XLU1HD AC3: the persisted eviction list (free-cooldowns.json's
+    // goneStrikes) — read live at reconcile time so an exclusion a rotation
+    // run wrote minutes ago is honoured on this pass, and an expired one
+    // (past GONE_EVICT_TTL_MS) is already absent from the set.
+    goneEvicted: goneEvictedModels(now),
     maxFreePool: deps.maxFreePool,
   });
 
@@ -364,10 +427,31 @@ export async function reconcileModelsBeforeWork(
   // cause a re-fetch storm on the next call.
   deps.writeLastRunMs(now);
 
+  // A STATIC profile is used exactly as written and is NEVER auto-edited by
+  // llm-ext (design addendum, "Rule 5 for STATIC profiles") — the settings
+  // write below is retired for it (makeCliReconcileDeps's own applyFreePool
+  // no longer writes settings.yaml; deps.applyFreePool stays in the
+  // interface only for a caller that still wants the old behavior). All a
+  // static profile gets here is a WARNING, once per reconcile throttle
+  // window, about ids that fell out of the catalog.
+  if (cfg.isStatic === true && (verdict.deadFreeModels.length > 0 || verdict.deadPaidModels.length > 0)) {
+    deps.log(
+      `[llm-externalizer] Model reconcile: configured model(s) no longer in the OpenRouter ` +
+        `catalog: ${[...verdict.deadFreeModels, ...verdict.deadPaidModels].join(", ")}. This profile ` +
+        `is static and is never auto-edited by llm-ext; update settings.yaml by hand, or switch to ` +
+        `the 'free'/'paid' dynamic profile to have it maintained automatically.\n`,
+    );
+  }
+
   // Persist + re-benchmark ONLY when the free class actually changed, and never
   // with an empty pool (applyFreePoolToSettings rejects that — an empty
-  // free_models would break free_only).
-  if (verdict.freePoolChanged && verdict.newFreePool.length > 0) {
+  // free_models would break free_only). TRDD-FDI9NYAS D3b: also never for a
+  // STATIC profile — the paragraph above already says the write is retired
+  // for it, but until now that claim relied ENTIRELY on makeCliReconcileDeps's
+  // own applyFreePool being a no-op stub. Gating it here too means the
+  // guarantee holds for ANY caller of this orchestrator, not just the one
+  // production wiring that happens to pass a no-op.
+  if (cfg.isStatic !== true && verdict.freePoolChanged && verdict.newFreePool.length > 0) {
     // The effects are wrapped, not trusted. This function's contract is "never
     // throws into the caller" — it runs as a PRE-FLIGHT on every work tool, so a
     // throw here fails the tool the user actually asked for, over a background
@@ -471,9 +555,11 @@ export function makeCliReconcileDeps(): ReconcileDeps {
     fetchCatalog: async () => catalogForReconcile(await fetchProgrammingModels()),
     getConfigured: (): ReconcileConfigured | null => {
       const s = loadSettings();
-      const active = s?.profiles[s.active];
-      if (!s || !active) return null;
-      const r = resolveProfile(s.active, active);
+      if (!s) return null;
+      const activeName = effectiveProfileName(s);
+      const active = s.profiles[activeName];
+      if (!active) return null;
+      const r = resolveProfile(activeName, active);
       if (r.protocol !== "openrouter_api") return null; // only OpenRouter has a catalog
       const ensemble = [r.model, r.secondModel, r.thirdModel].filter(
         (x): x is string => typeof x === "string" && x.length > 0,
@@ -487,34 +573,28 @@ export function makeCliReconcileDeps(): ReconcileDeps {
       const freePool = Array.isArray(rawFree)
         ? rawFree.filter((v): v is string => typeof v === "string")
         : [];
-      return { ensemble, freePool, toolModels };
+      return { ensemble, freePool, toolModels, isStatic: !isDynamicProfileName(activeName) };
     },
     benchmarkFailed: () => benchmarkFailedModels(),
-    applyFreePool: (pool) => {
-      try {
-        const s = loadSettings();
-        if (!s) return false;
-        applyFreePoolToSettings(getSettingsPath(), s.active, pool);
-        return true; // the command re-reads settings.yaml, so no in-memory update needed
-      } catch (err) {
-        process.stderr.write(
-          `[llm-externalizer] Model reconcile: could not write free pool: ${
-            err instanceof Error ? err.message : String(err)
-          }\n`,
-        );
-        return false;
-      }
-    },
-    launchFreeBench: (reason) => {
-      maybeTriggerFreePoolBench({
-        activeProfile: loadSettings()?.active ?? "unknown",
-        freeOnlyActive: true,
-        freeOnlyWasOn: null,
-        log: (m) => process.stderr.write(m),
-        force: true,
-        env: { ...process.env, LLM_EXT_AUTO_BENCH_REASON: reason },
-      });
-    },
+    benchmarkPassed: () => benchmarkPassedModels(),
+    // Deliberately a no-op: a STATIC profile is never auto-written by
+    // llm-ext (design addendum, "Rule 5 for STATIC profiles") — the write
+    // this used to perform (applyFreePoolToSettings into s.active) is
+    // retired. A DYNAMIC profile ('free'/'paid') is instead maintained by
+    // decideDynamicProfile's own $0 patch (default-profiles.ts), which does
+    // not route through this CLI-reconcile deps object at all. Kept as a
+    // stub (rather than deleted) so the ReconcileDeps contract stays
+    // satisfied for reconcileModelsBeforeWork's generic effect block.
+    applyFreePool: () => false,
+    // Retired with free-pool-auto-bench.ts (P6b item 6): applyFreePool above
+    // is already a no-op, so there is never a fresh pool change here to
+    // re-score — the second lock free-pool-auto-bench.ts used to take
+    // (free-pool-bench.lock, alongside the per-profile default-profile-<name>
+    // .lock) could race the SAME settings.yaml (design §2.4 addendum), which
+    // is exactly the defect this retirement removes. A dynamic profile's
+    // candidates are queued and benchmarked by the maintainer's own
+    // populateDefaultProfile spawn (dynamic-maintainer.ts) instead.
+    launchFreeBench: () => {},
     log: (m) => process.stderr.write(m),
   };
 }

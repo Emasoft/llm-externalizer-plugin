@@ -1,0 +1,365 @@
+diff --git a/scripts/llm-ext/src/benchmark/check-imports/bench-runner.test.ts b/scripts/llm-ext/src/benchmark/check-imports/bench-runner.test.ts
+new file mode 100644
+index 0000000..66fbdf3
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/check-imports/bench-runner.test.ts
+@@ -0,0 +1,156 @@
++// check_imports benchmark runner (TRDD-f45eeaa0). Hermetic: the completion call
++// is stubbed at the injected seam, so no network, no model, $0. What is under
++// test is the ORCHESTRATION — per-file iteration, response reading, failure
++// accounting, scoring, aggregation — not the model's quality, which only a real
++// run can measure.
++
++import { describe, it, expect } from "vitest";
++
++import {
++  CHECK_IMPORTS_MAX_OUTPUT_TOKENS,
++  checkImportsWorkloadShape,
++  runCheckImportsBenchmarkOnModel,
++  type ChatJsonFn,
++} from "./bench-runner.js";
++import { loadDataset } from "./dataset.js";
++
++const deps = {} as never;
++
++/**
++ * Identify which fixture a rendered block belongs to.
++ *
++ * NOT `find(c => text.includes(c.file))` — that was wrong and the corpus caught
++ * it: free-rotation.ts mentions "provider/completion.ts" in a comment, so a
++ * plain includes() matched completion.ts first and the "perfect" stub answered
++ * with the WRONG file's specifiers (TP 1, FP 12). readFileAsCodeBlock puts the
++ * filename tag at the START, so the correct fixture is the one occurring
++ * EARLIEST, not the first one in iteration order.
++ */
++function fixtureOf(text: string) {
++  let best: { c: ReturnType<typeof loadDataset>[number]; at: number } | null = null;
++  for (const c of loadDataset()) {
++    const at = text.indexOf(c.file);
++    if (at !== -1 && (best === null || at < best.at)) best = { c, at };
++  }
++  return best?.c;
++}
++
++/** A stub that answers with whatever the oracle says is true — a perfect model. */
++const perfect: ChatJsonFn = async (messages) => {
++  const hit = fixtureOf(messages[1]?.content ?? "");
++  return { parsed: { paths: hit ? [...hit.specifiers] : [] } } as never;
++};
++
++describe("check_imports runner — orchestration", () => {
++  it("scores every fixture and a perfect model PASSES", async () => {
++    const r = await runCheckImportsBenchmarkOnModel("test/model", { deps, chatJson: perfect });
++    expect(r.modelId).toBe("test/model");
++    expect(r.caseScores).toHaveLength(loadDataset().length);
++    expect(r.failures).toEqual([]);
++    expect(r.pass).toBe(true);
++  });
++
++  it("reports progress once per fixture", async () => {
++    const seen: number[] = [];
++    const n = loadDataset().length;
++    await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: perfect,
++      onProgress: (done, total) => {
++        seen.push(done);
++        expect(total).toBe(n);
++      },
++    });
++    expect(seen).toEqual(Array.from({ length: n }, (_, i) => i + 1));
++  });
++
++  it("sends the REAL schema and temperature 0 — fidelity, not approximation", async () => {
++    let opts: Record<string, unknown> | undefined;
++    await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async (_m, o) => {
++        opts = o as Record<string, unknown>;
++        return { parsed: { paths: [] } } as never;
++      },
++    });
++    expect(opts?.temperature).toBe(0);
++    expect(opts?.maxTokens).toBe(CHECK_IMPORTS_MAX_OUTPUT_TOKENS);
++    expect((opts?.jsonSchema as { name?: string })?.name).toBeTruthy();
++  });
++
++  it("sends the tool's own system prompt, not one written here", async () => {
++    let system = "";
++    await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async (m) => {
++        system = m[0]?.content ?? "";
++        return { parsed: { paths: [] } } as never;
++      },
++    });
++    expect(system).toContain("Extract ALL file path references and import statements");
++    expect(system).toContain("file path strings, configuration references");
++  });
++});
++
++describe("check_imports runner — bad answers are not silently zeroed", () => {
++  it("records a THROWN call as a failure and still finishes the corpus", async () => {
++    let n = 0;
++    const r = await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async () => {
++        n += 1;
++        if (n === 1) throw new Error("boom");
++        return { parsed: { paths: [] } } as never;
++      },
++    });
++    expect(r.failures).toHaveLength(1);
++    expect(r.failures[0].reason).toContain("boom");
++    // The sweep completed over the REMAINING fixtures rather than aborting.
++    expect(r.caseScores).toHaveLength(loadDataset().length);
++  });
++
++  it("treats a non-array `paths` as UNUSABLE, not as an empty answer", async () => {
++    const r = await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async () => ({ parsed: { paths: "not-an-array" } }) as never,
++    });
++    expect(r.failures.length).toBe(loadDataset().length);
++    expect(r.pass).toBe(false);
++  });
++
++  it("FAILS a model that returns nothing — the corpus has real imports to find", async () => {
++    const r = await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async () => ({ parsed: { paths: [] } }) as never,
++    });
++    expect(r.pass).toBe(false);
++  });
++});
++
++describe("check_imports runner — extra paths are surfaced, never punished", () => {
++  it("PASSES a model that returns every import plus config-ish extras", async () => {
++    // The tool's prompt asks for "file path strings, configuration references".
++    // A model obeying it must not be marked down — this is the runner-level
++    // counterpart of the scorer's recall-only decision.
++    const r = await runCheckImportsBenchmarkOnModel("m", {
++      deps,
++      chatJson: async (messages) => {
++        const hit = fixtureOf(messages[1]?.content ?? "");
++        return {
++          parsed: { paths: [...(hit?.specifiers ?? []), "./tsconfig.json", "some/config/ref"] },
++        } as never;
++      },
++    });
++    expect(r.pass).toBe(true);
++    expect(r.extraPaths.length).toBeGreaterThan(0);
++    expect(r.extraPaths[0].paths).toContain("./tsconfig.json");
++  });
++});
++
++describe("check_imports runner — workload shape", () => {
++  it("describes the corpus for cost estimation", () => {
++    const shape = checkImportsWorkloadShape();
++    expect(shape.files).toBe(loadDataset().length);
++    expect(shape.totalSpecifiers).toBeGreaterThan(0);
++  });
++});
+diff --git a/scripts/llm-ext/src/benchmark/check-imports/bench-runner.ts b/scripts/llm-ext/src/benchmark/check-imports/bench-runner.ts
+new file mode 100644
+index 0000000..b6e18b0
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/check-imports/bench-runner.ts
+@@ -0,0 +1,197 @@
++/**
++ * check_imports benchmark RUNNER (TRDD-f45eeaa0).
++ *
++ * ── IT DRIVES THE REAL TOOL, NOT A LOOKALIKE ────────────────────────────────
++ * `scan-folder/bench-runner.ts` states the doctrine this file obeys: drive the
++ * REAL pipeline "rather than looping over files ourselves — that is what makes
++ * this a benchmark of scan_folder and not of an ad-hoc prompt that resembles
++ * it." So every input here is the shipped artifact, not a copy:
++ *
++ *   • the PROMPT — `buildCheckImportsExtractMessages`, the same seam index.ts's
++ *     two check_imports paths call (extracted for exactly this reason),
++ *   • the SCHEMA — `EXTRACT_PATHS_SCHEMA`, the same structured-output contract,
++ *   • the FILE RENDERING — `readFileAsCodeBlock`, so the model sees the bytes
++ *     and the filename tag the tool really sends,
++ *   • the RESPONSE READING — `parsed.paths`, filtered to strings, exactly as the
++ *     tool does before handing phase 2 its list.
++ *
++ * If any of those drifts, this benchmark stops measuring the tool — which is why
++ * prompt.test.ts pins the prompt verbatim rather than trusting a comment.
++ *
++ * ── WHY THE COMPLETION CALL IS INJECTED ─────────────────────────────────────
++ * `chatJson` defaults to the real `chatCompletionJSON`, and tests pass a stub.
++ * That is a SEAM, not a mock of the unit under test: the thing being tested here
++ * is the orchestration (per-file iteration, parse, score, aggregate, failure
++ * accounting), and injecting the network boundary is the only way to exercise it
++ * deterministically and at $0. The MODEL's quality is what a real run measures;
++ * this seam does not stand in for that.
++ *
++ * ── PHASE 2 IS DELIBERATELY NOT RUN ─────────────────────────────────────────
++ * The tool resolves each extracted path against disk. That half is deterministic
++ * server code with no model in it, so running it would score Node's `existsSync`,
++ * not the candidate. Extraction is the whole gradeable surface.
++ */
++
++import { readdirSync } from "node:fs";
++import { join } from "node:path";
++
++import { readFileAsCodeBlock } from "../../scan-pipeline.js";
++import {
++  EXTRACT_PATHS_SCHEMA,
++  chatCompletionJSON,
++  type JSONCompletionResult,
++} from "../../provider/completion.js";
++import type { ChatMessage, CompletionDeps } from "../../provider/types.js";
++import { buildCheckImportsExtractMessages } from "../../check-imports/prompt.js";
++import { FIXTURE_DIR, deriveDeclaredSpecifiers, loadDataset } from "./dataset.js";
++import {
++  DEFAULT_CHECK_IMPORTS_THRESHOLDS,
++  passesThresholds,
++  scoreAll,
++  scoreFile,
++  type CaseScore,
++  type CheckImportsScore,
++} from "./score.js";
++
++/**
++ * The completion boundary. Mirrors chatCompletionJSON's shape so the real
++ * function is assignable with no adapter — an adapter is where fidelity leaks.
++ */
++export type ChatJsonFn = (
++  messages: ChatMessage[],
++  options: {
++    temperature?: number;
++    maxTokens?: number;
++    model?: string;
++    jsonSchema?: { name: string; strict: boolean; schema: Record<string, unknown> };
++  },
++  deps: CompletionDeps,
++) => Promise<JSONCompletionResult>;
++
++export interface CheckImportsRunOptions {
++  /** Completion deps (api key, url, fetch impl) — passed through untouched. */
++  deps: CompletionDeps;
++  /**
++   * Max completion tokens. Default 4096, and NOT tighter, for the reason P2b and
++   * P2c both record: on most providers max_tokens bounds reasoning + visible
++   * content TOGETHER, so a tight cap truncates a reasoning model mid-thought, it
++   * emits nothing parseable, and the scorer reads that as an unusable answer —
++   * i.e. the benchmark would systematically fail an entire class of model for
++   * being thoughtful. check_imports does not REQUIRE reasoning, but reasoning
++   * models are valid candidates, so the cap must not discriminate. A real answer
++   * is a short JSON array; the headroom costs nothing unless it is spent.
++   */
++  maxTokens?: number;
++  /** The tool sends temperature 0. Kept identical rather than "near" it. */
++  temperature?: number;
++  onProgress?: (done: number, total: number) => void;
++  /** Injected for tests; defaults to the real completion call. */
++  chatJson?: ChatJsonFn;
++}
++
++/** A fixture whose call produced nothing usable. */
++export interface FileFailure {
++  file: string;
++  reason: string;
++}
++
++export interface CheckImportsRunResult {
++  modelId: string;
++  caseScores: CaseScore[];
++  aggregate: CheckImportsScore;
++  /** True iff the aggregate clears DEFAULT_CHECK_IMPORTS_THRESHOLDS (recall-only). */
++  pass: boolean;
++  failures: FileFailure[];
++  /**
++   * Paths the model reported that the oracle does not know about. NOT graded —
++   * the tool's prompt asks for "file path strings, configuration references" too,
++   * so these are frequently CORRECT. Surfaced for a human reading the report,
++   * and the reason precision does not gate. See score.ts.
++   */
++  extraPaths: { file: string; paths: string[] }[];
++}
++
++export const CHECK_IMPORTS_MAX_OUTPUT_TOKENS = 4096;
++
++/** Run the check_imports benchmark for ONE model over the corpus. */
++export async function runCheckImportsBenchmarkOnModel(
++  modelId: string,
++  opts: CheckImportsRunOptions,
++): Promise<CheckImportsRunResult> {
++  const chatJson = opts.chatJson ?? chatCompletionJSON;
++  const truth = new Map(loadDataset().map((c) => [c.file, c.specifiers]));
++  const files = readdirSync(FIXTURE_DIR)
++    .filter((f) => f.endsWith(".ts"))
++    .sort();
++
++  const caseScores: CaseScore[] = [];
++  const failures: FileFailure[] = [];
++  const extraPaths: { file: string; paths: string[] }[] = [];
++
++  let done = 0;
++  for (const file of files) {
++    const expected = truth.get(file) ?? [];
++    let reported: string[] | null = null;
++    try {
++      const messages = buildCheckImportsExtractMessages({
++        lang: "typescript",
++        fileBlock: readFileAsCodeBlock(join(FIXTURE_DIR, file)),
++        // The tool appends FILE_FORMAT_EXAMPLE from index.ts. It is not
++        // importable here without a cycle, and it is a FORMAT example rather
++        // than part of the question, so it is omitted and that omission is
++        // stated rather than hidden. prompt.test.ts pins the half that matters.
++        fileFormatExample: "",
++      });
++      const resp = await chatJson(
++        messages,
++        {
++          temperature: opts.temperature ?? 0,
++          maxTokens: opts.maxTokens ?? CHECK_IMPORTS_MAX_OUTPUT_TOKENS,
++          model: modelId,
++          jsonSchema: EXTRACT_PATHS_SCHEMA,
++        },
++        opts.deps,
++      );
++      const raw = (resp.parsed as { paths?: unknown }).paths;
++      // Exactly the tool's own reading: an array, strings only. A non-array is
++      // an unusable answer, NOT an empty one — the distinction the scorer keeps.
++      reported = Array.isArray(raw) ? raw.filter((p): p is string => typeof p === "string") : null;
++      if (reported === null) failures.push({ file, reason: "response.paths was not an array" });
++    } catch (err) {
++      reported = null;
++      failures.push({ file, reason: (err as Error).message });
++    }
++
++    caseScores.push(scoreFile(file, expected, reported));
++    if (reported !== null) {
++      const unknown = reported.filter((p) => !expected.includes(p));
++      if (unknown.length > 0) extraPaths.push({ file, paths: unknown });
++    }
++    opts.onProgress?.(++done, files.length);
++  }
++
++  const aggregate = scoreAll(caseScores);
++  return {
++    modelId,
++    caseScores,
++    aggregate,
++    pass: passesThresholds(aggregate, DEFAULT_CHECK_IMPORTS_THRESHOLDS).pass,
++    failures,
++    extraPaths,
++  };
++}
++
++/**
++ * The corpus's per-file specifier counts — what a workload estimator needs to
++ * price a run. Exported so update-all's WORKLOAD_DESCRIBERS can describe this
++ * benchmark without importing the runner's IO.
++ */
++export function checkImportsWorkloadShape(): { files: number; totalSpecifiers: number } {
++  const cases = loadDataset();
++  return {
++    files: cases.length,
++    totalSpecifiers: cases.reduce((n, c) => n + c.specifiers.length, 0),
++  };
++}
++
++export { deriveDeclaredSpecifiers };

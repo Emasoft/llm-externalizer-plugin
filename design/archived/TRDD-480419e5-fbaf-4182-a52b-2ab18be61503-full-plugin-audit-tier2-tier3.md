@@ -27,7 +27,7 @@ task-type: feature
 **v9.8.0 auto-router repair (85f8417, audit SR-P1-001/002/003/004):**
 - ✅ Fixed `awk '/^\*\*File:\*\*/'` pattern that never matched real MCP `scan_folder` reports (which emit `## File:`). Now uses multi-pattern grep covering all 3 known report shapes.
 - ✅ Fixed per-bug serial-router always inspecting first `File:` line. Now awk state machine finds next-up unfixed bug.
-- ✅ Removed `tr -d ' '` that stripped spaces from paths like `/Users/Name Surname/...`.
+- ✅ Removed `tr -d ' '` that stripped spaces from paths like `~/Name Surname/...`.
 - ✅ Added `[[ -f "$report" ]]` existence check before `wc -l` to silence stderr.
 
 **Pre-push hook hardening (a10415b):**

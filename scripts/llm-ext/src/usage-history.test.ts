@@ -22,6 +22,9 @@ import {
   formatCost,
   localIsoTimestamp,
   formatHistoryLine,
+  parseHistoryLine,
+  readHistory,
+  countByEndpoint,
   getHistoryPath,
   newOpId,
   type UsageContext,
@@ -354,3 +357,80 @@ describe("newOpId", () => {
 function makeCtx(tool: string, opId: string): UsageContext {
   return { tool, params: "", project: "/p", opId };
 }
+
+// L1-10 (TRDD-TD6XP9GE): an optional endpoint field marks decisions calls; lines without it are the old format and still read.
+describe("endpoint field (L1-10)", () => {
+  const base = {
+    timestamp: "2026-05-24T09:08:07+0200",
+    project: "/work/proj",
+    tool: "classify",
+    params: "a=1",
+    ok: true,
+    durationMs: 1500,
+    costUsd: 0.0015,
+    opId: "op-deadbeef",
+  };
+  it("formatHistoryLine appends endpoint=<name> as an 8th field only when an endpoint is given", () => {
+    expect(formatHistoryLine({ ...base, endpoint: "decisions" })).toBe(
+      "2026-05-24T09:08:07+0200 - /work/proj - classify(a=1) - SUCCESS - 1.5s - $0.001500 - op-deadbeef - endpoint=decisions",
+    );
+    expect(formatHistoryLine(base)).not.toContain("endpoint=");
+  });
+  it("formatHistoryLine refuses an endpoint name that would make the line ambiguous", () => {
+    expect(() => formatHistoryLine({ ...base, endpoint: "a - b" })).toThrow(RangeError);
+    expect(() => formatHistoryLine({ ...base, endpoint: "" })).toThrow(RangeError);
+  });
+  it("recordRequest writes the endpoint field inside a context", () => {
+    withUsageContext({ tool: "classify", params: "", project: "/p" }, () => {
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0, endpoint: "systemone" });
+    });
+    expect(readLines()[0]).toMatch(/ - op-[0-9a-f]{8} - endpoint=systemone$/);
+  });
+  it("parseHistoryLine reads a new line with its endpoint", () => {
+    expect(parseHistoryLine(formatHistoryLine({ ...base, endpoint: "decisions" }))).toEqual({ ...base, params: undefined, tool: "classify(a=1)", endpoint: "decisions" });
+  });
+  it("parseHistoryLine reads an old 7-field line (no endpoint) exactly as before", () => {
+    const old = "2026-05-24T09:08:07+0200 - /work/proj - chat(a=1) - FAIL - 250ms - $0.000000 - op-00000001";
+    expect(parseHistoryLine(old)).toEqual({
+      timestamp: "2026-05-24T09:08:07+0200",
+      project: "/work/proj",
+      tool: "chat(a=1)",
+      ok: false,
+      durationMs: 250,
+      costUsd: 0,
+      opId: "op-00000001",
+    });
+  });
+  it("parseHistoryLine keeps a project path and params that contain the field separator", () => {
+    const line = formatHistoryLine({ ...base, project: "/My - Work/proj (x)", params: "q=a - b", endpoint: "decisions" });
+    const e = parseHistoryLine(line);
+    expect(e.project).toBe("/My - Work/proj (x)");
+    expect(e.tool).toBe("classify(q=a - b)");
+    expect(e.endpoint).toBe("decisions");
+  });
+  it("parseHistoryLine refuses a malformed line", () => {
+    expect(() => parseHistoryLine("not a history line")).toThrow(/history line/);
+    expect(() => parseHistoryLine("t - p - tool() - MAYBE - 5ms - $0.000000 - op-00000001")).toThrow(/history line/);
+  });
+  it("readHistory returns old and new lines together; a missing file is an empty history", () => {
+    expect(readHistory()).toEqual([]);
+    withUsageContext({ tool: "chat", params: "", project: "/p" }, () => {
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0.5 });
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0.25, endpoint: "decisions" });
+      recordRequest({ ok: false, durationMs: 5, costUsd: 0, endpoint: "decisions" });
+    });
+    const entries = readHistory();
+    expect(entries.map((e) => e.endpoint)).toEqual([undefined, "decisions", "decisions"]);
+  });
+  it("countByEndpoint shows decisions calls and groups entries without the field as unspecified", () => {
+    withUsageContext({ tool: "chat", params: "", project: "/p" }, () => {
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0.5 });
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0.25, endpoint: "decisions" });
+      recordRequest({ ok: true, durationMs: 5, costUsd: 0.25, endpoint: "decisions" });
+    });
+    expect(countByEndpoint(readHistory())).toEqual({
+      unspecified: { requests: 1, costUsd: 0.5 },
+      decisions: { requests: 2, costUsd: 0.5 },
+    });
+  });
+});

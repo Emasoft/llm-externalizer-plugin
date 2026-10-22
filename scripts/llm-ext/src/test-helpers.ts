@@ -20,7 +20,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { copyFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
   type ResolvedProfile,
   HIGH_QUALITY_MODEL_DEFAULTS,
@@ -28,6 +28,7 @@ import {
   resolveProfile,
   ensureSettingsExist,
   getSettingsPath,
+  effectiveProfileName,
 } from "./config.js";
 
 const execFileAsync = promisify(execFile);
@@ -102,6 +103,7 @@ const LOCAL_TEST_SETTINGS_YAML = [
 function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
   return {
     name: LOCAL_TEST_PROFILE_NAME,
+    profileType: "local",
     mode: "local",
     protocol: "openai_api",
     url: LOCAL_TEST_URL,
@@ -117,6 +119,15 @@ function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
     appName: "",
     httpReferer: "",
     highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,
+    // A local test server: not billable, and not a free-by-nature REMOTE provider
+    // (that flag is about paid-capable hosts that happen to charge nothing).
+    isLocal: true,
+    isFreeProvider: false,
+    // Single-provider: no extra routes, so every model goes to the primary
+    // backend — the behaviour every profile had before multi-provider existed.
+    routes: [],
+    routesFor: (): never[] => [],
+    routeForModel: (): null => null,
   };
 }
 
@@ -148,11 +159,12 @@ export function resolveTestConfig(options: TestConfigOptions): TestConfig {
     );
   }
 
-  const profile = settings.profiles[settings.active];
-  const resolved = resolveProfile(settings.active, profile);
+  const activeName = effectiveProfileName(settings);
+  const profile = settings.profiles[activeName];
+  const resolved = resolveProfile(activeName, profile);
   const timeout = options.timeout ?? resolved.timeout;
 
-  return { activeProfile: settings.active, resolved, timeout, testName: options.testName, liveBackend: true };
+  return { activeProfile: activeName, resolved, timeout, testName: options.testName, liveBackend: true };
 }
 
 /** Text-content result of one CLI invocation, shaped like the old MCP `ToolResult`
@@ -211,7 +223,13 @@ export async function runCli(
 ): Promise<CliResult> {
   const quiet = options.quiet ?? true;
   const timeoutMs = options.timeoutMs ?? config.timeout * 1000;
-  const outputDir = `/tmp/__llm_ext_${config.testName}_output`;
+  // mkdtempSync, not a fixed `${testName}`-based name: vitest runs test files
+  // in parallel worker processes, so two files sharing a testName could race
+  // — one call's `finally` rmSync'd the dir while another file's spawned CLI
+  // was still writing its report into it (TRDD-90DM5YHO's cleanup made this
+  // observable: the shared dir now gets deleted out from under the slower
+  // call instead of silently accumulating).
+  const outputDir = mkdtempSync(`/tmp/__llm_ext_${config.testName}_output_`);
 
   // Isolate the spawned process's config dir so its usage-history.log (and any
   // settings-edit side effects) land in a throwaway /tmp dir instead of the
@@ -234,6 +252,18 @@ export async function runCli(
   }
 
   const cliArgs = [CLI_SCRIPT, toolName, ...serializeFlags(args)];
+  // P6 item 2: `--profile`'s omission now resolves to the built-in 'free'
+  // default, NOT settings.yaml's (now-inert) `active:` key — so without this
+  // flag every non-live call here would silently stop using the synthetic
+  // LOCAL_TEST_PROFILE_NAME fixture and try the real 'free' (OpenRouter)
+  // profile instead, which is both a correctness break for any test
+  // asserting on the local-unreachable fixture's fields AND a COST-SAFETY
+  // regression (a real OPENROUTER_API_KEY in the environment would let a
+  // free-tier request actually go out). Pin it explicitly. Live-backend
+  // calls are unaffected on purpose — a live suite exercises the real
+  // settings.yaml exactly as an interactive user would invoke it, and an
+  // interactive user gets the same 'free' default under item 2.
+  if (!config.liveBackend) cliArgs.push("--profile", LOCAL_TEST_PROFILE_NAME);
   if (quiet) cliArgs.push("--quiet");
 
   try {
@@ -241,7 +271,7 @@ export async function runCli(
       env: {
         ...process.env,
         // Output .md files go to a temp dir so they don't accumulate
-        LLM_OUTPUT_DIR: outputDir,
+        LLM_EXT_OUTPUT_DIR: outputDir,
         // History + settings-edit side effects stay in the throwaway dir.
         LLM_EXT_CONFIG_DIR: tmpConfigDir,
         // Never let the spawned test process install the usage rule into the
@@ -258,17 +288,118 @@ export async function runCli(
       exitCode: 0,
     };
   } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; code?: number | null };
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      code?: number | null;
+      signal?: string | null;
+      killed?: boolean;
+    };
     // The CLI always writes the tool's error text to stderr (main.ts's
     // `die()` and the dispatch-error branch both do). stdout is the fallback
     // for a crash that happened before either wrote anything meaningful.
+    //
+    // A timeout kill sets `signal` and leaves `code` undefined, so the old
+    // `e.code ?? null` turned "we killed it after N seconds" into a bare
+    // `exitCode: null` and the assertion read "expected null to be +0" — a
+    // message that names neither the timeout nor the command. Say what happened.
     const stderrText = (e.stderr ?? "").trim();
     const text = stderrText.length > 0 ? stderrText : (e.stdout ?? "").trim();
     return {
       content: [{ type: "text", text }],
       isError: true,
-      stderr: e.stderr ?? "",
+      stderr: e.signal
+        ? `${e.stderr ?? ""}\n[test harness] child killed by ${e.signal}` +
+          `${e.killed ? " (timeout)" : ""} — tool: ${toolName}`
+        : e.stderr ?? "",
       exitCode: e.code ?? null,
     };
+  } finally {
+    // tmpConfigDir is a mkdtempSync-created per-call throwaway dir that nobody
+    // reads after this call returns -- leaving it leaks one /tmp entry per test
+    // assertion, and src/test-tmpdir-guard.ts fails the whole run on any
+    // leftover `llm-ext`-named /tmp entry.
+    //
+    // outputDir is NOT removed here (TRDD-90DM5YHO follow-up): callers
+    // (live.test.ts / live-extended.test.ts / live-websearch.test.ts) read the
+    // report file out of it via `readFileSync(reportPath)` AFTER `await
+    // runCli(...)` resolves -- rmSync'ing it here deleted it out from under
+    // them before they ever got to read it (verified live: ENOENT). It is
+    // still cleaned up: it's mkdtempSync-created, so
+    // src/test-tmpdir-tracker.ts's afterAll removes it once the test file
+    // finishes, after every caller has had its chance to read it.
+    rmSync(tmpConfigDir, { recursive: true, force: true });
+  }
+}
+
+// ── Help / CLI-shape tests ───────────────────────────────────────────────
+// The help-rendering suites all need the same thing: the real compiled CLI,
+// spawned against a throwaway config dir holding a local, unreachable profile.
+// They each grew their own copy of it; this is the one copy.
+
+/** One local, unreachable profile. `prof-a` is asserted on by name. */
+const HELP_TEST_SETTINGS_YAML = [
+  "active: prof-a",
+  "profiles:",
+  "  prof-a:",
+  "    mode: local",
+  "    api: generic-local",
+  "    model: model-a",
+  "    url: http://127.0.0.1:1",
+  "    timeout: 5",
+  "",
+].join("\n");
+
+export interface CliRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number | null;
+}
+
+/**
+ * Spawn the real compiled CLI (dist/llm-ext.js) against a THROWAWAY config dir
+ * and return its streams. No mocking.
+ *
+ * The dir is removed in `finally`: a per-call mkdtemp that is never cleaned
+ * leaves one /tmp directory behind per assertion, on every run, forever.
+ */
+export async function runCliInTempConfig(args: string[]): Promise<CliRunResult> {
+  const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_help_cfg_");
+  writeFileSync(join(tmpConfigDir, "settings.yaml"), HELP_TEST_SETTINGS_YAML, "utf-8");
+  try {
+    const { stdout, stderr } = await execFileAsync("node", [CLI_SCRIPT, ...args], {
+      env: { ...process.env, LLM_EXT_CONFIG_DIR: tmpConfigDir, LLM_EXT_INSTALL_RULE: "0" },
+      // 60s, not 15s: this spawns a cold Node process running the real CLI, and
+      // the gate that runs it (publish.py) runs it while the machine is also
+      // type-checking, linting and building. A 15s budget failed there while
+      // passing every time in isolation. See c0a3b6f6 — the same fix, applied
+      // to the file that hit it first; these never received it.
+      timeout: 60_000,
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
+  } catch (err) {
+    const e = err as {
+      stdout?: string;
+      stderr?: string;
+      code?: number | null;
+      signal?: string | null;
+      killed?: boolean;
+    };
+    // A timeout kill sets `signal` and leaves `code` undefined, so the old
+    // `e.code ?? null` turned "we killed it after N seconds" into a bare
+    // `exitCode: null` and the assertion read "expected null to be +0" — a
+    // message that names neither the timeout nor the command. Say what happened.
+    const stderrText = (e.stderr ?? "").trim();
+    return {
+      stdout: (e.stdout ?? "").trim(),
+      stderr: e.signal
+        ? `${stderrText}\n[test harness] child killed by ${e.signal}` +
+          `${e.killed ? " (timeout)" : ""} — args: ${args.join(" ")}`
+        : stderrText,
+      exitCode: e.code ?? null,
+    };
+  } finally {
+    rmSync(tmpConfigDir, { recursive: true, force: true });
   }
 }

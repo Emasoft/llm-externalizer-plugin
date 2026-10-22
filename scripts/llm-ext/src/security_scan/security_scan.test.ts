@@ -269,7 +269,7 @@ describe("T3 dedup — (content, category) keyed", () => {
           { id: "registry#999", category: "insecure_crypto", snippet: code },
         ],
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.exitCode).toBe(0);
     expect(m.calls).toBe(1); // judged ONCE
@@ -301,7 +301,7 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
     /** missing key is fail-safe, not a hard error. */
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }] },
-      { apiKey: "", pricing: TEST_PRICING, mainRoot: tmp },
+      { apiKey: "", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     // Empty-string key + no env fallback in test → treated as absent.
     // (process.env may have a real key; force absence by clearing.)
@@ -321,6 +321,7 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
         apiKey: "k",
         pricing: TEST_PRICING,
         mainRoot: tmp,
+        freeOnly: false,
         // keep retries small so the test is fast
       },
     );
@@ -334,7 +335,7 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
     const m = mockFetch(() => ({ content: "", throwNetwork: true }));
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.report!.items[0]!.verdict).toBe("uncertain");
   });
@@ -347,23 +348,23 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
         targets: [{ id: "x", category: "c", snippet: "code" }],
         default_verdict_on_error: "threat",
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.report!.items[0]!.verdict).toBe("threat");
   });
 
   it("exits non-zero ONLY on a bad input shape", async () => {
     /** usage error is the only fatal path. */
-    const bad = await runSecurityScan({ targets: [] }, { mainRoot: tmp });
+    const bad = await runSecurityScan({ targets: [] }, { mainRoot: tmp, freeOnly: false });
     expect(bad.exitCode).toBe(1);
     expect(bad.stderr).toMatch(/at least one item/);
 
-    const notObj = await runSecurityScan(42, { mainRoot: tmp });
+    const notObj = await runSecurityScan(42, { mainRoot: tmp, freeOnly: false });
     expect(notObj.exitCode).toBe(1);
 
     const badTarget = await runSecurityScan(
       { targets: [{ id: "x", category: "c" }] }, // no payload
-      { mainRoot: tmp },
+      { mainRoot: tmp, freeOnly: false },
     );
     expect(badTarget.exitCode).toBe(1);
     expect(badTarget.stderr).toMatch(/exactly one of/);
@@ -379,7 +380,7 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
     }));
     const out = await runSecurityScan(
       { targets, max_retries: 0, consecutive_failure_limit: 3, workers: 1 },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.exitCode).toBe(0);
     // Every item resolves to uncertain (fail-safe), none not_threat.
@@ -416,7 +417,7 @@ describe("T4 fail-safe — every failure ⇒ uncertain, never not_threat", () =>
         per_call_timeout_ms: 1000, // validator floor; abort fires at 1s
         max_retries: 0,
       },
-      { fetchImpl: hangingBodyFetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: hangingBodyFetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     // Fail-safes to uncertain (never not_threat) AND returns promptly — without
     // the fix this call hangs until the vitest test timeout.
@@ -445,7 +446,7 @@ describe("T5 injection defense", () => {
     });
     const out = await runSecurityScan(
       { targets: [{ id: "inj", category: "prompt_injection", snippet: payload }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     // Even with a naive model, the clamp prevents a high-confidence not_threat.
@@ -618,7 +619,7 @@ describe("T6 schema validation → uncertain on deviation", () => {
     const m = mockFetch(() => ({ content: "{ totally broken" }));
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }], max_retries: 0 },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.report!.items[0]!.verdict).toBe("uncertain");
   });
@@ -651,7 +652,7 @@ describe("T7 rubric override", () => {
         ],
         category_rubrics: { insecure_crypto: RUBRIC },
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(sawRubric).toBe(true);
   });
@@ -700,7 +701,7 @@ describe("T8 budget gate — whole-job refusal", () => {
     });
     const out = await runSecurityScan(
       { targets, budget_usd: 0.0000001 },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.exitCode).toBe(0); // documented gate, not a crash
     expect(called).toBe(false); // never hit the network
@@ -716,7 +717,7 @@ describe("T8 budget gate — whole-job refusal", () => {
     const m = mockFetch(() => ({ content: alwaysNotThreat() }));
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }], budget_usd: 100 },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.stdout).not.toMatch(/budget_gate=refused/);
     expect(m.calls).toBe(1);
@@ -745,7 +746,7 @@ describe("T9 output shape — per-item fields + summary, returns only paths", ()
           { id: "filew", category: "tool_shadow", file_path: f, line: 10 },
         ],
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.exitCode).toBe(0);
     const item = out.report!.items.find((i) => i.id === "filew")!;
@@ -778,7 +779,7 @@ describe("T9 output shape — per-item fields + summary, returns only paths", ()
     const m = mockFetch(() => ({ content: alwaysNotThreat() }));
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     // Return value is a compact counter + paths, NOT the full report body.
     expect(out.stdout).toMatch(/json=/);
@@ -790,8 +791,14 @@ describe("T9 output shape — per-item fields + summary, returns only paths", ()
     expect(JSON.parse(jsonOnDisk).items.length).toBe(1);
     const mdOnDisk = readFileSync(out.paths!.mdPath, "utf-8");
     expect(mdOnDisk).toContain("# Security-scan report");
-    // Report lives under reports/security_scan/ of the (test) main root.
-    expect(out.paths!.jsonPath).toContain(join("reports", "security_scan"));
+    // Report lives under reports/llm-externalizer/security_scan/ of the
+    // (test) main root (cc92fbb) — a bare reports/security_scan/ is the
+    // pre-cc92fbb path and must NOT satisfy this assertion (row 101 fix-queue:
+    // this assertion still named the old path, so it never caught a
+    // regression back to it).
+    expect(out.paths!.jsonPath).toContain(
+      join("reports", "llm-externalizer", "security_scan"),
+    );
   });
 });
 
@@ -835,7 +842,7 @@ describe("T11 nonce — injected fake close-delimiter cannot escape", () => {
         ],
         workers: 1,
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(seenOpens.size).toBe(2); // two distinct nonces
   });
@@ -1040,7 +1047,7 @@ describe("F2 fail-safe never fails open", () => {
         targets: [{ id: "x", category: "c", snippet: "code" }],
         max_retries: 0,
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     expect(out.exitCode).toBe(0);
     expect(out.report!.summary.counts_by_verdict.not_threat).toBe(0);
@@ -1283,7 +1290,7 @@ describe("F9 per-item fail_safe flag distinguishes never-judged from model-0", (
     }));
     const okOut = await runSecurityScan(
       { targets: [{ id: "real", category: "c", snippet: "code" }] },
-      { fetchImpl: genuine.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: genuine.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const realItem = okOut.report!.items.find((i) => i.id === "real")!;
     expect(realItem.confidence).toBe(0);
@@ -1293,7 +1300,7 @@ describe("F9 per-item fail_safe flag distinguishes never-judged from model-0", (
     const erroring = mockFetch(() => ({ content: "{}", httpStatus: 500 }));
     const errOut = await runSecurityScan(
       { targets: [{ id: "err", category: "c", snippet: "code" }], max_retries: 0 },
-      { fetchImpl: erroring.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: erroring.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const errItem = errOut.report!.items.find((i) => i.id === "err")!;
     expect(errItem.confidence).toBe(0);
@@ -1307,7 +1314,7 @@ describe("F9 per-item fail_safe flag distinguishes never-judged from model-0", (
     // Use the full pipeline so the skipped row reaches the report.
     return runSecurityScan(
       { targets: [{ id: "oob", category: "c", file_path: f, line: 999 }] },
-      { apiKey: "", pricing: TEST_PRICING, mainRoot: tmp },
+      { apiKey: "", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     ).then((out) => {
       const item = out.report!.items.find((i) => i.id === "oob")!;
       expect(item.fail_safe).toBe(true);
@@ -1320,7 +1327,7 @@ describe("F9 per-item fail_safe flag distinguishes never-judged from model-0", (
     const m = mockFetch(() => ({ content: alwaysNotThreat() }));
     const out = await runSecurityScan(
       { targets: [{ id: "x", category: "c", snippet: "code" }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const onDisk = JSON.parse(readFileSync(out.paths!.jsonPath, "utf-8"));
     expect(typeof onDisk.items[0].fail_safe).toBe("boolean");
@@ -1366,7 +1373,7 @@ describe("Issue #7 — reviewer-directed meta-instruction does NOT fail open", (
           { id: "T10", category: "prompt_injection", snippet: T10_PAYLOAD },
         ],
       },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     // The one thing that must NEVER happen: not_threat @ conf 1.0.
@@ -1484,7 +1491,7 @@ describe("Issue #7 — reviewer-directed meta-instruction does NOT fail open", (
     }));
     const out = await runSecurityScan(
       { targets: [{ id: "T7", category: "prompt_injection", snippet: T7 }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     // The model's verdict stands — no over-clamp.
@@ -1506,7 +1513,7 @@ describe("Issue #7 — reviewer-directed meta-instruction does NOT fail open", (
     }));
     const out = await runSecurityScan(
       { targets: [{ id: "ok", category: "c", snippet: benign }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     expect(item.verdict).toBe("not_threat");
@@ -1591,7 +1598,7 @@ describe("Issue #9 — context-aware marker clamp does not over-clamp benign det
     }));
     const out = await runSecurityScan(
       { targets: [{ id: "def", category: "prompt_injection", snippet: defensive }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     expect(item.verdict).toBe("not_threat");
@@ -1625,7 +1632,7 @@ describe("Issue #9 — context-aware marker clamp does not over-clamp benign det
     }));
     const out = await runSecurityScan(
       { targets: [{ id: "clf", category: "prompt_injection", snippet: classifier }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     expect(item.verdict).toBe("not_threat");
@@ -1650,7 +1657,7 @@ describe("Issue #9 — context-aware marker clamp does not over-clamp benign det
     }));
     const out = await runSecurityScan(
       { targets: [{ id: "T10", category: "prompt_injection", snippet: T10 }] },
-      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp },
+      { fetchImpl: m.fetch, apiKey: "k", pricing: TEST_PRICING, mainRoot: tmp, freeOnly: false },
     );
     const item = out.report!.items[0]!;
     expect(item.verdict).not.toBe("not_threat");

@@ -88,7 +88,10 @@ const SECRET_PATTERNS: Array<[RegExp, string]> = [
 ];
 
 /** Irreversible secret redaction — replaces every match with [REDACTED:LABEL]. */
-export function redactSecrets(content: string): {
+export function redactSecrets(
+  content: string,
+  opts: { keepLines?: boolean } = {},
+): {
   redacted: string;
   count: number;
 } {
@@ -96,9 +99,14 @@ export function redactSecrets(content: string): {
   let count = 0;
   for (const [pattern, label] of SECRET_PATTERNS) {
     pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
+    result = result.replace(pattern, (match: string) => {
       count++;
-      return `[REDACTED:${label}]`;
+      if (!opts.keepLines) return `[REDACTED:${label}]`;
+      // keepLines (opt-in, used by classifier content redaction): a multi-line match (PEM block, Bearer token on the next line, ENV_SECRET's
+      // leading newline) must not shift the caller's line numbers, so every newline of the match is given back around the placeholder.
+      const lead = /^\n*/.exec(match)![0];
+      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
+      return `${lead}[REDACTED:${label}]${"\n".repeat(rest)}`;
     });
   }
   return { redacted: result, count };
@@ -120,11 +128,12 @@ export const REDACTION_BUDGET_MS = 500;
 export function safeRedact(
   content: string,
   budgetMs: number = REDACTION_BUDGET_MS,
+  opts: { keepLines?: boolean } = {},
 ): { redacted: string; count: number; ok: boolean; reason?: string } {
   const started = Date.now();
   let out: { redacted: string; count: number };
   try {
-    out = redactSecrets(content);
+    out = redactSecrets(content, opts);
   } catch (e) {
     // A pattern threw (e.g. engine limit) — fail closed: never ship the raw text.
     return {
@@ -174,7 +183,7 @@ export interface SkippedRecord {
 
 /** A dedup group: one representative content judged once, fanned to members. */
 export interface DedupGroup {
-  /** sha1(content + " " + category) — the group key. */
+  /** sha1(content + NUL + category) — the group key. */
   key: string;
   category: string;
   language?: string;
@@ -610,7 +619,7 @@ export function intake(
 export function dedupKey(content: string, category: string): string {
   return createHash("sha1")
     .update(content, "utf-8")
-    .update(" ")
+    .update("\u0000")
     .update(category, "utf-8")
     .digest("hex");
 }

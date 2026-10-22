@@ -5,7 +5,6 @@
 import { describe, it, expect } from "vitest";
 import {
   computeReconcile,
-  parseReconcileInterval,
   reconcileModelsBeforeWork,
   shouldReconcile,
   DEFAULT_RECONCILE_INTERVAL_MS,
@@ -20,6 +19,12 @@ const base = (over: Partial<ReconcileInput> = {}): ReconcileInput => ({
   configuredToolModels: [],
   catalogFreeQualified: ["a/x:free", "a/y:free"],
   benchmarkFailed: new Set(),
+  // TRDD-FDI9NYAS D3c: the two already-configured ids are treated as already
+  // having passed (consistent with them being KEPT, not newly adopted — see
+  // the dedicated "requires a recorded pass" describe block below for the
+  // adoption-gate tests themselves). A test that adds a NEW arrival to
+  // catalogFreeQualified and expects it adopted must add it here too.
+  benchmarkPassed: new Set(["a/x:free", "a/y:free"]),
   ...over,
 });
 
@@ -68,11 +73,31 @@ describe("computeReconcile — new-model adoption (FREE only, $0)", () => {
       base({
         catalogIds: new Set(["a/x:free", "a/y:free", "a/z:free", "paid/keep"]),
         catalogFreeQualified: ["a/x:free", "a/y:free", "a/z:free"], // z is new
+        benchmarkPassed: new Set(["a/x:free", "a/y:free", "a/z:free"]), // z already has a recorded pass
       }),
     );
     expect(v.newFreeModels).toEqual(["a/z:free"]);
     expect(v.newFreePool).toEqual(["a/x:free", "a/y:free", "a/z:free"]);
     expect(v.freePoolChanged).toBe(true);
+  });
+
+  // TRDD-FDI9NYAS D3c: "no model should be used unless it pass the
+  // benchmark" — a brand-new catalog arrival with NO recorded pass must stay
+  // a candidate, never get served. Before D3c, `catalogFreeQualified`
+  // (computed by the caller with filterFreeModels) already admitted an
+  // unbenchmarked id, and `newFreeModels` adopted it straight into the
+  // written pool with no gate at all — this is the provisional-adoption bug.
+  it("does NOT adopt a qualifying :free arrival with no recorded benchmark PASS", () => {
+    const v = computeReconcile(
+      base({
+        catalogIds: new Set(["a/x:free", "a/y:free", "a/z:free", "paid/keep"]),
+        catalogFreeQualified: ["a/x:free", "a/y:free", "a/z:free"], // z qualifies on requirements
+        benchmarkPassed: new Set(["a/x:free", "a/y:free"]), // z has NO recorded pass
+      }),
+    );
+    expect(v.newFreeModels).not.toContain("a/z:free");
+    expect(v.newFreePool).not.toContain("a/z:free");
+    expect(v.freePoolChanged).toBe(false);
   });
 
   it("NEVER adopts a non-':free' id — a $0 router pseudo-model can't reach the pool", () => {
@@ -116,6 +141,7 @@ describe("computeReconcile — new-model adoption (FREE only, $0)", () => {
         configuredFreePool: ["a/x:free", "a/y:free"],
         catalogIds: new Set(["a/x:free", "a/y:free", ...arrivals]),
         catalogFreeQualified: ["a/x:free", "a/y:free", ...arrivals],
+        benchmarkPassed: new Set(["a/x:free", "a/y:free", ...arrivals]),
         maxFreePool: 5,
       }),
     );
@@ -156,7 +182,7 @@ describe("throttle math", () => {
     expect(shouldReconcile(1_000, 1_000 + DEFAULT_RECONCILE_INTERVAL_MS)).toBe(true);
   });
 
-  it("interval 0 means ALWAYS reconcile (agrees with parseReconcileInterval)", () => {
+  it("interval 0 means ALWAYS reconcile", () => {
     expect(shouldReconcile(1_000, 1_000, 0)).toBe(true);
     expect(shouldReconcile(1_000, 1_001, 0)).toBe(true);
   });
@@ -166,14 +192,12 @@ describe("throttle math", () => {
     expect(shouldReconcile(1_000, 1_000 + 60_000, NaN)).toBe(false);
   });
 
-  it("parseReconcileInterval: unset/empty → default; 0 passes; junk → default", () => {
-    expect(parseReconcileInterval(undefined)).toBe(DEFAULT_RECONCILE_INTERVAL_MS);
-    expect(parseReconcileInterval("")).toBe(DEFAULT_RECONCILE_INTERVAL_MS);
-    expect(parseReconcileInterval("0")).toBe(0);
-    expect(parseReconcileInterval("90000")).toBe(90_000);
-    expect(parseReconcileInterval("nonsense")).toBe(DEFAULT_RECONCILE_INTERVAL_MS);
-    expect(parseReconcileInterval("-1")).toBe(DEFAULT_RECONCILE_INTERVAL_MS);
-  });
+  // parseReconcileInterval / LLM_EXT_RECONCILE_INTERVAL_MS are retired
+  // (design addendum F, TRDD-90DM5YHO P4): the catalog disk-cache TTL
+  // (catalog-cache.ts) is the fetch-cost throttle now, so
+  // reconcileModelsBeforeWork always calls shouldReconcile with the fixed
+  // DEFAULT_RECONCILE_INTERVAL_MS — see the "IO-shell orchestrator" tests
+  // below for the behavioural proof (no env override changes the throttle).
 });
 
 describe("reconcileModelsBeforeWork — the IO-shell orchestrator (deps injected)", () => {
@@ -198,6 +222,12 @@ describe("reconcileModelsBeforeWork — the IO-shell orchestrator (deps injected
       }),
       getConfigured: () => ({ ensemble: ["paid/keep"], freePool: ["a/x:free", "a/y:free"], toolModels: [] }),
       benchmarkFailed: () => new Set(),
+      // TRDD-FDI9NYAS D3c: the default fetchCatalog's arrival ("a/z:free")
+      // already has a recorded pass here, so the existing adoption tests
+      // below keep testing THEIR own subject (throttle/env/fail-open/static
+      // handling), not benchmark-pass gating — that gets its own dedicated
+      // test further down.
+      benchmarkPassed: () => new Set(["a/x:free", "a/y:free", "a/z:free"]),
       applyFreePool: (pool) => {
         spies.applied.push(pool);
         return true;
@@ -285,5 +315,45 @@ describe("reconcileModelsBeforeWork — the IO-shell orchestrator (deps injected
     const { deps } = mkDeps({ getConfigured: () => null });
     const out = await reconcileModelsBeforeWork(deps);
     expect(out).toMatchObject({ outcome: "skipped", reason: "not openrouter / no profile" });
+  });
+
+  // TRDD-FDI9NYAS D3b: "no reconcile rewrite of static profiles" — a static
+  // profile's free_models is manual, "all manual, no benchmarks or updates"
+  // (USER spec 3.1). This asserts the code path already gated by
+  // `cfg.isStatic` (model-reconcile.ts) really does leave the profile
+  // byte-identical: applyFreePool is never called, so settings.yaml is
+  // never touched, however stale the configured ids are against the catalog.
+  it("a STATIC profile is never rewritten — applyFreePool is not called even with dead ids", async () => {
+    const { deps, spies } = mkDeps({
+      getConfigured: () => ({
+        ensemble: ["paid/keep"],
+        freePool: ["a/x:free", "dead/gone:free"],
+        toolModels: [],
+        isStatic: true,
+      }),
+      fetchCatalog: async () => ({
+        ids: new Set(["a/x:free", "paid/keep"]), // "dead/gone:free" fell out of the catalog
+        freeQualified: ["a/x:free"],
+      }),
+    });
+    const out = await reconcileModelsBeforeWork(deps);
+    expect(out.outcome).toBe("ran");
+    // The rewrite path (applyFreePool / launchFreeBench) never fires for a
+    // static profile — only the once-per-window log warning does.
+    expect(spies.applied).toEqual([]);
+    expect(spies.benches).toEqual([]);
+    expect(spies.logs.join(" ")).toMatch(/is static and is never auto-edited/);
+  });
+
+  // TRDD-FDI9NYAS D3c: same gate as the pure-core test, exercised through the
+  // full IO-shell orchestrator — a brand-new catalog arrival with no recorded
+  // pass must not reach applyFreePool (the actual settings.yaml write).
+  it("does NOT write a new :free arrival that has no recorded benchmark PASS", async () => {
+    const { deps, spies } = mkDeps({ benchmarkPassed: () => new Set(["a/x:free", "a/y:free"]) });
+    const out = await reconcileModelsBeforeWork(deps);
+    expect(out.outcome).toBe("ran");
+    expect(out.verdict?.newFreeModels).not.toContain("a/z:free");
+    expect(spies.applied).toEqual([]);
+    expect(spies.benches).toEqual([]);
   });
 });

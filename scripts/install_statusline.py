@@ -18,6 +18,11 @@ Behaviour mirrors install.sh exactly:
         }
       }
 
+- Writes our command PLAIN. If an agentlenspro capture wrap was already present
+  and ``agentlenspro`` is on PATH, it is re-applied by invoking that tool's own
+  ``--install-statusline`` (it wraps whatever command is there), then the wrap is
+  verified in settings.json. Never composes ``--inner`` by hand — that is
+  agentlenspro-internal, and pre-wrapping makes it wrap the wrap.
 - Atomic settings.json write (tmp file in same dir + os.replace).
 - Idempotent: re-running is safe.
 - ``REFRESH_INTERVAL`` env var overrides the 3-second default.
@@ -37,6 +42,7 @@ import json
 import os
 import shlex
 import shutil
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -187,6 +193,29 @@ def main() -> None:
     # shlex.join handles paths containing spaces (~/Test User/.claude/statusline.py)
     # which the old `python3 {dest}` interpolation broke into two arguments.
     statusline_cmd = shlex.join([interp, str(dest)])
+
+    # statusLine holds exactly ONE command: Claude Code keeps element [0] of an
+    # array, silently discards the rest, AND rewrites settings.json back to the
+    # object form (measured 2026-08-29 — 196 hits on element 0, 0 on element 1).
+    # So our bar and agentlenspro's capture cannot be sibling entries: one must
+    # wrap the other, and agentlenspro is the wrapper (its --install-statusline
+    # "WRAPS the command already there ... passes its stdout + exit code through
+    # byte-for-byte"). We therefore write our command PLAIN and let agentlenspro
+    # re-apply its own wrap below. Do NOT compose `agentlenspro statusline
+    # --inner ...` here: --inner is undocumented and internal, and pre-wrapping
+    # made agentlenspro wrap the wrap (verified: --inner count 2).
+    wrapper = shutil.which("agentlenspro")
+    restored = False
+    # statusLine may legitimately be a LIST here: Claude Code accepts an array,
+    # keeps element [0] and rewrites the file — so a settings.json written by
+    # hand between CC restarts can still hold one. A dict-only read crashes on it.
+    _old = data.get("statusLine")
+    if isinstance(_old, list):
+        _old = _old[0] if _old and isinstance(_old[0], dict) else {}
+    if not isinstance(_old, dict):
+        _old = {}
+    was_wrapped = "agentlenspro" in str(_old.get("command") or "")
+
     # Replace the statusLine block (rewrite, not merge) so stale fields can't survive.
     data["statusLine"] = {
         "type": "command",
@@ -195,7 +224,41 @@ def main() -> None:
     }
     _atomic_write_json(settings_path, data)
 
+    # Re-apply agentlenspro's capture wrap through ITS OWN installer, which is
+    # documented idempotent and transactional (backup + post-verify). Writing the
+    # plain command first is what keeps this to exactly one wrap. Only re-wrap
+    # when a wrap was already there — installing capture the user never asked for
+    # is not this installer's call.
+    if wrapper and was_wrapped:
+        rc = subprocess.run(
+            [wrapper, "--install-statusline"], capture_output=True, text=True
+        ).returncode
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        # Assert the POST-CONDITION, not the exit code: rc==0 does not prove the
+        # wrap is back. Read what actually landed in settings.json.
+        restored = "agentlenspro" in str(
+            (data.get("statusLine") or {}).get("command") or ""
+        )
+        if not restored:
+            print(
+                f"Warning: `{wrapper} --install-statusline` exited {rc} and the "
+                "agentlenspro capture wrap is NOT in settings.json. Your bar still "
+                "works (plain command); re-run that command to restore capture.",
+                file=sys.stderr,
+            )
+
     print(f"==> patched {settings_path}")
+    if wrapper and was_wrapped:
+        # Report what settings.json ACTUALLY holds, never the exit code. Printing
+        # "re-applied" next to a stderr warning saying it wasn't is how a lost
+        # wrap gets read as success.
+        state = "capture wrap re-applied" if restored else "capture wrap LOST — see warning"
+        print(f"    agentlenspro               = {wrapper} ({state})")
+    elif wrapper:
+        print(f"    agentlenspro               = {wrapper} on PATH, no wrap was present")
+        print("                                 run `agentlenspro --install-statusline` to add capture")
+    else:
+        print("    agentlenspro               = not on PATH (standalone install)")
     print(f"    statusLine.command         = {data['statusLine']['command']}")
     print(f"    statusLine.refreshInterval = {data['statusLine']['refreshInterval']}")
     print()

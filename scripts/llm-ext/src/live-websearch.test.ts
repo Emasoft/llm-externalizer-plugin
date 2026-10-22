@@ -81,7 +81,7 @@ async function runWebsearchCli(
       env: {
         ...process.env,
         LLM_EXT_CONFIG_DIR: TEST_CONFIG_DIR,
-        LLM_OUTPUT_DIR: join(TMP_DIR, 'output'),
+        LLM_EXT_OUTPUT_DIR: join(TMP_DIR, 'output'),
         LLM_EXT_INSTALL_RULE: '0',
       },
       timeout: timeoutMs,

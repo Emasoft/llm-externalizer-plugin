@@ -22,6 +22,7 @@ import {
   dispatchMassScoutTool,
 } from "./mcp-tools";
 import type { OpenRouterModel } from "../benchmark/discover";
+import { _resetDefaultOutputDirCache } from "../project-root";
 
 // ── Static shape checks ────────────────────────────────────────────────
 
@@ -447,6 +448,11 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     tmp = mkdtempSync(join("/tmp", "cmh-dispatch-"));
     process.env.LLM_EXT_CONFIG_DIR = tmp;
     process.env.CLAUDE_PROJECT_DIR = tmp;
+    // c9b: check_model_health's default report dir now routes through
+    // defaultOutputDir() (project-root.ts), which caches its result after
+    // the first call — reset so this test's own CLAUDE_PROJECT_DIR is what
+    // gets resolved, not a value cached by an earlier test in this run.
+    _resetDefaultOutputDirCache();
     writeFileSync(
       join(tmp, "settings.yaml"),
       [
@@ -479,7 +485,9 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     const text = res.content[0]!.text;
     expect(text).toContain("google/gemini-2.5-flash");
     expect(text).toContain("Report:");
-    expect(text).toContain("reports/model-health");
+    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
+    // not a bare top-level reports/model-health/.
+    expect(text).toContain("reports/llm-externalizer/model-health");
   });
 
   it("flags isError + critical when the configured model is absent from the catalog", async () => {
@@ -514,6 +522,11 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     tmp = mkdtempSync(join("/tmp", "dnm-dispatch-"));
     process.env.LLM_EXT_CONFIG_DIR = tmp;
     process.env.CLAUDE_PROJECT_DIR = tmp;
+    // c9b: discover_new_models' default report dir now routes through
+    // defaultOutputDir() (project-root.ts), which caches its result after
+    // the first call — reset so this test's own CLAUDE_PROJECT_DIR is what
+    // gets resolved, not a value cached by an earlier test in this run.
+    _resetDefaultOutputDirCache();
   });
   afterEach(() => {
     if (ORIG_CFG !== undefined) process.env.LLM_EXT_CONFIG_DIR = ORIG_CFG;
@@ -532,7 +545,9 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     expect(res.isError).toBeFalsy();
     const text = res.content[0]!.text;
     expect(text).toContain("seeded the snapshot");
-    expect(text).toContain("reports/model-arrivals");
+    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
+    // not a bare top-level reports/model-arrivals/.
+    expect(text).toContain("reports/llm-externalizer/model-arrivals");
   });
 
   it("second run reports the genuinely-new model offline", async () => {
@@ -598,7 +613,9 @@ describe("dispatchMassScoutTool — check_tool_replacements (TRDD-828238b5 A7-P3
     // Summary mentions the advisory posture + the report path under the tmp root.
     expect(text).toContain("advisory");
     expect(text).toContain("Report:");
-    expect(text).toContain("reports/auto-replace");
+    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
+    // not a bare top-level reports/auto-replace/.
+    expect(text).toContain("reports/llm-externalizer/auto-replace");
     // The report file was actually written.
     const reportLine = text.split("\n").find((l) => l.startsWith("Report:"));
     expect(reportLine).toBeDefined();

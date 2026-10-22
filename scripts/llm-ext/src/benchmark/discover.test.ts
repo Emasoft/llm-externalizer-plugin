@@ -164,23 +164,24 @@ describe("benchmark/discover filters", () => {
     });
   });
 
-  it("qualify enforces the strict (<, not <=) $1/M ceiling at the boundary", () => {
-    // Exactly $1.00/M out → rejected (>= cap). $0.999999/M out → accepted.
+  it("qualify enforces the ceiling with <=, not < (USER 2026-09-18 'one ceiling, <=')", () => {
+    // Exactly $1.30/M out (DEFAULT_CRITERIA's default, mirroring config.ts's
+    // ensemble ceiling) → ADMITTED (<= cap). $1.300001/M out → rejected.
     const atCap = makeModel({
       id: "vendor/at-cap",
-      pricing: { prompt: "0.0000005", completion: "0.000001" }, // out = $1.00/M
+      pricing: { prompt: "0.0000005", completion: "0.0000013" }, // out = $1.30/M
     });
-    const justUnder = makeModel({
-      id: "vendor/just-under",
-      pricing: { prompt: "0.0000005", completion: "0.000000999999" }, // out ≈ $0.999999/M
+    const justOver = makeModel({
+      id: "vendor/just-over",
+      pricing: { prompt: "0.0000005", completion: "0.0000013000001" }, // out ≈ $1.3000001/M
     });
-    expect(qualify(atCap, DEFAULT_CRITERIA)).toBeNull();
-    expect(disqualifyReason(atCap, DEFAULT_CRITERIA)).toBe(
-      "output $1.000/M >= cap $1.000/M",
-    );
-    const ok = qualify(justUnder, DEFAULT_CRITERIA);
+    const ok = qualify(atCap, DEFAULT_CRITERIA);
     expect(ok).not.toBeNull();
-    expect(ok!.outputDollarsPerMillion).toBeLessThan(1.0);
+    expect(ok!.outputDollarsPerMillion).toBe(1.3);
+    expect(qualify(justOver, DEFAULT_CRITERIA)).toBeNull();
+    expect(disqualifyReason(justOver, DEFAULT_CRITERIA)).toBe(
+      "output $1.300/M > cap $1.300/M",
+    );
   });
 
   it("qualify normalises null max_completion_tokens to context length and falls back name→id", () => {
@@ -231,6 +232,29 @@ describe("benchmark/discover filters", () => {
     expect(baselines[0].name).toBe("GPT-5");
     expect(baselines[0].inputDollarsPerMillion).toBeCloseTo(1.25, 10);
     expect(baselines[0].outputDollarsPerMillion).toBeCloseTo(10, 10);
+  });
+
+  // D0 (TRDD-AL8GIZYA, plan item 2a): the resolved ensemble price ceiling
+  // (profiles.paid.selection.price_ceiling_usd_per_million) must actually
+  // change which AUTO-DISCOVERED candidates a flow keeps. Before this
+  // fix, filterModels's global price-cap backstop always fell back to the
+  // literal MAX_BENCHMARK_PRICE_PER_M ($1.30/M) inside buildBenchmarkRoster,
+  // so a criteria object carrying a HIGHER custom ceiling (e.g. $2.00/M) was
+  // silently overridden back down to $1.30/M for candidates — raising the
+  // settings ceiling had no effect on what got discovered.
+  it("buildBenchmarkRoster keeps an auto-discovered candidate priced above the $1.30/M default when criteria carries a higher resolved ceiling", () => {
+    const customCriteria = { ...DEFAULT_CRITERIA, maxInputDollarsPerMillion: 2.0, maxOutputDollarsPerMillion: 2.0 };
+    // Priced at $1.50/M in and out: above the old hard-coded $1.30/M backstop,
+    // but within the custom $2.00/M ceiling.
+    const midPriced = makeModel({
+      id: "vendor/mid-priced",
+      pricing: { prompt: "0.0000015", completion: "0.0000015" },
+    });
+    // ceiling passed explicitly (5th arg): the backstop is deliberately kept
+    // independent of `criteria` (REVIEW finding) — a caller resolving a custom
+    // ceiling must pass it, buildBenchmarkRoster never infers it from criteria.
+    const { candidates } = buildBenchmarkRoster([midPriced], customCriteria, [], [midPriced], 2.0);
+    expect(candidates.map((m) => m.id)).toEqual(["vendor/mid-priced"]);
   });
 
   it("buildBenchmarkRoster de-duplicates baselines against candidates and within includeIds", () => {

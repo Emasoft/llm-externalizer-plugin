@@ -10,41 +10,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { CLI_SCRIPT } from "../test-helpers.js";
-
-const execFileAsync = promisify(execFile);
-
-const SETTINGS_YAML = [
-  "active: prof-a",
-  "profiles:",
-  "  prof-a:",
-  "    mode: local",
-  "    api: generic-local",
-  "    model: model-a",
-  "    url: http://127.0.0.1:1",
-  "    timeout: 5",
-  "",
-].join("\n");
-
-async function run(args: string[]): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
-  const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_profilehelp_cfg_");
-  writeFileSync(join(tmpConfigDir, "settings.yaml"), SETTINGS_YAML, "utf-8");
-  try {
-    const { stdout, stderr } = await execFileAsync("node", [CLI_SCRIPT, ...args], {
-      env: { ...process.env, LLM_EXT_CONFIG_DIR: tmpConfigDir, LLM_EXT_INSTALL_RULE: "0" },
-      timeout: 15_000,
-      maxBuffer: 8 * 1024 * 1024,
-    });
-    return { stdout: stdout.trim(), stderr: stderr.trim(), exitCode: 0 };
-  } catch (err) {
-    const e = err as { stdout?: string; stderr?: string; code?: number | null };
-    return { stdout: (e.stdout ?? "").trim(), stderr: (e.stderr ?? "").trim(), exitCode: e.code ?? null };
-  }
-}
+import { runCliInTempConfig as run } from "../test-helpers.js";
 
 describe("--profile visibility in per-command --help", () => {
   it("a profile-using command (chat) advertises --profile in its own help", async () => {
@@ -88,7 +54,7 @@ describe("--profile still dispatches correctly (no regression from the help inje
   it("a valid --profile still runs the command", async () => {
     const r = await run(["discover", "--profile", "prof-a", "--quiet"]);
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toMatch(/Active profile: prof-a/);
+    expect(r.stdout).toMatch(/Effective profile: prof-a \(source: --profile\)/);
   });
 
   it("an unknown --profile still fails fast and lists the real available profiles", async () => {

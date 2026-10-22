@@ -198,7 +198,7 @@ describe("scan_local_llm_services write path (against LLM_EXT_CONFIG_DIR)", () =
     expect(readFileSync(getSettingsPath(), "utf-8")).toBe(BASE_SETTINGS);
   });
 
-  it("--pick N writes a new profile and sets it active, preserving the existing one", async () => {
+  it("--pick N writes a new profile WITHOUT touching active:, preserving the existing one", async () => {
     const fetchImpl: FetchLike = async (url) =>
       url === "http://localhost:1234/v1/models"
         ? jsonResponse({ data: [{ id: "local/picked-model", context_length: 8192 }] })
@@ -208,16 +208,18 @@ describe("scan_local_llm_services write path (against LLM_EXT_CONFIG_DIR)", () =
     expect(picked.kind).toBe("lmstudio");
     const built = buildProfileForService(picked, ["existing"]);
 
-    const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile, {
-      setActive: true,
-    });
+    const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile);
 
-    expect(result).toEqual({ profileName: "lmstudio-local-auto", created: true, activated: true });
+    expect(result).toEqual({ profileName: "lmstudio-local-auto", created: true });
     const doc = yamlParse(readFileSync(getSettingsPath(), "utf-8")) as {
-      active: string;
+      active?: string;
       profiles: Record<string, Record<string, unknown>>;
     };
-    expect(doc.active).toBe("lmstudio-local-auto");
+    // P6c-a (fix-queue 44): `active:` is NOT written, and an existing one is
+    // left exactly as the user had it. Selection is `--profile <name>`, so
+    // writing the key would only make llm-ext print its own "'active:' is no
+    // longer used" notice about a key it had just added itself.
+    expect(doc.active).toBe("existing");
     expect(doc.profiles.existing).toEqual({
       mode: "local",
       api: "generic-local",
@@ -231,6 +233,7 @@ describe("scan_local_llm_services write path (against LLM_EXT_CONFIG_DIR)", () =
       model: "local/picked-model",
       url: "http://localhost:1234",
       context_window: 8192,
+      "profile-type": "local",
     });
   });
 });

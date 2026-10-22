@@ -31,17 +31,27 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 import {
-  FREE_POOL_SEED,
   getActiveFreeOnly,
-  setActiveFreeOnly,
   getConfigDir,
   loadSettings,
   resolveProfile,
+  effectiveProfileName,
 } from "./config.js";
-import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { isFreeSuffixModelId, paymentErrorCertainty } from "./benchmark/free-mode.js";
+import { failureText } from "./provider/http.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
+import {
+  assessModelPersistence,
+  parseEventTimestamp,
+  readModelEvents,
+  PERSISTENCE_WINDOW_HOURS,
+  type ModelEvent,
+} from "./model-events.js";
+
+import { RetryDeadlineError, retryWindowClosed, type RetryClock } from "./provider/http.js";
 
 // ── Which free models are APPROVED (the pool rotation may draw on) ──────
 
@@ -86,14 +96,31 @@ export const FREE_FLOOR_MIN_CONTEXT_TOKENS = 32_000;
  *
  * This IS the definition of "pre-benchmarked and approved": rotation can only
  * ever land on a model that passed through here.
+ *
+ * `benchmarkPassed` (TRDD-FDI9NYAS D3c, optional, no default): when a caller
+ * passes it, this becomes the STRICT "approved to SERVE" gate on top of the
+ * two above — an id with no RECORDED PASS is excluded even though it was
+ * never proven to fail either (USER: "no model should be used unless it pass
+ * the benchmark"). Left undefined (the default), this function stays the
+ * lenient requirements filter it always was, because it ALSO backs
+ * candidate-discovery/ranking call sites where a never-benchmarked id must
+ * stay VISIBLE — that visibility is how it gets queued for its first
+ * benchmark in the first place. Passing this set is what turns "candidate"
+ * into "approved to serve"; every caller that determines whether an
+ * AUTO-PICKED id may actually be SENT or WRITTEN into a served free_models
+ * pool must pass it (manual/static ids are provenance-exempt — union in the
+ * profile's manualModels before calling, never pass this filter a bare
+ * benchmarkPassed that would also reject a hand-listed id).
  */
 export function filterFreeModels(
   freeModels: readonly string[],
   catalogById: ReadonlyMap<string, FreeModelCatalogEntry>,
   benchmarkFailed: ReadonlySet<string> = new Set(),
+  benchmarkPassed?: ReadonlySet<string>,
 ): string[] {
   return freeModels.filter((id) => {
     if (benchmarkFailed.has(id)) return false; // proven-failing benchmark — exclude
+    if (benchmarkPassed && !benchmarkPassed.has(id)) return false; // no recorded pass — exclude
     const m = catalogById.get(id);
     if (!m) return true; // unknown to the catalog — keep (lenient on availability)
     const ctx = m.context_length ?? m.top_provider?.context_length ?? 0;
@@ -234,7 +261,7 @@ export function benchEvidenceFromLedgers(
  * offenders (content-safety, llama-guard style ids) and misses exotic names;
  * the ledger evidence is the primary signal, this is belt-and-braces.
  */
-function looksLikeClassifier(id: string): boolean {
+export function looksLikeClassifier(id: string): boolean {
   const s = id.toLowerCase();
   return s.includes("content-safety") || s.includes("guard") || s.includes("-safety");
 }
@@ -367,17 +394,38 @@ export function combinedFreeModelEvidence(): Map<string, BenchVerdict> {
 /** The top-3 approved free models (the ensemble), best bench evidence first.
  *  Rotation uses the FULL approved list (filterFreeModels) so models 4+ serve
  *  as fallbacks. `benchEvidence` defaults empty (rank = operator order), so
- *  callers without ledger access keep the old behavior. */
+ *  callers without ledger access keep the old behavior. `benchmarkPassed`
+ *  (TRDD-FDI9NYAS D3c, optional, no default) forwards straight to
+ *  filterFreeModels — see its own doc: the caller must union in the active
+ *  profile's manualModels before passing this, or a hand-listed id gets
+ *  wrongly excluded too. */
 export function selectFreeEnsembleModels(
   freeModels: readonly string[],
   catalogById: ReadonlyMap<string, FreeModelCatalogEntry>,
   benchmarkFailed: ReadonlySet<string> = new Set(),
   benchEvidence: ReadonlyMap<string, BenchVerdict> = new Map(),
+  benchmarkPassed?: ReadonlySet<string>,
 ): string[] {
-  return rankFreeModelsByBenchEvidence(
-    filterFreeModels(freeModels, catalogById, benchmarkFailed),
+  const ranked = rankFreeModelsByBenchEvidence(
+    filterFreeModels(freeModels, catalogById, benchmarkFailed, benchmarkPassed),
     benchEvidence,
-  ).slice(0, 3);
+  );
+  // THE ORDERING FLOOR (TRDD-6HGJFPDR). Ranking a classifier last only protects
+  // the ensemble while the pool is long enough that selection never reaches the
+  // bottom. At pool size <= 3, "last" and "selected" are the SAME POSITION, and a
+  // safety classifier — which cannot generate a code review at all — would serve
+  // as an ensemble member. Measured in TRDD-V32LB992 §3e.5 at pool size 3.
+  //
+  // So EXCLUDE rather than merely rank. On the live 18-member pool this changes
+  // nothing (classifiers already rank below the top 3); it only bites once the
+  // pool is short, which is exactly the case ordering cannot cover.
+  //
+  // The fallback is load-bearing, not defensive padding: if EVERY member is
+  // classifier-named, an unconditional exclusion would hand back an empty
+  // ensemble and take the tool dark. A degraded ensemble beats no ensemble, and
+  // "never dark" is this module's standing invariant.
+  const generators = ranked.filter((id) => !looksLikeClassifier(id));
+  return (generators.length > 0 ? generators : ranked).slice(0, 3);
 }
 
 /**
@@ -394,27 +442,37 @@ export function selectFreeEnsembleModels(
 export function approvedFreePoolFromSettings(): string[] {
   try {
     const s = loadSettings();
-    const active = s?.profiles[s.active];
-    if (!s || !active) return [];
-    const r = resolveProfile(s.active, active);
+    if (!s) return [];
+    const activeName = effectiveProfileName(s);
+    const active = s.profiles[activeName];
+    if (!active) return [];
+    const r = resolveProfile(activeName, active);
     // The pool this profile should run when free mode is active for ANY reason
     // (free_only, auto-free on low balance / 402, OR the allow_paid_models master
     // switch). Precedence: the profile's OWN curated free_models win over the
     // bundled seed. resolveProfile fills r.freeModels ONLY for a free_only profile,
     // so for a paid profile that pins free_models (the master-switch case, and the
-    // credit-switch case) we MUST read the RAW configured list — otherwise the
+    // credit-switch case) we MUST read the RAW configured list -- otherwise the
     // operator's curated pool is silently dropped and the static seed used instead
     // (a real bug the free-by-default default exposes: on geminigrok the 14
-    // configured :free models were ignored in favour of FREE_POOL_SEED). The seed
-    // is the last-resort fallback only when there is genuinely no configured pool.
+    // configured :free models were ignored in favour of FREE_POOL_SEED).
     const configured =
       r.freeModels.length > 0
         ? r.freeModels
         : Array.isArray(active.free_models)
           ? active.free_models.filter((v): v is string => typeof v === "string")
           : [];
-    const base = configured.length > 0 ? configured : [...FREE_POOL_SEED];
-    return filterFreeModels(base, new Map(), benchmarkFailedModels()).filter(
+    // Rule 5 (Phase 5 sec (a) Site 5): NO FREE_POOL_SEED fallback -- an
+    // unconfigured (static) profile now returns [] honestly instead of
+    // silently borrowing the bundled seed. Site 2 (index.ts's activeFreePool)
+    // already treats an empty pool as the trigger to refuse/warn rather than
+    // proceed (Site 3, engageAutoFree, was deleted outright -- TRDD-OE27RD7I
+    // addendum 4), so a mid-command 402 on an unconfigured static profile now
+    // surfaces the ORIGINAL 402 (the
+    // existing replayResponse(false, 402, body) rotation path) instead of
+    // silently switching to a model the profile never configured.
+    if (configured.length === 0) return [];
+    return filterFreeModels(configured, new Map(), benchmarkFailedModels()).filter(
       isFreeSuffixModelId,
     );
   } catch {
@@ -430,7 +488,8 @@ export type UnavailableKind =
   | "daily-quota"
   /** A short-window rate limit / provider overload. Minutes, not hours. */
   | "transient"
-  /** The model id no longer routes (no endpoints / 404). Effectively gone. */
+  /** The model id does not route FOR US (no endpoints / 404 / a 403 refusing
+   *  this integration access). Effectively gone; re-probed about hourly. */
   | "gone";
 
 export interface Cooldown {
@@ -446,10 +505,21 @@ export interface Cooldown {
 export interface CooldownStore {
   version: 1;
   models: Record<string, Cooldown>;
+  /**
+   * TRDD-W9XLU1HD AC3: how many runs in a row have classified this model
+   * "gone". Persisted here (same file, same atomic writer — ONE writer,
+   * free-cooldowns.json) so strikes survive process restarts. A model at
+   * >= GONE_EVICT_STRIKES strikes is EXCLUDED from reconcile's free-pool
+   * re-adoption (computeReconcile reads goneEvictedModels()) until
+   * GONE_EVICT_TTL_MS after its LAST strike, after which the entry ages out
+   * and the model may be re-probed/adopted again. A successful call
+   * (recordAvailable) clears the model's strikes — the self-heal path.
+   */
+  goneStrikes?: Record<string, { strikes: number; lastAt: number }>;
 }
 
 export function emptyStore(): CooldownStore {
-  return { version: 1, models: {} };
+  return { version: 1, models: {}, goneStrikes: {} };
 }
 
 // ── Pure core ──────────────────────────────────────────────────────────
@@ -460,6 +530,27 @@ const TRANSIENT_CAP_MS = 300_000;
 /** A model the router can't reach at all is worth re-probing about hourly. */
 const GONE_MS = 3_600_000;
 
+
+/** "gone" verdicts at or above this evict the model from reconcile re-adoption. */
+export const GONE_EVICT_STRIKES = 3;
+/** Strikes older than this stop counting (the model gets a fresh re-probe window). */
+export const GONE_EVICT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+// TRDD-W9XLU1HD AC3 — persisted eviction of a repeatedly-dead free model.
+// A one-off "gone" verdict self-heals through the hourly cooldown already;
+// but a model OpenRouter still LISTS yet rejects every call with a 403/404
+// re-enters free_models on every reconcile pass and burns a chunk on it
+// every run (the card's original incident: 295 failed session-summary
+// chunks across 3 still-listed dead models). The cure: count "gone"
+// verdicts per model ACROSS runs in the persisted store. N = 3 matches
+// PERSISTENCE_MIN_CONSECUTIVE (model-events.ts) — the codebase's own
+// established "3 identical failures = settled fact, not a wobble" bar;
+// one or two verdicts still heal via the 1h cooldown alone. 7 days for the
+// re-probe expiry mirrors REPROBE_AFTER_MS (default-profiles.ts): long
+// enough that a churny catalog doesn't re-adopt a dead model on the next
+// sweep, short enough that a genuinely restored model is back within a
+// week without operator action.
+
 /**
  * Classify an error string, or return null when it is NOT an availability
  * failure (a real bug, a 400, a schema violation) — in which case the caller
@@ -468,8 +559,19 @@ const GONE_MS = 3_600_000;
  * This is the SINGLE source of truth for "should we rotate?"; index.ts's
  * isModelUnavailableError() delegates to it so the two can never drift.
  */
-export function classifyUnavailable(detail: string): UnavailableKind | null {
+export function classifyUnavailable(
+  detail: string,
+  opts: { credentialProvenGoodElsewhere?: boolean } = {},
+): UnavailableKind | null {
   const s = (detail || "").toLowerCase();
+
+  // WHY: a 401 is a bad/revoked key, never a verdict on THIS model — the 403
+  // block below and the "not found" match both state a 401 is never rotated
+  // past. Without this guard OpenRouter's real 401 body "User not found."
+  // matched s.includes("not found") and returned "gone", so a dead key walked
+  // and cooled every free model (TRDD-8GE0OJ5R). Same prefix anchor as
+  // STATUS_CODE_RE: only our own send path's `API error 401` / `HTTP 401`.
+  if (/\b(?:api error|http)\s+401\b/.test(s)) return null;
 
   // The circuit breaker's verdict is GLOBAL, never per-model — checked FIRST
   // because its abort text also contains "overloaded", which the transient
@@ -507,11 +609,104 @@ export function classifyUnavailable(detail: string): UnavailableKind | null {
     return "daily-quota";
   }
 
+  // A 403 is the provider refusing THIS integration access to THIS model. It
+  // belongs with the other policy refusals already here ("no endpoints found
+  // matching your data policy" is a 403 that this branch has always caught by
+  // its text) — the only difference is the phrasing, so classifying it by the
+  // code closes the gap for providers that do not say "no endpoints".
+  //
+  // Why this is safe to ROTATE on, and why it must not be null: a 403 is never
+  // a request-shape bug (400) and never a missing/invalid credential (401), so
+  // rotating past it cannot hide the one error the user needs to see — the
+  // negative that the "REAL defect" test pins. Measured 2026-08-29 on
+  // `thinkingmachines/inkling:free`: HTTP 403 "is only available on agentic
+  // harnesses". Without this branch classifyUnavailable returned null and the
+  // whole call FAILED HARD instead of rotating to the next free model, for
+  // every one of its 8 call sites (TRDD-V32LB992).
+  //
+  // "gone" (not a denylist, not a permanent eviction) is the right horizon: the
+  // hourly re-probe self-heals the day access is granted, and it keeps the pool
+  // list honest instead of encoding an account-specific fact into settings that
+  // model-reconcile would re-adopt anyway.
+  //
+  // STATUS_CODE_RE anchors on the KNOWN PREFIX our own send path always uses —
+  // `API error ${res.status} (${backend.type}): ...` (provider/completion.ts)
+  // or `HTTP ${status}` (model-events.ts, security_scan/judge.ts) — never a
+  // bare substring/word-boundary match on the digits alone. A bare \bNNN\b
+  // (tried and reverted, w4/TRDD send-path cleanup) still matches a token
+  // count that happens to equal the status code, e.g. "limit exceeded (1404
+  // tokens)" or "context limit exceeded (410 tokens over)" — both would be
+  // misread as the model being gone instead of a transient token-limit
+  // message. Anchoring on the prefix closes that gap while still matching
+  // every real 404/410 our own send path produces — the code is always
+  // present and always delimited right after "api error " or "http ".
+  //
+  // \b403\b, not includes("403"): a bare substring also matches a token count
+  // like "1403", and this branch runs BEFORE the transient one, so
+  // "limit exceeded (1403 tokens)" would be misread as gone and sidelined for
+  // an hour instead of retried in 30s.
+  // 401/403 are ambiguous: a bad/revoked API key returns the SAME code for
+  // every model, so treating ANY bare 403 as "this model is gone" would mark
+  // a whole healthy pool unusable on one credential problem (P2 amendment,
+  // 2026-09-16, TRDD-90DM5YHO). Only classify "gone" when the body names
+  // THIS model specifically — the phrasings OpenRouter actually uses when a
+  // model (not the key) is the problem — OR (below) the caller has already
+  // proven this credential good on a DIFFERENT model this run. A bare/generic
+  // 403 with neither falls through to `null` below: the caller does not
+  // rotate, does not mark anything unusable, and the original auth error
+  // surfaces unchanged — exactly what should happen when the key, not the
+  // model, is broken. "no endpoints" / "no allowed providers" / "not found" /
+  // STATUS_CODE_RE(404) are NOT gated the same way: those already identify a
+  // routing failure for THIS model id, they can't be a generic account-wide
+  // auth message.
+  const modelSpecific403 =
+    /\b403\b/.test(s) &&
+    (s.includes("only available") ||
+      s.includes("agentic harnesses") ||
+      s.includes("not available for free") ||
+      s.includes("unavailable for free"));
+  // A bare/generic 403 (no model-specific phrasing) is ambiguous ON ITS OWN —
+  // a bad/revoked key returns the same code for every model. But when the
+  // caller has already proven THIS credential good this run (it completed a
+  // DIFFERENT model successfully — see markCredentialSucceeded /
+  // credentialSucceededOnOtherModel below and completion.ts's wiring at the
+  // success-return point and the error-handling gate), the key is ruled out,
+  // so a generic 403 can only be about THIS model. Opt-in via `opts`, never
+  // the default, so every OTHER caller of classifyUnavailable (applyUnavailable,
+  // callWithFreeRotation, session_summary/driver.ts) is unaffected until it is
+  // deliberately wired to pass the flag.
+  // TRDD-W9XLU1HD coordinator mitigation (2026-10-04): N=2 DISTINCT models
+  // rejecting with a generic 403 in the SAME run also rules the key out — a
+  // bad key returns 403 for every model, but it does so on the FIRST model
+  // tried; by the time TWO different ids have both refused with no model-
+  // specific phrasing, the refusal tracks the pool, not one credential or one
+  // model. Marking from the second distinct model onward is deliberately
+  // conservative: ONE generic 403 stays non-evicting (a single novel-wording
+  // refusal could still be an account state on one model), so a false mark
+  // requires two independent 403s — and a wrongly-marked model heals through
+  // the hourly "gone" re-probe anyway. N=2, not 3: at 2+ the run has already
+  // burned a round-trip on a second dead id; waiting for a third just spends
+  // another chunk of the pool discovering what two refusals already show.
+  const generic403 = /\b403\b/.test(s) && !modelSpecific403;
+  const genericThisCredentialProvenGood = generic403 && opts.credentialProvenGoodElsewhere === true;
+  const genericDistinct403Quorum = generic403 && generic403DistinctModels.size >= POOL_403_QUORUM;
+  // 410 ("Gone") is unambiguous by HTTP definition — unlike 403/401, a
+  // provider never returns 410 to mean "your key is bad"; it means THIS
+  // resource (the model id) is permanently retired. So it needs no
+  // model-specific-phrasing gate, unlike modelSpecific403 above (P2 review
+  // finding, 2026-09-16: without this a 410 skipped same-model retry in
+  // completion.ts's deterministic4xx gate but was never classified "gone",
+  // so it was never persisted/marked run-unusable either — retried forever
+  // on the NEXT overall attempt with no memory it was ever dead).
+  const STATUS_CODE_RE = /\b(?:api error|http)\s+(404|410)\b/;
   if (
     s.includes("no endpoints") ||
     s.includes("no allowed providers") ||
     s.includes("not found") ||
-    s.includes("404")
+    STATUS_CODE_RE.test(s) ||
+    modelSpecific403 ||
+    genericThisCredentialProvenGood ||
+    genericDistinct403Quorum
   ) {
     return "gone";
   }
@@ -576,10 +771,24 @@ export function applyUnavailable(
   modelId: string,
   detail: string,
   nowMs: number,
+  knownKind?: UnavailableKind,
+  // Round C0b item 3 (B7): an explicit cooldown horizon — the provider own
+  // Retry-After (err.retryAt) — that raises the computed `until` for a
+  // "transient" verdict. Ignored for "gone"/"daily-quota" (a future caller
+  // must not extend those verdicts with a rate-limit horizon).
+  until?: number,
 ): CooldownStore {
-  const kind = classifyUnavailable(detail);
-  if (!kind) return store;
   const prev = store.models[modelId];
+  // `knownKind` is the verdict the CALLER already knows to be true for this
+  // model (read from the run-unusable registry via `runUnusableKind`) — used
+  // only when `detail` itself does not self-classify (a corroborated bare
+  // 403, or a synthetic "already proven dead" message with no model-specific
+  // phrasing). A real kind cannot clobber correctly, so unlike the OLD
+  // `!prev && isRunUnusable(modelId) ? "gone" : null` fallback it replaces,
+  // there is no need to gate on `!prev`: that old gate also blocked renewing
+  // an EXPIRED "gone" entry (review finding, 2026-09-18, TRDD-W9XLU1HD).
+  const kind = classifyUnavailable(detail) ?? knownKind ?? null;
+  if (!kind) return store;
   // Strikes only accumulate while the previous cooldown is still in force; a
   // model that has been healthy since its last 429 starts the ladder again.
   const strikes =
@@ -589,12 +798,21 @@ export function applyUnavailable(
     models: {
       ...store.models,
       [modelId]: {
-        until: computeCooldownUntil(kind, strikes, nowMs),
+        // Max-then-min (round C0b item 3, B7): raise a "transient" cooldown to
+        // the provider own retryAt, THEN cap the merged value at 24 h from now
+        // so a malformed provider value cannot bury a model for days.
+        until:
+          kind === "transient" && until !== undefined
+            ? Math.min(Math.max(computeCooldownUntil(kind, strikes, nowMs), until), nowMs + 86_400_000)
+            : Math.min(computeCooldownUntil(kind, strikes, nowMs), nowMs + 86_400_000),
         kind,
         strikes,
         detail: (detail || "").split("\n")[0].slice(0, 200),
       },
     },
+    // AC3: eviction strikes live beside the cooldowns and are bumped only by
+    // recordUnavailable (bumpGoneStrike) — never here.
+    goneStrikes: store.goneStrikes ?? {},
   };
 }
 
@@ -603,7 +821,10 @@ export function clearCooldown(store: CooldownStore, modelId: string): CooldownSt
   if (!store.models[modelId]) return store;
   const models = { ...store.models };
   delete models[modelId];
-  return { version: 1, models };
+  // AC3: strikes are cleared separately (clearGoneStrikes, from
+  // recordAvailable — the only success path). A manual cooldown clear must
+  // not silently reset the eviction count.
+  return { version: 1, models, goneStrikes: store.goneStrikes ?? {} };
 }
 
 /** Drop entries whose cooldown has expired (keeps the persisted file small). */
@@ -612,12 +833,246 @@ export function pruneExpired(store: CooldownStore, nowMs: number): CooldownStore
   for (const [id, cd] of Object.entries(store.models)) {
     if (cd.until > nowMs) models[id] = cd;
   }
-  return { version: 1, models };
+  // AC3: strike records are intentionally NOT pruned here — their own TTL
+  // (GONE_EVICT_TTL_MS, checked in goneEvictedModels) governs expiry, and
+  // pruning them on the cooldown's shorter horizon would reset the count
+  // while the 1h cooldown cycles.
+  return { version: 1, models, goneStrikes: store.goneStrikes ?? {} };
+}
+
+
+// ── AC3 persisted eviction strikes (TRDD-W9XLU1HD) ─────────────────────
+
+/** Increment the model's persisted "gone" strike count, restarting the count
+ *  at 1 when the previous record is older than GONE_EVICT_TTL_MS (a windowed
+ *  threshold, not a lifetime one — same reasoning as recordNoContentStrike).
+ *  Pure: returns a new store. */
+function bumpGoneStrike(
+  store: CooldownStore,
+  modelId: string,
+  nowMs: number,
+): CooldownStore {
+  const strikes = store.goneStrikes ?? {};
+  const prev = strikes[modelId];
+  const withinWindow = prev !== undefined && nowMs - prev.lastAt <= GONE_EVICT_TTL_MS;
+  return {
+    ...store,
+    goneStrikes: {
+      ...strikes,
+      [modelId]: { strikes: withinWindow ? prev.strikes + 1 : 1, lastAt: nowMs },
+    },
+  };
+}
+
+/** Clear the model's strike record — the heal path on a successful call.
+ *  Read-first: no write when there is nothing to clear. */
+function clearGoneStrikes(store: CooldownStore, modelId: string): CooldownStore {
+  if (!store.goneStrikes || !store.goneStrikes[modelId]) return store;
+  const strikes = { ...store.goneStrikes };
+  delete strikes[modelId];
+  return { ...store, goneStrikes: strikes };
+}
+
+/** Models whose persisted "gone" strikes are at/over GONE_EVICT_STRIKES and
+ *  whose last strike is still inside GONE_EVICT_TTL_MS — reconcile must not
+ *  re-adopt these into free_models (computeReconcile consumes this). Expired
+ *  records (lastAt past the TTL) do NOT evict: that is the re-probe window
+ *  through which a genuinely restored model returns. */
+export function goneEvictedModels(nowMs: number = Date.now()): Set<string> {
+  const out = new Set<string>();
+  for (const [id, rec] of Object.entries(getCooldownStore(nowMs).goneStrikes ?? {})) {
+    if (nowMs - rec.lastAt >= GONE_EVICT_TTL_MS) continue; // expired — may return
+    if (rec.strikes >= GONE_EVICT_STRIKES) out.add(id);
+  }
+  return out;
 }
 
 export function isCooling(store: CooldownStore, modelId: string, nowMs: number): boolean {
   const cd = store.models[modelId];
   return !!cd && cd.until > nowMs;
+}
+
+// ── This-run-only "proved dead" registry (design §3.1 point 3, §5) ──────
+//
+// A cooldown (above) is a PERSISTED, cross-process heuristic with an expiry.
+// This is the opposite: in-process-only, filled the instant a "gone"/
+// "daily-quota" verdict is reached for THIS run (recordUnavailable below,
+// and provider/completion.ts's own retry-skip gate), so every subsequent
+// free-model pick in THIS process skips a model it already proved dead
+// instead of re-learning the same fact over an HTTP round-trip. Never
+// persisted, never crosses a process boundary — cleared only by process exit
+// or resetRunUnusableForTests() (module state persists across tests in the
+// SAME vitest file since vitest isolates per FILE, not per test).
+const runUnusable = new Map<string, UnavailableKind>();
+
+// TRDD-W9XLU1HD coordinator mitigation: the distinct generic-403 ids seen
+// THIS run. noteGeneric403Model() records the caller's model id when it
+// reports a bare 403 (completion.ts's error gate and session_summary's
+// classifyModelFallback path); once >= POOL_403_QUORUM distinct ids are in
+// the set, classifyUnavailable treats a further generic 403 as "gone".
+// In-process only — same lifetime as runUnusable above.
+export const POOL_403_QUORUM = 2;
+const generic403DistinctModels = new Set<string>();
+
+/** Record that `modelId` was refused with a bare/generic 403 this run. */
+export function noteGeneric403Model(modelId: string): void {
+  if (modelId) generic403DistinctModels.add(modelId);
+}
+
+/** Test hook — clear the distinct-403 set (module state persists per FILE). */
+export function resetGeneric403ForTests(): void {
+  generic403DistinctModels.clear();
+}
+
+/** Record that `id` failed with a run-scoped-dead verdict this run, carrying
+ *  WHICH verdict — a bare boolean lost the reason, forcing every later
+ *  caller to guess "gone" regardless of the real kind (S3, TRDD-W9XLU1HD:
+ *  `kind` is now required — the old default silently misreported daily-quota
+ *  verdicts as "gone" for any caller that forgot to pass it). */
+export function markRunUnusable(id: string, kind: UnavailableKind): void {
+  runUnusable.set(id, kind);
+}
+
+/** The verdict kind recorded for `id` this run, or `undefined` if it was
+ *  never marked — the typed counterpart to `isRunUnusable`, so a caller that
+ *  needs to know WHY (not just whether) reads the real kind instead of
+ *  re-guessing "gone" (TRDD-W9XLU1HD review). */
+export function runUnusableKind(id: string): UnavailableKind | undefined {
+  return runUnusable.get(id);
+}
+
+/** True once `markRunUnusable(id)` fired this run. */
+export function isRunUnusable(id: string): boolean {
+  return runUnusable.has(id);
+}
+
+/** Test hook — every test file that touches runUnusable must reset it in
+ *  afterEach, or a later test inherits a dirty set. */
+export function resetRunUnusableForTests(): void {
+  runUnusable.clear();
+}
+
+// ── Per-credential run-success registry (TRDD-90DM5YHO item 1) ──────────
+//
+// A generic 403 (no model-specific phrasing) is ambiguous: it could mean THIS
+// model is gone, or the API key is bad/revoked (which returns the same code
+// for every model). We can tell them apart within one process: if this
+// credential has already completed a chat successfully on a DIFFERENT model
+// this run, the key is proven good, so a later generic 403 on model X can
+// only be about X. Fingerprint is `${backendType}:${baseUrl}:${sha256(apiKey)
+// .slice(0, 12)}` — the credential's SHAPE, never the raw key. baseUrl is
+// included (review finding, 2026-09-16) so two same-typed backends pointing
+// at DIFFERENT endpoints (a proxy vs. the real API, two openrouter-compatible
+// hosts reusing the same key shape) never collide into one fingerprint — a
+// key proven good against one service says nothing about another. A falsy
+// apiKey (unset/empty) is treated as "no credential" and never marked or
+// matched, so every keyless backend of the same type/url does not silently
+// collide into a single shared fingerprint. In-process only, same lifetime as
+// runUnusable above; cleared only by process exit or the test reset hook.
+const credentialSucceededModels = new Map<string, Set<string>>();
+
+function credentialFingerprint(backendType: string, baseUrl: string, apiKey: string): string {
+  return `${backendType}:${baseUrl}:${createHash("sha256").update(apiKey).digest("hex").slice(0, 12)}`;
+}
+
+/** Record that `modelId` completed a chat successfully on this credential this run. */
+export function markCredentialSucceeded(
+  backendType: string,
+  baseUrl: string,
+  apiKey: string,
+  modelId: string,
+): void {
+  if (!apiKey) return; // no credential to fingerprint — nothing to remember
+  const fp = credentialFingerprint(backendType, baseUrl, apiKey);
+  let models = credentialSucceededModels.get(fp);
+  if (!models) {
+    models = new Set();
+    credentialSucceededModels.set(fp, models);
+  }
+  models.add(modelId);
+}
+
+/**
+ * True once this credential has succeeded on a model OTHER than `modelId`
+ * this run — the discriminator classifyUnavailable's `opts.
+ * credentialProvenGoodElsewhere` expects. A success on the SAME model does
+ * NOT count (the key could have been revoked mid-run right after).
+ */
+export function credentialSucceededOnOtherModel(
+  backendType: string,
+  baseUrl: string,
+  apiKey: string,
+  modelId: string,
+): boolean {
+  if (!apiKey) return false; // no credential to fingerprint — never proven good
+  const fp = credentialFingerprint(backendType, baseUrl, apiKey);
+  const models = credentialSucceededModels.get(fp);
+  if (!models) return false;
+  for (const id of models) {
+    if (id !== modelId) return true;
+  }
+  return false;
+}
+
+/** Test hook — every test file that touches this registry must reset it. */
+export function resetCredentialSuccessForTests(): void {
+  credentialSucceededModels.clear();
+}
+
+// ── Durable runtime verdict — lazy, capped-window cache over model-events.log ──
+//
+// model-events.log is unbounded (can reach MB scale on a long-lived server);
+// re-reading and re-parsing the WHOLE file on every free-model selection would
+// make each pick's cost scale with total log size instead of with the ~24h
+// window assessModelPersistence actually needs. This loads it ONCE per
+// process, keeps only events inside the persistence window, and is updated
+// incrementally (not re-read from disk) when THIS process appends its own
+// event via noteOwnModelEvent().
+let recentEventsCache: ModelEvent[] | null = null;
+
+function recentModelEvents(nowMs: number): ModelEvent[] {
+  if (!recentEventsCache) {
+    const cutoff = nowMs - PERSISTENCE_WINDOW_HOURS * 3_600_000;
+    recentEventsCache = readModelEvents().filter((ev) => {
+      const at = parseEventTimestamp(ev.timestamp);
+      return at !== null && at >= cutoff;
+    });
+  }
+  return recentEventsCache;
+}
+
+/**
+ * Call right after appendModelEvent() for a THIS-PROCESS failure so the
+ * cached window picks it up without a re-read. A no-op before the first
+ * unusableModelIds()/isUnusable() call in this process — the next lazy load
+ * reads it off disk like everything else, so nothing is lost, only deferred.
+ */
+export function noteOwnModelEvent(ev: ModelEvent): void {
+  if (recentEventsCache) recentEventsCache.push(ev);
+}
+
+/** Test hook — forces the next call to re-read the log from disk. */
+export function resetRecentModelEventsCacheForTests(): void {
+  recentEventsCache = null;
+}
+
+/**
+ * The union every unusability check reads (design §5): a recorded FAILING
+ * benchmark, a durable runtime verdict (≥3 trailing rotate-worthy failures in
+ * 24h), or a this-run "proved dead" mark. Same answer everywhere it's called,
+ * so a model one reader considers unusable can't be re-adopted by another.
+ */
+export function unusableModelIds(nowMs: number = Date.now()): Set<string> {
+  const out = new Set<string>(benchmarkFailedModels());
+  for (const [id] of assessModelPersistence(recentModelEvents(nowMs), { now: new Date(nowMs) })) {
+    out.add(id);
+  }
+  for (const id of runUnusable.keys()) out.add(id);
+  return out;
+}
+
+export function isUnusable(id: string, nowMs: number = Date.now()): boolean {
+  return unusableModelIds(nowMs).has(id);
 }
 
 /** The soonest moment any of `ids` becomes available again, or null. */
@@ -650,7 +1105,10 @@ export function orderByAvailability<T extends { id: string }>(
   const fresh: T[] = [];
   const deferred: T[] = [];
   for (const c of pool) {
-    if (isCooling(store, c.id, nowMs)) deferred.push(c);
+    // A this-run "proved dead" model (markRunUnusable) is deferred exactly
+    // like a cooling one, not dropped — invariant (2) above: a wrong signal
+    // can only reorder attempts, never remove a model from the rotation.
+    if (isCooling(store, c.id, nowMs) || isRunUnusable(c.id)) deferred.push(c);
     else fresh.push(c);
   }
   deferred.sort(
@@ -672,12 +1130,16 @@ export function cooldownFilePath(): string {
   return join(getConfigDir(), "free-cooldowns.json");
 }
 
+
 function readStoreFromDisk(): CooldownStore {
   try {
     const raw = readFileSync(cooldownFilePath(), "utf-8");
     const parsed = JSON.parse(raw) as Partial<CooldownStore>;
     if (parsed && parsed.version === 1 && parsed.models && typeof parsed.models === "object") {
-      return { version: 1, models: parsed.models };
+      // AC3 (TRDD-W9XLU1HD): carry the persisted strike records through —
+      // dropping them here would silently reset every model's eviction
+      // count on every process restart, making the eviction never fire.
+      return { version: 1, models: parsed.models, goneStrikes: parsed.goneStrikes ?? {} };
     }
   } catch {
     // Missing / corrupt / unreadable — an empty registry is always a safe start:
@@ -693,9 +1155,13 @@ function writeStoreToDisk(store: CooldownStore): void {
     const tmp = `${path}.tmp`;
     writeFileSync(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 0o600 });
     renameSync(tmp, path);
-  } catch {
-    // Persistence is an optimisation, not a correctness requirement — an
-    // unwritable config dir must never fail a live tool call.
+  } catch (err) {
+    // Persistence stays best-effort (an unwritable config dir must never fail
+    // a live tool call) but must never be INVISIBLE again — T1 (TRDD-W9XLU1HD)
+    // reproduced free-cooldowns.json silently never being created on a clean
+    // host with zero signal anywhere. One stderr line, not a throw.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[llm-externalizer] free-cooldowns.json write failed: ${msg}\n`);
   }
 }
 
@@ -713,19 +1179,49 @@ export function recordUnavailable(
   modelId: string,
   detail: string,
   nowMs: number = Date.now(),
+  // Round C0b item 3 (B7): the provider own Retry-After horizon, passed only
+  // by the rotation Retry-After refusal site; every other caller keeps the
+  // default (undefined) behaviour.
+  until?: number,
 ): void {
+  // S1 fix (review of 527d5e8, TRDD-W9XLU1HD): only fall back to the
+  // registry verdict when no cooldown is currently in force for this model.
+  // Passing runUnusableKind(modelId) UNCONDITIONALLY meant every later
+  // AMBIGUOUS error on an already-marked model (a timeout, a 5xx, a parse
+  // error, or the synthetic "already verified unavailable this run" message)
+  // re-ran applyUnavailable with a freshly computed cooldown, rewriting
+  // free-cooldowns.json and bumping strikes even though the existing verdict
+  // was still valid. isCooling(store, id, nowMs) is exactly "an entry exists
+  // and has not expired" -- the same test as "entry in force".
   const before = getCooldownStore(nowMs);
-  const after = applyUnavailable(before, modelId, detail, nowMs);
+  const knownKind = isCooling(before, modelId, nowMs) ? undefined : runUnusableKind(modelId);
+  const after = applyUnavailable(before, modelId, detail, nowMs, knownKind, until);
   if (after === before) return;
-  cache = after;
-  writeStoreToDisk(after);
+  // A persisted "gone"/"daily-quota" verdict is also a this-run "proved dead"
+  // fact (design §3.1 point 3). Every caller of recordUnavailable — this
+  // module's own rotation loops (callWithFreeRotation, rotateOverFreeIds) AND
+  // session_summary/driver.ts's transition handlers (advanceModel,
+  // applyFanoutTransition) — funnels through here, so this is the ONE place
+  // that keeps the cross-process cooldown and the in-process runUnusable
+  // registry from ever disagreeing about what "gone"/"daily-quota" means.
+  const kind = after.models[modelId]?.kind;
+  if (kind === "gone" || kind === "daily-quota") markRunUnusable(modelId, kind);
+  // TRDD-W9XLU1HD AC3: only a "gone" verdict earns an eviction strike — a
+  // daily-quota model is healthy tomorrow by design, never evictable.
+  let withStrikes = after;
+  if (kind === "gone") withStrikes = bumpGoneStrike(after, modelId, nowMs);
+  cache = withStrikes;
+  writeStoreToDisk(withStrikes);
 }
 
-/** Record a success — a model that answers is available, whatever we believed. */
+/** Record a success — a model that answers is available, whatever we believed.
+ *  Also clears any AC3 eviction strikes: the self-heal path (a successful
+ *  call is the strongest possible counter-evidence to "gone"). */
 export function recordAvailable(modelId: string, nowMs: number = Date.now()): void {
   const before = getCooldownStore(nowMs);
-  const after = clearCooldown(before, modelId);
-  if (after === before) return;
+  const healed = clearGoneStrikes(before, modelId);
+  const after = clearCooldown(healed, modelId);
+  if (after === healed && after === before) return;
   cache = after;
   writeStoreToDisk(after);
 }
@@ -766,7 +1262,9 @@ export class AllFreeModelsExhaustedError extends Error {
 /** The registry seam — injected in tests, the persistent one in production. */
 export interface RotationStore {
   get: (now: number) => CooldownStore;
-  recordUnavailable: (id: string, detail: string, now: number) => void;
+  // `until` — the optional provider Retry-After horizon (round C0b item 3,
+  // B7); callers that do not pass it keep the default behaviour.
+  recordUnavailable: (id: string, detail: string, now: number, until?: number) => void;
   recordAvailable: (id: string, now: number) => void;
 }
 
@@ -785,8 +1283,8 @@ export function memoryRotationStore(initial: CooldownStore = emptyStore()): Rota
   let s = initial;
   return {
     get: () => s,
-    recordUnavailable: (id, detail, now) => {
-      s = applyUnavailable(s, id, detail, now);
+    recordUnavailable: (id, detail, now, until) => {
+      s = applyUnavailable(s, id, detail, now, undefined, until);
     },
     recordAvailable: (id) => {
       s = clearCooldown(s, id);
@@ -809,6 +1307,9 @@ export interface RotationHooks<T> {
    *  the provider's echoed `model` field would trust the provider to tell the
    *  truth about a model we rotated away from. */
   onAttempt?: (modelId: string) => void;
+  /** The dispatch's shared retry clock (TRDD-YG72CYY7). Once its window is
+   *  closed no further candidate is started. */
+  retryClock?: RetryClock;
 }
 
 /**
@@ -857,8 +1358,40 @@ export async function callWithFreeRotation<T>(
 
   const tried: string[] = [];
   let lastDetail = "unknown error";
+  // Newest failure seen (thrown error or failure value): the cause when the
+  // shared clock closes under a model that failed with its own plain error.
+  let lastThrown: unknown;
 
   for (;;) {
+    // The clock is the dispatch's whole retry budget: once closed, no candidate
+    // (not even the first) may start, or it would only end in a RetryDeadlineError
+    // with no request of its own.
+    const clock = hooks.retryClock;
+    if (clock && retryWindowClosed(clock)) {
+      // Round C0b item 2 (B5): the cause is FOREIGN only when the rotation has
+      // no failure of its own to attach (no lastThrown). When it IS the
+      // rotation own lastThrown, the status comes from the cause text
+      // ("API error NNN" parse — same fallback rule as completion.ts) and the
+      // provider falls back to the clock, then the constructor default.
+      const cause = lastThrown ?? clock.lastError;
+      const causeText = cause === undefined ? undefined : cause instanceof Error ? cause.message : String(cause);
+      const causeStatus =
+        lastThrown === undefined
+          ? clock.lastStatus
+          : Number(/API error (\d{3})\b/.exec(causeText ?? "")?.[1]) || clock.lastStatus;
+      throw new RetryDeadlineError(
+        {
+          attempts: clock.attempts ?? 0,
+          elapsedMs: Date.now() - (clock.startedAt ?? Date.now()),
+          lastStatus: causeStatus,
+          lastProvider: clock.lastProvider,
+        },
+        cause,
+        undefined,
+        true,
+        lastThrown === undefined,
+      );
+    }
     if (cur === null) {
       const idx = nextFallback();
       if (idx >= 0 && idx < fallbacks.length) {
@@ -884,6 +1417,7 @@ export async function callWithFreeRotation<T>(
     tried.push(cur.id);
     hooks.onAttempt?.(cur.id);
     let detail: string;
+    let refusalUntil: number | undefined;
     try {
       const result = await callOne(cur.id, cur.maxOutput);
       const failure = hooks.resultFailureDetail ? hooks.resultFailureDetail(result) : null;
@@ -895,14 +1429,47 @@ export async function callWithFreeRotation<T>(
       // hand it straight back so the caller can surface the real error.
       if (!classifyUnavailable(failure)) return result;
       detail = failure;
+      // First line, capped: a failure VALUE can be a whole partial answer plus
+      // its upstream-error tail, and it would flow unbounded into a deadline
+      // error's cause text.
+      lastThrown = failure.split("\n")[0].slice(0, 300);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!classifyUnavailable(msg)) throw err;
+      // WHY rethrown untouched, before any recording or rotation, ONLY when
+      // `dispatchClosed`: the clock is the dispatch's whole retry budget, and
+      // such an error may come from a model that made no request of its own
+      // (another slot closed the window). Recording it would put cooldowns on
+      // untried models, and rotating would only hand the next model a closed
+      // window. A deadline error with dispatchClosed false is one model's own
+      // Retry-After beyond the window: the window is still open and that 429 is
+      // an availability error, so it falls through to the classification below
+      // (cooldown for that model, next model tried).
+      if (err instanceof RetryDeadlineError && err.dispatchClosed) throw err;
+      lastThrown = err;
+      // failureText: a RetryDeadlineError's own message is neutral; its cause
+      // carries the availability text classifyUnavailable must read to rotate.
+      const msg = failureText(err);
+      // A payment error also advances (D1): the free pool IS this profile's
+      // chain, and the USER's rule is "skip to the next provider". The
+      // completion layer below already spent the one same-model retry an
+      // uncertain one gets. It is not an availability verdict, so
+      // recordUnavailable below writes no cooldown of its own for it (a model
+      // already proven dead this run keeps that verdict, as for any error).
+      if (!classifyUnavailable(msg) && paymentErrorCertainty(msg) === null) throw err;
       detail = msg;
+      // refusalUntil: set ONLY in the catch (a refusal thrown by the call);
+      // a failure VALUE carries no retryAt, so it stays undefined on that path.
+      if (err instanceof RetryDeadlineError && err.retryAt !== undefined && !err.dispatchClosed) {
+        refusalUntil = err.retryAt;
+      }
     }
 
     lastDetail = detail;
-    store.recordUnavailable(cur.id, detail, now());
+    // Round C0b item 3 (B7): a refusal (dispatchClosed false) with a
+    // provider-supplied retryAt cools the model at least until retryAt — the
+    // generic 30 s ladder would have the rotation re-trying it at once on the
+    // next file, burning an instant 429 per file. The 24 h cap on the merged
+    // value lives in applyUnavailable (max-then-min).
+    store.recordUnavailable(cur.id, detail, now(), refusalUntil);
     hooks.onRotate?.(cur.id, "next free model", detail);
     cur = null;
   }
@@ -984,27 +1551,14 @@ export function resetRotationJournalForTests(): void {
   modelsSent.length = 0;
 }
 
-// Auto-free engagement seam. index.ts owns the real engageAutoFree (it sets the
-// autoFreeEngaged flag + autoFreePool + the chokepoint flag, all consistently)
-// and REGISTERS it here at startup, so this leaf module can trigger a session-wide
-// paid→free switch WITHOUT importing index.ts (which would be a cycle). In a
-// standalone CLI process index.ts is never loaded, so the hook stays null and the
-// decorator falls back to flipping the config chokepoint flag directly — safe
-// there because a CLI process has no completion-ensemble path to keep in sync.
-let autoFreeEngageHook: ((reason: string) => void) | null = null;
-
-/** index.ts calls this once at boot with its engageAutoFree. */
-export function registerAutoFreeEngage(fn: (reason: string) => void): void {
-  autoFreeEngageHook = fn;
-}
-
-/** Engage session-wide free mode after a mid-command credit exhaustion. Uses the
- *  registered engageAutoFree when present (the MCP process, keeps every spend
- *  site consistent), else flips the chokepoint flag directly (a CLI process). */
-function engageFreeAfterCreditExhaustion(reason: string): void {
-  if (autoFreeEngageHook) autoFreeEngageHook(reason);
-  else setActiveFreeOnly(true);
-}
+// registerAutoFreeEngage() DELETED (TRDD-OE27RD7I 14.1-C2c-ENV): this seam
+// used to let a leaf module trigger a session-wide paid->free switch on a
+// mid-command 402 (see withFreeRotation's now-deleted PAID-mode branch).
+// That switch is forbidden, no exceptions (addendum 4) — it had been kept
+// as a no-op export because index.ts's own boot-time call site was outside
+// an earlier phase's file set; index.ts (this phase's file set) deleted
+// engageAutoFree and that call site together, so the seam has zero callers
+// anywhere now and is gone, not just unused.
 
 /**
  * The ONE stderr line for "a free model was rotated away from". Every rotation
@@ -1023,14 +1577,19 @@ export function logRotation(from: string, to: string, detail: string): void {
 export interface FetchRotationHooks {
   /** The approved free pool, in preference order. Defaults to settings on disk. */
   pool?: () => string[];
-  /** Whether free mode is active. Defaults to the global free_only flag, which
-   *  engageAutoFree() also sets — so this one predicate covers both. */
+  /** Whether free mode is active. Defaults to the global free_only flag —
+   *  the profile's own static shape, or the allow_paid_models master switch;
+   *  never an automatic engagement (engageAutoFree was deleted outright,
+   *  TRDD-OE27RD7I addendum 4). */
   freeActive?: () => boolean;
   now?: () => number;
   store?: RotationStore;
   onRotate?: (from: string, to: string, detail: string) => void;
-  /** Test seam for the paid→free credit switch. Defaults to the real engage. */
-  onCreditExhausted?: (reason: string) => void;
+  // `onCreditExhausted` DELETED (TRDD-OE27RD7I 14.1-C2c-ENV): withFreeRotation's
+  // PAID-mode 402 branch that used to consult it was already deleted --
+  // paid->free is forbidden, no exceptions -- and its last caller (an
+  // existing test passing the hook) has been updated to stop passing it, so
+  // the dead field itself is gone too.
 }
 
 /**
@@ -1093,23 +1652,25 @@ function orderedFreeAttempts(
  * Wrap a production FetchImpl for the direct-HTTP tools (security_scan / mass_scout,
  * which do not go through the completion layer) so that:
  *
- *  A. Under FREE mode, a request pinning a rate-limited ':free' model is
- *     transparently re-sent against the next APPROVED free model, until one
- *     answers or the whole approved pool has been tried.
+ *  Under FREE mode, a request pinning a rate-limited ':free' model is
+ *  transparently re-sent against the next APPROVED free model, until one
+ *  answers or the whole approved pool has been tried — all within the
+ *  active (free) profile's own pool.
  *
- *  B. Under PAID mode, a request that comes back 402 (credit exhausted mid-
- *     command) engages session-wide free and completes THAT call on the rotating
- *     free pool — the direct-HTTP twin of the completion layer's 402 catch, so a
- *     security_scan / mass_scout that hits $0 still finishes instead of fail-
- *     safing every remaining item. Strictly one-directional (paid→free): there is
- *     no path here that ever sends a paid model under free mode.
+ * Under PAID mode every request is sent as-is, unconditionally — including a
+ * 402. A 402 here used to engage session-wide free and complete the call on
+ * the rotating free pool (the direct-HTTP twin of the completion layer's
+ * 402 catch, deleted from chatCompletionWithRetry the same phase); that was
+ * a paid->free cross-profile borrow, and TRDD-OE27RD7I addendum 4 (USER, no
+ * exceptions) forbids it, so it is gone: the caller's own fail-safe path now
+ * sees the honest 402.
  *
- * Inert (pass-through) in the safe cases: a paid call that DIDN'T 402; a body with
- * no model (catalog/pricing GETs); and a non-availability failure
+ * Inert (pass-through) in the safe cases: a paid call under paid mode; a body
+ * with no model (catalog/pricing GETs); and a non-availability failure
  * (400/bad-key/schema), which is handed back as-is so a real defect is never
- * masked by rotating the whole pool. A free-mode request pinning a PAID model is
- * NOT passed through — it is served from the free pool, because the only way it
- * occurs is a mid-job auto-free engage (see the branch comment below).
+ * masked by rotating the whole pool. A free-mode request pinning a PAID model
+ * is NOT passed through — it is served from the free pool, because the only
+ * way it occurs is a mid-job auto-free engage (see the branch comment below).
  */
 export function withFreeRotation(
   inner: RotatingFetchImpl,
@@ -1127,7 +1688,6 @@ export function withFreeRotation(
     const poolOf = hooks.pool ?? approvedFreePoolFromSettings;
     const now = hooks.now ?? Date.now;
     const store = hooks.store ?? persistentRotationStore;
-    const onCreditExhausted = hooks.onCreditExhausted ?? engageFreeAfterCreditExhaustion;
     const onRotate = hooks.onRotate ?? logRotation;
 
     let parsed: Record<string, unknown>;
@@ -1138,35 +1698,20 @@ export function withFreeRotation(
     }
     const requested = parsed["model"];
 
-    // ── PAID mode: send as-is; only a 402 (credit exhausted) triggers a switch.
+    // ── PAID mode: send as-is, always. A 402 (credit exhausted) used to
+    // engage session-wide free mode and complete THIS call by rotating over
+    // the free pool — a paid->free cross-profile borrow, the direct-HTTP-
+    // tools twin of the one deleted from provider/completion.ts's
+    // chatCompletionWithRetry. TRDD-OE27RD7I addendum 4 (USER, no
+    // exceptions: "no switching to free models ... must exist anymore")
+    // forbids it here too, so it is deleted, not reworked: the honest 402
+    // now always reaches the caller's own fail-safe path unchanged.
+    // `hooks.onCreditExhausted` (FetchRotationHooks) and
+    // `registerAutoFreeEngage` are DELETED too (14.1-C2c-ENV) — index.ts's
+    // boot-time call site went with engageAutoFree, so nothing calls either
+    // seam anymore.
     if (!freeActive()) {
-      const res = await inner(url, init);
-      if (res.status !== 402 || typeof requested !== "string" || requested.length === 0) {
-        return res; // not a credit-exhaustion on a real completion call → untouched
-      }
-      const body = await res.text(); // consume the 402 so we can replay it if needed
-      // Engage session-wide free (consistently, via the registered engageAutoFree),
-      // then complete THIS call on the free pool. The paid `requested` model is not
-      // a candidate — it can never be sent under free mode.
-      onCreditExhausted("402 in direct-HTTP tool");
-      process.stderr.write(
-        `[llm-externalizer] Credit exhausted (402) in a direct-HTTP tool — switching this command to the free pool.\n`,
-      );
-      const pool = poolOf();
-      if (pool.length === 0) return replayResponse(false, 402, body); // no free pool → surface the 402
-      const out = await rotateOverFreeIds(
-        inner,
-        url,
-        init,
-        parsed,
-        orderedFreeAttempts(pool, store, now),
-        store,
-        now,
-        onRotate,
-      );
-      // If the free pool also couldn't complete it, surface the ORIGINAL 402 (the
-      // actionable error), not a downstream free-model 429.
-      return out.ok ? out : replayResponse(false, 402, body);
+      return inner(url, init);
     }
 
     // ── FREE mode.

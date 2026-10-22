@@ -32,7 +32,7 @@ Copy this checklist and track your progress:
 5. [ ] Read the output file with the Read tool
 6. [ ] Act on the results (apply fixes with Edit, create issues)
 
-Long-running commands (`scan-folder`, `security-scan`, `mass-scout*`, `code-task` on big folders) need an extended Bash timeout or `run_in_background: true` — there is no long-lived server process keeping work alive between calls.
+Long-running commands (`scan-folder`, `security-scan`, `mass-scout*`, `code-task` on big folders) need an extended Bash timeout or `run_in_background: true` (background commands are capped at 30 min, max 2 h, in unattended sessions (`-p`, CI); interactive sessions are uncapped) — there is no long-lived server process keeping work alive between calls.
 
 ## Context
 
@@ -47,7 +47,7 @@ Use when you need to analyze files without consuming orchestrator context, scan 
 
 `answer_mode` controls how reports are written to disk, NOT how many files the LLM sees. Files are batched 1–5 per request (FFD ~400 KB, or one group per request with `---GROUP:id---`). Ensemble = 3 responses/file; free + local = 1 response/file. Cross-file analysis across a whole codebase → `search-existing-implementations`.
 
-Reports go under `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never derived from git; override with `--output_dir` or `$LLM_OUTPUT_DIR`). Modes: `0`=per-file, `1`=per-group, `2`=merged. Defaults: `scan-folder`=0, others=2.
+Reports go under `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never derived from git; override with `--output_dir` or `$LLM_EXT_OUTPUT_DIR`). Modes: `0`=per-file, `1`=per-group, `2`=merged. Defaults: `scan-folder`=0, others=2.
 
 See [tool-reference.md](references/tool-reference.md) for the full answer_mode breakdown.
 

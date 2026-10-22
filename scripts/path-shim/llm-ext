@@ -1,0 +1,71 @@
+#!/bin/sh
+# llm-externalizer-path-shim — installer identity marker, keep this line
+# llm-ext — global shim for the llm-externalizer Claude Code plugin's CLI.
+#
+# Claude Code puts a plugin's bin/ on PATH only inside its own sessions, so in a
+# plain terminal `llm-ext` is "command not found". A symlink into the plugin
+# cache would go stale: each plugin version gets its own cache dir, and an update
+# installs a new one.
+#
+# Resolution, with NO fallback between the two steps (a fallback would hide a
+# broken install behind a different CLI):
+#  1. Inside a Claude Code session the harness has already put the session's
+#     plugin bin/ on PATH, after ~/.local/bin. That is the authoritative version
+#     there (it may be a project-scope install), so the first such entry wins.
+#  2. Otherwise, run the install path Claude Code recorded for the user-scope
+#     install in installed_plugins.json.
+
+set -f
+old_ifs=$IFS
+IFS=:
+for d in $PATH; do
+  case $d in
+    */plugins/cache/*/llm-externalizer/*/bin)
+      IFS=$old_ifs
+      set +f
+      if [ -x "$d/llm-ext" ]; then
+        exec "$d/llm-ext" "$@"
+      fi
+      echo "llm-ext: the Claude Code session's plugin bin dir has no runnable CLI: $d/llm-ext" >&2
+      exit 1
+      ;;
+  esac
+done
+IFS=$old_ifs
+set +f
+
+reg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/installed_plugins.json"
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "llm-ext: node is not on PATH (the plugin CLI is a node script)" >&2
+  exit 127
+fi
+
+# The JS is single-quoted on purpose: its $ and backticks belong to JS, not sh.
+# shellcheck disable=SC2016
+root=$(node -e '
+const fs = require("fs");
+const reg = process.argv[1];
+const fail = (msg) => { console.error(`llm-ext: ${msg}`); process.exit(1); };
+let data;
+try { data = JSON.parse(fs.readFileSync(reg, "utf8")); }
+catch (e) { fail(`cannot read ${reg}: ${e.message}`); }
+const entries = Object.entries(data.plugins || {}).filter(([key]) => key.startsWith("llm-externalizer@"));
+for (const [key, recs] of entries) {
+  if (!Array.isArray(recs)) fail(`unexpected format for ${key} in ${reg} (expected a list of install records)`);
+}
+const total = entries.reduce((n, [, recs]) => n + recs.length, 0);
+const installs = entries.flatMap(([key, recs]) => recs.filter((r) => r.scope === "user").map((r) => ({ key, ...r })));
+if (installs.length !== 1) {
+  fail(`expected exactly one user-scope llm-externalizer install in ${reg}, found ${installs.length} (of ${total} llm-externalizer records)` +
+       (installs.length ? `: ${installs.map((i) => `${i.key} ${i.installPath}`).join(", ")}` : ""));
+}
+process.stdout.write(installs[0].installPath);
+' "$reg") || exit 1
+
+cli="$root/bin/llm-ext"
+if [ ! -x "$cli" ]; then
+  echo "llm-ext: recorded install path has no runnable CLI: $cli" >&2
+  exit 1
+fi
+exec "$cli" "$@"

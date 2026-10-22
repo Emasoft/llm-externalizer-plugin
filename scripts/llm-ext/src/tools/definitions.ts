@@ -11,6 +11,11 @@
 // The 5 helpers are used ONLY by buildTools and are kept module-internal
 // (not exported). Only buildTools is exported.
 import { MASS_SCOUT_TOOLS } from "../mass_scouting/mcp-tools.js";
+import type { ProfileType } from "../config.js";
+import { ANY_PROFILE_TYPE, TEXT_PROFILE_TYPES } from "../profile-accept.js";
+import { DECISION_SPECS } from "../classifiers/catalog/index.js";
+import { INPUT_FLAGS, SHARED_FLAGS } from "../classifiers/shared-flags.js";
+import type { AnySpec } from "../classifiers/catalog/spec.js";
 
 // Shared batching-reality note. Spliced into every multi-file tool
 // description because callers repeatedly assumed that avoiding answer_mode: 0
@@ -25,15 +30,46 @@ const BATCHING_NOTE =
   "files each — by default via First-Fit Decreasing bin packing into " +
   "~400 KB batches (sized to fit the context window), or one group per " +
   "request when ---GROUP:id--- markers are used. In ensemble mode each " +
-  "file is reviewed by 3 different LLMs in parallel so every file receives " +
-  "3 distinct responses; in free mode and local mode each file receives " +
-  "only 1 response. answer_mode controls ONLY how reports are written to " +
+  "file is reviewed by up to 3 different LLMs in parallel so every file " +
+  "receives that many distinct responses; under the free profile each file " +
+  "gets one response until the free pool has enough benchmark-ranked " +
+  "models to run as an ensemble, after which it gets up to 3. " +
+  "answer_mode controls ONLY how reports are written to " +
   "disk, NOT how many files the LLM sees per request: 0 = ONE REPORT PER " +
   "FILE, 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/" +
   "namespace/basename/imports if no ---GROUP:id--- markers are supplied, " +
   "max 1 MB per group), 2 = SINGLE REPORT (everything merged). If you " +
   "need cross-file analysis across the whole codebase, use " +
   "search_existing_implementations — it is purpose-built for it.";
+
+
+// C4-02 (TRDD-V8Q20MLW), plan §4: one tool per registered decision spec, GENERATED from the catalog so its flags, defaults, ranges and help text cannot be retyped or drift;
+// the entry for a 15th spec appears with no edit here. Threshold keys are the CLI flag names (kebab); property names are snake_case like every other tool. WHY both spellings work on the command line: launcher.ts classifyArgv turns every `--snake_case` token into the kebab flag runDecisionArgv parses (cli/main.ts parseFlags is not used for classify tools).
+export const classifyToolName = (specId: string): string => `classify_${specId.replaceAll("-", "_")}`;
+export const thresholdProperty = (key: string): string => key.replaceAll("-", "_");
+
+// WHY `specs` is a parameter: the consistency test feeds a spec the registry does not hold to prove a new spec yields its entry with no edit here.
+export function classifyTools(specs: readonly AnySpec[] = DECISION_SPECS) {
+  return specs.map((spec) => ({
+    name: classifyToolName(spec.id),
+    description: `Classify decision "${spec.id}" (catalog spec; flags, defaults and ranges are generated from it).`,
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        ...Object.fromEntries(Object.entries(spec.thresholds).map(([key, t]) => [
+          thresholdProperty(key),
+          { type: "number", minimum: t.min, maximum: t.max, default: t.default, description: t.help },
+        ])),
+        ...Object.fromEntries(SHARED_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }])),
+        // IN-01: file-input flags only for specs that declare `cli`; the positional question/query has no schema property (classify is CLI-only today).
+        ...(spec.cli === undefined ? {} : Object.fromEntries(INPUT_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }]))),
+        // IN-02: the spec own flags (label --labels, --labels-json), declared on the spec (flags, not cli: check has --preset and no file mode), so the schema cannot drift from the parser.
+        // IN-03: type from the flag declaration (rank --all boolean, --head number); default string.
+        ...Object.fromEntries((spec.flags ?? []).map((f) => [f.property, { type: f.type ?? "string", description: f.help }])),
+      },
+    },
+  }));
+}
 
 // Reusable schema for answer_mode field
 const answerModeSchema = {
@@ -45,8 +81,10 @@ const answerModeSchema = {
     "whole set of input files at once: files are packed into LLM requests of typically 1-5 " +
     "files each (First-Fit Decreasing bin packing into ~400 KB batches, or one group per " +
     "request when ---GROUP:id--- markers are supplied). In ENSEMBLE mode each file is reviewed " +
-    "by 3 different LLMs in parallel so every file receives 3 distinct responses; in FREE mode " +
-    "and LOCAL mode each file receives only 1 response.\n\n" +
+    "by up to 3 different LLMs in parallel so every file receives that many distinct " +
+    "responses; under the FREE profile each file gets one response until the free " +
+    "pool has enough benchmark-ranked models to run as an ensemble, after which it gets " +
+    "up to 3.\n\n" +
     "answer_mode : 0\n" +
     "NAME: ONE REPORT PER FILE\n" +
     "DESCRIPTION: One .md report is saved for every input file. Files are still batched into " +
@@ -156,14 +194,18 @@ const folderSchemaProps = {
       "falling back to $PWD/reports/llm-externalizer/. NEVER derived from git " +
       "(no `git worktree list`, no git-root climb) — that picks the wrong dir " +
       "in worktrees, per-subfolder-git monorepos, and git-less roots. " +
-      "Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides " +
+      "Per-call override wins unconditionally; $LLM_EXT_OUTPUT_DIR also overrides " +
       "the default.",
   },
   free: {
     type: "boolean" as const,
+    // fix-queue 98(2): no more hard-coded built-in free model -- this now
+    // resolves to the SELECTED profile's own first ':free' chain entry (or
+    // refuses, naming this flag and the remedy, when the profile has none).
     description:
-      "Use the free Nemotron 3 Super model (nvidia/nemotron-3-super-120b-a12b:free) " +
-      "instead of the ensemble. No cost, single model, 262K context. " +
+      "Use the selected profile's own first ':free' model in its chain, instead of the " +
+      "ensemble. No cost, single model. Fails with an error if the selected profile has " +
+      "no ':free' model (use --profile free, or add a ':free' model to this profile). " +
       "LOW QUALITY: significantly lower intelligence than ensemble — more false positives, missed bugs, shallow analysis. " +
       "WARNING: prompts are logged by the provider — do not use with sensitive/proprietary code.",
   },
@@ -271,12 +313,49 @@ const scanFolderSchemaProps = {
       "falling back to $PWD/reports/llm-externalizer/. NEVER derived from git " +
       "(no `git worktree list`, no git-root climb) — that picks the wrong dir " +
       "in worktrees, per-subfolder-git monorepos, and git-less roots. " +
-      "Per-call override wins unconditionally; $LLM_OUTPUT_DIR also overrides " +
+      "Per-call override wins unconditionally; $LLM_EXT_OUTPUT_DIR also overrides " +
       "the default.",
   },
 };
 
-export function buildTools(limitsText: string) {
+
+// PT-03 (TRDD-B9FWID59, plan section 8, D37): which profile types each command accepts,
+// stored ONCE here; the runtime check (profile-accept.ts), `--help` and the README table read it.
+// A tool missing from this table fails buildTools() so a new command cannot ship unclassified.
+const LFP = TEXT_PROFILE_TYPES; // local, free, paid
+// PF-05 (TRDD-LMS3JT0C), plan section 8 and D37: a decision runs only on a classifier profile (the /decisions endpoint), never on a text profile.
+// WHY generated from the registry: a 15th spec gets its row with no edit here, and no classify row is ever typed by hand.
+export function classifierProfileRows(specs: readonly AnySpec[] = DECISION_SPECS): Record<string, readonly ProfileType[]> {
+  return Object.fromEntries(specs.map((spec) => [classifyToolName(spec.id), ["classifier"] as const]));
+}
+// WHY frozen and spread LAST: a hand-typed row can then neither override a generated classifier row nor be mutated at run time.
+export const ACCEPTED_PROFILE_TYPES: Readonly<Record<string, readonly ProfileType[]>> = Object.freeze({
+  // text commands: the profile chain (ensembleStreaming / chatCompletionJSON), verified in PT-03 step 1
+  chat: LFP, code_task: LFP, summarize: LFP, topics: LFP, sem_deduplicate: LFP, describe: LFP,
+  cluster_synonyms: LFP, batch_check: LFP, scan_folder: LFP, search_existing_implementations: LFP,
+  compare_files: LFP, check_references: LFP, check_imports: LFP, check_against_specs: LFP,
+  // refuse free mode (config.ts, default-profiles.ts FREE_FORBIDDEN_TOOLS): paid only
+  high_quality_scan: ["paid"], security_scan: ["paid"],
+  // session_summary picks only ':free' OpenRouter ids from the public catalog; a local server cannot serve them
+  session_summary: ["free", "paid"],
+  // mass scouting accepts only the scouting type (D34); the model-free actions below are listed in the plan row too
+  mass_scout: ["scouting"], mass_scout_chain: ["scouting"], mass_scout_propose_fieldset: ["scouting"],
+  mass_scout_estimate: ["scouting"], mass_scout_register: ["scouting"], mass_scout_preclassify: ["scouting"],
+  // no model call, or the command picks its own candidates: any type
+  review_plan: ANY_PROFILE_TYPE, rules_check: ANY_PROFILE_TYPE, discover: ANY_PROFILE_TYPE,
+  scan_local_llm_services: ANY_PROFILE_TYPE, or_model_info: ANY_PROFILE_TYPE, or_model_info_table: ANY_PROFILE_TYPE,
+  or_model_info_json: ANY_PROFILE_TYPE, reset: ANY_PROFILE_TYPE, get_settings: ANY_PROFILE_TYPE,
+  profile: ANY_PROFILE_TYPE, list_profiles: ANY_PROFILE_TYPE,
+  mass_scout_search: ANY_PROFILE_TYPE, mass_scout_search_xjob: ANY_PROFILE_TYPE, mass_scout_get: ANY_PROFILE_TYPE,
+  mass_scout_export: ANY_PROFILE_TYPE, mass_scout_jobs_list: ANY_PROFILE_TYPE, mass_scout_audit_sample: ANY_PROFILE_TYPE,
+  mass_scout_body_get: ANY_PROFILE_TYPE, mass_scout_build_fieldset: ANY_PROFILE_TYPE, mass_scout_diff: ANY_PROFILE_TYPE,
+  mass_scout_list_bundled_fieldsets: ANY_PROFILE_TYPE, security_triage_benchmark: ANY_PROFILE_TYPE,
+  search_existing_benchmark: ANY_PROFILE_TYPE, assess_model: ANY_PROFILE_TYPE, check_model_health: ANY_PROFILE_TYPE,
+  discover_new_models: ANY_PROFILE_TYPE, check_tool_replacements: ANY_PROFILE_TYPE,
+  ...classifierProfileRows(),
+});
+
+function buildToolsWithoutProfileTypes(limitsText: string) {
   const allTools = [
     {
       name: "chat",
@@ -680,7 +759,7 @@ export function buildTools(limitsText: string) {
     {
       name: "get_settings",
       description:
-        "Read-only view of settings.yaml. Prints the ACTIVE profile's fully resolved " +
+        "Read-only view of settings.yaml. Prints the EFFECTIVE profile's fully resolved " +
         "settings (mode, backend, model(s), timeout, context window, auth status) to " +
         "stdout, and also copies the raw settings file to the output directory, " +
         "returning the copy's path for manual editing. This tool cannot write settings " +
@@ -692,12 +771,24 @@ export function buildTools(limitsText: string) {
       name: "profile",
       description:
         "Read-only view of the profiles defined in settings.yaml. With no arguments, lists " +
-        "every profile (name, whether it is active, mode, backend, model(s), and whether " +
-        "free_only is set). With `show`, prints the full resolved detail for that one " +
-        "profile (concrete model, protocol, timeout, context window, free pool, per-tool " +
-        "overrides). This tool cannot add, switch, edit, or remove a profile — profile " +
-        "configuration is user-only. Edit ~/.llm-externalizer/settings.yaml manually to " +
-        "change the active profile or a profile's fields, then call 'reset' to reload.",
+        "every profile (name, whether it is the EFFECTIVE one for this invocation, mode, " +
+        "backend, model(s), and whether free_only is set). With `show`, prints the full " +
+        "resolved detail for that one profile (concrete model, protocol, timeout, context " +
+        "window, free pool, per-tool overrides). This tool cannot add, switch, edit, or " +
+        "remove a profile — profile configuration is user-only. Edit " +
+        "~/.llm-externalizer/settings.yaml manually to change a profile's fields, then call " +
+        "'reset' to reload. Profile selection precedence: a `--profile <name>` flag on the " +
+        "invocation wins first; otherwise the `active: <name>` key in settings.yaml wins; " +
+        "otherwise the built-in 'free' profile is used. 'free', 'paid', and 'local' are " +
+        "built-in dynamic profiles that llm-ext itself owns and regenerates in the background " +
+        "whenever the OpenRouter catalog or the detected local endpoints change — they never " +
+        "need hand-editing. Within one selected profile, a failing model falls back to the " +
+        "next candidate in that same profile only (dynamic profiles in the order their section " +
+        "lists them — the benchmark's order for free and paid, probe order for local; " +
+        "static profiles fall back in listed order); a profile is never switched for another. " +
+        "A static profile whose models are all failing errors with \"the models in the " +
+        "selected profile are all failing; retry later or change the profile\"; a dynamic " +
+        "profile instead announces and waits for its background update.",
       inputSchema: {
         type: "object" as const,
         properties: {
@@ -714,12 +805,15 @@ export function buildTools(limitsText: string) {
       name: "list_profiles",
       description:
         "Read-only list of every profile defined in ~/.llm-externalizer/settings.yaml — " +
-        "both the profiles seeded on first run and any the user has since added by hand " +
-        "— with a marker on whichever one is currently active. One line per profile " +
-        "(name, mode, backend, model(s) or free_only pool size). This tool cannot add, " +
-        "switch, edit, or remove a profile; edit settings.yaml manually and call 'reset' " +
-        "to reload. Reports plainly (never crashes) if settings.yaml does not exist yet " +
-        "— it is created automatically the first time any llm-ext command runs.",
+        "the three built-in dynamic profiles ('free', 'paid', 'local', machine-managed and " +
+        "regenerated in the background as the OpenRouter catalog or the detected local " +
+        "endpoints change) plus any static profile the user has added by hand — with a " +
+        "marker on whichever one is EFFECTIVE for this invocation (--profile flag > " +
+        "settings.yaml `active:` key > built-in 'free'). One line per profile (name, mode, " +
+        "backend, model(s) or free_only pool size). This tool cannot add, switch, edit, or " +
+        "remove a profile; edit settings.yaml manually and call 'reset' to reload. Reports " +
+        "plainly (never crashes) if settings.yaml does not exist yet — it is created " +
+        "automatically the first time any llm-ext command runs.",
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
@@ -944,6 +1038,8 @@ export function buildTools(limitsText: string) {
         "in settings.yaml (id, reasoning_effort, cache, min_quantization, provider).\n\n" +
         "CONTEXT WARNING: Remote LLM has ZERO project context — include brief context." +
         BATCHING_NOTE +
+        " (This tool specifically: a fail-fast condition above refuses the whole call " +
+        "outright, not a fallback to 1 response per file.)" +
         limitsText,
       inputSchema: {
         type: "object" as const,
@@ -1596,5 +1692,16 @@ export function buildTools(limitsText: string) {
   // These are thin shims around the CLI dispatcher in mass_scouting/cli.ts;
   // every tool corresponds 1:1 to a `bin/llm-externalizer mass-scout <sub>`
   // CLI invocation.
-  return [...allTools, ...MASS_SCOUT_TOOLS];
+  // C4-03: the classify entries are listed here so --help and the typo suggestion see them like any command (the general profile-type check is skipped for classify: the runner's resolveClassifierProfile enforces the classifier-only rule, and definitions-classify.test.ts pins that the row above equals it); cli/main.ts runs them through runDecisionArgv, never dispatchCallTool.
+  return [...allTools, ...MASS_SCOUT_TOOLS, ...classifyTools()];
+}
+
+
+// WHY a wrapper: the accepted types are encoded once (ACCEPTED_PROFILE_TYPES) and attached to every tool here, so --help and the runtime check cannot drift from the table; a tool missing from it fails fast.
+export function buildTools(limitsText: string) {
+  return buildToolsWithoutProfileTypes(limitsText).map((tool) => {
+    const acceptedProfileTypes = ACCEPTED_PROFILE_TYPES[tool.name];
+    if (acceptedProfileTypes === undefined) throw new Error(`tool ${tool.name} has no acceptedProfileTypes entry in tools/definitions.ts`);
+    return { ...tool, acceptedProfileTypes };
+  });
 }

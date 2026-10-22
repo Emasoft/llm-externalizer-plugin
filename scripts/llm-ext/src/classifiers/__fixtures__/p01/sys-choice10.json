@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"model\":\"typesafe/jev-1.13-20260917\",\"answers\":{\"team\":{\"type\":\"choice\",\"choice\":\"opt0\",\"probabilities\":{\"opt0\":0.59,\"opt1\":0.11,\"opt2\":0.04,\"opt3\":0.06,\"opt4\":0.06,\"opt5\":0.05,\"opt6\":0.02,\"opt7\":0.02,\"opt8\":0.02,\"opt9\":0.03},\"confidence\":0.54}},\"usage\":{\"input_tokens\":500,\"output_tokens\":98,\"cost\":0.000021},\"provider\":\"TypeSafe\"}"
+}

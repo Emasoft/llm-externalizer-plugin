@@ -110,6 +110,10 @@ describe("security-triage benchmark — model routing + free_only", () => {
     setAllowPaidModels(true); // OUTER master switch — paid benchmarks need it too (USER D4)
     setPaidBenchmarksAllowed(true);
     setValidationBypassForTests(true); // benchmark routing test — the gate is not under test
+    // D3c-2 C4d: unset no longer reads false (fail-open). These tests publish
+    // per-profile free_only: false — a paid-candidate routing test under an
+    // explicitly NON-free profile, exactly what a real publisher writes.
+    setActiveFreeOnly(false);
     vi.stubGlobal("fetch", async () => ({
       ok: true,
       status: 200,
@@ -193,12 +197,16 @@ describe("security-triage benchmark — model routing + free_only", () => {
 
   it("master switch OFF and NO per-profile free_only: the free candidate still runs, the paid incumbent is skipped", async () => {
     // The configuration every other test in this file skips: allow_paid_models
-    // false (the modern top-level switch) while the per-profile free_only flag is
-    // absent. That is the DEFAULT for anyone who never set free_only, and it used
-    // to abort the whole sweep — the auto-added PAID incumbent tripped
-    // assertPaidBenchmarkAllowed before a single free candidate was scored, which
-    // is why the free-mode ledgers were empty. setActiveFreeOnly stays false here
-    // on purpose: that is precisely what makes this case distinct.
+    // false (the modern top-level switch) while the per-profile free_only flag
+    // is false — what a publisher writes for a NON-free profile. (D3c-2 C4d: a
+    // flag that is truly UNSET now fails closed, so "absent" can no longer be
+    // simulated by not calling setActiveFreeOnly; that posture has its own
+    // test in config.test.ts.) It used to abort the whole sweep — the
+    // auto-added PAID incumbent tripped assertPaidBenchmarkAllowed before a
+    // single free candidate was scored, which is why the free-mode ledgers
+    // were empty. setActiveFreeOnly stays false here on purpose: that is
+    // precisely what makes this case distinct.
+    setActiveFreeOnly(false);
     setAllowPaidModels(false);
     setPaidBenchmarksAllowed(false);
     const sent: string[] = [];

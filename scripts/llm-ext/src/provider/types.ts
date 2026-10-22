@@ -15,9 +15,32 @@
  * time, never a snapshot taken at wiring time.
  */
 
+import type { ResolvedRoute } from "../config.js";
+
 /** Immutable backend snapshot (see index.ts's T2.7 snapshot-and-swap note). */
 export interface BackendConfig {
   readonly type: "local" | "openrouter";
+  /**
+   * Can a send to this backend cost money?
+   *
+   * NOT derivable from `type`, which answers "which request format" — a remote
+   * OpenAI-compatible preset (chat-b-ai-remote) is type "local" while being a
+   * real internet endpoint holding a real key. Sourced from `preset.isLocal`
+   * and the provider's free-by-nature flag, both of which are properties of the
+   * ENDPOINT. This is what the free_only cost guard reads; reading `type` was
+   * the D1 bypass.
+   */
+  readonly billable: boolean;
+  /**
+   * Is the PRIMARY provider's preset actually a local server (mirrors
+   * ResolvedProfile.isLocal — "the honest source for can a send cost money").
+   * Also NOT derivable from `type` for the same D1 reason `billable` isn't: a
+   * remote openai_api preset resolves type "local" while being a real internet
+   * endpoint. Distinct from `billable` — a genuinely-remote FREE provider
+   * (isLocal: false, billable: false) still needs the remote/cold-start retry
+   * ladder even though it can't bill (item D2's split).
+   */
+  readonly isLocal: boolean;
   readonly baseUrl: string;
   readonly apiKey: string;
   readonly model: string;
@@ -48,6 +71,10 @@ export interface StreamingResult {
     cost?: number;
   };
   finishReason: string;
+  /** Set only on the circuit breaker's abort verdict (checkServiceHealthOrWait),
+   *  never on a provider reply: lets a caller tell the verdict from a
+   *  provider finish_reason=error partial reply, which also has finishReason "error". */
+  serviceAbort?: boolean;
   truncated: boolean;
 }
 
@@ -75,42 +102,76 @@ export interface ProviderDeps {
   getBackend(): BackendConfig;
   /** Auth + attribution headers for the current backend (index.ts `apiHeaders()`). */
   apiHeaders(): Record<string, string>;
+  /**
+   * The provider that serves `model` under a multi-provider profile, or null
+   * when the profile routes everything to its primary provider (every profile
+   * that predates `providers:`).
+   *
+   * This is the seam that lets ONE run send model A to b.ai and model B to
+   * OpenRouter. Without it, `resolveConnection` builds every URL from the single
+   * active backend, so an ensemble spanning two providers is impossible however
+   * the pool is assembled.
+   */
+  routeForModel(model: string): ResolvedRoute | null;
+  /** Auth + attribution headers for ONE route (its own key, not the backend's). */
+  routeHeaders(route: ResolvedRoute): Record<string, string>;
   /** Live per-request soft timeout in ms (index.ts `SOFT_TIMEOUT_MS`, a `let`). */
   getSoftTimeoutMs(): number;
   /** Active profile's `free_only` flag — gates the cost-safety assertion. */
   isFreeOnly(): boolean;
   /** Active profile's protocol is `lmstudio_api` → probe failures must fail hard. */
   isLMStudioProvider(): boolean;
+
+  /** The ACTIVE profile's protocol (config.ts ApiProtocol) — D6b: the connection
+   *  layer decides which detector to run from the GROUP PRESET PROTOCOL, never
+   *  backend.type (b.ai is backend.type local AND protocol openai_api). */
+  getActiveProtocol(): string;
+
+  /**
+   * True iff `model` is in the active profile's `manualModels` provenance set
+   * (TRDD-FDI9NYAS D3b) — the user hand-listed it. Replaces the earlier
+   * planned `isDynamic` flag: exemption from the benchmark-verdict and price
+   * gates follows where a model CAME FROM, not the profile's type, so a
+   * reserved/manual id inside a DYNAMIC profile is exempt too (D5).
+   */
+  isManualModel(model: string): boolean;
+  /**
+   * ONE model's recorded price (USD / million tokens, input + output), or
+   * null when there is no recorded price data (cold/absent cache) —
+   * TRDD-FDI9NYAS D3c's send-time price check. The chokepoint MUST fail
+   * closed on null, never treat "unknown" as "cheap enough".
+   */
+  getModelPricePerMillion(
+    model: string,
+  ): { inputDollarsPerMillion: number; outputDollarsPerMillion: number } | null;
+  /** The active ensemble price ceiling (USD / million), read fresh on every
+   *  call (config.ts `getEnsemblePriceCeiling`) — same reload-safety reason
+   *  as every other function field here. */
+  getEnsemblePriceCeilingUsd(): number;
   /** Fallback temperature when a caller does not set one. */
   defaultTemperature: number;
 }
 
 /**
  * The extra seams the COMPLETION layer needs on top of the transport ones
- * (B1 Phase 5b). Every field here reaches state that could NOT move into
- * provider/completion.ts because index.ts reads or writes it elsewhere —
- * `creditExhausted` feeds `shouldUseFree()` and the dispatch layer,
- * `engageAutoFree` drives the ensemble builder's free pool, `FREE_MODEL_ID`
- * and the resolved max-tokens are consumed all over index.ts.
+ * (B1 Phase 5b). The resolved max-tokens is consumed all over index.ts and
+ * could not move into provider/completion.ts either.
  *
- * They are exposed as FUNCTIONS for two reasons: (1) same as ProviderDeps —
- * a value captured at wiring time would pin the completion layer to a stale
- * generation; (2) `FREE_MODEL_ID` is a `const` initialised LATER in index.ts
- * than the deps object itself, so reading it eagerly here would throw on TDZ.
+ * Exposed as a FUNCTION for the same reason as ProviderDeps — a value
+ * captured at wiring time would pin the completion layer to a stale
+ * generation.
  *
- * The two mutators keep index.ts's `let creditExhausted` / auto-free flags as
- * the SINGLE binding — the completion layer writes THROUGH the seam instead of
- * owning a copy that would silently diverge from what index.ts reads.
+ * TRDD-OE27RD7I 14.1-C2c-ENV: `getFreeModelId()` and `engageAutoFree()` were
+ * deleted here -- provider/completion.ts (this interface's only real
+ * consumer) never called either (see that file's own module comment), and
+ * their sole remaining caller was index.ts's own `resolveModelOverride` /
+ * `classifyError`, which now reach `FREE_MODEL_ID` directly and no longer
+ * engage anything (addendum 4 deleted engageAutoFree itself). Same fate as
+ * the credit-exhausted-session setter and the balance-cache invalidator
+ * that preceded them on this interface. Grep gate: all four are 0 hits in
+ * src outside a comment or a test asserting absence.
  */
 export interface CompletionDeps extends ProviderDeps {
   /** Max output tokens for the current model (index.ts `resolveDefaultMaxTokens()`). */
   getDefaultMaxTokens(): number;
-  /** The configured free-model id used for the 402 mid-flight fallback. */
-  getFreeModelId(): string;
-  /** Set index.ts's `creditExhausted` flag (402 seen → session is out of credit). */
-  setCreditExhausted(): void;
-  /** Engage auto-free routing for every later spend site. Idempotent in index.ts. */
-  engageAutoFree(reason: string): void;
-  /** Drop the cached OpenRouter balance so the next check re-queries. */
-  invalidateBalanceCache(): void;
 }

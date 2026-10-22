@@ -73,9 +73,11 @@ import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 
 import { assertFreeOnlyModel } from "../config.js";
-import { classifyUnavailable, recordUnavailable, getCooldownStore, earliestReset } from "../free-rotation.js";
+import { classifyUnavailable, noteGeneric403Model, recordUnavailable, getCooldownStore, earliestReset, runUnusableKind } from "../free-rotation.js";
+import { RetryDeadlineError, failureText } from "../provider/http.js";
 import { readTranscript, type PruneLevel, type Turn, type TranscriptStats } from "./transcript.js";
 import type { EligibleModel } from "./model-select.js";
+import { isEchoResponse } from "../response-gate.js";
 import {
   chunkTurns,
   classifyContextOverflow,
@@ -871,13 +873,46 @@ function shrinkBudgetOnOverflow(current: number): number {
   return Math.max(MIN_OVERFLOW_CHUNK_BUDGET, Math.floor(current / 2));
 }
 
-function classifyModelFallback(detail: string): ModelFallbackReason | null {
+function classifyModelFallback(detail: string, modelId: string): ModelFallbackReason | null {
+  // TEXT-derived reasons win first -- a real 402 on THIS call must report
+  // "no-longer-free", not a stale "gone" verdict left by the registry for
+  // an unrelated earlier call (review of da917e9, TRDD-W9XLU1HD).
+  const s = (detail || "").toLowerCase();
+  // TRDD-W9XLU1HD coordinator mitigation: a 403 arriving here notes its model
+  // BEFORE classification, so the model that completes the 2-distinct quorum
+  // is itself treated as gone (see noteGeneric403Model in free-rotation.ts).
+  // Without this the session_summary path could never trigger the pool-level
+  // "gone" verdict even when half the pool is refusing. Noting a
+  // model-specific 403 is harmless — that already classifies "gone" alone.
+  if (/\b403\b/.test(s)) noteGeneric403Model(modelId);
   const kind = classifyUnavailable(detail);
   if (kind === "gone" || kind === "daily-quota") return kind;
-  const s = (detail || "").toLowerCase();
-  if (s.includes("402") || s.includes("insufficient credit") || s.includes("payment required")) {
+  // S6 (review of 527d5e8): match the STATUS CODE only, not a bare
+  // substring -- "402" also matches inside a request id, a token count
+  // ("4021 tokens"), or a price, so a bare includes() misclassified any of
+  // those as "no-longer-free". \b402\b anchors on the digits as a whole
+  // word, matching the real "API error 402 (...)" shape completion.ts
+  // throws while still rejecting "4021 tokens".
+  if (
+    /\b402\b/.test(s) ||
+    s.includes("insufficient credit") ||
+    s.includes("payment required")
+  ) {
     return "no-longer-free";
   }
+  // completion.ts may already have proven THIS model "gone"/"daily-quota" via
+  // credential corroboration (classifyUnavailable's credentialProvenGoodElsewhere
+  // gate, TRDD-90DM5YHO item 1) and called markRunUnusable() before throwing --
+  // but the raw error text it threw carries no model-specific phrasing, so
+  // classifyUnavailable(detail) alone (no credential context here) returns
+  // null. Without this fallback callWithRetry below treats a corroborated-dead
+  // model as a "genuine failure" and burns up to maxRetries same-model retries
+  // before hard-failing the whole chunk instead of falling back to the next
+  // candidate (TRDD-W9XLU1HD AC2/AC4). Reads the REAL kind, not a hardcoded
+  // "gone" (review of da917e9): a model corroborated "daily-quota" must
+  // report "daily-quota", not "gone".
+  const registryKind = runUnusableKind(modelId);
+  if (registryKind === "gone" || registryKind === "daily-quota") return registryKind;
   return null;
 }
 
@@ -885,7 +920,6 @@ function classifyModelFallback(detail: string): ModelFallbackReason | null {
 // surface judges echoes identically; re-exported here because this module is
 // where it was born and its tests and callers import it from here.
 export { isEchoResponse } from "../response-gate.js";
-import { isEchoResponse } from "../response-gate.js";
 
 /**
  * Call `callModel` with a bounded number of retries — but ONLY for a
@@ -976,6 +1010,20 @@ async function callWithRetry(
     } catch (err) {
       if (err instanceof ModelUnavailableError) throw err; // no-text/echo: never retried, propagate for fallback immediately
       lastErr = err;
+      // The retry clock already spent its whole window (TRDD-YG72CYY7) inside
+      // this one call: retrying maxRetries more times would multiply a five-
+      // minute window by maxRetries+1 and make session_summary LONGER than it
+      // was. It is fail-fast-with-checkpoint exactly as a transient verdict
+      // was, never "genuine failure, retry". Its own message is neutral, so the
+      // real cause is named from `.cause`.
+      if (err instanceof RetryDeadlineError) {
+        throw new Error(
+          `session-summary: ${label} hit a rate limit / availability error on model '${modelId}': ` +
+            `${err.message} Last error: ${failureText(err)}. Checkpoint saved at ${checkpointPath} — re-run the same ` +
+            `command to resume once the limit clears (free daily quotas reset at 00:00 UTC).`,
+          { cause: err },
+        );
+      }
       const msg = err instanceof Error ? err.message : String(err);
 
       // Ground truth beats our estimate: the eligible free models aren't
@@ -988,7 +1036,7 @@ async function callWithRetry(
         throw new ContextOverflowError(modelId, msg);
       }
 
-      const fallbackReason = classifyModelFallback(msg);
+      const fallbackReason = classifyModelFallback(msg, modelId);
       if (fallbackReason) {
         throw new ModelUnavailableError(fallbackReason, modelId, msg);
       }
@@ -1267,7 +1315,8 @@ export async function summarizeSession(
   // way to opt into paid spend at all. Checked before any file IO / chunking
   // work, so a misconfigured modelId fails in milliseconds, not after
   // chunking a multi-hundred-MB transcript.
-  for (const m of models) assertFreeOnlyModel(true, "openrouter", m.id);
+  // `true, true` = free_only forced AND billable; this path is OpenRouter-only.
+  for (const m of models) assertFreeOnlyModel(true, true, m.id);
 
   let activeModelIdx = 0;
   const activeModel = (): EligibleModel => models[activeModelIdx];
@@ -1456,7 +1505,8 @@ export async function summarizeSession(
    *  Reuses the project's own cooldown registry (free-rotation.ts) to name
    *  the earliest moment ANY tried candidate might recover, rather than
    *  reinventing that bookkeeping here. */
-  function allModelsExhausted(triedIds: readonly string[], lastErr: ModelUnavailableError): Error {
+  function allModelsExhausted(failures: readonly Pick<ModelUnavailableError, "modelId" | "reason">[], lastErr: ModelUnavailableError): Error {
+    const triedIds = failures.map((failure) => failure.modelId);
     const store = getCooldownStore();
     const earliest = earliestReset(store, models.map((m) => m.id), Date.now());
     const when =
@@ -1488,6 +1538,9 @@ export async function summarizeSession(
     }
     return new Error(
       `session-summary: every candidate free model is unavailable — tried ${triedIds.join(", ")}. ` +
+        // Stable codes preserve every terminal slot without replaying earlier provider bodies.
+        `Reasons: ${failures.map((failure) => `${failure.modelId} (${failure.reason})`).join(", ")}. ` +
+        `session-summary selects only eligible free OpenRouter models; it does not fall back to the configured backend. ` +
         `Last failure on '${lastErr.modelId}' (${lastErr.reason}): ${lastErr.detail}.${when} ` +
         `Checkpoint saved at ${options.checkpointPath} — re-run once a model recovers.`,
     );
@@ -1495,12 +1548,12 @@ export async function summarizeSession(
 
   /** Record the failure (cooldown bookkeeping, reused from free-rotation.ts)
    *  and advance to the next candidate, or throw when none remain. */
-  function advanceModel(err: ModelUnavailableError, triedIds: string[]): void {
+  function advanceModel(err: ModelUnavailableError, triedIds: Pick<ModelUnavailableError, "modelId" | "reason">[]): void {
     // Never let a model's OWN WORDS be re-read as a provider status message —
     // see RUNTIME_VERDICT_REASONS. A summary mentioning "404" must not earn
     // the model a persisted "gone" cooldown.
     recordUnavailable(err.modelId, RUNTIME_VERDICT_REASONS.includes(err.reason) ? "" : err.detail);
-    triedIds.push(err.modelId);
+    triedIds.push({ modelId: err.modelId, reason: err.reason });
     if (activeModelIdx + 1 >= models.length) throw allModelsExhausted(triedIds, err);
     activeModelIdx++;
   }
@@ -1546,7 +1599,7 @@ export async function summarizeSession(
   // for the WHOLE run (activeModelIdx only ever advances), so which chunk
   // happened to discover a given model's unavailability is not meaningful;
   // only the cumulative list of everything tried before exhaustion is.
-  const triedModelIds: string[] = [];
+  const triedModelIds: Pick<ModelUnavailableError, "modelId" | "reason">[] = [];
 
   /** One attempt cycle on chunk `i`: call the model, and on success persist
    *  the checkpoint immediately (see the module header — no `await` sits
@@ -1572,13 +1625,36 @@ export async function summarizeSession(
     retryTransient: boolean,
     sleepFn: (ms: number) => Promise<void>,
   ): Promise<ChunkCallResult> {
+    // A sibling worker (same-slot PER_MODEL_CONCURRENCY, or another fan-out
+    // slot) may already hold a gone/daily-quota verdict for this exact model
+    // THIS run (free-rotation.ts::markRunUnusable, fired inside
+    // recordUnavailable — see advanceModel/applyFanoutTransition below).
+    // Consulting it here BEFORE the HTTP call is what stops every other
+    // concurrent chunk on a dead model from independently re-discovering it
+    // (TRDD-W9XLU1HD AC4) — without this, N queued chunks each burn one
+    // request on a model the process already knows is unusable.
+    // Read the REAL verdict kind instead of hardcoding "gone" (review of
+    // da917e9, TRDD-W9XLU1HD): a model already corroborated "daily-quota"
+    // must synthesize a "daily-quota" ModelUnavailableError, not "gone" --
+    // otherwise every sibling slot reports the wrong reason for the rest of
+    // this run. `transient` is never in the registry (markRunUnusable is
+    // only ever called with "gone"/"daily-quota" — see free-rotation.ts),
+    // but the guard still narrows explicitly rather than trusting that.
+    const registryKind = runUnusableKind(model.id);
+    if (registryKind === "gone" || registryKind === "daily-quota") {
+      return {
+        kind: "fallback",
+        err: new ModelUnavailableError(
+          registryKind,
+          model.id,
+          "model already verified unavailable this run (shared verdict, no new HTTP call)",
+        ),
+      };
+    }
     try {
       const summary = await callWithRetry(
         renderChunkPrompt(chunks[i], chunks.length),
         model.id,
-        // What we RESERVE in windowBudgetForModel must be what we REQUEST here —
-        // asking for the provider's full allowance (262k on one free model) both
-        // wastes the window and is what drove the usable budget to the 1_000 floor.
         completionRequestFor(model),
         options.callModel,
         maxRetries,
@@ -2024,7 +2100,7 @@ export async function summarizeSession(
       if (slot.model.id !== outcome.err.modelId) return;
 
       recordUnavailable(outcome.err.modelId, outcome.err.detail);
-      triedModelIds.push(outcome.err.modelId);
+      triedModelIds.push({ modelId: outcome.err.modelId, reason: outcome.err.reason });
       const oldModel = slot.model;
 
       if (nextReplacementIdx >= models.length) {

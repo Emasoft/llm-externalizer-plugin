@@ -1,0 +1,215 @@
+diff --git a/scripts/llm-ext/src/benchmark/check-imports/score.test.ts b/scripts/llm-ext/src/benchmark/check-imports/score.test.ts
+new file mode 100644
+index 0000000..1b09b12
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/check-imports/score.test.ts
+@@ -0,0 +1,94 @@
++// check_imports scorer (TRDD-f45eeaa0). Pure set math — no network, no model.
++
++import { describe, it, expect } from "vitest";
++
++import {
++  DEFAULT_CHECK_IMPORTS_THRESHOLDS,
++  passesThresholds,
++  scoreAll,
++  scoreFile,
++} from "./score.js";
++
++const TRUTH = ["node:fs", "./a.js", "../b.js"];
++
++describe("check-imports scorer — the confusion matrix", () => {
++  it("a perfect extraction is 1.0 across the board", () => {
++    const c = scoreFile("f.ts", TRUTH, [...TRUTH]);
++    expect(c.truePositives).toBe(3);
++    expect(c.falsePositives).toBe(0);
++    expect(c.falseNegatives).toBe(0);
++    expect(c.f1).toBe(1);
++  });
++
++  it("a MISSED specifier is a false negative, not a silent pass", () => {
++    const c = scoreFile("f.ts", TRUTH, ["node:fs", "./a.js"]);
++    expect(c.falseNegatives).toBe(1);
++    expect(c.recall).toBeCloseTo(2 / 3);
++    expect(c.precision).toBe(1);
++  });
++
++  it("an INVENTED specifier is a false positive", () => {
++    const c = scoreFile("f.ts", TRUTH, [...TRUTH, "./ghost.js"]);
++    expect(c.falsePositives).toBe(1);
++    expect(c.recall).toBe(1);
++    expect(c.precision).toBeCloseTo(3 / 4);
++  });
++
++  it("order does not matter — a SET is the unit of truth", () => {
++    const c = scoreFile("f.ts", TRUTH, ["../b.js", "node:fs", "./a.js"]);
++    expect(c.f1).toBe(1);
++  });
++
++  it("duplicates in the model's answer do not inflate the score", () => {
++    const c = scoreFile("f.ts", TRUTH, ["node:fs", "node:fs", "./a.js", "../b.js"]);
++    expect(c.truePositives).toBe(3);
++    expect(c.f1).toBe(1);
++  });
++
++  it("TRUE NEGATIVES ARE ALWAYS ZERO, by construction and on purpose", () => {
++    // Documented in score.ts: an item enters the universe only if it is true or
++    // was reported, so there is no finite population of correct non-reports.
++    // Pinned so nobody later reads meaning into the zero — or 'fixes' it.
++    expect(scoreFile("f.ts", TRUTH, [...TRUTH]).trueNegatives).toBe(0);
++    expect(scoreFile("f.ts", TRUTH, ["./ghost.js"]).trueNegatives).toBe(0);
++  });
++});
++
++describe("check-imports scorer — an unusable answer", () => {
++  it("an unparseable report loses every true specifier, and is not scored as perfect", () => {
++    const c = scoreFile("f.ts", TRUTH, null);
++    expect(c.truePositives).toBe(0);
++    expect(c.f1).toBeLessThan(1);
++  });
++
++  it("an EMPTY answer is not the same as an unparseable one", () => {
++    // Both are bad, but "I read it and found none" is a claim; "I produced
++    // nothing" is a failure to answer. Keeping them distinct is what lets
++    // coverage separate a broken model from an inaccurate one.
++    const empty = scoreFile("f.ts", TRUTH, []);
++    const unparseable = scoreFile("f.ts", TRUTH, null);
++    expect(empty.unscored).toBe(0);
++    expect(unparseable.unscored).toBeGreaterThan(0);
++  });
++});
++
++describe("check-imports scorer — the pass bar", () => {
++  it("demands more than the semantic benchmarks, because extraction is mechanical", () => {
++    expect(DEFAULT_CHECK_IMPORTS_THRESHOLDS.minMicroF1).toBeGreaterThan(0.85);
++    expect(DEFAULT_CHECK_IMPORTS_THRESHOLDS.minMicroRecall).toBeGreaterThan(
++      DEFAULT_CHECK_IMPORTS_THRESHOLDS.minMicroF1,
++    );
++  });
++
++  it("passes a near-perfect run", () => {
++    const cases = [scoreFile("a.ts", TRUTH, [...TRUTH]), scoreFile("b.ts", TRUTH, [...TRUTH])];
++    expect(passesThresholds(scoreAll(cases)).pass).toBe(true);
++  });
++
++  it("FAILS a run that misses specifiers, and says which floor it missed", () => {
++    const cases = [scoreFile("a.ts", TRUTH, ["node:fs"]), scoreFile("b.ts", TRUTH, ["node:fs"])];
++    const verdict = passesThresholds(scoreAll(cases));
++    expect(verdict.pass).toBe(false);
++    expect(verdict.failures.length).toBeGreaterThan(0);
++  });
++});
+diff --git a/scripts/llm-ext/src/benchmark/check-imports/score.ts b/scripts/llm-ext/src/benchmark/check-imports/score.ts
+new file mode 100644
+index 0000000..f3d9d36
+--- /dev/null
++++ b/scripts/llm-ext/src/benchmark/check-imports/score.ts
+@@ -0,0 +1,109 @@
++/**
++ * Deterministic scorer for the check_imports benchmark (TRDD-f45eeaa0).
++ *
++ * ── ZERO LLM JUDGE. Set math, end to end. ───────────────────────────────────
++ *
++ * WHAT IS SCORED: the SET of import specifiers a model extracts from a file's
++ * text. check_imports is two-phase — the model extracts, the server then
++ * resolves each against disk — so extraction is the only half a model can be
++ * good or bad at, and a set is the natural unit of truth.
++ *
++ * ── THE MATH IS NOT COPIED — IT IS THE SAME MATH ────────────────────────────
++ * `scoreCase` / `aggregateScores` / `passesThresholds` are IMPORTED from
++ * search-existing/score.ts, exactly as scan-folder/score.ts imports them. Two
++ * copies of a confusion matrix drift the day one is fixed.
++ *
++ * Reuse needs an argument, though, because the SHAPES differ: search_existing
++ * and scan_folder score a per-FILE binary verdict, while this scores set
++ * membership. They unify once you pick the right universe — for each file, the
++ * union of (true specifiers ∪ reported specifiers), where "expected yes" is the
++ * true set and the model's verdict on an item is "did you report it". Then
++ * TP/FP/FN are literally the same counts:
++ *   TP = correctly extracted, FP = invented, FN = missed.
++ *
++ * ── THE HONEST CONSEQUENCE OF THAT CHOICE ───────────────────────────────────
++ * TRUE NEGATIVES ARE ALWAYS ZERO here, and that is correct rather than a
++ * degenerate case: an item enters the universe only if it is true or was
++ * reported, so "correctly did not report a specifier that was never there" has
++ * no finite population to count over — every string that is not an import would
++ * qualify. Precision, recall and F1 do not read trueNegatives, so the reported
++ * figures are unaffected; only `trueNegatives` itself is uninformative, and it
++ * is left visible rather than hidden so nobody reads meaning into a zero.
++ */
++
++import {
++  aggregateScores,
++  passesThresholds as sharedPassesThresholds,
++  scoreCase,
++  type CaseScore,
++  type SearchExistingScore,
++  type SearchExistingThresholds,
++  type SectionVerdict,
++} from "../search-existing/score.js";
++
++export type CheckImportsScore = SearchExistingScore;
++export type CheckImportsThresholds = SearchExistingThresholds;
++export type { CaseScore };
++
++/**
++ * Score ONE file: the model's extracted specifiers against the derived truth.
++ *
++ * `reported === null` means the report was missing or unparseable. That is NOT
++ * silently a zero: every true specifier becomes a false negative (the model
++ * asserted nothing about them), which is what an unusable answer deserves, and
++ * the aggregate's coverage figure is what surfaces it as a systemic problem
++ * rather than as poor accuracy.
++ */
++export function scoreFile(
++  file: string,
++  trueSpecifiers: readonly string[],
++  reported: readonly string[] | null,
++): CaseScore {
++  const truth = new Set(trueSpecifiers);
++  const got = new Set(reported ?? []);
++  // The universe: everything that is true, plus everything claimed. See the
++  // header for why this is the right population and why TN is therefore 0.
++  const universe = [...new Set([...truth, ...got])];
++  const verdicts = new Map<string, SectionVerdict>(
++    universe.map((spec) => [
++      spec,
++      reported === null ? "unparseable" : got.has(spec) ? "yes" : "no",
++    ]),
++  );
++  return scoreCase(file, universe, truth, verdicts);
++}
++
++export function scoreAll(cases: readonly CaseScore[]): CheckImportsScore {
++  return aggregateScores(cases);
++}
++
++/**
++ * Pass bar. RECALL IS THE WEIGHTED HALF, and more heavily than the sibling
++ * benchmarks weight theirs, because the asymmetry is sharper here:
++ *
++ *   a MISSED specifier  -> phase 2 never resolves it, so a genuinely broken
++ *                          import ships UNDETECTED. That is the exact failure
++ *                          check_imports exists to prevent, so it defeats the
++ *                          tool rather than degrading it.
++ *   a SPURIOUS specifier -> phase 2 resolves it, finds it absent, and reports a
++ *                          broken import that is not real. Noise, and a human
++ *                          dismisses it in seconds.
++ *
++ * Extraction is also a MECHANICAL task, not a judgement call — the answer is
++ * present in the text — so the bar is set above the 0.85 that search_existing
++ * and scan_folder use for their genuinely semantic decisions. A model that
++ * cannot read import statements out of source reliably has no business being
++ * assigned this command.
++ */
++export const DEFAULT_CHECK_IMPORTS_THRESHOLDS: CheckImportsThresholds = {
++  minMicroF1: 0.9,
++  minMicroRecall: 0.95,
++  minCoverage: 0.9,
++};
++
++export function passesThresholds(
++  score: CheckImportsScore,
++  thresholds: CheckImportsThresholds = DEFAULT_CHECK_IMPORTS_THRESHOLDS,
++): { pass: boolean; failures: string[] } {
++  return sharedPassesThresholds(score, thresholds);
++}

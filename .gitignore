@@ -99,3 +99,11 @@ llm_externalizer_output/
 
 # Janitor runtime state (regeneratable; never committed)
 /.janitor/
+
+# CPV scans the working tree, and its gitignore matcher is case-sensitive:
+# `*_dev/` does not match `INPUT_DEV/`, so the directory was scanned and
+# produced 264 publish-blocking findings. Name it explicitly.
+INPUT_DEV/
+# Local tooling state (regeneratable databases, not project content)
+/.codegraph/
+/.tracer/

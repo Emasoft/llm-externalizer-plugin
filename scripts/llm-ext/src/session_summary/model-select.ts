@@ -47,6 +47,7 @@
  * project's PURE CORE + THIN IO SHELL convention (see free-rotation.ts).
  */
 
+import { goneEvictedModels } from "../free-rotation.js";
 /** The subset of the OpenRouter `/api/v1/models` catalog entry this module reads. */
 export interface CatalogModel {
   id: string;
@@ -226,8 +227,13 @@ export async function fetchCatalog(): Promise<CatalogModel[]> {
 }
 
 /** Fetch the live catalog and return the eligible models. Network + filter combined
- *  for the common case; tests exercise fetchCatalog and selectEligibleModels separately. */
+ *  for the common case; tests exercise this IO shell against a local catalog server. */
 export async function selectModels(options: SelectModelsOptions = {}): Promise<EligibleModel[]> {
   const catalog = await fetchCatalog();
-  return selectEligibleModels(catalog, options);
+  const eligible = selectEligibleModels(catalog, options);
+  // Honor persisted refusals across runs; the shared expiry permits restored models to be re-probed.
+  const evicted = goneEvictedModels();
+  const available = eligible.filter((model) => !evicted.has(model.id));
+  if (available.length === 0) throw new Error("session-summary: all otherwise eligible free models are excluded by persisted gone verdicts; retry after their exclusion expires.");
+  return available;
 }

@@ -1,5 +1,6 @@
 /**
- * Per-model OpenRouter call for the benchmark.
+ * Per-model chat-completion call for the benchmark — OpenRouter by default, any
+ * OpenAI-compatible endpoint via RunnerOptions.baseUrl (D7a: local models, later b.ai).
  *
  * Sends one chat-completion request per candidate model. The prompt
  * contains all 5 fixture files and the three keyword substrings, and
@@ -23,7 +24,6 @@ import type { Fixture } from "./ground-truth.js";
 import type { QualifiedModel } from "./discover.js";
 import { isFreeModeEligible } from "./discover.js";
 import { recordRequest } from "../usage-history.js";
-import { getActiveFreeOnly } from "../config.js";
 
 export interface RunResult {
   modelId: string;
@@ -68,7 +68,34 @@ export interface RunError {
 export type RunOutcome = RunResult | RunError;
 
 export interface RunnerOptions {
-  apiKey: string;
+  /**
+   * Bearer token. Optional since D7a: a local server takes none, and an empty
+   * `Authorization: Bearer ` is not the same as no header — omitted here means NO
+   * Authorization header. Every OpenRouter caller passes its key, so their request
+   * is unchanged.
+   */
+  apiKey?: string;
+  /**
+   * API root the request is sent to, WITHOUT `/v1` — the convention of
+   * API_PRESETS.defaultUrl and local_discovery's DiscoveredService.baseUrl, so a
+   * discovered local server can be passed as-is. D7a: the local-model benchmark
+   * must reach llama.cpp / LM Studio / Ollama / vLLM, and later b.ai. Defaults to
+   * OPENROUTER_BASE_URL, and no pre-existing caller passes it, so every one of them
+   * still sends to exactly https://openrouter.ai/api/v1/chat/completions.
+   * The cost gates around this runner (free_only below, the sweep's price cap, paid
+   * opt-in and spend ledger) are keyed to the OpenRouter catalog: a caller that
+   * points this elsewhere owns the billability check (local-bench.ts refuses
+   * billable hosts before any request).
+   */
+  baseUrl?: string;
+  /**
+   * Row 92 fix-queue: was read from a module-global (`getActiveFreeOnly()` in
+   * config.ts) inside the cost-safety gate below, so tests had to reset the
+   * global in `beforeEach` to isolate runs. A REQUIRED parameter instead — every
+   * caller resolves its own profile's `free_only` and passes it explicitly, so
+   * the gate can never read a stale/leaked value from an unrelated caller.
+   */
+  freeOnly: boolean;
   /** Extra headers OpenRouter uses to attribute traffic for analytics. */
   httpReferer?: string;
   xTitle?: string;
@@ -90,6 +117,26 @@ export interface RunnerOptions {
    */
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>;
 }
+
+/** The runner's default API root (RunnerOptions.baseUrl). */
+export const OPENROUTER_BASE_URL = "https://openrouter.ai/api";
+
+/**
+ * The chat-completions URL under an API root (RunnerOptions.baseUrl convention).
+ * Trailing slashes are dropped so `http://localhost:1234/` does not become
+ * `…//v1/…`, which some servers answer with 404. Shared with local-bench.ts's
+ * warm-up so both requests of one model always hit the same URL.
+ */
+export function chatCompletionsUrl(baseUrl: string): string {
+  return `${baseUrl.replace(/\/+$/, "")}/v1/chat/completions`;
+}
+
+/**
+ * The only model fields the runner reads (the id, and the prices for the free_only
+ * gate). Narrower than QualifiedModel so a model that has no OpenRouter catalog
+ * entry — a local one — can be benchmarked without inventing a catalog row.
+ */
+type RunnerModel = Pick<QualifiedModel, "id" | "inputDollarsPerMillion" | "outputDollarsPerMillion">;
 
 const SYSTEM_PROMPT =
   "You are a precise static-analysis classifier. Given several TypeScript " +
@@ -168,7 +215,7 @@ function responseSchema(keywords: readonly string[]): Record<string, unknown> {
 }
 
 export async function runBenchmarkOnModel(
-  model: QualifiedModel,
+  model: RunnerModel,
   keywords: readonly string[],
   fixtures: readonly Fixture[],
   options: RunnerOptions,
@@ -187,7 +234,7 @@ export async function runBenchmarkOnModel(
 }
 
 async function runBenchmarkOnModelInner(
-  model: QualifiedModel,
+  model: RunnerModel,
   keywords: readonly string[],
   fixtures: readonly Fixture[],
   options: RunnerOptions,
@@ -201,8 +248,13 @@ async function runBenchmarkOnModelInner(
   // flip-to-paid re-reads non-zero → not eligible → skipped). Return a RunError
   // (honouring the runner's never-throw contract) so the sweep records the skip and
   // continues instead of billing. To benchmark a PAID model, switch off free_only.
+  // `options.freeOnly` (row 92 fix-queue): this used to read the module-global
+  // `getActiveFreeOnly()`, so it silently followed whatever the LAST caller set —
+  // a paid sweep running after a free one (or a concurrent one) inherited the
+  // wrong gate. The caller now resolves its own profile's free_only and passes
+  // it explicitly, so the gate can only ever see the value ITS OWN sweep intended.
   if (
-    getActiveFreeOnly() &&
+    options.freeOnly &&
     !isFreeModeEligible(model.id, model.inputDollarsPerMillion, model.outputDollarsPerMillion)
   ) {
     return {
@@ -230,10 +282,9 @@ async function runBenchmarkOnModelInner(
     requestBody.reasoning = { effort: options.reasoningEffort };
   }
 
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${options.apiKey}`,
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  // No key ⇒ no Authorization header at all (see RunnerOptions.apiKey).
+  if (options.apiKey !== undefined) headers.Authorization = `Bearer ${options.apiKey}`;
   if (options.httpReferer) headers["HTTP-Referer"] = options.httpReferer;
   if (options.xTitle) headers["X-Title"] = options.xTitle;
 
@@ -250,7 +301,7 @@ async function runBenchmarkOnModelInner(
   let attempt = 0;
   while (true) {
     try {
-      resp = await doFetch("https://openrouter.ai/api/v1/chat/completions", {
+      resp = await doFetch(chatCompletionsUrl(options.baseUrl ?? OPENROUTER_BASE_URL), {
         method: "POST",
         headers,
         body: JSON.stringify(requestBody),

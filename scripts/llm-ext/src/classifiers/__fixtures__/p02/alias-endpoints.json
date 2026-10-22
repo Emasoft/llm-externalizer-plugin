@@ -1,0 +1,8 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "cache-control": "private, no-store"
+ },
+ "body": "{\"data\":{\"id\":\"~typesafe/jev-latest\",\"name\":\"TypeSafe: Jev Latest\",\"created\":1789689685,\"description\":\"This model always redirects to the latest model in the Jev family.\",\"architecture\":{\"tokenizer\":\"Router\",\"instruct_type\":null,\"modality\":\"text->decisions\",\"input_modalities\":[\"text\"],\"output_modalities\":[\"decisions\"]},\"endpoints\":[]}}"
+}

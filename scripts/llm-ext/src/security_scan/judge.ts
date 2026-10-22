@@ -41,7 +41,7 @@ import {
 } from "./types";
 import type { DedupGroup } from "./intake";
 import type { ModelPricing } from "../mass_scouting/cost-estimate";
-import { assertFreeOnlyModel, getActiveFreeOnly } from "../config";
+import { assertFreeOnlyModel, getActiveBillableForModel } from "../config";
 import { assertModelValidated } from "../benchmark/validated.js";
 
 // ── Constants ────────────────────────────────────────────────────────────
@@ -73,6 +73,16 @@ export interface JudgeOptions {
   model: string;
   apiKey: string;
   pricing: ModelPricing;
+  /**
+   * Row 101 fix-queue (mirrors 4d160a8's benchmark/runner.ts treatment): was
+   * read from the module-global `getActiveFreeOnly()` right at the gate call
+   * below, so a stale/leaked global from an unrelated caller in the same
+   * process silently decided this call's cost-safety gate. A REQUIRED
+   * parameter instead — the caller resolves its own profile's free_only and
+   * passes it explicitly, so the gate can only ever see the value ITS OWN
+   * job intended.
+   */
+  freeOnly: boolean;
   apiUrl?: string;
   workers: number;
   maxRetries: number;
@@ -184,11 +194,17 @@ export async function judgeGroups(
   // Airtight free_only cost-safety (TRDD-97ef8b63). The judge fetches OpenRouter
   // directly (not via resolveConnection), so it enforces the guard itself: under
   // a free_only profile a non-':free' judge model throws BEFORE any request.
-  assertFreeOnlyModel(getActiveFreeOnly(), "openrouter", opts.model);
+  // Route-aware billable (item 1/A1): do NOT hardcode `true` — see cli.ts's
+  // sibling comment (getActiveBillableForModel).
+  const billable = getActiveBillableForModel(opts.model);
+  // opts.freeOnly (row 101 fix-queue): used to read the module-global
+  // getActiveFreeOnly() here, so this gate silently followed whatever the
+  // LAST caller set process-wide instead of the caller of THIS job.
+  assertFreeOnlyModel(opts.freeOnly, billable, opts.model);
   // IRON RULE (TRDD-8b6b3646): a PAID judge model must have passed the
   // security_scan (or a harder) benchmark, else refuse BEFORE any request. Exempt
   // for a ':free' model (own filter). The judge is an OpenRouter subsystem.
-  assertModelValidated(opts.model, "security_scan", "openrouter");
+  assertModelValidated(opts.model, "security_scan", billable);
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const verdicts: GroupVerdict[] = new Array(groups.length);
   let totalCost = 0;

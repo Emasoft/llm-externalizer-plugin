@@ -10,11 +10,21 @@
  * which is why this dataset reuses that scorer's math verbatim (see score.ts).
  *
  * ── THE CORPUS IS REAL CODE (a hard project rule) ───────────────────────────
- * benchmark-fixtures/scan-folder/src/ holds TWELVE files copied VERBATIM out of
- * this repository's own scripts/llm-ext/src/ tree (provenance table in that directory's
- * README.md). Nothing is authored for the benchmark and nothing is edited. They
- * sit outside src/ so the toolchain never compiles them — their relative imports
- * dangle by design, which is irrelevant: scan_folder reads a file's TEXT.
+ * benchmark-fixtures/scan-folder/src/ holds TWELVE files that are a SNAPSHOT of
+ * this repository's own src/ tree at commit 8f5547d — copied verbatim, then
+ * frozen (per-file provenance table in that directory's README.md, which still
+ * names the pre-5dc5c58 `mcp-server/src/` paths that commit used). Nothing is
+ * authored for the benchmark and nothing is edited. They sit outside src/ so the
+ * toolchain never compiles them — their relative imports dangle by design, which
+ * is irrelevant: scan_folder reads a file's TEXT.
+ *
+ * A snapshot, NOT a mirror of today's tree, and deliberately so. `free-pool-
+ * auto-bench.ts` is the visible case: P6b retired that module, so it exists in
+ * this corpus and nowhere in src/ any more. Re-syncing the fixtures to HEAD
+ * would silently move the ground truth (deriveMatchingFiles recomputes the
+ * answer from these bytes), turning every scored run into a comparison against a
+ * different corpus than the previous one. Do not "fix" a fixture whose original
+ * has since been deleted or renamed — that is the snapshot working as intended.
  *
  * ── GROUND TRUTH IS DERIVED, NOT TYPED IN ───────────────────────────────────
  * Each case carries a `truthRegexSource`: a mechanical rule over the fixture

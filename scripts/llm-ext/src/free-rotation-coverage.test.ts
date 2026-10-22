@@ -23,6 +23,23 @@ import { join, relative } from "node:path";
 const SRC = join(__dirname);
 const read = (p: string) => readFileSync(join(SRC, p), "utf-8");
 
+/** Drop every comment LINE (a `//` line, a ` * ...` continuation line inside
+ *  a block comment, or a block-comment opener line) before a guard checks
+ *  for a deleted name — fix-queue 98(4b): the four guards below used to
+ *  strip only `//` lines, so a name mentioned in a multi-line doc comment
+ *  (this project's own "why this was deleted" convention) could still read
+ *  as live code. One shared filter so the four call sites cannot drift
+ *  apart on which comment shapes they recognise. */
+function stripComments(src: string): string {
+  return src
+    .split("\n")
+    .filter((l) => {
+      const t = l.trim();
+      return !t.startsWith("//") && !t.startsWith("*") && !t.startsWith("/*");
+    })
+    .join("\n");
+}
+
 /** Every .ts file under src/, as a path relative to src/. */
 function globSrc(dir: string = SRC): string[] {
   const out: string[] = [];
@@ -78,12 +95,14 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(index).toContain("callSingleWithFreeRotation");
     expect(index).toContain("callEnsembleSlotWithRotation");
     expect(index).toContain("buildFreeRotationPool");
-    // The predicate must be free_only OR auto-free. Keying off freeOnly alone was
-    // the original defect: under auto-free the fallback list came out empty while
-    // the boot log promised "rotation on rate-limit".
+    // The predicate must be free_only OR the master switch. TRDD-OE27RD7I
+    // addendum 4 deleted the third arm this used to OR in (sticky auto-free
+    // on a low balance / prior 402) -- keying off freeOnly alone was the
+    // original defect this guard exists to catch either way.
     expect(index).toMatch(
-      /function isFreeModeActive\(\)[\s\S]{0,200}freeOnly[\s\S]{0,80}autoFreeEngaged/,
+      /function isFreeModeActive\(\)[\s\S]{0,200}freeOnly[\s\S]{0,80}forceFreeByMasterSwitch/,
     );
+    expect(index).not.toContain("autoFreeEngaged");
   });
 
   it("check_imports' direct JSON completions rotate", () => {
@@ -105,17 +124,146 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(index).toMatch(/csPool[\s\S]{0,400}callSingleWithFreeRotation/);
   });
 
-  it("the auto-reconcile pre-flight is wired at the ONE shared dispatcher", () => {
-    // Same class of bug as the rotation-wiring guard: the reconcile helper being
-    // correct is worthless if a funnel never calls it. Skills / slash-commands /
-    // agents all wrap the CLI, which routes every tool call through
-    // dispatchCallTool — so this one call is what makes "always assess first"
-    // hold for every surface.
+  it("the one-time profile migration runs at BOOT, strictly before the dispatch pre-flight (P6c-a item 3, amendment 3)", () => {
+    // ORDER IS THE WHOLE POINT. The migration ADOPTS an unmarked section that
+    // is provably one of ours by stamping the generated marker on it. If the
+    // maintainer ran first it would see that same section WITHOUT the marker,
+    // conclude it was hand-authored, and back the entire settings.yaml up —
+    // announcing "your previous version was saved" about a file the user never
+    // touched. Both calls are correct in isolation; only their order is not.
     const index = read("index.ts");
-    expect(index, "dispatch must run reconcile before work tools").toMatch(
-      /RECONCILE_SKIP_TOOLS[\s\S]{0,400}runModelReconcile\(\)/,
-    );
+    const migrateAt = index.indexOf("migrateProfileSections(getSettingsPath()");
+    const preflightAt = index.indexOf("// P6b dynamic-profile pre-flight BEGIN");
+    expect(migrateAt, "index.ts must call migrateProfileSections at boot").toBeGreaterThan(-1);
+    expect(preflightAt).toBeGreaterThan(-1);
+    expect(
+      migrateAt,
+      "the migration must run BEFORE the dispatch pre-flight that maintains free/paid",
+    ).toBeLessThan(preflightAt);
+    // And inside the settings-loading IIFE, not merely earlier in the file:
+    // ensureSettingsExist() is what created/repaired the document it migrates.
+    const ensureAt = index.indexOf("ensureSettingsExist()");
+    expect(ensureAt).toBeGreaterThan(-1);
+    expect(ensureAt).toBeLessThan(migrateAt);
+  });
+
+  it("the dynamic-profile maintainer AND the legacy auto-reconcile pre-flight are wired at the ONE shared dispatcher (P6b item 1, addendum F)", () => {
+    // Same class of bug as the rotation-wiring guard: the reconcile/maintainer
+    // helper being correct is worthless if a funnel never calls it. Skills /
+    // slash-commands / agents all wrap the CLI, which routes every tool call
+    // through dispatchCallTool — so this one call is what makes "always assess
+    // first" hold for every surface.
+    //
+    // P6b rewired this block: a DYNAMIC effective profile ('free'/'paid') goes
+    // through maintainDynamicProfiles + dynamicProfileGate; a STATIC one gets
+    // runModelReconcile()'s dead-id WARNING and nothing else (P6c-a retired the
+    // lazy-population half, so the dynamic arm is the only writer).
+    // This replaces the old single-regex assertion (which matched
+    // `runModelReconcile()` immediately after the skip-list check) — that
+    // shape no longer exists on purpose; asserting it would re-forbid the very
+    // rewiring this test is supposed to confirm happened.
+    const index = read("index.ts");
+
+    // P6b-fix2 S-8: the block is delimited by two unique anchors in index.ts
+    // instead of measured in characters. Every `[\s\S]{0,N}` window here was a
+    // silent countdown — one of them had 25 characters of headroom, so the next
+    // comment line added to the dispatch pre-flight would have reddened it for
+    // a reason with nothing to do with the wiring. Extract the block once,
+    // assert ORDER inside it with indexOf, and adding prose to it is free.
+    const BEGIN = "// P6b dynamic-profile pre-flight BEGIN";
+    const END = "// P6b dynamic-profile pre-flight END";
+    const from = index.indexOf(BEGIN);
+    const to = index.indexOf(END);
+    expect(from, `index.ts must carry the '${BEGIN}' anchor`).toBeGreaterThan(-1);
+    expect(to, `index.ts must carry the '${END}' anchor`).toBeGreaterThan(from);
+    const preflight = index.slice(from, to);
+
+    /** Position of `needle` inside the pre-flight block; -1 when absent. */
+    const at = (needle: string): number => preflight.indexOf(needle);
+    const ordered = (...needles: string[]): void => {
+      let prev = -1;
+      for (const n of needles) {
+        const i = at(n);
+        expect(i, `${n} must appear in the dispatch pre-flight block`).toBeGreaterThan(-1);
+        expect(i, `${n} must come after the step before it`).toBeGreaterThan(prev);
+        prev = i;
+      }
+    };
+
+    expect(
+      at("RECONCILE_SKIP_TOOLS.has(name)"),
+      "dispatch must gate on RECONCILE_SKIP_TOOLS before EITHER path",
+    ).toBeGreaterThan(-1);
+    expect(at("isDynamicProfileName(effective)")).toBeGreaterThan(at("RECONCILE_SKIP_TOOLS.has(name)"));
+
+    // C2b-wire (TRDD-OE27RD7I): the dynamic arm's own maintainer call moved
+    // OFF this dispatch site onto a detached detector — every tool call on a
+    // dynamic profile used to pay for a full in-process catalog fetch+patch,
+    // which is what card C's 100ms `settings status` latency acceptance
+    // forbids. Nothing here writes settings.yaml synchronously anymore, so
+    // there is no reload to order before the gate either — asserting the old
+    // "maintain -> reload-if-written -> gate" order would re-forbid the very
+    // rewiring this test is supposed to confirm happened.
+    // D2: the detector is SCHEDULED in this block (before the gate, inside the
+    // dynamic arm) and SPAWNED in dispatchCallToolInner's `finally`, after the
+    // work. Spawned here, it held the profile's one lock while this same
+    // command's models failed, so the update the failure requests found the
+    // lock held and started nothing (proven by empty-pool-wait.test.ts /
+    // profile-chain-402.test.ts's "exactly one update-requested child").
+    ordered("detectAfterDispatch = effective;", "dynamicProfileGate(");
+
+    // C2b-wire acceptance (spec's "spawns exactly one detector for a dynamic
+    // profile and none for a static one or a RECONCILE_SKIP_TOOLS tool"):
+    // exactly one call site in the whole file; the ONLY thing that arms it is
+    // the assignment strictly inside the `isDynamicProfileName(effective)`
+    // branch of THIS block (already proven gated on
+    // `!RECONCILE_SKIP_TOOLS.has(name)` by the outer `if` this whole
+    // `preflight` slice is extracted from) — never the STATIC `else` arm below,
+    // which only ever runs runModelReconcile().
+    const spawnCalls = (index.match(/spawnDetachedDetector\(/g) ?? []).length;
+    expect(spawnCalls, "spawnDetachedDetector( must appear exactly once in index.ts").toBe(1);
+    const arms = (index.match(/detectAfterDispatch = /g) ?? []).length;
+    expect(arms, "the detector must be armed at exactly one site").toBe(1);
+    const staticArmAt = preflight.indexOf("} else {");
+    expect(staticArmAt, "the static-profile else arm must exist in this block").toBeGreaterThan(-1);
+    expect(
+      at("detectAfterDispatch = effective;"),
+      "the detector must be armed before the static-profile else arm, never inside it",
+    ).toBeLessThan(staticArmAt);
+    // ...and spawned only AFTER the work: in the finally that follows the
+    // whole dispatch, past this block's END anchor.
+    const spawnAt = index.indexOf("spawnDetachedDetector({ profile: detectAfterDispatch");
+    expect(spawnAt, "the detector must be spawned from the armed profile").toBeGreaterThan(to);
+    expect(index.lastIndexOf("} finally {", spawnAt)).toBeGreaterThan(to);
+
+    // P6b-fix S7: this asserted `runModelReconcile\(\)`, which the function
+    // DECLARATION (`async function runModelReconcile(): Promise<void>`) also
+    // satisfies, so deleting the actual CALL left the test green. Scoping to
+    // the block kills that class of false match outright — the declaration is
+    // nowhere near it — and the trailing `;` still pins a CALL, not a mention.
+    expect(
+      at("await runModelReconcile();"),
+      "a STATIC effective profile must still get the reconcile dead-id warning",
+    ).toBeGreaterThan(-1);
     expect(index).toContain("reconcileModelsBeforeWork");
+
+    // P6b-fix B2: the legacy arm's own name must come from the IN-MEMORY
+    // effective profile, never from a fresh loadSettings() of the disk
+    // `active:` key — that mismatch is what routed `--profile <static>` runs
+    // into a lockless write of the generated `profiles.free` section and
+    // pinned isStatic to false for every static profile.
+    expect(index, "the legacy reconcile deps must key on the in-memory effective name").toMatch(
+      /const sActiveName = effectiveProfileName\(activeSettings\);/,
+    );
+    expect(index, "isStatic must derive from that same name").toMatch(
+      /isStatic: !isDynamicProfileName\(sActiveName\)/,
+    );
+    // P6b-fix2 S-8: the last char-count window in this test, replaced by an
+    // ordering assertion over two strings that each occur once.
+    const nameAt = index.indexOf("const reconcileProfileName = effectiveProfileName(activeSettings);");
+    const refusalAt = index.indexOf("if (isDynamicProfileName(reconcileProfileName))");
+    expect(nameAt, "the legacy free-pool writer must resolve its name from the in-memory profile").toBeGreaterThan(-1);
+    expect(refusalAt, "the legacy free-pool writer must refuse a dynamic profile name").toBeGreaterThan(nameAt);
 
     // The CLI inherits the reconcile pre-flight because it dispatches every
     // command through dispatchCallTool (asserted just above) — there is now
@@ -126,19 +274,30 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     );
   });
 
-  it("credit→free is non-interrupting AND strictly one-directional (paid→free only)", () => {
+  it("credit exhaustion (402) NEVER borrows the free pool — the completion path stays inside its own profile (TRDD-OE27RD7I addendum 4)", () => {
+    // USER, no exceptions: "no switching to free models ... must exist anymore".
+    // The paid->free rotation body and the engage-then-retry-on-free
+    // machinery it needed were deleted outright from
+    // provider/completion.ts — a 402 now falls straight into the generic
+    // deterministic-4xx classification and is thrown honestly, same as any
+    // other terminal 4xx. This test used to assert the OPPOSITE (that the
+    // borrow existed and completed the call); it now asserts the borrow is
+    // genuinely gone, not just renamed or relocated.
     const completion = read("provider/completion.ts");
-    // 402 (credit exhausted) completes on the ROTATING free pool, not a single
-    // pinned model — so a daily-capped first free model can't kill the command.
-    expect(completion).toContain("completeOnFreePool");
-    expect(completion).toMatch(/API error 402[\s\S]{0,1400}completeOnFreePool/);
-    // The paid→free fallback is guarded by the current model NOT being ':free',
-    // which makes it structurally one-directional: a free_only profile's model is
-    // already ':free', so it can never be pushed to paid here.
-    expect(completion).toMatch(/!isFreeSuffixModelId\(options\.model\)/);
-    // The fallback only fires on a genuine availability failure, never a 400/bad
-    // key (classifyUnavailable rejects those) — so it can't mask real bugs.
-    expect(completion).toContain("classifyUnavailable(errMsg)");
+    // Positive anchor: a wrong path or an empty read would make every
+    // `.not.toContain()` below pass vacuously. Pin the read to the real file
+    // by requiring content only completion.ts has, plus a length floor.
+    expect(completion).toContain("chatCompletionWithRetry");
+    expect(completion.length).toBeGreaterThan(1000);
+    // Strip //-comment lines first: the deleted names are still MENTIONED in
+    // explanatory comments documenting the deletion (see this same file's
+    // "circuit breaker" test below for the identical pattern) — the guard
+    // must check the LIVE code contains none of them, not the prose about it.
+    const completionCode = stripComments(completion);
+    expect(completionCode).not.toContain("completeOnFreePool(");
+    expect(completionCode).not.toContain("onCreditExhausted(");
+    expect(completionCode).not.toContain("engageFreeAfterCreditExhaustion");
+    expect(completionCode).not.toContain("autoFreeEngageHook");
   });
 
   it("the circuit breaker is TRANSPORT-only and half-opens after aborting (2026-08-04 livelock guards)", () => {
@@ -157,10 +316,7 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     //    alone on a line, so a reintroduced `if (x) recordServiceFailure();`
     //    was invisible to the exact test built to block it (ultracode F13).
     //    2 = the function definition + the ONE transport-error call site.
-    const codeOnly = completion
-      .split("\n")
-      .filter((l) => !l.trim().startsWith("//"))
-      .join("\n");
+    const codeOnly = stripComments(completion);
     const failureRefs = codeOnly.match(/\brecordServiceFailure\(\)/g) ?? [];
     expect(
       failureRefs.length,
@@ -181,24 +337,65 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     expect(rotation).toMatch(/server issue detected[\s\S]{0,400}return null;/);
   });
 
-  it("the direct-HTTP tools' paid→free credit switch is wired consistently (engage hook registered)", () => {
-    // The decorator can't import index.ts (a cycle), so index.ts REGISTERS its
-    // engageAutoFree as the hook. Without this the decorator would flip only the
-    // config chokepoint flag, leaving autoFreeEngaged false — and the completion
-    // path would then build a paid ensemble that throws at assertFreeOnlyModel.
-    const index = read("index.ts");
-    expect(index).toContain("registerAutoFreeEngage(engageAutoFree)");
-    // The decorator handles the paid-402 branch (not only free-mode rotation).
+  it("the direct-HTTP tools' fetch decorator has NO paid→free credit switch wired (TRDD-OE27RD7I addendum 4)", () => {
+    // withFreeRotation's PAID-mode branch used to engage session-wide free mode
+    // on a 402 and rotate the call onto the free pool — the direct-HTTP-tools
+    // twin of the completion.ts borrow above. That branch was deleted; PAID
+    // mode now always sends the request as-is, including a 402. This test used
+    // to assert the hook WAS registered/wired; it now asserts the opposite —
+    // none of the deleted machinery's names remain as live source.
     const rotation = read("free-rotation.ts");
-    expect(rotation).toContain("onCreditExhausted");
-    expect(rotation).toMatch(/res\.status !== 402/);
+    // Positive anchor: a wrong path or an empty read would make every
+    // `.not.toContain()` below pass vacuously. Pin the read to the real file
+    // by requiring content only free-rotation.ts has, plus a length floor.
+    expect(rotation).toContain("withFreeRotation");
+    expect(rotation.length).toBeGreaterThan(1000);
+    // Same comment-stripping rationale as the completion.ts guard above: the
+    // deletion is documented in a comment naming the dead function, which is
+    // not itself a regression — only a live (non-comment) reference is.
+    const rotationCode = stripComments(rotation);
+    expect(rotationCode).not.toContain("completeOnFreePool(");
+    expect(rotationCode).not.toContain("onCreditExhausted(");
+    expect(rotationCode).not.toContain("engageFreeAfterCreditExhaustion");
+    expect(rotationCode).not.toContain("autoFreeEngageHook");
   });
 
-  it("the paid credit is used down to $0 by default (the 402 catch is the safety net)", () => {
+  it("no low-balance auto-free threshold exists anymore (TRDD-OE27RD7I addendum 4) — the paid credit is used down to $0, and a 402 is honest, never a switch", () => {
     const index = read("index.ts");
-    // parseFreeBelowUsd defaults to 0 — no proactive early switch; the guaranteed
-    // non-interrupting trigger is the mid-call 402.
-    expect(index).toMatch(/function parseFreeBelowUsd[\s\S]{0,700}return 0;/);
+    expect(index).toContain("chatCompletionWithProfileFallback"); // positive anchor
+    expect(index.length).toBeGreaterThan(1000);
+    const indexCode = stripComments(index);
+    // parseFreeBelowUsd/MIN_BALANCE_FOR_PAID_USD were the proactive
+    // early-switch threshold and its dollar-value env override — deleted
+    // outright, no opt-out. The guaranteed (and now ONLY) 402 behaviour is
+    // the honest classifyError failure, never a switch.
+    expect(indexCode).not.toContain("parseFreeBelowUsd");
+    expect(indexCode).not.toContain("MIN_BALANCE_FOR_PAID_USD");
+    expect(indexCode).not.toContain("LLM_EXT_FREE_BELOW_USD");
+  });
+
+  it("stripComments also drops block-comment lines (' * ...', '/*...'), not just '//' (fix-queue 98(4b))", () => {
+    // Before this fix, a name mentioned only inside a `/** ... */` doc
+    // comment (this project's own "why this was deleted" convention) still
+    // read as live code to every guard above, because the shared filter
+    // only recognised a `//` line comment.
+    // dogfood sweep · promise-vs-code: these are fixture STRINGS feeding
+    // stripComments' own unit test, not live calls — the trailing markers below
+    // are the harness's documented escape hatch (same-line comment, in a test
+    // file, hit inside a string literal).
+    const src = [
+      "const kept = 1;",
+      "// dropped: completeOnFreePool(", // absence-assert
+      "/* dropped: onCreditExhausted( */", // absence-assert
+      " * dropped: engageFreeAfterCreditExhaustion",
+      "const alsoKept = 2;",
+    ].join("\n");
+    const filtered = stripComments(src);
+    expect(filtered).toContain("kept = 1");
+    expect(filtered).toContain("alsoKept = 2");
+    expect(filtered).not.toContain("completeOnFreePool(");
+    expect(filtered).not.toContain("onCreditExhausted(");
+    expect(filtered).not.toContain("engageFreeAfterCreditExhaustion");
   });
 
   it("the ':free' suffix rule has exactly ONE definition", () => {

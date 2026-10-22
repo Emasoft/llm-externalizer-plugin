@@ -34,6 +34,12 @@ uv run tests/dogfood/dogfood_test.py
 DOGFOOD_LIVE=1 uv run tests/dogfood/dogfood_test.py
 ```
 
+```bash
+# Debugging — keep the throwaway LLM_EXT_CONFIG_DIR dirs on disk instead of
+# deleting them at process exit, so you can inspect the generated settings.yaml.
+DOGFOOD_KEEP_CFG=1 uv run tests/dogfood/dogfood_test.py
+```
+
 - Exit code is **non-zero if any row is FAIL**. WARN and SKIP do not fail.
 - A Unicode result table is printed to stdout (opt-in live rows are
   snail-marked 🐌).

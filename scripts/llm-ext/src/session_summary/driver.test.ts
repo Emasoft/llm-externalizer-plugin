@@ -21,9 +21,11 @@ import {
   type CallModelFn,
 } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
-import { resetCooldownCacheForTests } from "../free-rotation.js";
 
 const FREE_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
+
+import { cooldownFilePath, getCooldownStore, goneEvictedModels, isRunUnusable, markRunUnusable, resetCooldownCacheForTests, resetRunUnusableForTests } from "../free-rotation.js";
+
 const PAID_MODEL = "anthropic/claude-sonnet-5";
 const FALLBACK_MODEL = "vendor/fallback-small-context:free";
 
@@ -52,6 +54,7 @@ describe("driver: summarizeSession", () => {
     if (prevConfigDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
     else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
     setHedgeAfterMsForTests(null); // never leak a shrunk hedge delay into another test file
+    resetRunUnusableForTests(); // TRDD-W9XLU1HD AC4 tests mark models run-unusable -- clear before the next test
   });
 
   function writeTranscript(lines: unknown[], name = "in.jsonl"): string {
@@ -844,6 +847,51 @@ describe("driver: summarizeSession", () => {
     expect(calls).toBe(1); // no retry, and no silent switch to the fallback candidate
   });
 
+  it.each([1, 2])("exhaustion diagnostics retain every model reason at concurrency %i", async (concurrency) => {
+    const p = writeTranscript(Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `exhaustion request ${i} `.repeat(30))));
+    const attempted = new Set<string>();
+    const message = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [{ id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 }],
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      concurrency,
+      callModel: async (_prompt, modelId) => {
+        attempted.add(modelId);
+        throw new Error(modelId === FREE_MODEL ? "HTTP 404: earlier-private-provider-detail" : "HTTP 429: daily quota exceeded");
+      },
+    }).then(() => "", (error: unknown) => error instanceof Error ? error.message : String(error));
+    expect(attempted).toEqual(new Set([FREE_MODEL, FALLBACK_MODEL]));
+    expect(message).toContain(`${FREE_MODEL} (gone)`);
+    expect(message).toContain(`${FALLBACK_MODEL} (daily-quota)`);
+    expect(message).not.toContain("earlier-private-provider-detail");
+    expect(message).toContain("session-summary selects only eligible free OpenRouter models; it does not fall back to the configured backend.");
+  });
+  it("parallel exhaustion retains reasons when the second model fails first", async () => {
+    const p = writeTranscript(Array.from({ length: 4 }, (_, i) => userTurn(`u${i}`, `reversed exhaustion ${i} `.repeat(30))));
+    let releasePrimary!: () => void;
+    const primaryGate = new Promise<void>((resolve) => { releasePrimary = resolve; });
+    const failureOrder: string[] = [];
+    const message = await summarizeSession({
+      transcriptPath: p, checkpointPath: checkpointPath(), modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000, modelMaxCompletionTokens: 1_000,
+      fallbackModels: [{ id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 }],
+      maxChunkTokens: 30, chunkOverlapTurns: 0, concurrency: 2,
+      callModel: async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) await primaryGate;
+        else releasePrimary();
+        failureOrder.push(modelId);
+        throw new Error(modelId === FREE_MODEL ? "HTTP 404: primary gone" : "HTTP 429: daily quota exceeded");
+      },
+    }).then(() => "", (error: unknown) => error instanceof Error ? error.message : String(error));
+    expect(failureOrder[0]).toBe(FALLBACK_MODEL);
+    expect(message).toContain(`${FREE_MODEL} (gone)`);
+    expect(message).toContain(`${FALLBACK_MODEL} (daily-quota)`);
+  });
   it("exhausts every candidate and surfaces an actionable error naming all tried models when none survive", async () => {
     const p = writeTranscript([userTurn("u1", "hello")]);
     const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
@@ -2123,6 +2171,207 @@ describe("driver: summarizeSession", () => {
       );
       expect(result.fallbackEvents).toEqual([]);
     }, 15_000);
+
+    it("AC4: a model already known run-unusable (marked by a sibling call elsewhere in this process) is never dispatched -- skips straight to the next candidate", async () => {
+      // The shared registry (free-rotation.ts::markRunUnusable/isRunUnusable,
+      // TRDD-W9XLU1HD AC4) is process-wide, not scoped to one
+      // summarizeSession call -- exactly the point: a sibling fan-out slot,
+      // or (as reproduced directly here) an entirely separate caller earlier
+      // in the same process, already proved this model dead THIS run. The
+      // very FIRST attempt on it must consult that verdict and skip to the
+      // fallback candidate WITHOUT spending an HTTP round-trip -- pre-fix,
+      // callChunkModel has no such check and dispatches anyway.
+      markRunUnusable(FREE_MODEL, "gone");
+      const lines = [userTurn("u0", "ac4 pre-poisoned model request ".repeat(30))];
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      let freeCalls = 0;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          freeCalls++;
+          throw new Error("API error 403 (openrouter): x/y:free is only available on agentic harnesses");
+        }
+        return summaryFixture("SUMMARY-fallback");
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        callModel,
+      });
+
+      expect(freeCalls).toBe(0); // never dispatched -- the shared verdict alone was enough to skip it
+      expect(result.summary).toBe(summaryFixture("SUMMARY-fallback"));
+    }, 10_000);
+
+    it("a model corroborated run-unusable DURING its own failing call (registry marked mid-call, not pre-marked) falls back after exactly ONE send, not maxRetries+1 (review of da917e9, classifyModelFallback's registry-consult-last line)", async () => {
+      // Mirrors completion.ts's real sequencing: it calls markRunUnusable()
+      // SYNCHRONOUSLY, BEFORE it throws, once a credential-corroborated 403
+      // proves the model gone -- but the raw error text it throws carries no
+      // model-specific phrasing, so classifyUnavailable(msg) alone returns
+      // null and the 402 text-check does not match either. Unmarked at
+      // callChunkModel's entry (so that gate does NOT short-circuit this
+      // call to zero sends) -- the model becomes run-unusable as a SIDE
+      // EFFECT of this very attempt, exactly like completion.ts's real call
+      // path. Deleting classifyModelFallback's registry-consult-last line
+      // makes this go red: callWithRetry would then treat the ambiguous
+      // error as a "genuine failure" and burn maxRetries+1 same-model
+      // attempts before giving up, instead of falling back after one.
+      const lines = [userTurn("u0", "mid-call corroboration request ".repeat(30))];
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      let freeCalls = 0;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          freeCalls++;
+          markRunUnusable(FREE_MODEL, "gone");
+          throw new Error("unexpected response shape from provider");
+        }
+        return summaryFixture("SUMMARY-fallback");
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        callModel,
+      });
+
+      expect(freeCalls).toBe(1); // exactly one send, never maxRetries+1
+      expect(result.summary).toBe(summaryFixture("SUMMARY-fallback"));
+    }, 10_000);
+
+    it("a 402 on a model already registry-marked 'gone' (by an earlier, unrelated verdict) reports 'no-longer-free', not 'gone' (review of da917e9)", async () => {
+      // Pre-da917e9-fix, classifyModelFallback checked the registry BEFORE
+      // the 402/insufficient-credit text -- so ANY run-unusable-marked model
+      // reported "gone" even when THIS call's own error is a 402. The
+      // registry mark simulates a sibling slot having proven the model
+      // "gone" earlier for an unrelated reason; THIS call's own text (402)
+      // must still win, since it is the ground truth for what happened on
+      // THIS attempt.
+      const lines = [userTurn("u0", "402-over-stale-gone-mark request ".repeat(30))];
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      let freeCalls = 0;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          freeCalls++;
+          markRunUnusable(FREE_MODEL, "gone"); // stale/unrelated earlier verdict
+          throw new Error("API error 402 (openrouter): insufficient credit");
+        }
+        return summaryFixture("SUMMARY-fallback");
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 1_000,
+        fallbackModels: [fallback],
+        maxChunkTokens: 30,
+        chunkOverlapTurns: 0,
+        callModel,
+      });
+
+      expect(freeCalls).toBe(1);
+      expect(result.summary).toBe(summaryFixture("SUMMARY-fallback"));
+      expect(result.fallbackEvents[0]?.reason).toBe("no-longer-free");
+    }, 10_000);
+
+    it("a request id containing '402' is NOT misread as a 402 payment-required (S6, review of 527d5e8: classifyModelFallback used to bare-substring-match \"402\", so a request id, token count, or price containing those digits falsely fell back instead of surfacing the real, unrelated error)", async () => {
+      const lines = [userTurn("u0", "req-id-with-402-substring request ".repeat(30))];
+      const p = writeTranscript(lines);
+      const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+      let freeCalls = 0;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+        if (modelId === FREE_MODEL) {
+          freeCalls++;
+          // No "402" status and no availability phrasing anywhere -- just a
+          // request id that CONTAINS the digits "402" as a substring
+          // ("req_1402ab"). Pre-fix, classifyModelFallback's
+          // s.includes("402") matched this and incorrectly threw a
+          // ModelUnavailableError("no-longer-free"), silently falling back
+          // to a healthy model instead of surfacing the real (unrelated,
+          // non-availability) failure.
+          throw new Error("unexpected response shape from provider (request id: req_1402ab)");
+        }
+        return summaryFixture("SUMMARY-fallback");
+      });
+
+      // maxRetriesPerChunk:0 makes the genuine-failure path (the one this
+      // error must take post-fix) fail after exactly one attempt instead of
+      // burning the default 3 -- see other maxRetriesPerChunk:0 tests above.
+      await expect(
+        summarizeSession({
+          transcriptPath: p,
+          checkpointPath: checkpointPath(),
+          modelId: FREE_MODEL,
+          modelMaxContext: 1_000_000,
+          modelMaxCompletionTokens: 1_000,
+          fallbackModels: [fallback],
+          maxChunkTokens: 30,
+          chunkOverlapTurns: 0,
+          maxRetriesPerChunk: 0,
+          callModel,
+        }),
+      ).rejects.toThrow();
+      // Exactly one attempt on the FREE model -- it never fell back to
+      // FALLBACK_MODEL, which it would have (and the promise would have
+      // RESOLVED with a fallback summary instead of rejecting) had the bare
+      // "402" substring match misclassified this as no-longer-free.
+      expect(freeCalls).toBe(1);
+    }, 10_000);
+
+    it("a transient (429) verdict never populates the shared run-unusable set (retried normally, not fanned-out-skipped)", async () => {
+      // Sequential (default concurrency) so a transient error throws
+      // immediately on the FIRST attempt (design: no retryTransient backoff
+      // outside a concurrent run) -- the fastest, most direct way to prove
+      // the guard added for AC4 is scoped to gone/daily-quota only.
+      const lines = [userTurn("u0", "ac4 transient request ".repeat(30))];
+      const p = writeTranscript(lines);
+
+      let freeCalls = 0;
+      const callModel = vi.fn<CallModelFn>(async () => {
+        freeCalls++;
+        // Bare 429, no daily-quota/gone phrasing -- classifyUnavailable
+        // classifies this "transient", never "gone"/"daily-quota".
+        throw new Error("429 rate limit exceeded, try again shortly");
+      });
+
+      await expect(
+        summarizeSession({
+          transcriptPath: p,
+          checkpointPath: checkpointPath(),
+          modelId: FREE_MODEL,
+          modelMaxContext: 1_000_000,
+          modelMaxCompletionTokens: 1_000,
+          maxChunkTokens: 30,
+          chunkOverlapTurns: 0,
+          callModel,
+        }),
+      ).rejects.toThrow(/rate limit/);
+      expect(freeCalls).toBe(1);
+      // The whole point of this test: a transient verdict must never mark
+      // the model run-unusable, or a LATER, genuinely-recovered attempt on
+      // the same model in the same run would be wrongly short-circuited.
+      expect(isRunUnusable(FREE_MODEL)).toBe(false);
+    }, 10_000);
   });
 
   // ── Hedging (owner-specified, 2026-08-12) ─────────────────────────────
@@ -2420,4 +2669,76 @@ describe("driver: summarizeSession", () => {
       expect(callModel.mock.calls.every((c) => c[1] === FREE_MODEL)).toBe(true);
     });
   });
+});
+
+// ── TRDD-W9XLU1HD AC3/AC4 wiring: the driver's recordUnavailable call sites
+// (advanceModel L~1529 and applyFanoutTransition L~2076) funnel through
+// free-rotation.ts's PERSISTED recordUnavailable, so a dead model learned in
+// the session-summary path lands in free-cooldowns.json on disk — not just
+// in the run-scoped registry.
+
+describe("driver recordUnavailable sites reach the PERSISTED failure store (TRDD-W9XLU1HD AC3/AC4 wiring)", () => {
+  let dir: string;
+  let prevConfigDir: string | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "session-summary-driver-ac3-"));
+    prevConfigDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = mkdtempSync(join("/tmp", "llm-ext-driver-ac3-"));
+    resetCooldownCacheForTests();
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (prevConfigDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
+    resetRunUnusableForTests();
+    resetCooldownCacheForTests();
+  });
+
+  function writeTranscriptLocal(lines: unknown[], name = "in.jsonl"): string {
+    const p = join(dir, name);
+    writeFileSync(p, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    return p;
+  }
+
+  function userTurnLocal(uuid: string, text: string): unknown {
+    return { type: "user", uuid, parentUuid: null, timestamp: "t", message: { role: "user", content: text } };
+  }
+
+  it("a fan-out slot's gone verdict is persisted to free-cooldowns.json AND counts as the first eviction strike", async () => {
+    const lines = [userTurnLocal("u0", "ac3 persisted fanout request ".repeat(30))];
+    const p = writeTranscriptLocal(lines);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 1_000_000, maxCompletionTokens: 1_000 };
+
+    const callModel = vi.fn<CallModelFn>(async (_prompt, modelId) => {
+      if (modelId === FREE_MODEL) {
+        throw new Error("API error 404 (openrouter): no endpoints found for this model");
+      }
+      return summaryFixture("SUMMARY-fallback");
+    });
+
+    const result = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: join(dir, "checkpoint.json"),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      maxChunkTokens: 30,
+      chunkOverlapTurns: 0,
+      callModel,
+    });
+    expect(result.totalChunks).toBe(1);
+
+    // PERSISTED: the on-disk store carries the gone verdict (kind + strike).
+    const onDisk = JSON.parse(readFileSync(cooldownFilePath(), "utf-8"));
+    expect(onDisk.models[FREE_MODEL]?.kind).toBe("gone");
+    expect(onDisk.goneStrikes?.[FREE_MODEL]?.strikes).toBe(1);
+
+    // And the eviction registry reads it back in a FRESH "process" (cache dropped).
+    resetCooldownCacheForTests();
+    expect(goneEvictedModels().has(FREE_MODEL)).toBe(false); // 1 strike — below the N=3 bar
+    expect(getCooldownStore().models[FREE_MODEL]?.kind).toBe("gone");
+  }, 15_000);
 });

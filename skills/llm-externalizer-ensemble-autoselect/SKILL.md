@@ -75,9 +75,13 @@ the 30-40M-token failure mode these commands exist to prevent.
   There is no silent fallback and nothing for you to decide — relay the line; the user
   can lower `--min-f1` or broaden the sweep.
 - **The write.** Atomic (tmp + rename); every other profile and key preserved.
-- **The cost rule.** Input AND output both strictly `< $1/M`; a model priced at exactly
-  `$0` with no `:free` suffix (open-beta, e.g. `openrouter/owl-alpha`) qualifies. Free
-  eligibility is semantic: id ends `:free` OR the catalog prices it at exactly $0.
+- **The cost rule.** Input AND output both `<= ` the one configurable ensemble
+  price ceiling (default `$1.30/M`, `ensemble_price_ceiling_usd_per_million` in
+  `settings.yaml`), gated on EACH side independently, never their sum — a
+  model priced at exactly the ceiling qualifies. A model priced at exactly
+  `$0` with no `:free` suffix (open-beta, e.g. `openrouter/owl-alpha`)
+  qualifies. Free eligibility is semantic: id ends `:free` OR the catalog
+  prices it at exactly $0.
 
 ## Credit-free pre-ranking (why the cap is safe)
 

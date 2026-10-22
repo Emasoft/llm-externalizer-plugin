@@ -30,6 +30,7 @@ import {
 import { parseFieldset } from "./fieldset";
 import { openRegistry, type Registry } from "./registry";
 import type { ModelPricing } from "./cost-estimate";
+import { getActiveFreeOnly, setActiveFreeOnly, setActiveRouting } from "../config";
 
 // scout.ts now appends a usage-history line per LLM web request. Redirect the
 // history config dir to a throwaway /tmp dir for the whole suite so these
@@ -133,6 +134,10 @@ function baseOpts(jobId = "scout-test"): ScoutOpts {
     pricing: TEST_PRICING,
     model: "qwen/qwen-2.5-7b-instruct",
     apiKey: "test-key",
+    // Row 101 fix-queue: freeOnly is now a REQUIRED explicit parameter (was
+    // read from the module-global getActiveFreeOnly()). Every test here uses
+    // a paid model, so false matches prior behaviour before this field existed.
+    freeOnly: false,
     workers: 2,
     maxRetries: 1,
     smokeTest: false, // most tests skip the smoke phase by default
@@ -574,5 +579,65 @@ describe("runScoutJob", () => {
     expect(res.filesFailed).toBe(1);
     const skipped = reg.listSkipped("scout");
     expect(skipped[0]!.reason).toMatch(/timeout/);
+  });
+
+  // ── Row 101 fix-queue: opts.freeOnly, never a leaked global ────────────
+
+  it("row 101 fix-queue: a stale global true does not gate a paid call that received freeOnly:false", async () => {
+    // Deliberately leave the global TRUE (as a previous free job in the same
+    // process would) and pass freeOnly: false explicitly — before the fix
+    // this paid model would have been skipped by the module-global
+    // getActiveFreeOnly() regardless of what THIS call asked for.
+    seedFiles(1);
+    const m = mockFetch([
+      { body: { is_async: true, framework: "react", summary: "x" } },
+    ]);
+    setActiveFreeOnly(true);
+    // Also force billable so the OLD (pre-fix) code path — reading the stale
+    // global — would genuinely have refused; otherwise getActiveBillableForModel's
+    // default-false would make the gate a no-op either way and this test would
+    // pass for the wrong reason.
+    setActiveRouting((): never[] => [], true);
+    try {
+      const res = await runScoutJob(
+        reg,
+        { ...baseOpts("stale-global-true-1"), freeOnly: false },
+        m.fetch,
+      );
+      expect(res.filesOk).toBe(1);
+      expect(res.filesFailed).toBe(0);
+    } finally {
+      setActiveFreeOnly(false); // never leak into other tests
+      setActiveRouting((): never[] => [], false); // restore default billable=false
+    }
+  });
+
+  it("row 101 fix-queue: a stale global false does not let a free-only call through", async () => {
+    // Reverse direction: the global says paid is fine, but THIS call asked
+    // for freeOnly: true against a non-':free' model — the gate must still
+    // refuse, proving it reads opts.freeOnly and not the (now-false) global.
+    seedFiles(1);
+    const m = mockFetch([
+      { body: { is_async: true, framework: "react", summary: "x" } },
+    ]);
+    const orig = getActiveFreeOnly();
+    setActiveFreeOnly(false);
+    // getActiveBillableForModel defaults to false (no routing set up in this
+    // suite), which would make assertFreeOnlyModel a no-op regardless of
+    // freeOnly — force billable so the gate can actually fire.
+    setActiveRouting((): never[] => [], true);
+    try {
+      await expect(
+        runScoutJob(
+          reg,
+          { ...baseOpts("stale-global-false-1"), freeOnly: true },
+          m.fetch,
+        ),
+      ).rejects.toThrow(/free_only cost-safety/);
+      expect(m.calls).toBe(0); // refused before any fetch
+    } finally {
+      setActiveFreeOnly(orig); // never leak into other tests
+      setActiveRouting((): never[] => [], false); // restore default billable=false
+    }
   });
 });

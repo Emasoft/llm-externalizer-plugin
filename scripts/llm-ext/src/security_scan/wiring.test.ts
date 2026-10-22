@@ -8,7 +8,7 @@
  * flat flags) and the deterministic FetchImpl injection through CliRunOptions.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setValidationBypassForTests } from "../benchmark/validated.js";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -22,6 +22,7 @@ import {
 import { runMassScoutCli } from "../mass_scouting/cli";
 import type { FetchImpl } from "./judge";
 import { DEFAULT_MODEL } from "./types";
+import { setActiveFreeOnly, setActiveRouting } from "../config.js";
 
 function okFetch(content: string): FetchImpl {
   return (async () => ({
@@ -283,5 +284,164 @@ describe("wiring — per-tool model resolution (tool_models, TRDD-f45eeaa0)", ()
     );
     expect(res.exitCode).toBe(0);
     expect(sentModel(bodies)).toBe("explicit/model");
+  });
+});
+
+// C4c (review of 21a2d20): runSecurityScanCli used to derive freeOnly from
+// `resolveProfile(activeName, active).freeOnly` — the active profile's OWN
+// static field — instead of the chokepoint every other cost-safety gate in
+// this file reads (getActiveFreeOnly(), row 101 fix-queue). That chokepoint
+// is kept in lockstep with BOTH the allow_paid_models master switch and a
+// `--profile` override by publishFreeState() on every settings reload
+// (index.ts applyNewSettings, called by boot AND overrideActiveProfile) — the
+// profile's own `free_only` field alone reflects neither. Red on 21a2d20 (a
+// `git archive 21a2d20` scratch copy of cli.ts): with the active profile's
+// own free_only:false but the chokepoint forced true (simulating
+// allow_paid_models:false), the pre-fix code sent the paid model straight to
+// the mocked fetch — this test's `bodies.length` assertion below would have
+// been 1, not 0, and no error would have been thrown.
+describe("wiring — CLI subcommand: freeOnly comes from getActiveFreeOnly(), not the profile's own field", () => {
+  const origCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+  const cfgDirs: string[] = [];
+
+  function useConfig(yaml: string): void {
+    const dir = mkdtempSync(join("/tmp", "secscan-freeonly-cfg-"));
+    writeFileSync(join(dir, "settings.yaml"), yaml, "utf-8");
+    cfgDirs.push(dir);
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+  }
+
+  // The active profile is an ordinary paid one — free_only is absent
+  // (defaults false). Only the module-global chokepoint says free.
+  const PAID_PROFILE =
+    "active: t\n" +
+    "profiles:\n" +
+    "  t:\n" +
+    "    mode: remote\n" +
+    "    api: openrouter-remote\n" +
+    "    model: profile/main-model\n" +
+    "    api_key: direct-key\n";
+
+  afterEach(() => {
+    if (origCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = origCfgDir;
+    for (const d of cfgDirs.splice(0)) {
+      rmSync(d, { recursive: true, force: true });
+    }
+    // Never leak free-mode state into a sibling test file.
+    setActiveFreeOnly(false);
+    setActiveRouting((): never[] => [], false);
+  });
+
+  it("refuses a non-':free' judge model when the chokepoint is forced free, even though the active profile's own free_only is false", async () => {
+    useConfig(PAID_PROFILE);
+    // Simulates what boot's publishFreeState() would have published under
+    // allow_paid_models:false (or a --profile override) — the ONE thing the
+    // fix in cli.ts must consult instead of re-deriving its own answer.
+    setActiveFreeOnly(true);
+    // getActiveBillableForModel defaults false with no routing configured,
+    // which would make the gate a no-op regardless of freeOnly — force
+    // billable true so this test actually exercises the gate (mirrors
+    // judge.test.ts's own setup for the same gate).
+    setActiveRouting((): never[] => [], true);
+    const { impl, bodies } = captureFetch(NOT_THREAT);
+    const input = JSON.stringify({
+      targets: [{ id: "c1", category: "c", snippet: "code" }],
+      model: "paid/non-free-model",
+      output_dir: tmp,
+    });
+    await expect(
+      runMassScoutCli(["security-scan", "--input-json", input], {
+        fetchImpl: impl,
+        apiKey: "k",
+      }),
+    ).rejects.toThrow(/free_only cost-safety/);
+    expect(bodies.length).toBe(0); // refused before any request
+  });
+});
+
+// C4c follow-up (review of this same fix): the master-switch test above
+// proves cli.ts trusts getActiveFreeOnly() unconditionally, but only by
+// setting that global BY HAND (setActiveFreeOnly(true)) — it never exercises
+// the REAL `--profile` flag path (index.ts's overrideActiveProfile), which
+// item 1 of this review showed reaches the same chokepoint via
+// applyNewSettings -> publishFreeState -> setActiveFreeOnly. This test drives
+// that real path end-to-end: the settings.yaml's `active:` profile is an
+// ordinary PAID profile, and a SECOND free_only profile is selected only via
+// `--profile` (overrideActiveProfile("flag")) — mirroring exactly what
+// cli/main.ts does before any dispatch (index.ts:833). If overrideActiveProfile
+// ever stopped republishing free state (a regression in index.ts, not in
+// cli.ts), this is the test that would catch it — the master-switch test
+// above cannot, since it never calls overrideActiveProfile at all.
+describe("wiring — CLI subcommand: a real --profile switch to a free_only profile reaches the same gate", () => {
+  it("refuses a non-':free' model when --profile selects a free_only profile, even though the settings.yaml active: profile is paid", async () => {
+    const dir = mkdtempSync(join("/tmp", "secscan-profileflag-cfg-"));
+    writeFileSync(
+      join(dir, "settings.yaml"),
+      "active: paidmain\n" +
+        "profiles:\n" +
+        "  paidmain:\n" +
+        "    mode: remote\n" +
+        "    api: openrouter-remote\n" +
+        "    model: profile/main-model\n" +
+        "    api_key: direct-key\n" +
+        "  freeswitch:\n" +
+        "    mode: remote\n" +
+        "    api: openrouter-remote\n" +
+        "    api_key: direct-key\n" +
+        "    free_only: true\n" +
+        "    free_models:\n" +
+        "      - vendor/model-x:free\n",
+      "utf-8",
+    );
+    const prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = dir;
+    try {
+      // Fresh module graph so index.ts's boot-time activeSettings load (and
+      // cli.ts's config.ts singleton) both see THIS settings.yaml — a
+      // statically-imported index.ts would have already loaded whatever
+      // profile map was active when the test FILE was first imported and
+      // would not know "freeswitch" exists (overrideActiveProfile reuses the
+      // in-memory profile map from module init, it does not re-read disk).
+      vi.resetModules();
+      const idx = await import("../index.js");
+      const { runMassScoutCli: freshRunMassScoutCli } = await import(
+        "../mass_scouting/cli.js"
+      );
+      // vi.resetModules() gives judge.ts a BRAND NEW validated.js instance,
+      // so the file-level beforeEach's setValidationBypassForTests(true) (bound
+      // to the PRE-reset instance) no longer reaches it — set the bypass again
+      // on the fresh instance, or assertModelValidated's "IRON RULE" gate fires
+      // before the free_only gate even runs, masking the assertion under test.
+      const { setValidationBypassForTests: freshBypass } = await import(
+        "../benchmark/validated.js"
+      );
+      freshBypass(true);
+      // The real `--profile freeswitch` flag path — the ONLY thing
+      // cli/main.ts calls before any dispatch (index.ts:833 comment).
+      const result = idx.overrideActiveProfile("freeswitch", "flag");
+      expect(result.ok).toBe(true);
+
+      const { impl, bodies } = captureFetch(NOT_THREAT);
+      const input = JSON.stringify({
+        targets: [{ id: "c1", category: "c", snippet: "code" }],
+        // Deliberately NOT one of freeswitch's own free_models — a paid
+        // model reaching the gate under a --profile-selected free_only
+        // profile is exactly the scenario item 1 showed the old code missed.
+        model: "paid/non-free-model",
+        output_dir: tmp,
+      });
+      await expect(
+        freshRunMassScoutCli(["security-scan", "--input-json", input], {
+          fetchImpl: impl,
+          apiKey: "k",
+        }),
+      ).rejects.toThrow(/free_only cost-safety/);
+      expect(bodies.length).toBe(0); // refused before any request
+    } finally {
+      if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+      else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

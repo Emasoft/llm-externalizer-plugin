@@ -26,7 +26,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { getConfigDir } from "../config.js";
-import { isFreeSuffixModelId } from "./free-mode.js";
+import { isFreeSuffixModelId, paymentErrorCertainty } from "./free-mode.js";
 
 // ── Ledger readers (latest-wins, conclusive-pass only) ────────────────────
 
@@ -155,8 +155,9 @@ function passedGeneralKeyword(): Set<string> {
  * the snapshot, which is exactly the pre-ledger behavior.
  */
 export function recordGeneralKeywordPasses(
-  rows: ReadonlyArray<{ modelId?: unknown; ok?: unknown; pass?: unknown; schemaCompliant?: unknown }>,
+  rows: ReadonlyArray<{ modelId?: unknown; ok?: unknown; pass?: unknown; schemaCompliant?: unknown; error?: unknown }>,
   when: string = new Date().toISOString(),
+  scope: "paid" | "free" = "free",
 ): void {
   const path = join(getConfigDir(), GENERAL_KEYWORD_LEDGER);
   let cache: Record<string, unknown> = {};
@@ -171,6 +172,22 @@ export function recordGeneralKeywordPasses(
   const date = when.slice(0, 10);
   for (const row of rows) {
     if (!row || typeof row.modelId !== "string" || row.modelId.length === 0) continue;
+    // TRDD-FDI9NYAS D3c-2 (D2 report Item 9), D4 scope fix: a CERTAIN payment
+    // error is the KEY's credit failing, not the model — recording a fail
+    // verdict on the PAID sweep would let the latest-wins ledger refuse that
+    // model at send time until a re-benchmark that itself needs credit,
+    // poisoning the pool for every model at once. No verdict: the model keeps
+    // whatever verdict it had. On the FREE sweep a certain 402 means the model
+    // STOPPED BEING FREE — a fact about the model, which the ledger MUST
+    // record (a dead free model keeps its validated status otherwise, served
+    // until a send-time 402 — D3c-2 review F1).
+    if (
+      scope === "paid" &&
+      row.ok === false &&
+      paymentErrorCertainty(String(row.error ?? "")) === "certain"
+    ) {
+      continue;
+    }
     cache[`${row.modelId}::${date}`] = {
       date: when,
       ok: row.ok === true,
@@ -246,7 +263,7 @@ export function validatedModelsForTool(toolName: string): Set<string> {
   // Keyed by CONFIG DIR too, not just the tool: LLM_EXT_CONFIG_DIR is swapped per
   // test case (and can change at runtime), and a dir-blind memo would answer one
   // config's question with another config's ledgers.
-  const key = `${getConfigDir()} ${toolName}`;
+  const key = `${getConfigDir()}\u0000${toolName}`;
   const hit = validatedMemo.get(key);
   const now = Date.now();
   if (hit && now - hit.at < VALIDATED_MEMO_TTL_MS) return hit.set;
@@ -309,11 +326,11 @@ export function setBenchmarkValidationExempt(v: boolean): void {
 export function assertModelValidated(
   modelId: string,
   toolName: string,
-  backendType: "local" | "openrouter",
+  billable: boolean,
 ): void {
   if (validationBypassForTests) return; // test-only escape hatch (see above)
   if (benchmarkValidationExempt) return; // the run that CREATES validations
-  if (backendType !== "openrouter") return; // local — no catalog/benchmark
+  if (!billable) return; // non-billable endpoint — no catalog/benchmark to gate
   if (isFreeSuffixModelId(modelId)) return; // ':free' — its own filter, and $0
 
   // ONE ledger read for both the decision and the message — the failure path used

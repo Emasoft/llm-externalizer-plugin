@@ -16,19 +16,19 @@ import { _resetDefaultOutputDirCache } from "./index.js";
 
 // Capture the original env so we can restore after each case.
 const ORIG_ENV = {
-  LLM_OUTPUT_DIR: process.env.LLM_OUTPUT_DIR,
+  LLM_EXT_OUTPUT_DIR: process.env.LLM_EXT_OUTPUT_DIR,
   CLAUDE_PROJECT_DIR: process.env.CLAUDE_PROJECT_DIR,
 };
 
 beforeEach(() => {
-  delete process.env.LLM_OUTPUT_DIR;
+  delete process.env.LLM_EXT_OUTPUT_DIR;
   delete process.env.CLAUDE_PROJECT_DIR;
   _resetDefaultOutputDirCache();
 });
 
 afterEach(() => {
-  if (ORIG_ENV.LLM_OUTPUT_DIR !== undefined) process.env.LLM_OUTPUT_DIR = ORIG_ENV.LLM_OUTPUT_DIR;
-  else delete process.env.LLM_OUTPUT_DIR;
+  if (ORIG_ENV.LLM_EXT_OUTPUT_DIR !== undefined) process.env.LLM_EXT_OUTPUT_DIR = ORIG_ENV.LLM_EXT_OUTPUT_DIR;
+  else delete process.env.LLM_EXT_OUTPUT_DIR;
   if (ORIG_ENV.CLAUDE_PROJECT_DIR !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG_ENV.CLAUDE_PROJECT_DIR;
   else delete process.env.CLAUDE_PROJECT_DIR;
   _resetDefaultOutputDirCache();
@@ -55,10 +55,10 @@ async function resolveOnce(): Promise<string> {
 }
 
 describe("defaultOutputDir resolution (Issue #5)", () => {
-  it("LLM_OUTPUT_DIR env var wins over everything", async () => {
+  it("LLM_EXT_OUTPUT_DIR env var wins over everything", async () => {
     const tmp = mkdtempSync(join(tmpdir(), "dod-env-"));
     try {
-      process.env.LLM_OUTPUT_DIR = tmp;
+      process.env.LLM_EXT_OUTPUT_DIR = tmp;
       const got = await resolveOnce();
       expect(got).toBe(tmp);
     } finally {
@@ -124,11 +124,11 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
     const tmp1 = mkdtempSync(join(tmpdir(), "dod-cache1-"));
     const tmp2 = mkdtempSync(join(tmpdir(), "dod-cache2-"));
     try {
-      process.env.LLM_OUTPUT_DIR = tmp1;
+      process.env.LLM_EXT_OUTPUT_DIR = tmp1;
       const a = await resolveOnce(); // _resetDefaultOutputDirCache called inside
       expect(a).toBe(tmp1);
       // Change env, do NOT reset cache: the cached value should hold.
-      process.env.LLM_OUTPUT_DIR = tmp2;
+      process.env.LLM_EXT_OUTPUT_DIR = tmp2;
       const mod = (await import("./index.js")) as unknown as {
         _testDefaultOutputDir?: () => string;
       };
@@ -137,6 +137,22 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
     } finally {
       rmSync(tmp1, { recursive: true, force: true });
       rmSync(tmp2, { recursive: true, force: true });
+    }
+  });
+
+  // OLD-NAME POLICY (USER 2026-09-18): the pre-rename name LLM_OUTPUT_DIR
+  // must be silently ignored — no fallback read, no warning. This is the
+  // one sanctioned mention of the old name, asserting it has zero effect.
+  it("old name LLM_OUTPUT_DIR is silently ignored (only LLM_EXT_OUTPUT_DIR is read)", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "dod-oldname-"));
+    try {
+      process.env.LLM_OUTPUT_DIR = tmp; // old, unprefixed name — must have no effect
+      const got = await resolveOnce();
+      expect(got).not.toBe(tmp);
+      expect(got.endsWith("/reports/llm-externalizer")).toBe(true);
+    } finally {
+      delete process.env.LLM_OUTPUT_DIR;
+      rmSync(tmp, { recursive: true, force: true });
     }
   });
 });

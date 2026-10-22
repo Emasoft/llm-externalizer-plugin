@@ -29,6 +29,12 @@ import { BENCHMARK_RUBRICS, type SecurityTriageCase } from "./dataset.js";
 export interface TriageRunOptions {
   apiKey: string;
   pricing: ModelPricing;
+  /**
+   * Mirrors judge.ts JudgeOptions.freeOnly (row 101 fix-queue): the caller
+   * resolves its own profile free_only and passes it explicitly, never a
+   * module-global read inside this runner.
+   */
+  freeOnly: boolean;
   apiUrl?: string;
   /** Concurrent judge calls. Default 8 (matches the tool default). */
   workers?: number;
@@ -98,13 +104,14 @@ export async function runTriageBenchmarkOnModel(
     model: modelId,
     apiKey: opts.apiKey,
     pricing: opts.pricing,
+    freeOnly: opts.freeOnly,
     apiUrl: opts.apiUrl,
     workers: opts.workers ?? 8,
     maxRetries: opts.maxRetries ?? 1,
     perCallTimeoutMs: opts.perCallTimeoutMs ?? 600_000,
     // Disabled: the benchmark must attempt EVERY case so the score reflects the
     // full dataset. Per-case errors still fail-safe to a verdict inside the
-    // judge; we just don't want a transient streak to skip the remainder.
+    // judge; we just do not want a transient streak to skip the remainder.
     consecutiveFailureLimit: 0,
     defaultVerdictOnError: "uncertain",
     rubrics: opts.rubrics ?? BENCHMARK_RUBRICS,

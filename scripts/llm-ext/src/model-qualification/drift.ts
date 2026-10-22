@@ -20,14 +20,20 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { getConfigDir, loadSettings, resolveProfile, type ResolvedProfile } from "../config.js";
+import {
+  getConfigDir,
+  loadSettings,
+  resolveProfile,
+  effectiveProfileName,
+  type ResolvedProfile,
+} from "../config.js";
 import {
   fetchProgrammingModels,
   type OpenRouterModel,
 } from "../benchmark/discover.js";
 import { qualifyModelForTool, registeredTools } from "./registry.js";
 import { localIsoTimestamp } from "../usage-history.js";
-import { resolveProjectMainRoot } from "../project-root.js";
+import { defaultOutputDir } from "../project-root.js";
 
 /** A configured model and the tools whose requirements it must satisfy. */
 export interface ConfiguredModel {
@@ -337,7 +343,11 @@ export async function checkModelHealth(
 
 // ── Surfaces glue (active profile, markdown report, orchestrator) ───────────
 
-/** Resolve the active profile from settings.yaml. Throws a clear error if unconfigured. */
+/** Resolve the EFFECTIVE profile from settings.yaml -- precedence
+ *  (TRDD-G6XT3AY9): the in-memory `active` field (set from the on-disk
+ *  `active:` key, or by an in-process `--profile` override) when set, else
+ *  the built-in default -- see effectiveProfileName(). Throws a clear error
+ *  if unconfigured. */
 export function resolveActiveProfile(): ResolvedProfile {
   const settings = loadSettings();
   if (!settings) {
@@ -346,11 +356,12 @@ export function resolveActiveProfile(): ResolvedProfile {
         "or /llm-externalizer:llm-externalizer-configure.",
     );
   }
-  const profile = settings.profiles[settings.active];
+  const name = effectiveProfileName(settings);
+  const profile = settings.profiles[name];
   if (!profile) {
-    throw new Error(`Active profile '${settings.active}' not found in settings.yaml.`);
+    throw new Error(`Effective profile '${name}' not found in settings.yaml.`);
   }
-  return resolveProfile(settings.active, profile);
+  return resolveProfile(name, profile);
 }
 
 /** Compact, filesystem-safe local timestamp: `YYYYMMDD_HHMMSS±HHMM`. */
@@ -409,7 +420,11 @@ export async function runCheckModelHealth(
 ): Promise<{ report: ModelHealthReport; reportPath: string }> {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join(resolveProjectMainRoot(), "reports", "model-health");
+  // write-roots fix (c9b, 2026-09-18): route the default through
+  // defaultOutputDir() so it lands under reports/llm-externalizer/model-health
+  // (the USER-approved tree) and honors LLM_EXT_OUTPUT_DIR like every other
+  // report writer; an explicit outputDir still wins verbatim.
+  const dir = opts.outputDir ?? join(defaultOutputDir(), "model-health");
   mkdirSync(dir, { recursive: true });
   const reportPath = join(dir, `${compactStamp()}-model-health-${profile.name}.md`);
   writeFileSync(reportPath, renderModelHealthMarkdown(report));

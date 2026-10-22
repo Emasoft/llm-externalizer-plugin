@@ -203,6 +203,9 @@ describe.skipIf(!LIVE_ENABLED)(
             pricing,
             model: "qwen/qwen-2.5-7b-instruct",
             apiKey,
+            // Row 101 fix-queue: freeOnly is now REQUIRED. This live smoke
+            // uses a paid model against the real API, so false.
+            freeOnly: false,
             workers: 8, // moderate concurrency — keep gentle on the API
             maxRetries: 1,
             sourceRoot: FIXTURE_DIR,

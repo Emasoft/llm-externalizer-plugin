@@ -18,6 +18,23 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+# The script's OWN folder, created by the script itself. One constant, so
+# every writer below agrees on the folder and so the folder can be redirected
+# in tests without patching literals.
+#
+# LITERAL "/tmp" ON POSIX, NOT tempfile.gettempdir(). On macOS gettempdir()
+# returns the per-user $TMPDIR (/var/folders/.../T), while the CLI writes its
+# stats to the literal /tmp/claude/llm-externalizer-stats.json (index.ts,
+# STATS_FILE). Changing this to gettempdir() would silently re-break the
+# CLI-stats link — the statusline would look in a different directory than the
+# CLI writes to, and the row would go empty with no error. The Windows branch
+# below uses gettempdir() because there is no literal /tmp there.
+#
+# READ AT CALL TIME, not memoised into another module global: the tests
+# redirect this attribute, and a cached copy elsewhere would make them pass
+# while testing nothing.
+_CACHE_DIR = Path("/tmp/claude")
+
 # ── ANSI colors matching oh-my-posh theme ──
 BLUE = "\033[38;2;0;153;255m"
 ORANGE = "\033[38;2;255;176;85m"
@@ -121,8 +138,10 @@ def get_git_info(cwd: str) -> tuple[str, bool]:
         # AND honours submodule .gitignore correctly (audit SR-P1-013 /
         # SC-P1-013: ls-files --others ignored submodule .gitignore, so
         # the bar showed `branch*` when `git status` showed nothing dirty).
+        # --no-optional-locks: `status` refreshes the on-disk index; a timeout
+        # kill mid-refresh must never leave a stale .git/index.lock behind (#14).
         status = subprocess.run(
-            ["git", "-C", cwd, "status", "--porcelain=v1"],
+            ["git", "--no-optional-locks", "-C", cwd, "status", "--porcelain=v1"],
             capture_output=True,
             text=True,
             timeout=GIT_TIMEOUT,
@@ -134,16 +153,50 @@ def get_git_info(cwd: str) -> tuple[str, bool]:
 
 
 def ensure_cache_dir() -> Path:
-    """Create and return the cache directory for statusline data."""
+    """Create and return the cache directory for statusline data.
+
+    The statusline's OWN folder, at /tmp/claude, created by the script
+    itself. The statusline is INDEPENDENT of llm-externalizer's CONFIGURATION
+    and INSTALL: it reads no llm-ext config (no $LLM_EXT_CONFIG_DIR, no
+    ~/.llm-externalizer) and writes no llm-ext path.
+
+    It still DISPLAYS the CLI's stats, which is a deliberate link to the
+    CLI's runtime output — not to its configuration. The two are different
+    things: independence means the statusline needs no llm-ext setup, not
+    that it shows nothing the CLI produced.
+
+    Why /tmp/claude and not a subfolder of the llm-ext config dir: the
+    TypeScript CLI writes its stats to /tmp/claude/llm-externalizer-stats.json
+    (scripts/llm-ext/src/index.ts, STATS_FILE). A statusline that cached
+    under ~/.llm-externalizer/statusline/ looked for that file in the wrong
+    place and the CLI-stats row stayed empty forever — the link was dead.
+    Reading it from /tmp/claude both keeps the statusline independent and
+    makes the link live again.
+
+    This reverses the 2026-09-18 write-roots rule (59de8673), which moved the
+    statusline's writes under ~/.llm-externalizer/statusline/ to satisfy the
+    USER's "llm-ext writes only under these roots" ruling. That ruling never
+    reached the CLI's own stats file, so it left the two programs disagreeing
+    about the folder — the rule was applied to the statusline and missed on
+    the CLI side, which is why the link broke. The USER's later directive
+    (2026-10-20) — "the statusline script file must be independent from
+    llm-externalizer. it must use its own folders and create them by its own"
+    — is the more specific and more recent instruction, and it is what this
+    implements. The statusline is not the CLI: it reads no llm-ext config,
+    so the "one write root" contract, whose purpose was to bound where the
+    CLI writes, does not apply to it. The CLI's own writes are unchanged.
+    """
     if sys.platform == "win32":
         cache_dir = Path(tempfile.gettempdir()) / "claude"
         cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         return cache_dir
 
-    cache_dir = Path("/tmp/claude")
-    # Refuse symlinks: lstat (no follow) before touching the path. A world-writable
-    # /tmp means any local user can plant /tmp/claude as a symlink to a victim-owned
-    # file/dir and trick us into chmod'ing it. See CWE-59.
+    cache_dir = _CACHE_DIR
+
+    # Refuse symlinks: lstat (no follow) before touching the path. A
+    # world-writable config-dir parent means a local user could plant
+    # "statusline" as a symlink to a victim-owned file/dir and trick us into
+    # chmod'ing it. See CWE-59.
     try:
         lst = os.lstat(cache_dir)
     except FileNotFoundError:
@@ -293,9 +346,9 @@ def fetch_usage_from_api(cache_dir: Path, claude_version: str) -> dict | None:
             # 0o600 restrict mode — the response is derived from the
             # user's OAuth bearer token and includes rate-limit /
             # subscription-tier info that should not be world-readable
-            # on multi-tenant Linux hosts. The parent /tmp/claude dir is
-            # 0o700 but Path.write_text uses the process umask (typically
-            # 0o022 -> 0644), so we tighten explicitly.
+            # on multi-tenant Linux hosts. The parent cache dir (ensure_cache_dir(),
+            # /tmp/claude) is 0o700 but Path.write_text uses
+            # the process umask (typically 0o022 -> 0644), so we tighten explicitly.
             try:
                 cache_file.chmod(0o600)
             except OSError:
@@ -462,37 +515,142 @@ def _visible_width(s: str) -> int:
     return width
 
 
+def _log_tier_debug(cols: int, visible: int, tier_chosen: int) -> None:
+    """Append one width/tier diagnostic line — ONLY when explicitly enabled.
+
+    The gate is load-bearing, not a style preference. This runs on every
+    statusline render, and Claude Code re-renders on a `refreshInterval` as
+    low as 3s, in EVERY concurrent session on the machine. Ungated, that is
+    one appended line every 3s per session forever, with no rotation and no
+    size cap: measured 2026-08-29 at 128 MB and still growing ~27 MB while it
+    was being read. An unconditional append with no bound is a disk leak, not
+    a log.
+
+    Keep it opt-in rather than adding rotation: the value here is a
+    developer's width-debugging knob, and nothing reads the file otherwise,
+    so the cheapest correct bound is not writing it at all by default.
+
+    CLAUDE_STATUSLINE_DEBUG only gates WHETHER this writes — it does not
+    redirect WHERE, so the path itself is not user-directed and moves with
+    the rest of the statusline's writes: ensure_cache_dir() (/tmp/claude).
+    """
+    if not os.environ.get("CLAUDE_STATUSLINE_DEBUG"):
+        return
+    try:
+        dbg = ensure_cache_dir() / "statusline-debug.log"
+        with dbg.open("a") as f:
+            f.write(
+                f"{datetime.now().isoformat()} cols={cols} width={visible} tier={tier_chosen}\n"
+            )
+    except Exception:
+        # Diagnostics must never break the bar (same contract as _log_exception).
+        pass
+
+
+# statusline-error.log is appended on EVERY internal exception, and it lives
+# under /tmp/claude — which the OS does NOT rotate for us. So the size is
+# bounded here instead. 1 MiB mirrors the CLAUDE_STATUSLINE_DEBUG log's own
+# "cheapest correct bound" choice: rotate to a single .1 backup instead of
+# truncating, so the most recent full cycle of tracebacks still survives for
+# triage.
+_ERROR_LOG_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
+
+
+def _rotate_log_if_oversized(log_path: Path) -> None:
+    """Rotate log_path -> log_path + ".1" once it exceeds _ERROR_LOG_MAX_BYTES,
+    so the unconditional appends in _log_exception() cannot grow the file
+    forever. Never raises — a rotation failure (perms, ENOSPC) must not crash
+    the statusline over a logging bound.
+
+    A rotation failure IS surfaced, though, and that is the point of the
+    USER's 2026-10-09 hand-fix to the installed statusline, which this port
+    carries: a PERSISTENT rotation failure must not silently disable the
+    bound, because the cap exists precisely for the incident where the log
+    grew to 101 MB / 65k entries in a single 429 storm. A silent failure
+    recreates that incident invisibly — the log regrows with no error and no
+    clue. So the failure gets a one-line stderr breadcrumb, deduped by errno
+    exactly like the sibling write-failure path in _log_exception() below.
+
+    The breadcrumb says the rotation failed, not that the cap is disabled:
+    the cap is still enforced on the NEXT call, which retries the rotation.
+    What is lost is the guarantee that the file stays bounded — the
+    oversized log keeps being appended to until a rotation succeeds.
+    """
+    try:
+        if log_path.stat().st_size > _ERROR_LOG_MAX_BYTES:
+            backup = log_path.with_name(log_path.name + ".1")
+            log_path.replace(backup)
+    except FileNotFoundError:
+        # The benign concurrent-rotation race: another render rotated the
+        # log between our stat() and our replace(). Nothing to report.
+        pass
+    except OSError as rot_err:
+        # global is REQUIRED here: the dedup set is module-level and defined
+        # BELOW this function. Without it, `rot_err.errno not in
+        # _LOG_EXCEPTION_WARN_SEEN` would create a FUNCTION-LOCAL set, and
+        # the breadcrumb would print on EVERY render instead of once per
+        # errno — turning a diagnostic into a flood.
+        global _LOG_EXCEPTION_WARN_SEEN
+        if rot_err.errno not in _LOG_EXCEPTION_WARN_SEEN:
+            _LOG_EXCEPTION_WARN_SEEN.add(rot_err.errno)
+            sys.stderr.write(
+                f"[llm-externalizer statusline] cannot rotate error log "
+                f"(errno {rot_err.errno}: {rot_err.strerror}); "
+                f"the log may regrow unbounded\n"
+            )
+
+
 def _log_exception(label: str, exc: BaseException) -> None:
-    """Append a labelled traceback to /tmp/claude/statusline-error.log.
+    """Append a labelled traceback to ensure_cache_dir()/statusline-error.log
+    (/tmp/claude).
 
     Per-section guard: when an upstream schema change or transient failure
     breaks a single section, we record it for diagnosis and continue
     rendering the rest of the bar. Logging itself must never raise.
 
-    v9.9.0 audit T2.21: secondary errors (ENOSPC, /tmp read-only on a
-    sandboxed container, hardened-write hook denying append) are now
+    This write is unconditional (every internal exception, not opt-in), so
+    unlike the CLAUDE_STATUSLINE_DEBUG-gated log above, there was never a
+    user-directed override to preserve — it belongs with the statusline's
+    other unconditional writes, under the folder the statusline creates for
+    itself.
+
+    v9.9.0 audit T2.21: secondary errors (ENOSPC, the config dir read-only on
+    a sandboxed container, hardened-write hook denying append) are now
     surfaced once via stderr instead of being swallowed silently. Claude
     Code merges statusline stderr into its main error log, so the user
     has a path to discover that logging itself is broken.
     """
     import traceback
     try:
-        log_path = Path("/tmp/claude/statusline-error.log")
-        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path = ensure_cache_dir() / "statusline-error.log"
+        _rotate_log_if_oversized(log_path)
         with log_path.open("a") as f:
             f.write(f"\n=== {datetime.now().isoformat()} [{label}] ===\n")
             traceback.print_exception(type(exc), exc, exc.__traceback__, file=f)
-    except OSError as log_err:
-        # Disk full, perms revoked, mount switched read-only — emit a
-        # one-line breadcrumb to stderr so the failure is visible. We
-        # use a module-level dedup set so repeated failures during a
-        # single render don't flood stderr.
+    except (OSError, RuntimeError) as log_err:
+        # S2 (c6b review): widened from `except OSError` — ensure_cache_dir()
+        # (called above) can ALSO raise RuntimeError (config dir rejected by
+        # the write-roots guard, symlink attack, wrong owner), and that must
+        # get the SAME one-line stderr breadcrumb as a disk-full OSError, not
+        # silently fall through to the catch-all `except Exception: pass`
+        # below — T2.21's whole point was "no secondary error is swallowed
+        # silently". OSError still dedups by errno; RuntimeError has none, so
+        # it dedups by its own message (still bounded — one distinct message
+        # per rejected path, not unbounded growth).
         global _LOG_EXCEPTION_WARN_SEEN
-        if log_err.errno not in _LOG_EXCEPTION_WARN_SEEN:
-            _LOG_EXCEPTION_WARN_SEEN.add(log_err.errno)
+        dedup_key: int | str | None = (
+            log_err.errno if isinstance(log_err, OSError) else str(log_err)
+        )
+        if dedup_key not in _LOG_EXCEPTION_WARN_SEEN:
+            _LOG_EXCEPTION_WARN_SEEN.add(dedup_key)
+            detail = (
+                f"errno {log_err.errno}: {log_err.strerror}"
+                if isinstance(log_err, OSError)
+                else str(log_err)
+            )
             sys.stderr.write(
                 f"[llm-externalizer statusline] cannot write error log "
-                f"(errno {log_err.errno}: {log_err.strerror}); "
+                f"({detail}); "
                 f"primary error was [{label}]: {type(exc).__name__}\n"
             )
     except Exception:
@@ -501,7 +659,7 @@ def _log_exception(label: str, exc: BaseException) -> None:
         pass
 
 
-_LOG_EXCEPTION_WARN_SEEN: set[int | None] = set()
+_LOG_EXCEPTION_WARN_SEEN: set[int | str | None] = set()
 
 
 def main() -> None:
@@ -602,8 +760,17 @@ def main() -> None:
 
     try:
         cache_dir = ensure_cache_dir()
-    except Exception:
-        # Cache dir unavailable (symlink attack guard, wrong owner, etc.) — skip optional sections
+    except Exception as e:
+        # Cache dir unavailable (symlink attack guard, wrong owner, etc.) —
+        # skip optional sections but the bar MUST
+        # still render (S2, c6b review): a blank statusline looks identical
+        # to "nothing to show" and gives the user no path to discover WHY.
+        # One stderr line, same spirit as _log_exception's T2.21 breadcrumb —
+        # Claude Code merges statusline stderr into its own error log.
+        sys.stderr.write(
+            f"[llm-externalizer statusline] cache dir unavailable "
+            f"({type(e).__name__}: {e}); rendering without caching/logging\n"
+        )
         print(out, end="")
         return
 
@@ -700,6 +867,28 @@ def main() -> None:
                 out += f"{sep}💰 {WHITE}extra{RESET} {build_bar(extra_pct, bar_width)} {CYAN}${extra_used:.2f}/${extra_limit:.2f}{RESET}"
         except Exception as e:
             _log_exception("extra-usage", e)
+
+        # Spend limit (Claude apps gateway, CC 2.1.284+) — guarded like the
+        # sibling windows: render only when the field exists; inert on older CC.
+        try:
+            sl_used = safe_jq(usage_data, "spend_limit", "used_usd")
+            sl_limit = safe_jq(usage_data, "spend_limit", "limit_usd")
+            if sl_used is not None and sl_limit is not None:
+                sl_period = str(safe_jq(usage_data, "spend_limit", "period") or "")
+                out += f"{sep}💳 {CYAN}${float(sl_used):.2f}/${float(sl_limit):.2f}{RESET}"
+                if sl_period and len(sl_period) <= 8:
+                    out += f" {DIM}{sl_period}{RESET}"
+        except Exception as e:
+            _log_exception("spend-limit", e)
+
+    # Prompt-cache miss cause (CC 2.1.265+) — guarded: display only when the
+    # field is present, dim and truncated so it never dominates the bar.
+    try:
+        pc_text = str(safe_jq(data, "prompt_cache") or "").strip()
+        if pc_text:
+            out += f"{sep}🧩 {DIM}{pc_text[:60]}{RESET}"
+    except Exception as e:
+        _log_exception("prompt-cache", e)
 
     # ── Width-aware tiered layout ──
     # Tier 1 (≥ width):        single line — full bar
@@ -810,23 +999,11 @@ def main() -> None:
                     print(head)
                     print(f"📊{rest}", end="")
 
-            try:
-                dbg = Path("/tmp/claude/statusline-debug.log")
-                dbg.parent.mkdir(parents=True, exist_ok=True)
-                with dbg.open("a") as f:
-                    f.write(f"{datetime.now().isoformat()} cols={cols} width={visible} tier={tier_chosen}\n")
-            except Exception:
-                pass
+            _log_tier_debug(cols, visible, tier_chosen)
             return
 
         # Single-line path (tier 1).
-        try:
-            dbg = Path("/tmp/claude/statusline-debug.log")
-            dbg.parent.mkdir(parents=True, exist_ok=True)
-            with dbg.open("a") as f:
-                f.write(f"{datetime.now().isoformat()} cols={cols} width={visible} tier={tier_chosen}\n")
-        except Exception:
-            pass
+        _log_tier_debug(cols, visible, tier_chosen)
     except Exception as e:
         _log_exception("width-split", e)
 

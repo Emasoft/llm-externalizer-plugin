@@ -16,9 +16,11 @@ import { join } from "node:path";
 import {
   BENCH_LOCK_TTL_MS,
   benchLockIsHeld,
+  benchLockPid,
   claimBenchLock,
   commitBenchLock,
   releaseBenchLock,
+  releaseOwnBenchLockOnExit,
 } from "./bench-lock.js";
 
 let dir = "";
@@ -138,5 +140,107 @@ describe("commit / release — handing the lock to the child, and giving it back
 
   it("release on an already-absent lock is silent — it runs on failure paths that must not throw", () => {
     expect(() => releaseBenchLock(lockPath)).not.toThrow();
+  });
+});
+
+describe("claimBenchLock — a TAKEOVER says so, exactly once (P6c-a2a item 66)", () => {
+  it("emits ONE stderr line naming the dead pid and the lock when it steals a stale lock", () => {
+    writeFileSync(lockPath, "4194304", "utf-8"); // dead pid
+    const lines: string[] = [];
+    expect(claimBenchLock(lockPath, Date.now(), (m) => lines.push(m)).ok).toBe(true);
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain("4194304");
+    expect(lines[0]).toContain(lockPath);
+  });
+
+  it("says NOTHING when the lock was simply free — a takeover is the only event worth a line", () => {
+    const lines: string[] = [];
+    expect(claimBenchLock(lockPath, Date.now(), (m) => lines.push(m)).ok).toBe(true);
+    expect(lines).toEqual([]);
+  });
+
+  it("says NOTHING when it refuses a LIVE lock — that is the normal throttle, not a fault", () => {
+    writeFileSync(lockPath, String(process.pid), "utf-8");
+    const lines: string[] = [];
+    expect(claimBenchLock(lockPath, Date.now(), (m) => lines.push(m)).ok).toBe(false);
+    expect(lines).toEqual([]);
+  });
+});
+
+describe("benchLockPid — the ownership question, which is NOT the liveness question", () => {
+  it("returns the stamped pid", () => {
+    writeFileSync(lockPath, "4194304", "utf-8");
+    expect(benchLockPid(lockPath)).toBe(4194304);
+  });
+
+  it("returns null for an absent, empty or unparseable lock rather than throwing", () => {
+    expect(benchLockPid(lockPath)).toBeNull();
+    writeFileSync(lockPath, "", "utf-8");
+    expect(benchLockPid(lockPath)).toBeNull();
+    writeFileSync(lockPath, "not-a-pid\n", "utf-8");
+    expect(benchLockPid(lockPath)).toBeNull();
+  });
+});
+
+describe("releaseOwnBenchLockOnExit — the child gives the lock back (P6c-a2a item 66)", () => {
+  // Arming registers listeners on THIS (vitest) process, so every test here
+  // removes exactly what it added. Leaving one behind would unlink a temp path
+  // at vitest shutdown and, worse, leak state into the next test file.
+  const SIGNALS = ["SIGTERM", "SIGINT", "SIGHUP"] as const;
+  type Listener = Parameters<typeof process.removeListener>[1];
+  let added: { event: string; fn: Listener }[] = [];
+
+  /** Arm for real, and hand back the 'exit' listener the real function
+   *  registered — invoking THAT is what a process exit would do. */
+  function arm(path: string, pid: number): () => void {
+    const before = {
+      exit: new Set(process.listeners("exit")),
+      ...Object.fromEntries(SIGNALS.map((s) => [s, new Set(process.listeners(s))])),
+    } as Record<string, Set<unknown>>;
+    releaseOwnBenchLockOnExit(path, pid);
+    let exitHook: (() => void) | undefined;
+    for (const event of ["exit", ...SIGNALS]) {
+      for (const fn of process.listeners(event as "exit")) {
+        if (before[event].has(fn)) continue;
+        added.push({ event, fn: fn as Listener });
+        if (event === "exit") exitHook = fn as () => void;
+      }
+    }
+    if (!exitHook) throw new Error("no 'exit' listener was registered");
+    return exitHook;
+  }
+
+  afterEach(() => {
+    for (const { event, fn } of added) process.removeListener(event, fn);
+    added = [];
+  });
+
+  it("registers on 'exit' AND on each of SIGTERM/SIGINT/SIGHUP — 'exit' does NOT fire on a signal", () => {
+    arm(lockPath, process.pid);
+    expect(added.map((a) => a.event).sort()).toEqual(["SIGHUP", "SIGINT", "SIGTERM", "exit"]);
+  });
+
+  it("releases a lock still stamped with OUR pid — the success path nothing used to clean up", () => {
+    writeFileSync(lockPath, String(process.pid), "utf-8");
+    const exitHook = arm(lockPath, process.pid);
+    exitHook();
+    expect(existsSync(lockPath)).toBe(false);
+  });
+
+  it("leaves a lock ANOTHER process took over alone — deleting it would license a double spawn", () => {
+    // Our run overran the TTL, someone took the lock over and stamped their own
+    // pid. Unlinking here would let a third process claim it while that second
+    // benchmark is still running.
+    const ourPid = 4194304;
+    writeFileSync(lockPath, String(process.pid), "utf-8"); // NOT ours any more
+    const exitHook = arm(lockPath, ourPid);
+    exitHook();
+    expect(existsSync(lockPath)).toBe(true);
+    expect(benchLockPid(lockPath)).toBe(process.pid);
+  });
+
+  it("is silent when the lock is already gone — it runs on paths that must not throw", () => {
+    const exitHook = arm(lockPath, process.pid);
+    expect(() => exitHook()).not.toThrow();
   });
 });

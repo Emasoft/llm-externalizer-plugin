@@ -177,7 +177,13 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
         "",
       ].join("\n"),
     );
-    const r = run(["--auto-replace"]);
+    // P6b-fix3 B-1': `--profile ens` is now REQUIRED to mean "assess ens". The
+    // ensemble half used to read the disk `active:` key, which this fixture sets
+    // to `ens` — P6 retired that key for selection, and fix2 had already made the
+    // TOOL half resolve `--profile` else the built-in default. Both halves of one
+    // command must name one profile, so the fixture names it, exactly as fix2's
+    // three other CLI fixtures had to. Every assertion below is unchanged.
+    const r = run(["--auto-replace", "--profile", "ens"]);
     expect(r.status).toBe(0);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[OK\] advisory — .*1\/2 ensemble slot\(s\) broken; nothing written\. Report: /);
@@ -196,7 +202,8 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
   });
 
   it("--auto-replace on an empty ledger reports a healthy ensemble", () => {
-    const r = run(["--auto-replace"]);
+    // P6b-fix3 B-1': names its profile — see the case above.
+    const r = run(["--auto-replace", "--profile", "ens"]);
     expect(r.status).toBe(0);
     expect(r.final).toMatch(/0\/2 ensemble slot\(s\) broken/);
     expect(r.stderr).toMatch(/ensemble\.model \(vendor\/dead-model\): healthy/);
@@ -233,7 +240,13 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
   });
 
   it("--update-all self-checks the API key before any work (one line, no agent probe)", () => {
-    const r = run(["--update-all", "--paid"]);
+    // P6b-fix2 B-1: `--profile ens` names the target explicitly here, so this
+    // fixture's `active:` (if any) is moot -- with no --profile AND no
+    // `active:`, a write command targets the built-in default ('free',
+    // TRDD-G6XT3AY9) — a GENERATED section — and is refused before the key
+    // check. The assertion is unchanged; only the way the command names its
+    // target is.
+    const r = run(["--update-all", "--paid", "--profile", "ens"]);
     expect(r.status).not.toBe(0);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[FAILED\] OPENROUTER_API_KEY not set/);
@@ -258,7 +271,10 @@ describe("benchmark CLI — the [OK|FAILED] final-line contract", () => {
         "",
       ].join("\n"),
     );
-    const r = run(["--update-all", "--paid"]);
+    // P6b-fix2 B-1: names the target with --profile instead of the retired
+    // disk `active:` key (see the case above). The free_only refusal still
+    // beats every other check, which is what this case is about.
+    const r = run(["--update-all", "--paid", "--profile", "fo"]);
     expect(r.status).toBe(2);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[FAILED\] --update-all --paid refused: profile 'fo' has free_only: true/);

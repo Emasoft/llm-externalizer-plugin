@@ -28,6 +28,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { benchmarkSubReportDir } from "../report-dir.js";
 import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
@@ -38,9 +39,9 @@ import {
   qualify,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "../discover.js";
-import { getConfigDir, getActiveFreeOnly } from "../../config.js";
-import { resolveProjectMainRoot } from "../../project-root.js";
+import { getConfigDir, getActiveFreeOnly, getEnsemblePriceCeiling, loadSettings } from "../../config.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -337,6 +338,15 @@ async function runTextToolBenchmark(
   const progress = opts.onProgress ?? ((): void => {});
   const freeOnly = getActiveFreeOnly();
   const criteria = textToolCriteria(tool);
+  // D0 (TRDD-AL8GIZYA, plan item 2a): textToolCriteria's price fields only
+  // mirror DEFAULT_CRITERIA's DEFAULT ceiling; auto-discovered candidates must
+  // be filtered against the resolved, settings-overridable ceiling instead.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const discoveryCriteria: ModelCriteria = {
+    ...criteria,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
 
   progress(`Loaded ${caseCount} golden ${tool} cases (dataset ${datasetHash}).`);
 
@@ -393,7 +403,7 @@ async function runTextToolBenchmark(
       }
     }
   } else {
-    const { candidates } = buildBenchmarkRoster(catalog, criteria, []);
+    const { candidates } = buildBenchmarkRoster(catalog, discoveryCriteria, [], catalog, discoveryCeiling);
     const affordable = candidates.filter(
       (c) =>
         c.inputDollarsPerMillion <= incumbentIn + 1e-9 &&
@@ -438,7 +448,18 @@ async function runTextToolBenchmark(
     }
   }
 
-  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Global price-cap fail-fast on AUTO-DISCOVERED candidates only (already
+  // dropped by discoveryCriteria above, so this is a safety net). USER
+  // 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX) exempts only an
+  // explicitly-named --include id — NOT the incumbent (REVIEW finding: the
+  // incumbent is auto-added by this orchestrator, not user-named in this
+  // invocation, so it is not covered by that USER decision and stays gated,
+  // matching pre-D0-flows behaviour).
+  const manualIds = new Set(opts.models ?? []);
+  const autoDiscovered = [...toAssess.values()]
+    .filter((v) => !manualIds.has(v.model.id))
+    .map((v) => v.model);
+  assertModelsUnderPriceCap(autoDiscovered, discoveryCeiling);
   assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${caseCount} ${tool} cases…`);
@@ -542,8 +563,11 @@ async function runTextToolBenchmark(
     incumbentOutputDollarsPerMillion: incumbentOut,
   });
 
-  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join(mainRoot, "reports", "text-tools-benchmark", tool);
+  // Write-roots rule (2026-09-18): route the default through
+  // benchmarkSubReportDir() -> defaultOutputDir(), the only USER-approved
+  // report root, instead of hand-rolling mainRoot/"reports"/sub (that landed
+  // outside every approved write root). An explicit outputDir still wins.
+  const reportDir = opts.outputDir ?? join(benchmarkSubReportDir("text-tools-benchmark", opts.mainRoot), tool);
   mkdirSync(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join(reportDir, `${stamp}-${tool}-benchmark.json`);

@@ -64,10 +64,11 @@ describe("doc-inventory extraction (sanity)", () => {
     expect(agents).toContain("llm-externalizer-setup-agent");
   });
 
-  it("extracts the 6 backend presets", () => {
+  it("extracts the 7 backend presets", () => {
     expect(presets).toContain("openrouter-remote");
+    expect(presets).toContain("chat-b-ai-remote");
     expect(presets).toContain("lmstudio-local");
-    expect(presets.length).toBe(6);
+    expect(presets.length).toBe(7);
   });
 });
 

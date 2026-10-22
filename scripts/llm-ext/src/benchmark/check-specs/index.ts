@@ -22,6 +22,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { benchmarkSubReportDir } from "../report-dir.js";
 import {
   buildBenchmarkRoster,
   assertModelsUnderPriceCap,
@@ -32,9 +33,9 @@ import {
   qualify,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "../discover.js";
-import { getConfigDir, getActiveFreeOnly } from "../../config.js";
-import { resolveProjectMainRoot } from "../../project-root.js";
+import { getConfigDir, getActiveFreeOnly, getEnsemblePriceCeiling, loadSettings } from "../../config.js";
 import { KNOWN_PRICING, type ModelPricing } from "../../mass_scouting/cost-estimate.js";
 import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
@@ -69,6 +70,7 @@ import {
   type CheckSpecsCandidate,
   type CheckSpecsSelectionResult,
 } from "./select.js";
+import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
 
 /**
  * check_against_specs has no per-tool default model of its own — it runs on the active
@@ -303,6 +305,15 @@ export async function runCheckSpecsBenchmark(
   const incumbentId = opts.incumbentModelId ?? DEFAULT_MODEL;
   const progress = opts.onProgress ?? ((): void => {});
   const freeOnly = getActiveFreeOnly();
+  // D0 (TRDD-AL8GIZYA, plan item 2a): CHECK_SPECS_CRITERIA's price fields only
+  // mirror DEFAULT_CRITERIA's DEFAULT ceiling; auto-discovered candidates must
+  // be filtered against the resolved, settings-overridable ceiling instead.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const discoveryCriteria: ModelCriteria = {
+    ...CHECK_SPECS_CRITERIA,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
 
   const violations = fixtures.filter((f) => f.truth === "VIOLATION").length;
   progress(
@@ -365,7 +376,7 @@ export async function runCheckSpecsBenchmark(
       }
     }
   } else {
-    const { candidates } = buildBenchmarkRoster(catalog, CHECK_SPECS_CRITERIA, []);
+    const { candidates } = buildBenchmarkRoster(catalog, discoveryCriteria, [], catalog, discoveryCeiling);
     const affordable = candidates.filter(
       (c) =>
         c.inputDollarsPerMillion <= incumbentIn + 1e-9 &&
@@ -415,14 +426,31 @@ export async function runCheckSpecsBenchmark(
     }
   }
 
-  // Global price-cap fail-fast (explicit ids + incumbent; discovered already
-  // dropped by filterModels). Refuses before any send, $0 spent.
-  assertModelsUnderPriceCap([...toAssess.values()].map((v) => v.model));
+  // Global price-cap fail-fast on AUTO-DISCOVERED candidates only (already
+  // dropped by discoveryCriteria above, so this is a safety net). USER
+  // 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX) exempts only an
+  // explicitly-named --include id — NOT the incumbent (REVIEW finding: the
+  // incumbent is auto-added by this orchestrator, not user-named in this
+  // invocation, so it is not covered by that USER decision and stays gated,
+  // matching pre-D0-flows behaviour).
+  const manualIds = new Set(opts.models ?? []);
+  const autoDiscovered = [...toAssess.values()]
+    .filter((v) => !manualIds.has(v.model.id))
+    .map((v) => v.model);
+  assertModelsUnderPriceCap(autoDiscovered, discoveryCeiling);
   assertPaidBenchmarkAllowed([...toAssess.values()].map((v) => v.model));
 
   progress(`Assessing ${toAssess.size} model(s) over ${fixtures.length} file decisions…`);
 
   const cache = loadCache();
+  // Reclaim already-paid benchmark scores. The per-day cache key embeds
+  // today() (`cacheKey(model.id, today(), datasetHash)`), so a row written on
+  // an earlier date is never looked up again and its `qualityPass` — the ONLY
+  // field that gives a ':free' model a verdict in the evidence fold — is never
+  // backfilled, despite the note at the write site promising it would be.
+  // Judging those rows from the score they already carry costs no model call.
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: CheckSpecsAssessment[] = [];
   let totalCost = 0;
 
@@ -529,8 +557,11 @@ export async function runCheckSpecsBenchmark(
     incumbentOutputDollarsPerMillion: incumbentOut,
   });
 
-  const mainRoot = resolveProjectMainRoot(opts.mainRoot);
-  const reportDir = opts.outputDir ?? join(mainRoot, "reports", "check-specs-benchmark");
+  // Write-roots rule (2026-09-18): route the default through
+  // benchmarkSubReportDir() -> defaultOutputDir(), the only USER-approved
+  // report root, instead of hand-rolling mainRoot/"reports"/sub (that landed
+  // outside every approved write root). An explicit outputDir still wins.
+  const reportDir = opts.outputDir ?? benchmarkSubReportDir("check-specs-benchmark", opts.mainRoot);
   mkdirSync(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join(reportDir, `${stamp}-check-specs-benchmark.json`);
@@ -733,4 +764,21 @@ function buildReportMarkdown(args: {
       "that profile's `tool_models.check_against_specs` (CLI-only writer — the MCP surface never writes).",
   );
   return lines.join("\n") + "\n";
+}
+
+/**
+ * Zero-call standalone backfill: upgrades legacy ledger rows to carry
+ * `qualityPass`, without benchmarking anything (no catalog fetch, no model
+ * call). Same dataset-hash and pass predicate `runCheckSpecsBenchmark` uses.
+ */
+export function backfillOwnLedger(): { tool: string; upgraded: number } {
+  const fixtures: readonly SpecFixture[] = CHECK_SPECS_FIXTURES;
+  validateDataset(fixtures);
+  const datasetHash = datasetFingerprint();
+  const thresholds = DEFAULT_CHECK_SPECS_THRESHOLDS;
+
+  const cache = loadCache();
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  if (upgraded > 0) saveCache(cache);
+  return { tool: "check_against_specs", upgraded };
 }

@@ -18,7 +18,7 @@ import { getConfigDir } from "../config.js";
 import { fetchProgrammingModels, type OpenRouterModel } from "../benchmark/discover.js";
 import { assessModelAcrossTools } from "./assess.js";
 import { localIsoTimestamp } from "../usage-history.js";
-import { resolveProjectMainRoot } from "../project-root.js";
+import { defaultOutputDir } from "../project-root.js";
 import { compactStamp } from "./drift.js";
 
 // ── Shapes ─────────────────────────────────────────────────────────────
@@ -308,7 +308,11 @@ export async function runDiscoverNewArrivals(
   opts: RunDiscoverNewArrivalsOptions = {},
 ): Promise<{ report: NewArrivalsReport; reportPath: string }> {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join(resolveProjectMainRoot(), "reports", "model-arrivals");
+  // write-roots fix (c9b, 2026-09-18): route the default through
+  // defaultOutputDir() so it lands under reports/llm-externalizer/model-arrivals
+  // (the USER-approved tree) and honors LLM_EXT_OUTPUT_DIR like every other
+  // report writer; an explicit outputDir still wins verbatim.
+  const dir = opts.outputDir ?? join(defaultOutputDir(), "model-arrivals");
   mkdirSync(dir, { recursive: true });
   const reportPath = join(dir, `${compactStamp()}-new-arrivals.md`);
   writeFileSync(reportPath, renderNewArrivalsMarkdown(report));

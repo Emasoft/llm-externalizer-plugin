@@ -91,6 +91,7 @@ export interface ScanFolderDeps {
     reason: string;
     unrecoverable?: boolean;
     serviceLevel?: boolean;
+    countsAsFailure?: boolean;
   };
   saveResponse: (
     tool: string,
@@ -279,6 +280,19 @@ export async function runScanFolder(
                 if (classified.serviceLevel) {
                   aborted = true;
                   abortReason = `Unrecoverable: ${classified.reason}`;
+                }
+                // A closed retry window is final for this file but still a failed
+                // outcome: feed the "3 of the last 3 failed" abort, exactly as
+                // robustPerFileProcess / batch_check do (TRDD-YG72CYY7) — without
+                // it a dead provider burns a five-minute window per file.
+                recentOutcomes.push(false);
+                if (
+                  classified.countsAsFailure &&
+                  recentOutcomes.length >= 3 &&
+                  recentOutcomes.slice(-3).every((v) => !v)
+                ) {
+                  aborted = true;
+                  abortReason = `3 of the last 3 completions failed. Last error: ${classified.reason}`;
                 }
                 return {
                   filePath,

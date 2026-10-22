@@ -29,11 +29,17 @@
  * command the user actually ran.
  */
 
-import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, resolve as pathResolve } from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { claimBenchLock, commitBenchLock, releaseBenchLock } from "./bench-lock.js";
+import {
+  BENCH_LOCK_PATH_ENV,
+  benchLockPid,
+  claimBenchLock,
+  commitBenchLock,
+  releaseBenchLock,
+} from "./bench-lock.js";
 
 /**
  * Locate the bundled benchmark entrypoint.
@@ -72,6 +78,21 @@ export interface SpawnDetachedBenchOpts {
   reason: string;
   /** Stderr sink — caller passes process.stderr.write or a stub. */
   log: (msg: string) => void;
+  /**
+   * SG2 (per-profile singleton lock): true when the CALLER already
+   * exclusively holds `lockPath` under ITS OWN pid (a detector child handing
+   * its lock to the populate child it decides to run, or -- D2 -- to the one
+   * a requested update's maintainer pass spawns) and wants that SAME lock
+   * handed to the new child instead of
+   * re-claimed. Skips claimBenchLock entirely -- re-claiming would fail
+   * (the lock file already shows a live pid: the callers own) -- and
+   * instead verifies `lockPath` is still stamped with OUR pid right before
+   * spawning, so a caller that no longer actually holds it (a bug, or the
+   * lock expired out from under it) gets a clean refusal rather than
+   * stealing or duplicating a claim. Default false preserves every existing
+   * caller, which claims lockPath fresh exactly as before.
+   */
+  alreadyHeld?: boolean;
 }
 
 export type SpawnDetachedBenchResult =
@@ -84,7 +105,7 @@ export type SpawnDetachedBenchResult =
  * Never throws.
  */
 export function spawnDetachedBench(opts: SpawnDetachedBenchOpts): SpawnDetachedBenchResult {
-  const { lockPath, logPath, scriptPath, args, env, reason, log } = opts;
+  const { lockPath, logPath, scriptPath, args, env, reason, log, alreadyHeld = false } = opts;
 
   // The directories that hold the LOG and the LOCK — deliberately not the
   // config dir. When a caller injects paths (tests, or a future per-profile
@@ -99,7 +120,22 @@ export function spawnDetachedBench(opts: SpawnDetachedBenchOpts): SpawnDetachedB
     }
   }
 
-  const claim = claimBenchLock(lockPath);
+  // `log` passed through so a stale-lock TAKEOVER says so once on stderr
+  // (item 66). Without it the self-healing is invisible, and "the lock was
+  // stale" is indistinguishable from "there was never a lock" — the state the
+  // P6d dogfood run spent 15 minutes failing to tell apart.
+  //
+  // SG2: `alreadyHeld` skips claimBenchLock's create-or-fail linkSync
+  // entirely — the lock file already exists (stamped with OUR pid), so that
+  // linkSync would just fail EEXIST and this whole spawn would be wrongly
+  // refused as "already in progress" against itself. Instead verify we
+  // still hold it (own-pid check, same shape as releaseOwnBenchLockOnExit's
+  // releaseIfOurs) right before handing it to the child below.
+  const claim = alreadyHeld
+    ? benchLockPid(lockPath) === process.pid
+      ? ({ ok: true } as const)
+      : ({ ok: false, reason: "held", detail: lockPath } as const)
+    : claimBenchLock(lockPath, Date.now(), log);
   if (!claim.ok) {
     return {
       ok: false,
@@ -118,12 +154,43 @@ export function spawnDetachedBench(opts: SpawnDetachedBenchOpts): SpawnDetachedB
     return { ok: false, reason: `cannot open log ${logPath}: ${(e as Error).message}` };
   }
 
+  // Row 19 (OE27RD7I): opening the log with "a" never changes its modification
+  // time (measured: a 2020 mtime stays 2020), so a child that dies before
+  // printing would leave an old time and the spawn-attempt floor in
+  // dynamic-maintainer.ts would never fire. This marker write IS the attempt
+  // stamp that floor reads, and it leaves a visible record of every attempt in
+  // the log. It happens before spawn(), so a failed spawn also counts as an
+  // attempt (deliberate). A log that cannot be written is refused like one that
+  // cannot be opened.
+  try {
+    writeSync(logFd, `[llm-ext] spawn attempt ${new Date().toISOString()}\n`);
+  } catch (e) {
+    try {
+      closeSync(logFd);
+    } catch {
+      /* already closed */
+    }
+    releaseBenchLock(lockPath);
+    return { ok: false, reason: `cannot write log ${logPath}: ${(e as Error).message}` };
+  }
+  // Marker written: start the child.
   let child;
   try {
     child = spawn(process.execPath, [scriptPath, ...args], {
       detached: true,
       stdio: ["ignore", logFd, logFd],
-      env: { ...env, LLM_EXT_AUTO_BENCH_REASON: env.LLM_EXT_AUTO_BENCH_REASON ?? reason },
+      env: {
+        ...env,
+        LLM_EXT_AUTO_BENCH_REASON: env.LLM_EXT_AUTO_BENCH_REASON ?? reason,
+        // Item 66: the child is the ONLY process that knows when the run is
+        // over — the parent returns immediately and its `releaseBenchLock`
+        // calls all sit on failure paths, so nothing released the lock on the
+        // SUCCESS path. Handing the path down is what lets the child arm
+        // releaseOwnBenchLockOnExit. Always OUR value, never the inherited
+        // one: a lock path leaked in from an outer bench would make this child
+        // delete a lock it does not own.
+        [BENCH_LOCK_PATH_ENV]: lockPath,
+      },
     });
   } catch (e) {
     // spawn() throws SYNCHRONOUSLY on argument/resource errors (EMFILE, ENOMEM,
@@ -148,7 +215,10 @@ export function spawnDetachedBench(opts: SpawnDetachedBenchOpts): SpawnDetachedB
     // The child never existed, so its pid will never be reaped into staleness
     // by the liveness check. Release now rather than making the next attempt
     // wait out the TTL.
-    releaseBenchLock(lockPath);
+    // Only when the lock is still ours (or already gone): another process may have taken it over since the
+    // claim, and unlinking its lock would admit a double spawn.
+    const owner = benchLockPid(lockPath);
+    if (owner === null || owner === process.pid) releaseBenchLock(lockPath);
   });
 
   // Detach so the bench survives the parent's shutdown.

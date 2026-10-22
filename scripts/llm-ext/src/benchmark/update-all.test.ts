@@ -155,6 +155,28 @@ describe("--update-all", () => {
     } as { deps: UpdateAllDeps; toolCalls: string[]; sweepCalls: number };
   }
 
+  // ── The generated-section refusal (P6b-fix2 B-1) ─────────────────────────
+
+  it("refuses a GENERATED dynamic profile BEFORE anything is fetched, spent or written", async () => {
+    // This orchestrator writes settings THREE times (ensemble, free pool, each
+    // tool head) and pick.ts's writers now throw for a dynamic profile name —
+    // so without an up-front refusal a run wrote the ensemble and then died at
+    // the second writer, leaving settings.yaml half-updated. An aborted RESULT
+    // (not a throw) is what makes the CLI's exit clean instead of a stack trace.
+    const before = readFileSync(settingsPath, "utf-8");
+    const { deps, toolCalls, ...spy } = spyDeps();
+    const r = await runUpdateAll(baseOpts({ profileName: "free" }), deps);
+
+    expect(r.ok).toBe(false);
+    expect(r.aborted).toContain("GENERATED dynamic profile");
+    expect(r.aborted).toContain("--populate-default-profile free");
+    expect(readFileSync(settingsPath, "utf-8"), "not one byte may move").toBe(before);
+    // Nothing was even attempted: no catalog fetch, no sweep, no tool run.
+    expect(spy.sweepCalls).toBe(0);
+    expect(toolCalls).toEqual([]);
+    expect(r.spentUsd).toBe(0);
+  });
+
   // ── The report's central honesty claim ───────────────────────────────────
 
   it("accounts for EVERY registered tool — none may silently vanish from the report", async () => {
@@ -193,6 +215,9 @@ describe("--update-all", () => {
         "check_against_specs",
         "code_task",
         "describe",
+        "check_imports",
+        "check_references",
+        "compare_files",
         "mass_scout",
         "scan_folder",
         "search_existing_implementations",
@@ -204,7 +229,7 @@ describe("--update-all", () => {
     );
     // Everything else carries `benchmark: null` in the registry — requirements only.
     expect(gated).toEqual(
-      ["chat", "check_imports", "check_references", "cluster_synonyms", "compare_files"].sort(),
+      ["chat", "cluster_synonyms"].sort(),
     );
 
     // A requirement-gated tool must never claim a benchmark, a winner, or a write.
@@ -233,7 +258,10 @@ describe("--update-all", () => {
     expect(toolCalls.sort()).toEqual(
       [
         "check_against_specs",
+        "check_imports", // joined the sweep in TRDD-f45eeaa0
+        "check_references", // joined in TRDD-2G6D42LK
         "code_task",
+        "compare_files", // joined in TRDD-2G6D42LK
         "describe",
         "scan_folder",
         "search_existing_implementations",
@@ -256,7 +284,7 @@ describe("--update-all", () => {
     expect(doc.profiles.ens.tool_models.chat).toBeUndefined();
     // Untouched keys survive.
     expect(doc.profiles.ens.api_key).toBe("sk-test-literal");
-    expect(r.toolsUpdated).toBe(9);
+    expect(r.toolsUpdated).toBe(12); // +check_imports, +compare_files, +check_references
   });
 
   it("does NOT write a tool whose gate found no eligible same-or-cheaper passer", async () => {
@@ -581,7 +609,10 @@ describe("--update-all", () => {
 
     // Every tool that never ran is reported as SKIPPED — never as passing, never silently.
     const skipped = r.tools.filter((t) => t.note.includes("SKIPPED") || t.note.includes("ABORTED"));
-    expect(skipped).toHaveLength(6);
+    // 7 since check_imports joined the sweep (TRDD-f45eeaa0). Incidental, not a
+    // behaviour change: ranTools is still 3 and spentUsd still ~6 above, so the
+    // cap trips at the SAME point — only the count of not-run tools grew.
+    expect(skipped).toHaveLength(9);
     for (const t of skipped) {
       expect(t.winner).toBeNull();
       expect(t.written).toBe(false);
@@ -610,7 +641,7 @@ describe("--update-all", () => {
     const perToolSweeps = r.tools.filter(
       (x) => x.gate === "benchmark-proven" && x.benchmark !== "keyword-classification",
     );
-    expect(perToolSweeps).toHaveLength(9);
+    expect(perToolSweeps).toHaveLength(12); // +check_imports, +compare_files, +check_references
     for (const t of perToolSweeps) {
       expect(t.note).toMatch(/dry-run — would benchmark \d+ model\(s\), worst case \$/);
       expect(t.written).toBe(false);
@@ -626,7 +657,7 @@ describe("--update-all", () => {
     const { deps } = spyDeps();
     const r = await runUpdateAll(baseOpts(), deps);
     expect(r.summary).toMatch(
-      /paid refresh complete: \d+ scanned \/ \d+ qualified \/ \d+ benchmarked, 10 benchmark-proven \+ 5 requirement-gated tool\(s\), \d+ tool\(s\) updated, \$[\d.]+ spent of the \$[\d.]+ cap/,
+      /paid refresh complete: \d+ scanned \/ \d+ qualified \/ \d+ benchmarked, 13 benchmark-proven \+ 2 requirement-gated tool\(s\), \d+ tool\(s\) updated, \$[\d.]+ spent of the \$[\d.]+ cap/,
     );
     expect(r.modelsScanned).toBe(CATALOG.length);
   });

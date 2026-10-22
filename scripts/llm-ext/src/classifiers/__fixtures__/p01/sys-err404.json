@@ -1,0 +1,7 @@
+{
+ "status": 400,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"error\":{\"message\":\"Model typesafe/no-such-model-xyz does not exist\",\"code\":400}}"
+}

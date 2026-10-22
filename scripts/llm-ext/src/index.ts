@@ -42,6 +42,7 @@ import {
   dispatchMassScoutTool,
 } from "./mass_scouting/mcp-tools.js";
 import { safeReadJson } from "./safe-body.js";
+import { buildTools } from "./tools/definitions.js";
 import {
   runClusterSynonyms,
   type ClusterSynonymsHooks,
@@ -57,12 +58,13 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 import { summarizeSession, DEFAULT_CHUNK_TIMEOUT_MS, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
 import { untilDoneBackoffMs, looksQuotaCapped } from "./session_summary/until-done.js";
 import { formatSizeReport } from "./session_summary/size-report.js";
+import { classifyContextOverflow } from "./session_summary/chunker.js";
 import { selectModels } from "./session_summary/model-select.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
-import { fetchWithTimeout } from "./provider/http.js";
+import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf } from "./provider/http.js";
 import {
   detectLMStudio,
   clearLMStudioProbeCache,
@@ -72,7 +74,16 @@ import {
   chatCompletionWithRetry,
   EXTRACT_PATHS_SCHEMA,
   type JSONCompletionResult,
+  type SimpleCompletionOptions,
 } from "./provider/completion.js";
+// TRDD-OE27RD7I 14.1-C2 §0: profileChain drives the profile's OWN model
+// chain (never a foreign profile's) for the single-model completion path --
+// see chatCompletionWithProfileFallback below, its only caller.
+import {
+  profileChain,
+  ProfileExhaustedError,
+  dynamicProfileRetryLaterMessage,
+} from "./profile-fallback.js";
 import {
   type BackendConfig,
   type ChatMessage,
@@ -138,6 +149,8 @@ import {
   type TextToolsDeps,
 } from "./text-tools/core.js";
 
+import type { RetryClock } from "./provider/http.js";
+
 /**
  * Resolve max output tokens for the current model.
  * Uses the model's actual max_completion_tokens from OpenRouter metadata.
@@ -171,20 +184,22 @@ import {
   type ResolvedProfile,
   type Profile,
   API_PRESETS,
+  isLocalUrl,
+  type ResolvedRoute,
   validateSettings,
+  settingsLevelErrors,
   resolveProfile,
   loadSettings,
   ensureSettingsExist,
   getSettingsPath,
   getConfigDir,
   generateDefaultSettings,
-  isDefaultProfileName,
-  isUnpopulatedDefaultProfile,
+  isInvalidOnlyBecauseUnpopulated,
   setActiveFreeOnly,
+  setActiveRouting,
   setAllowPaidModels,
   getAllowPaidModels,
   shouldForceFreeMode,
-  FREE_POOL_SEED,
   HIGH_QUALITY_MODEL_DEFAULTS,
   buildHighQualityProvider,
   highQualityScanRefusal,
@@ -192,7 +207,34 @@ import {
   formatResolvedProfileLines,
   formatActiveProfileSummary,
   formatProfilesList,
+  effectiveProfileName,
+  isDynamicProfileName,
+  type DynamicProfileName,
+  DEFAULT_PROFILE_NAME,
+  unpopulatedDefaultProfile,
+  PLACEHOLDER_MODEL_ID,
+  billableForRoute,
+  getEnsemblePriceCeiling,
+  resolveGroups,
+  hasNoTextProfile,
 } from "./config.js";
+import { readCachedModelPrice } from "./catalog-cache.js";
+import { writeDynamicProfileSection, migrateProfileSections, migrateSettingsTo141 } from "./benchmark/pick.js";
+import {
+  getProfileMigrationStamp,
+  stampProfileMigrationDone,
+  isMigrationStepApplied,
+  markMigrationStepApplied,
+} from "./default-profiles-state.js";
+// P6b item 1 (design §2.1/§3.3): the dynamic free/paid gate. D2: this file
+// no longer runs the maintainer at all -- every profile update happens in a
+// detached child (default-profiles-runner.ts's requestProfileUpdate /
+// spawnDetachedDetector, profile-detector.ts).
+import { dynamicProfileGate } from "./dynamic-maintainer.js";
+// C2b-wire + D2: the detached DETECTOR (fired at the end of every dispatch on
+// a dynamic profile, never awaited) and the background update a command
+// requests when its profile has no working model (never awaited either).
+import { spawnDetachedDetector, requestProfileUpdate } from "./default-profiles-runner.js";
 // recordRequest moved with the completion layer (B1 Phase 5b) — the per-request
 // usage line is written where the request is actually made (provider/completion.ts
 // + provider/lmstudio.ts), so index.ts only sets up the usage CONTEXT here.
@@ -202,10 +244,11 @@ import {
   summarizeParams,
 } from "./usage-history.js";
 import { installUsageRule } from "./rule-install.js";
-import { resolveProjectMainRoot } from "./project-root.js";
 import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
-import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
-import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/security-triage/index.js";
+import { buildCheckImportsExtractMessages } from "./check-imports/prompt.js";
+import { compareFilesSystemPrompt } from "./compare-files/prompt.js";
+import { isFreeSuffixModelId, paymentErrorCertainty } from "./benchmark/free-mode.js";
 import { applyFreePoolToSettings, addProfileToSettings } from "./benchmark/pick.js";
 import {
   discoverLocalLlmServices,
@@ -218,25 +261,17 @@ import {
   reconcileModelsBeforeWork,
   readLastReconcileMs,
   writeLastReconcileMs,
-  catalogForReconcile,
   type ReconcileConfigured,
 } from "./model-reconcile.js";
-import {
-  ensureDefaultProfileReady,
-  cachedPricesFromResults,
-  type CatalogPriceSnapshot,
-  type DefaultProfileBenchmarkRunner,
-} from "./default-profiles.js";
-import { loadCachedReport } from "./benchmark/pick.js";
-import { getEnsemblePriceCeiling } from "./config.js";
-import { getProfileRecord } from "./default-profiles-state.js";
-import {
-  populateDefaultProfile,
-  describeOutcome,
-  defaultProfileLogPath,
-  type PopulationOutcome,
-} from "./default-profiles-runner.js";
-import { readModelEvents, assessModelPersistence } from "./model-events.js";
+// P6c-a item 5: catalogForReconcile / CatalogPriceSnapshot / loadCachedReport /
+// getEnsemblePriceCeiling / getProfileRecord / populateDefaultProfile /
+// describeOutcome / defaultProfileLogPath / PopulationOutcome / readModelEvents /
+// assessModelPersistence were imported here for maybeEnsureDefaultProfileReady
+// ALONE. That function is gone with the retired machine-owned names, and so are
+// its imports — the dynamic maintainer owns every one of those reads now.
+import { getActiveBillableForModel } from "./config.js";
+import { getDynamicProfileRecord } from "./default-profiles-state.js";
+import { readCandidates } from "./dynamic-candidates.js";
 import {
   AllFreeModelsExhaustedError,
   approvedFreePoolFromSettings,
@@ -245,9 +280,9 @@ import {
   classifyUnavailable,
   filterFreeModels,
   getCooldownStore,
+  isUnusable,
   logRotation,
   orderByAvailability,
-  registerAutoFreeEngage,
   selectFreeEnsembleModels,
   type RotationCandidate,
   type RotationHooks,
@@ -258,7 +293,8 @@ import {
   formatModelInfoTable,
   formatModelInfoJson,
 } from "./or-model-info.js";
-import { maybeTriggerFreePoolBench } from "./free-pool-auto-bench.js";
+
+import { clearEndpointFlavorCache } from "./provider/endpoint-flavor.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -272,8 +308,8 @@ let settingsError = "";
  * Whether boot should proceed despite `validation` (validateSettings on the
  * active profile) having FAILED, because the failure is exactly the
  * self-healing "not benchmarked yet" placeholder state of a machine-owned
- * default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
- * 'paid-mass-scout') — never a genuine misconfiguration. Extracted as a pure
+ * dynamic profile ('free' | 'paid') — never a genuine misconfiguration.
+ * Extracted as a pure
  * function (used by the module-load boot IIFE below, which is otherwise hard
  * to unit-test directly) so the decision itself is independently testable.
  */
@@ -281,7 +317,66 @@ export function shouldBootDespiteInvalidActiveProfile(
   activeName: string,
   activeProfile: Profile | undefined,
 ): boolean {
-  return activeProfile !== undefined && isUnpopulatedDefaultProfile(activeName, activeProfile);
+  // isInvalidOnlyBecauseUnpopulated, NOT isUnpopulatedDefaultProfile: the
+  // caller DISCARDS the entire error list when this returns true, so the
+  // question has to be "are ALL the errors population errors?" and not "is this
+  // profile a placeholder?". Keyed on the profile, one self-healing condition
+  // suppressed every other rule — a YAML typo in `providers:` booted silently
+  // and reported "has not been benchmarked yet".
+  return (
+    activeProfile !== undefined &&
+    isInvalidOnlyBecauseUnpopulated(activeName, activeProfile)
+  );
+}
+
+/**
+ * The ONE verdict "is this settings document usable right now" that boot,
+ * reloadSettingsFromDisk, overrideActiveProfile and applyNewSettings must all
+ * compute identically (P6c-a2b: fix-queue review S1 + 57). validateSettings'
+ * result, THEN the self-healing unpopulated-placeholder exemption
+ * (shouldBootDespiteInvalidActiveProfile) -- but the exemption only ever
+ * answers a PER-PROFILE question and DISCARDS the whole error list on
+ * `true`, so it must never be asked when validateSettings failed for a
+ * SETTINGS-level reason it cannot see (S1: a hand-authored section under a
+ * RESERVED dynamic name -- config.ts's reservedDynamicProfileNameError).
+ * Checking `settingsLevelErrors(settings)` here, once, is what makes EVERY
+ * settings-level refusal survive the exemption at every call site instead of
+ * only at the one path (profile-migration.test.ts's direct validateSettings()
+ * call) that never exercised the exemption at all.
+ *
+ * Four callers used to answer "is this configured" four different ways --
+ * three duplicated the exemption inline (and all three missed the same S1
+ * gap), and applyNewSettings answered a WEAKER question entirely: "does the
+ * active profile object exist", never validateSettings' actual verdict (57).
+ * That let a reload of a document validateSettings had genuinely rejected
+ * report itself CONFIGURED, because an invalid profile is still an object.
+ * One function, so all four can no longer drift into disagreeing answers.
+ *
+ * Row 75 (fix-queue): the exemption used to be carved out ONLY for the
+ * reserved-name refusal above -- when the active profile was still a
+ * placeholder AND validateSettings failed for some OTHER settings-level
+ * reason (e.g. appendCapErrors), that OTHER error was still discarded by
+ * `shouldBootDespiteInvalidActiveProfile`'s "true -> ignore the whole list"
+ * behaviour. That gap is now closed: `settingsLevelErrors` covers every
+ * settings-level error validateSettings can produce, so the exemption is
+ * carved out ONLY when none of them apply -- no settings-level error is
+ * ever discarded through this path anymore.
+ */
+function evaluateSettingsValidity(
+  settings: Settings,
+): { valid: boolean; error: string; exempt: boolean } {
+  const validation = validateSettings(settings);
+  if (validation.valid) return { valid: true, error: "", exempt: false };
+  const name = effectiveProfileName(settings);
+  const profile = settings.profiles[name];
+  // Row 75: never let the per-profile exemption see (and silently discard)
+  // ANY settings-level refusal -- ask it only when validateSettings genuinely
+  // has none of its own (settingsLevelErrors covers both the reserved-name
+  // refusal and the paid_benchmark_daily_cap_usd check).
+  const hasSettingsLevelError = settingsLevelErrors(settings).length > 0;
+  const exempt =
+    !hasSettingsLevelError && shouldBootDespiteInvalidActiveProfile(name, profile);
+  return { valid: exempt, error: exempt ? "" : validation.errors.join("; "), exempt };
 }
 
 // ── Profile-based startup ────────────────────────────────────────────
@@ -290,7 +385,37 @@ export function shouldBootDespiteInvalidActiveProfile(
 
 let activeSettings: Settings = (() => {
   try {
-    return ensureSettingsExist();
+    const loaded = ensureSettingsExist();
+    // P6c-a item 3 (addendum K): the ONE-TIME pre-14.0.0 migration runs HERE —
+    // at boot, before validateSettings below and therefore long before the
+    // dispatch maintainer. Order is load-bearing twice over: a section it
+    // ADOPTS must already carry the generated marker when the maintainer first
+    // looks at it (otherwise the maintainer backs the same section up a second
+    // time), and validateSettings' reserved-name refusal must not fire on the
+    // very file the migration is about to fix.
+    //
+    // Never throws (see migrateProfileSections); a no-op after its first
+    // successful pass, so this costs one state-file read per boot thereafter.
+    const migration = migrateProfileSections(getSettingsPath(), {
+      notify: (msg) => process.stderr.write(`${msg}\n`),
+      readStamp: getProfileMigrationStamp,
+      writeStamp: stampProfileMigrationDone,
+    });
+    // D0 (TRDD-AL8GIZYA): the 14.1.0 migration list runs right after the
+    // pre-14.0.0 one, for the same two reasons — a step must see MARKED
+    // dynamic sections (writeDynamicProfileSection's per-key generated-key
+    // merge assumes that), and a settings-level refusal it fixes (E-D3) must
+    // not fire on the very file this migration is about to correct.
+    const migration141 = migrateSettingsTo141(getSettingsPath(), {
+      notify: (msg) => process.stderr.write(`${msg}\n`),
+      isApplied: isMigrationStepApplied,
+      markApplied: markMigrationStepApplied,
+    });
+    if (migration.alreadyDone && migration141.applied.length === 0) return loaded;
+    // Re-read: either migration may have deleted, adopted, regenerated or
+    // rewritten a section, and `loaded` is the document as it was BEFORE
+    // both ran.
+    return loadSettings() ?? loaded;
   } catch (err) {
     settingsError = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}\n\nSettings file: ${SETTINGS_FILE}`;
     process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
@@ -304,33 +429,45 @@ let activeSettings: Settings = (() => {
 setAllowPaidModels(activeSettings.allow_paid_models === true);
 
 let activeResolved: ResolvedProfile | null = (() => {
-  const validation = validateSettings(activeSettings);
-  if (!validation.valid) {
-    const activeProfile = activeSettings.profiles[activeSettings.active];
-    // A machine-owned default profile ('free' | 'free-ensemble' | 'paid' |
-    // 'paid-ensemble' | 'paid-mass-scout') that has never been benchmarked
-    // yet is EXPECTED to fail validateProfile
+  // effectiveProfileName(), not the raw `activeSettings.active` read: this
+  // IIFE runs at module-import time, BEFORE cli/main.ts's guaranteed
+  // overrideActiveProfile(profileOverride ?? DEFAULT_PROFILE_NAME) call
+  // (item 2) -- its result is a transient best-effort guess, always
+  // superseded a moment later. Using the same helper here keeps this guess
+  // consistent with everything downstream instead of re-deriving
+  // "omitted -> free" locally.
+  const targetName = effectiveProfileName(activeSettings);
+  // P6c-a2b (fix-queue review S1 + 57): evaluateSettingsValidity is the ONE
+  // verdict boot/reloadSettingsFromDisk/overrideActiveProfile/applyNewSettings
+  // all compute identically now -- see its docblock. Before this, each of the
+  // three call sites re-derived "is this exempt" inline (and all three missed
+  // the same S1 gap: a settings-level refusal getting discarded by the
+  // per-profile placeholder exemption). One call here means this IIFE cannot
+  // silently re-diverge from the other three the way it did before.
+  const verdict = evaluateSettingsValidity(activeSettings);
+  if (!verdict.valid) {
+    settingsError = `${verdict.error}\n\nSettings file: ${SETTINGS_FILE}`;
+    process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
+    return null;
+  }
+  if (verdict.exempt) {
+    // A machine-owned dynamic profile ('free' | 'paid') that has never been
+    // benchmarked yet is EXPECTED to fail validateProfile
     // (an empty pool / a placeholder model id genuinely cannot serve a
     // request) — that is not a user misconfiguration, it is the self-healing
-    // "not populated yet" state. Booting anyway lets the dispatcher hook
-    // (dispatchCallToolInner, beside runModelReconcile()) populate it lazily
-    // on first real use. Gating boot here on validateProfile's verdict would
+    // "not populated yet" state. Booting anyway lets the dispatch pre-flight's
+    // dynamic maintainer populate it on first real use. Gating boot here on
+    // validateProfile's verdict would
     // send every fresh install into NOT CONFIGURED with no path forward. A
     // genuinely misconfigured user profile (any other invalid shape) still
-    // falls through to the NOT CONFIGURED branch below, unchanged.
-    if (shouldBootDespiteInvalidActiveProfile(activeSettings.active, activeProfile)) {
-      process.stderr.write(
-        `[llm-externalizer] '${activeSettings.active}' has not been benchmarked yet — it will populate on first use.\n`,
-      );
-    } else {
-      settingsError = `${validation.errors.join("; ")}\n\nSettings file: ${SETTINGS_FILE}`;
-      process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
-      return null;
-    }
+    // falls through to the NOT CONFIGURED branch above, unchanged.
+    process.stderr.write(
+      `[llm-externalizer] '${targetName}' has not been benchmarked yet — it will populate on first use.\n`,
+    );
   }
   settingsValid = true;
-  const profile = activeSettings.profiles[activeSettings.active];
-  const resolved = resolveProfile(activeSettings.active, profile);
+  const profile = activeSettings.profiles[targetName];
+  const resolved = resolveProfile(targetName, profile);
   // Log auth status on startup so users can verify env vars are picked up
   if (resolved.authToken) {
     process.stderr.write(
@@ -350,20 +487,23 @@ let activeResolved: ResolvedProfile | null = (() => {
   // Publish free_only to config.ts so the pure subsystem spend sites
   // (judge/scout/benchmark) enforce the cost-safety guard (TRDD-97ef8b63).
   setActiveFreeOnly(resolved.freeOnly);
-  // Auto-bench the free pool when free_only is ON and the cache lacks
-  // :free entries (TRDD-f1510055). Fire-and-forget — never blocks server boot;
-  // the detached child writes to <getConfigDir()>/free-pool-bench.log (i.e.
-  // ~/.llm-externalizer/... unless LLM_EXT_CONFIG_DIR overrides it).
-  // Cost-safety: --bench-free-pool + the runner's free_only guard reject
-  // any non-:free model, so this is zero-spend by construction.
-  // At startup we don't know the *prior* free_only state, so pass null —
-  // the helper treats null as "fire if active and cache is empty".
-  maybeTriggerFreePoolBench({
-    activeProfile: activeSettings.active,
-    freeOnlyActive: resolved.freeOnly,
-    freeOnlyWasOn: null,
-    log: (msg) => process.stderr.write(msg),
-  });
+  // Same chokepoint for route-aware billability (item 1/A1): the pure spend
+  // sites derive a model's REAL billable status (routed elsewhere, e.g. b.ai,
+  // vs the primary backend) instead of hardcoding `true` (OpenRouter-only
+  // assumption that breaks once a model is routed to a non-billable provider).
+  setActiveRouting(resolved.routesFor, !resolved.isLocal && !resolved.isFreeProvider);
+  // free-pool-auto-bench.ts retired (P6b item 6): this used to fire an
+  // unconditional auto-bench at MODULE BOOT, on every invocation including
+  // pure status/meta commands (discover/reset/get_settings are NOT skipped
+  // here — this runs before dispatchCallToolInner's RECONCILE_SKIP_TOOLS
+  // gate even exists for this call), which is how a `settings status` run
+  // could spawn a detached child nobody asked for. Population is now the
+  // dynamic maintainer's job (dynamic-maintainer.ts's maintainDynamicProfiles,
+  // wired at dispatch time and correctly skipped for read-only tools) for
+  // 'free'/'paid' — the only profiles this codebase ever populates, and it
+  // needs no boot-time kick. P6c-a retired the legacy placeholder trio and
+  // maybeEnsureDefaultProfileReady's lazy path along with them; a STATIC
+  // profile is never rewritten (Rule 5), so there is nothing else to start.
   return resolved;
 })();
 
@@ -380,6 +520,25 @@ export function __getBootStateForTests(): {
   activeResolved: boolean;
 } {
   return { settingsValid, activeResolved: activeResolved !== null };
+}
+
+// WHY (TRDD-G6XT3AY9): `active:` is a live selector again -- there is no more
+// "raw disk value vs effective value" distinction to snapshot at boot (that
+// bookkeeping existed only to feed the P6 deprecation notice, now deleted).
+// cli/main.ts's default-profile resolution (`profileOverride ??
+// effectiveProfileName(...)`) and display paths (settings show/status) both
+// just need the CURRENT in-memory settings, so one plain accessor replaces
+// the old raw-snapshot + getter pair.
+export function getActiveSettings(): Settings {
+  return activeSettings;
+}
+
+/** Was the currently-effective profile chosen by an explicit `--profile`
+ *  flag, or by the default (no flag given)? Set by overrideActiveProfile's
+ *  `source` argument; cli/main.ts is the only caller that passes it. */
+let profileSelectionSource: "flag" | "default" = "default";
+export function getProfileSelectionSource(): "flag" | "default" {
+  return profileSelectionSource;
 }
 
 const DEFAULT_OPENROUTER_RPS = 5; // conservative default if balance can't be determined
@@ -448,6 +607,14 @@ function makeBackendFromProfile(
   const isRemote = resolved.protocol === "openrouter_api";
   return {
     type: isRemote ? "openrouter" : "local",
+    // Endpoint-derived, deliberately NOT `isRemote`. A non-local preset that is
+    // free by nature (and whose URL was not redirected away from the host the
+    // preset vouches for) cannot bill; everything else remote can.
+    billable: !resolved.isLocal && !resolved.isFreeProvider,
+    // D2 split: the transport-strategy question ("is this endpoint remote,
+    // for retry/backoff purposes") is separate from billability — see
+    // BackendConfig.isLocal's doc comment.
+    isLocal: resolved.isLocal,
     baseUrl: resolved.url,
     apiKey: resolved.authToken,
     model: modelOverride || resolved.model,
@@ -457,7 +624,10 @@ function makeBackendFromProfile(
 
 let currentBackend: BackendConfig = activeResolved
   ? makeBackendFromProfile(activeResolved)
-  : { type: "local", baseUrl: "http://localhost:1234", apiKey: "", model: "", __version: ++RELOAD_VERSION };
+  // No active profile: a localhost placeholder, which cannot bill.
+  // isLocal: true — a bare localhost placeholder before any profile
+  // resolves, per its own comment above (cannot bill).
+  : { type: "local", billable: false, isLocal: true, baseUrl: "http://localhost:1234", apiKey: "", model: "", __version: ++RELOAD_VERSION };
 
 /**
  * Snapshot accessor — returns the current backend reference in one read.
@@ -489,13 +659,28 @@ function getCurrentBackend(): BackendConfig {
  * `getCurrentBackend()` will keep its consistent view; new callers will
  * see the new backend via the next `getCurrentBackend()` call.
  */
-function reloadSettingsFromDisk(): boolean {
+/**
+ * P6b-fix4 Q2: the outcome of a reload, WITH the reason it failed.
+ *
+ * It used to be a bare boolean, and every caller dropped it — so a rejected
+ * document (invalid, or unparseable) left the process judging its stale
+ * in-memory copy with no way for the caller to say why, and the only trace was a
+ * `⚠` line on stderr that the tool's own output then buried.
+ */
+export interface SettingsReloadResult {
+  ok: boolean;
+  /** Empty when ok; otherwise the rejection, ready to quote to the user. */
+  error: string;
+}
+
+function reloadSettingsFromDisk(): SettingsReloadResult {
   // The parse lives in exactly one place (config.ts's loadSettings) so no
   // top-level key can be dropped here — this function used to hand-rebuild
   // the Settings object from three known keys, which silently discarded any
   // other key on every hot-reload (see the incident this used to document).
-  const newSettings = loadSettings();
-  if (!newSettings) {
+  const freshSettings = loadSettings();
+  if (!freshSettings) {
+    const parseError = "settings.yaml could not be parsed";
     // Say that the EDIT was ignored, not just that a read failed. loadSettings
     // warns on a parse throw but is silent when the file merely parses to a
     // non-object, and either way it cannot know a reload was in progress —
@@ -504,33 +689,53 @@ function reloadSettingsFromDisk(): boolean {
     process.stderr.write(
       `[llm-externalizer] ⚠ settings.yaml could not be parsed — ignoring change, keeping the previous settings.\n`,
     );
-    return false;
+    return { ok: false, error: parseError };
   }
+  // WHY (TRDD-G6XT3AY9): preserve the profile THIS invocation is currently
+  // using (set at module init, or by cli/main.ts's overrideActiveProfile)
+  // across a settings.yaml edit -- a hot reload must not silently switch
+  // profiles mid-invocation (Phase 5 design (e) site 7) just because the user
+  // edited `active:` on disk while the process was running. `active:` is a
+  // live selector for a NEW invocation, not for one already under way.
+  const newSettings: Settings = { ...freshSettings, active: effectiveProfileName(activeSettings) };
 
-  // Validate before applying — with the SAME unpopulated-default-profile
-  // exemption the boot path uses. validateProfile deliberately has none of its
-  // own (an empty pool genuinely cannot serve a request), so every caller must
-  // apply it, and this one did not: a `reset` while the active profile was an
-  // unpopulated machine-owned default — the normal state right after a fresh
-  // install, or right after switching `active` to one — rejected the ENTIRE
-  // reload. That discarded any other edit made in the same save, including the
-  // `allow_paid_models: true` flip a user would make precisely to get those
-  // profiles populated.
-  if (newSettings.active) {
-    const validation = validateSettings(newSettings);
-    const activeProfile = newSettings.profiles[newSettings.active];
-    const exempt =
-      activeProfile !== undefined &&
-      shouldBootDespiteInvalidActiveProfile(newSettings.active, activeProfile);
-    if (!validation.valid && !exempt) {
+  // Validate before applying — through evaluateSettingsValidity (P6c-a2b: fix-
+  // queue 57 + review S1), the SAME verdict boot/overrideActiveProfile/
+  // applyNewSettings compute. This used to re-derive the unpopulated-default-
+  // profile exemption inline, missing S1's reserved-name-refusal guard the
+  // same way boot did; and applyNewSettings, further down, used to answer a
+  // WEAKER question of its own ("does the active profile object exist")
+  // instead of trusting this verdict, so a reload the caller had judged
+  // exempt-but-invalid could still report itself CONFIGURED for a reason this
+  // function had already rejected -- or vice versa. Routing all four through
+  // ONE function removes that gap: this is not "stricter than boot", it is
+  // the identical predicate boot uses, so a fresh-install unpopulated `free`
+  // stays exempt (CONFIGURED) here exactly as it does at boot.
+  {
+    const verdict = evaluateSettingsValidity(newSettings);
+    if (!verdict.valid) {
       process.stderr.write(
-        `[llm-externalizer] ⚠ settings.yaml change rejected: ${validation.errors.join("; ")}\n`,
+        `[llm-externalizer] ⚠ settings.yaml change rejected: ${verdict.error}\n`,
       );
-      return false;
+      return { ok: false, error: verdict.error };
     }
   }
 
-  return applyNewSettings(newSettings);
+  // applyNewSettings always returns true ("the swap was applied"), so there is
+  // no error shape to translate here.
+  applyNewSettings(newSettings);
+  return { ok: true, error: "" };
+}
+
+/**
+ * Test-only accessor for reloadSettingsFromDisk -- same "private by design"
+ * convention as __getBootStateForTests (see its docblock): lets a test drive
+ * the REAL reload path, not a hand-rolled reimplementation of it, after
+ * writing a new settings.yaml under the config dir a freshly-imported
+ * index.ts is already pointed at.
+ */
+export function __reloadSettingsFromDiskForTests(): SettingsReloadResult {
+  return reloadSettingsFromDisk();
 }
 
 /**
@@ -554,11 +759,29 @@ function applyNewSettings(newSettings: Settings): boolean {
   let nextValid = false;
   let nextErr = "";
 
+  // 57 (fix-queue review): settingsValid must track evaluateSettingsValidity's
+  // verdict -- the SAME one boot/reloadSettingsFromDisk/overrideActiveProfile
+  // already computed before deciding to call this function at all -- never
+  // "does the active profile object merely exist". Presence alone let a
+  // reload of a document the validator had genuinely rejected report itself
+  // CONFIGURED, because an invalid profile is still an object; and it could
+  // never reproduce the exemption boot legitimately relies on for a fresh
+  // install's placeholder either. The presence guard stays FIRST so
+  // `active: ""` (a documented valid state: "no active profile configured",
+  // never reached by any current caller but part of this function's
+  // contract) still short-circuits to nextErr exactly as before, rather than
+  // being silently re-validated against the DEFAULT_PROFILE_NAME fallback
+  // effectiveProfileName() would otherwise substitute for it.
   if (newSettings.active && newSettings.profiles[newSettings.active]) {
     const profile = newSettings.profiles[newSettings.active];
-    nextResolved = resolveProfile(newSettings.active, profile);
-    nextBackend = makeBackendFromProfile(nextResolved);
-    nextValid = true;
+    const verdict = evaluateSettingsValidity(newSettings);
+    if (verdict.valid) {
+      nextResolved = resolveProfile(newSettings.active, profile);
+      nextBackend = makeBackendFromProfile(nextResolved);
+      nextValid = true;
+    } else {
+      nextErr = verdict.error;
+    }
   } else {
     nextErr = "No active profile configured";
   }
@@ -568,11 +791,19 @@ function applyNewSettings(newSettings: Settings): boolean {
   // currentBackend LAST so a handler that just snapshotted via
   // getCurrentBackend() and is about to read activeSettings sees a
   // coherent pair.
-  // Snapshot the *previous* free_only state BEFORE overwriting it so the
-  // auto-bench helper can detect a real OFF→ON transition (TRDD-f1510055).
-  const priorFreeOnly = activeResolved?.freeOnly ?? false;
   activeSettings = newSettings;
   activeResolved = nextResolved;
+  // Route-aware billability chokepoint (item 1/A1): keep it in lockstep
+  // with activeResolved on EVERY reload, not just boot — a stale route map
+  // here would let getActiveBillableForModel answer for the PREVIOUS
+  // profile after a live settings reload (mass_scout CLI / scout / judge
+  // all read it). Invalid settings (nextResolved null) => empty route map
+  // + non-billable, the fail-safe defaults (mirrors makeBackendFromProfile's
+  // placeholder).
+  setActiveRouting(
+    nextResolved?.routesFor ?? ((): ResolvedRoute[] => []),
+    nextResolved ? !nextResolved.isLocal && !nextResolved.isFreeProvider : false,
+  );
   // Publish the master switch BEFORE recomputing free state so a flipped
   // allow_paid_models takes effect on this reload (clean toggle).
   setAllowPaidModels(newSettings.allow_paid_models === true);
@@ -583,15 +814,10 @@ function applyNewSettings(newSettings: Settings): boolean {
   // the user edits an unrelated key; the wallet is still empty) OR the master
   // switch. null resolved (invalid settings) → not free.
   publishFreeState();
-  // Auto-bench the free pool on an OFF→ON transition with an empty cache
-  // (TRDD-f1510055). Helper is fire-and-forget and short-circuits on every
-  // skip condition (already-on, cache populated, lock held, opt-out env).
-  maybeTriggerFreePoolBench({
-    activeProfile: newSettings.active,
-    freeOnlyActive: nextResolved?.freeOnly ?? false,
-    freeOnlyWasOn: priorFreeOnly,
-    log: (msg) => process.stderr.write(msg),
-  });
+  // free-pool-auto-bench.ts retired (P6b item 6, see the boot-IIFE comment
+  // above for the full rationale) — an OFF→ON transition on a dynamic
+  // profile is now picked up by the maintainer on the NEXT dispatch (the
+  // reload path itself is not a tool dispatch, so it must not spawn work).
   settingsValid = nextValid;
   settingsError = nextErr;
   if (nextValid) {
@@ -614,36 +840,113 @@ function applyNewSettings(newSettings: Settings): boolean {
   return true;
 }
 
+// P6c-a / TRDD-C9SXX7HO (D2): the old private name→shape switch (a
+// `unpopulatedDynamicProfileStub` wrapper around a "free" ? ... : "paid"
+// ternary) is GONE — config.ts's `unpopulatedDefaultProfile` is now the ONE
+// per-profile table for this, so index.ts calls it directly at the one call
+// site below rather than keeping a second copy that would need its own
+// `local` arm and could drift from config.ts's.
+
 /**
  * CLI global `--profile <name>` flag: override which settings.yaml profile
  * THIS invocation uses. Reuses the SAME profile map already loaded into
  * `activeSettings` at module init (config.ts's `resolveProfile` /
  * `validateSettings` are the single profile-resolution source — this does
  * not re-implement resolution) and the SAME atomic-swap sequence a
- * settings.yaml edit goes through. Never reads or writes settings.yaml: the
- * override is in-memory only and vanishes when the process exits, exactly
- * like every other per-call override (output_dir, free, …).
+ * settings.yaml edit goes through. Never reads or writes settings.yaml
+ * for a STATIC profile: the override is in-memory only and vanishes when
+ * the process exits, exactly like every other per-call override (output_dir,
+ * free, …). The one exception is `name` naming a DYNAMIC profile
+ * ('free'/'paid') absent from settings.yaml -- see the first-run branch below.
  *
  * Must be called AFTER activeSettings is loaded (module init — always true,
  * since this function is only reachable once the module has finished
  * loading) and BEFORE boot()/dispatchCallTool() so getCurrentBackend() and
  * activeResolved reflect the override for the whole invocation.
+ *
+ * `source` records whether `name` came from an explicit `--profile` flag or
+ * the implicit default (cli/main.ts is the only caller that passes it) --
+ * read back by getProfileSelectionSource() for settings show/status.
  */
 export function overrideActiveProfile(
   name: string,
+  source: "flag" | "default" = "default",
 ): { ok: true } | { ok: false; error: string } {
+  profileSelectionSource = source;
+  // WHY (TRDD-OE27RD7I 0a regression fix): a COMPLETELY empty profiles map
+  // (first run, or a hand-edit that wiped the map to `{}`) has no existing
+  // profile for `active:` to meaningfully dangle a reference to -- the
+  // G6XT3AY9 dangling-`active:` error is for "used to resolve, now doesn't
+  // among real profiles", not for a config file that has never been
+  // populated. So when nothing exists yet and the caller did not pin this
+  // exact name with an explicit --profile flag, resolve to the built-in
+  // default BEFORE the self-heal/dangling checks below judge the raw
+  // (possibly garbage) `active:` value -- matches the pre-G6XT3AY9 behaviour
+  // this exact first-run scenario always had, and keeps profile.test.ts's
+  // "P6 item 2" self-heal case true without weakening case 4's dangling-
+  // active-among-real-profiles error (untouched: that scenario's profiles
+  // map is non-empty).
+  // PF-04: `hasNoTextProfile`, not an empty map: the migration adds the classifier `or-jev` to a file with no profile, and a classifier or scouting profile is not "the user has profiles" for the text-profile self-heal.
+  if (source === "default" && hasNoTextProfile(activeSettings.profiles)) {
+    name = DEFAULT_PROFILE_NAME;
+  }
+  if (!activeSettings.profiles[name] && isDynamicProfileName(name)) {
+    // First run on a settings.yaml with no free/paid section yet (item 2):
+    // persist an unpopulated, marked section through the existing writer
+    // (design §2.6) instead of failing "unknown profile" -- the profile then
+    // self-heals like every other machine-owned default on first real use.
+    try {
+      writeDynamicProfileSection(
+        getSettingsPath(),
+        name,
+        // P6b-fix2 S-9: the writer now takes the decision as a function of the
+        // section it finds under the lock. This caller only creates a section
+        // that is absent, and a section another process created in the
+        // meantime is a REAL one — keep it rather than stamp a stub over it.
+        (currentSection) => currentSection ?? unpopulatedDefaultProfile(name),
+        { notify: (msg) => process.stderr.write(`${msg}\n`) },
+      );
+      const reloaded = loadSettings();
+      if (reloaded) activeSettings = { ...activeSettings, profiles: reloaded.profiles };
+    } catch (err) {
+      // Never silently swallow -- but also never let a write failure (e.g.
+      // an unwritable config dir) hide the ORIGINAL "unknown profile"
+      // diagnostic; fall through to the normal error below with this
+      // failure appended for context.
+      process.stderr.write(
+        `[llm-externalizer] failed to create the '${name}' profile: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
   const available = Object.keys(activeSettings.profiles);
   if (!activeSettings.profiles[name]) {
-    return {
-      ok: false,
-      error:
-        `unknown profile '${name}'. Available profiles: ${available.join(", ") || "(none)"}`,
-    };
+    // WHY (TRDD-G6XT3AY9 amendment): the dangling-`active:` error now fires
+    // HERE, at selection time, not in validateSettings -- and only when the
+    // raw `active:` value is what actually got selected (source === "default"
+    // means no --profile was given; `name === activeSettings.active` means
+    // it resolved to the key's raw value, not the "missing -> free" fallback).
+    // A --profile typo keeps the ordinary "unknown profile" wording; only the
+    // settings.yaml defect gets the message naming the key and the value.
+    const error =
+      source === "default" && activeSettings.active === name
+        ? `settings.yaml 'active: ${name}' names a profile that does not exist. ` +
+          `Available: ${available.join(", ") || "(none)"}`
+        : `unknown profile '${name}'. Available profiles: ${available.join(", ") || "(none)"}`;
+    return { ok: false, error };
   }
   const newSettings: Settings = { ...activeSettings, active: name };
-  const validation = validateSettings(newSettings);
-  if (!validation.valid) {
-    return { ok: false, error: validation.errors.join("; ") };
+  // evaluateSettingsValidity (P6c-a2b: fix-queue 57 + review S1) is the SAME
+  // verdict boot/reloadSettingsFromDisk/applyNewSettings compute -- see its
+  // docblock. This used to re-derive the self-healing exemption inline (a
+  // machine-owned default profile that has never been benchmarked yet is
+  // EXPECTED to fail validateProfile -- refusing the override here would turn
+  // "no --profile" into a hard failure on every invocation until the
+  // maintainer or a manual benchmark populates it), missing the same S1 gap
+  // boot and reload did: a settings-level refusal getting silently discarded
+  // by that exemption.
+  const verdict = evaluateSettingsValidity(newSettings);
+  if (!verdict.valid) {
+    return { ok: false, error: verdict.error };
   }
   applyNewSettings(newSettings);
   return { ok: true };
@@ -852,61 +1155,37 @@ const session = {
   totalCost: 0, // Cumulative cost in USD from OpenRouter usage.cost
 };
 
-// ── OpenRouter balance + credit-exhaustion state ────────────────────
+// ── OpenRouter credit-exhaustion bookkeeping ────────────────────────
 // Session-level flag that flips to true the first time we hit a 402
-// "Payment required" error. All subsequent calls automatically route
-// through FREE_MODEL_ID instead of the paid ensemble. The flag is only
-// cleared on process restart — no point probing a dead wallet repeatedly.
+// "Payment required" error. TRDD-OE27RD7I addendum 4 (USER, no exceptions:
+// "no switching to free models ... must exist anymore"): llm-ext no longer
+// switches ANYTHING on this flag. It survives only so highQualityScanRefusal
+// (config.ts) can give an accurate refusal message ("credit is exhausted")
+// instead of a generic one — pure observability, not a routing decision.
+// Cleared only on process restart (no point re-probing a dead wallet for a
+// message that only matters within this session).
 let creditExhausted = false;
 
-// ── Auto-free pure helpers (TRDD-542bdbef) — exported for unit tests ──
-
-/** Parse the low-balance auto-free threshold (USD) from LLM_EXT_FREE_BELOW_USD.
- *  Default $1.00; a non-finite or ≤0 value falls back to $1.00. */
-export function parseFreeBelowUsd(raw: string | undefined): number {
-  // Default 0: use PAID credit down to $0 (the user's rule — "when it reaches 0,
-  // switch to free"). At 0 the pre-flight never engages auto-free proactively;
-  // the guaranteed non-interrupting trigger is the 402 mid-call catch, which
-  // completes the in-flight call on the rotating free pool. A user who wants a
-  // safety margin sets LLM_EXT_FREE_BELOW_USD to e.g. 1. `0` is now a valid value
-  // (the old clamp forbade it); only a NEGATIVE / non-finite value falls back.
-  if (raw === undefined) return 0;
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= 0 ? v : 0;
-}
-
-/** Resolve the single working free model (LLM_EXT_FREE_MODEL_ID) for the
- *  `free: true` flag + 402 single-retry. Default poolside/laguna-m.1:free —
- *  across 4 free-pool benchmark runs (TRDD-f1510055) it was the ONLY model to
- *  return valid output every time (the others 429'd or emitted empty content)
- *  AND it scored the top security-triage PASS (0.966). Availability matters
- *  most for a single-model path with no rotation. A non-':free' override is
- *  rejected (cost-safety). The ensemble paths use the rotating free POOL, so
- *  this single id is only the narrow fallback. */
-export function resolveFreeModelId(raw: string | undefined): string {
-  if (typeof raw === "string" && raw.trim().endsWith(":free")) {
-    return raw.trim();
-  }
-  return "poolside/laguna-m.1:free";
-}
-
-/** The free pool to route through when auto-free engages on a paid profile:
- *  the profile's pinned free_models if any, else the bundled FREE_POOL_SEED.
- *  Always a fresh mutable copy. */
+/** The profile's own pinned free_models, copied fresh. NOT an "auto-free
+ *  engaged" pool anymore (TRDD-OE27RD7I addendum 4 deleted that mechanism
+ *  outright) — this is just the static list a `free_only` profile, or the
+ *  allow_paid_models master switch, already draws on. An empty list stays
+ *  empty (no FREE_POOL_SEED substitute, Rule 5); FREE_POOL_SEED survives
+ *  only as the seed the dynamic `free` benchmark starts FROM. */
 export function resolveAutoFreePool(
   profileFreeModels: readonly string[],
 ): string[] {
-  return profileFreeModels.length > 0
-    ? [...profileFreeModels]
-    : [...FREE_POOL_SEED];
+  return [...profileFreeModels];
 }
 
 /** Which model to force for a single-model subsystem (security_scan /
- *  mass_scout) under free mode (TRDD-542bdbef Phase 2). Those tools default to
- *  a PAID model and assert ':free' on it (getActiveFreeOnly), so under free
- *  mode an unset or paid `model` arg must be replaced with a ':free' one.
- *  Returns undefined to leave the caller's choice untouched (free mode off, or
- *  the caller already passed a ':free' model). Pure + offline-testable. */
+ *  mass_scout) when the ACTIVE PROFILE is already in free mode — its own
+ *  `free_only`, or the allow_paid_models master switch; never an automatic
+ *  engagement (TRDD-OE27RD7I addendum 4). Those tools default to a PAID
+ *  model and assert ':free' on it (getActiveFreeOnly), so under free mode an
+ *  unset or paid `model` arg must be replaced with a ':free' one. Returns
+ *  undefined to leave the caller's choice untouched (free mode off, or the
+ *  caller already passed a ':free' model). Pure + offline-testable. */
 export function resolveSubsystemFreeModel(
   freeActive: boolean,
   freePool: readonly string[],
@@ -914,223 +1193,194 @@ export function resolveSubsystemFreeModel(
 ): string | undefined {
   if (!freeActive) return undefined; // paid mode — caller's model stands
   if (requestedModel.trim().endsWith(":free")) return undefined; // already free
-  return freePool[0] ?? resolveFreeModelId(undefined);
+  // fix-queue 98(2): FREE_MODEL_ID deleted -- an empty in-profile pool is no
+  // longer patched with a hard-coded id (Rule 5: never borrow outside the
+  // selected profile). Returning undefined here leaves the caller's
+  // (unset/paid) model untouched, which the mass-scout/security-scan
+  // dispatch path already fails loudly on via its own getActiveFreeOnly
+  // assertion downstream -- this is the "refuse" half of the rule, not a
+  // silent pass-through.
+  //
+  // fix-queue P1 follow-up item 3: the assertion cited above is
+  // assertFreeOnlyModel (config.ts) -- called as
+  // `assertFreeOnlyModel(getActiveFreeOnly(), billable, opts.model)` right
+  // before the OpenRouter request in mass_scouting/scout.ts:237 and
+  // mass_scouting/cli.ts:1163. getActiveFreeOnly() is kept in sync with
+  // isFreeModeActive() (profile free_only OR the allow_paid_models master
+  // switch) by publishFreeState() (index.ts, called on boot + every
+  // reload), so it fires for BOTH reasons free mode can be active here, not
+  // just free_only -- confirmed by reading assertFreeOnlyModel's own body:
+  // it throws whenever `freeOnly` is true and the resolved model is
+  // billable and not free.
+  return freePool[0];
 }
 
-// Minimum balance (USD) to attempt a PAID ensemble call. Below this the
-// server auto-engages free mode (TRDD-542bdbef): the main-dispatch ensemble
-// routes through the validated free pool (with rate-limit rotation) instead
-// of 402'ing on the paid ensemble — which was making agents refuse the tool.
-// Default $1.00 (a balance this low can't reliably clear even one ensemble
-// pass). Override via LLM_EXT_FREE_BELOW_USD; non-finite/≤0 → $1.00.
-const MIN_BALANCE_FOR_PAID_USD: number = parseFreeBelowUsd(
-  process.env.LLM_EXT_FREE_BELOW_USD,
-);
-
-// Auto-free engagement (TRDD-542bdbef). Flips true the first time the balance
-// is seen below MIN_BALANCE_FOR_PAID_USD, or a 402 fires. While engaged, the
-// main-dispatch ensemble (getEnsembleModels) routes through autoFreePool — the
-// active profile's free_models if it pins any, else the bundled FREE_POOL_SEED
-// — using the existing rate-limit rotation (TRDD-8b6b3646 Phase 3). Cleared
-// only on process restart (no point re-probing a dead wallet every call).
-let autoFreeEngaged = false;
-let autoFreePool: string[] = [];
-
-// The MASTER SWITCH force-free flag (Settings.allow_paid_models=false). Distinct
-// from autoFreeEngaged on purpose: auto-free is STICKY (a dead wallet stays dead
-// until restart), but the master switch must be a clean TOGGLE — so this is
-// RECOMPUTED on every load/reload from the switch + backend, never latched. It is
-// OR'd into isFreeModeActive(), so every free-routing decision already gated on
-// "free_only OR auto-free" also honours the master switch, with no per-site latch.
+// The MASTER SWITCH force-free flag (Settings.allow_paid_models=false).
+// RECOMPUTED on every load/reload from the switch + backend, never latched —
+// a clean toggle (unlike the deleted sticky auto-free engagement it used to
+// sit beside). OR'd into isFreeModeActive(), so every free-routing decision
+// already gated on "free_only OR master switch" honours it too, with no
+// per-site latch.
 let forceFreeByMasterSwitch = false;
 
-/** Engage auto-free: route EVERY spend site through the free pool.
- *  Idempotent — safe to call on every low-balance / 402 check. Sets the global
- *  free_only flag (TRDD-97ef8b63 chokepoint) so security_scan / mass_scout also
- *  go free (Phase 2); the dispatch site injects a ':free' model into those
- *  subsystems so the chokepoint assertion is satisfied rather than thrown. The
- *  main-dispatch ensemble picks up autoFreePool via getEnsembleModels. */
-function engageAutoFree(reason: string): void {
-  if (autoFreeEngaged) return;
-  autoFreeEngaged = true;
-  // Prefer the RECONCILED / persisted approved pool (catalog-tracked, benchmark-
-  // filtered) over whatever the profile resolved to at boot. On a paid profile
-  // resolveProfile leaves activeResolved.freeModels empty, so without this the
-  // credit→free switch would fall back to the STATIC seed even when reconcile had
-  // just written a fresh pool to settings. approvedFreePoolFromSettings reads
-  // that persisted pool; resolveAutoFreePool (profile free_models → seed) is the
-  // fallback when settings are unreadable / hold no pool.
-  const reconciled = approvedFreePoolFromSettings();
-  autoFreePool =
-    reconciled.length > 0
-      ? reconciled
-      : resolveAutoFreePool(activeResolved?.freeModels ?? []);
-  // Engage the airtight chokepoint so the subsystem spend sites (judge.ts,
-  // scout.ts) that read getActiveFreeOnly() also enforce ':free'. Safe because
-  // the dispatch site now substitutes a ':free' model for those tools.
-  setActiveFreeOnly(true);
-  process.stderr.write(
-    `[llm-externalizer] Auto-free engaged (${reason}) — ALL tools now route through the free pool (${autoFreePool.length} models, rotation on rate-limit). Funded-profile choices reactivate on restart.\n`,
-  );
-}
-
-// Let the direct-HTTP tools' fetch decorator (free-rotation.ts) trigger THIS same
-// engageAutoFree on a mid-command 402 — without importing index.ts (a cycle). The
-// registration keeps every spend site's free-mode state consistent: flipping only
-// the config chokepoint flag would leave autoFreeEngaged false and make the
-// completion path build a paid ensemble that then throws at assertFreeOnlyModel.
-registerAutoFreeEngage(engageAutoFree);
-
-// Balance query cache: fresh for 60s so we don't hammer /v1/credits
-// every time a tool is invoked. Still queried on demand when the cache
-// is stale. `null` means "not yet queried this session".
-let cachedBalanceUsd: number | null = null;
-let balanceCacheTime = 0;
-const BALANCE_CACHE_TTL_MS = 60_000;
-
-/**
- * Returns the remaining OpenRouter balance in USD, or `Infinity` if the
- * key is unlimited (no cap), or `NaN` if the query fails / we can't tell.
- * Callers should treat NaN as "unknown — proceed as if paid".
- */
-async function getOpenRouterBalance(): Promise<number> {
-  if (!activeResolved || activeResolved.protocol !== "openrouter_api") {
-    return NaN;
-  }
-  const now = Date.now();
-  if (cachedBalanceUsd !== null && now - balanceCacheTime < BALANCE_CACHE_TTL_MS) {
-    return cachedBalanceUsd;
-  }
+/** Enumerate `profile`'s own model chain (profileChain) and return its
+ *  first `:free`-suffixed entry, or undefined when it has none. Pure and
+ *  offline: profileChain is a generator that never makes a request, so
+ *  driving it to exhaustion here (never feeding it a failure) just reads
+ *  the list it would walk, in the SAME order chatCompletionWithProfileFallback
+ *  drives it in (fix-queue 98(2) — one definition of "the profile's chain",
+ *  not a second copy that could disagree on order). */
+function firstFreeIdInChain(profile: ResolvedProfile): string | undefined {
+  const gen = profileChain(profile);
   try {
-    // /v1/key is the cheapest probe — returns limit_remaining for capped keys.
-    const keyRes = await fetchWithTimeout(`${activeResolved.url}/v1/key`, {
-      headers: { Authorization: `Bearer ${activeResolved.authToken}` },
-    });
-    if (keyRes.ok) {
-      const body = (await keyRes.json()) as {
-        data: {
-          limit?: number | null;
-          usage?: number;
-          limit_remaining?: number | null;
-        };
-      };
-      if (
-        body.data?.limit_remaining !== null &&
-        body.data?.limit_remaining !== undefined
-      ) {
-        cachedBalanceUsd = body.data.limit_remaining;
-        balanceCacheTime = now;
-        return cachedBalanceUsd;
+    let step = gen.next();
+    while (!step.done) {
+      // fix-queue P1 follow-up: a free_only profile (the built-in `free`
+      // profile, or any profile marked free_only) is $0 by construction --
+      // every chain entry is free even when a route-served id has no
+      // `:free` suffix (the b.ai-only leg's first/only slot has none, e.g.
+      // `env -u OPENROUTER_API_KEY`). The suffix test is a cost-safety gate
+      // for a NON-free_only profile only, where a paid id could sit in the
+      // chain -- applying it to a free_only profile produced a wrong
+      // refusal of the one profile that is free by construction. Uses the
+      // project's single suffix predicate (isFreeSuffixModelId), never a
+      // second inline `.endsWith(":free")`.
+      //
+      // adversarial review follow-up (p14.1 r92/p1fu item 1): this trusts
+      // profile.freeOnly with NO per-id check here on PURPOSE, because TWO
+      // guards already sit downstream of it:
+      //  1. Boot-time: dispatchCallToolInner refuses every tool except
+      //     discover/reset/get_settings/profile/list_profiles/
+      //     scan_local_llm_services while the `settingsValid` gate is false,
+      //     and settingsValid is recomputed from validateSettings ->
+      //     validateProfile's free_only pool check, which rejects a
+      //     free_models entry that is neither `:free`-suffixed nor served
+      //     by a non-billable `providers[]` route (billableForRoute) -- a
+      //     profile mismarked free_only with a billable entry never
+      //     becomes active at all.
+      //  2. Per-request: resolveConnection, the "single point every
+      //     request's model flows through" per its own doc comment, calls
+      //     assertFreeOnlyModel(deps.isFreeOnly(), billable, model,
+      //     route.isFreeProvider) on EVERY send -- billable computed from
+      //     the model's OWN route (`!route.isLocal && !route.isFreeProvider`),
+      //     so a billable id chosen here would still be refused before the
+      //     wire even if guard 1 were somehow bypassed (e.g. a reload
+      //     raced past validation).
+      // See the "mismarked free_only profile" test in index.test.ts (guard
+      // 1) -- guard 2's exact scenario (free_only, non-billable ROUTE,
+      // non-suffix model) is already pinned by name in free-only.test.ts as
+      // "ALLOWS any id from a free-by-nature provider" (assertFreeOnlyModel(
+      // true, false, "glm-5.3-flash", true)), read directly rather than
+      // inferred from the file existing.
+      //
+      // row 100: a chain entry served by a NON-BILLABLE route (local, or a
+      // free-by-nature provider) is free for this walk exactly like a
+      // free_only entry is, even outside a free_only profile -- the `local`
+      // dynamic profile is $0 by construction just like `free`, so its own
+      // model must not need a `:free` suffix it will never carry. Reuses
+      // billableForRoute (config.ts), the SAME decider resolveConnection's
+      // `billable` uses, so this can never drift from what actually gets
+      // billed; never a second inline `!route.isLocal` check.
+      // D6a: the walk now yields (id, route) entries; the ENTRY's own route
+      // is the one about to be used, so billability is judged on it — not on
+      // the first-serving-group lookup, which under multi-group serving
+      // could name a different account than the one about to send.
+      const nonBillableRoute = !billableForRoute(
+        step.value.route,
+        !profile.isLocal && !profile.isFreeProvider,
+      );
+      if (profile.freeOnly || isFreeSuffixModelId(step.value.modelId) || nonBillableRoute) {
+        return step.value.modelId;
       }
-      if (body.data?.limit === null) {
-        // Unlimited key — no cap. Treat as infinite for the purpose of
-        // pre-flight checks; we'll still react to 402 mid-flight.
-        cachedBalanceUsd = Infinity;
-        balanceCacheTime = now;
-        return Infinity;
-      }
+      step = gen.next();
     }
-    // Fall back to /v1/credits (requires management-level key).
-    const credRes = await fetchWithTimeout(`${activeResolved.url}/v1/credits`, {
-      headers: { Authorization: `Bearer ${activeResolved.authToken}` },
-    });
-    if (credRes.ok) {
-      const body = (await credRes.json()) as {
-        data: { total_credits?: number; total_usage?: number };
-      };
-      const credits = body.data?.total_credits ?? 0;
-      const usage = body.data?.total_usage ?? 0;
-      cachedBalanceUsd = credits - usage;
-      balanceCacheTime = now;
-      return cachedBalanceUsd;
-    }
-  } catch {
-    // Non-fatal — unknown balance, proceed normally.
+  } catch (err) {
+    // profileChain throws ProfileExhaustedError once the walk is exhausted
+    // (its own documented contract) -- that IS "no more entries", not a
+    // real error to propagate; anything else is a genuine bug.
+    if (!(err instanceof ProfileExhaustedError)) throw err;
   }
-  return NaN;
+  return undefined;
 }
 
 /**
  * Decide which model (if any) to force for a given tool invocation.
  *
- * - If the caller explicitly set `free: true`, always return FREE_MODEL_ID.
- * - If the backend is not OpenRouter, return undefined (no override).
- * - If the credit-exhausted session flag is set, return FREE_MODEL_ID.
- * - If the balance query succeeds and the remaining balance is below
- *   MIN_BALANCE_FOR_PAID_USD, return FREE_MODEL_ID and log the fallback.
- * - Otherwise return undefined (proceed with the normal ensemble / profile).
+ * TRDD-OE27RD7I addendum 4 (USER, no exceptions) deleted the
+ * balance-check-to-free switch, the credit-exhausted-session auto-fallback,
+ * and the low-balance-threshold env override that used to tune it — no
+ * cross-profile switch, no env opt-out, the selected profile is fixed for
+ * the whole command. The ONLY override left: an explicit caller `free: true`,
+ * which now resolves to the SELECTED profile's own first `:free` chain entry
+ * (fix-queue 98(2) — never a hard-coded id outside the profile) and refuses
+ * with a named remedy when it has none. Anything else proceeds through the
+ * resolved profile's own chain unchanged (chatCompletionWithProfileFallback).
  */
-async function resolveModelOverride(
+function resolveModelOverride(
   freeRequested: boolean,
-): Promise<string | undefined> {
-  if (freeRequested) return FREE_MODEL_ID;
-  // T2.7 — single read but snapshot anyway for consistency
-  const backend = getCurrentBackend();
-  if (backend.type !== "openrouter") return undefined;
-  await ensureAutoFreeDecided();
-  if (!autoFreeEngaged) return undefined; // funded → normal paid ensemble
-  // Auto-free (TRDD-542bdbef): an ensemble profile routes through the free
-  // pool (getEnsembleModels) — return undefined so the free ensemble runs with
-  // rotation; a single-model (remote) profile has no ensemble, so use the one
-  // validated free model.
-  return activeResolved?.mode === "remote-ensemble" ? undefined : FREE_MODEL_ID;
-}
-
-/** Decide whether to engage auto-free (TRDD-542bdbef): engage on a prior 402
- *  (creditExhausted) or when the OpenRouter balance is below the threshold.
- *  Idempotent + cached (60s balance cache). Shared by the main dispatch and the
- *  security_scan / mass_scout short-circuit so every entry point agrees. */
-async function ensureAutoFreeDecided(): Promise<void> {
-  if (autoFreeEngaged) return;
-  if (getCurrentBackend().type !== "openrouter") return;
-  if (creditExhausted) {
-    engageAutoFree("credit-exhausted session");
-    return;
-  }
-  const balance = await getOpenRouterBalance();
-  if (!isFinite(balance)) return; // unknown → proceed normally (treat as paid)
-  if (balance < MIN_BALANCE_FOR_PAID_USD) {
-    creditExhausted = true; // lock the session so we don't re-probe
-    engageAutoFree(
-      `balance $${balance.toFixed(4)} < $${MIN_BALANCE_FOR_PAID_USD.toFixed(2)}`,
+): string | undefined {
+  if (!freeRequested) return undefined;
+  // fix-queue 98(2): FREE_MODEL_ID deleted -- an explicit `free: true` no
+  // longer pins one hard-coded id outside the selected profile (Rule 5, USER
+  // addendum 4 "no exceptions"). It now resolves to THIS profile's own
+  // first `:free` entry in its own chain order (profileChain, the same
+  // walk chatCompletionWithProfileFallback drives) -- and refuses with a
+  // named remedy when the profile has none, rather than silently borrowing
+  // a model the profile never listed.
+  if (!activeResolved) {
+    throw new Error(
+      "free flag: no resolved profile is active -- fix settings.yaml and retry",
     );
   }
+  const freeId = firstFreeIdInChain(activeResolved);
+  if (!freeId) {
+    // fix-queue P1 follow-up: telling a caller already on a free_only
+    // profile (e.g. the built-in `free` profile) to "use --profile free"
+    // is a wrong remedy for its own refusal -- the only way a free_only
+    // profile lands here is an EMPTY chain (firstFreeIdInChain accepts its
+    // first entry unconditionally), so the fix is to populate that chain,
+    // never to switch profiles.
+    //
+    // row 100: a validated `mode: local` profile's `model` field is
+    // required (validateProfile rejects free_only+local, and a bare model
+    // is required unless free_only) and firstFreeIdInChain's non-billable-
+    // route branch (above) now accepts that head model unconditionally, so
+    // a VALID local profile can never actually reach this branch -- there
+    // is no separate "local" remedy to name here. Adversarial review of
+    // this diff found an earlier version added one anyway with no fixture
+    // that could reach it (validateProfile makes it unreachable); removed
+    // rather than ship untested dead code.
+    const remedy = activeResolved.freeOnly
+      ? `profile '${activeResolved.name}' (free_only) has an empty model chain -- add a model to its pool`
+      : `profile '${activeResolved.name}' has no ':free' model in its chain -- use --profile free, or add a ':free' model to this profile`;
+    throw new Error(`free flag: ${remedy}`);
+  }
+  return freeId;
 }
 
 /**
- * The mass-scouting pre-flight (TRDD-542bdbef Phase 2 / TRDD-W9DK4L3N): decide
- * whether auto-free should engage, then return the ':free' model to substitute
- * for `requestedModel` — or `undefined` to leave the caller's choice untouched
- * (free mode inactive, or the caller already asked for a ':free' model).
+ * The mass-scouting pre-flight (TRDD-542bdbef Phase 2 / TRDD-W9DK4L3N):
+ * return the ':free' model to substitute for `requestedModel` when the
+ * active profile is ALREADY in free mode — or `undefined` to leave the
+ * caller's choice untouched (free mode inactive, or the caller already asked
+ * for a ':free' model). No auto-engagement step (TRDD-OE27RD7I addendum 4
+ * deleted it): isFreeModeActive()/activeFreePool() read only the profile's
+ * own static free_only flag and the master switch now, never a
+ * balance/402-triggered one.
  *
- * Extracted out of `dispatchCallToolInner`'s MASS_SCOUT_TOOL_NAMES branch so it
- * is the ONE place this decision is made. It originally had to be callable by
- * two runtime entry points; the legacy one (`dist/cli.js` / `src/cli.ts`) called
- * `runMassScoutCli` directly and would otherwise never have consulted it, so a
- * user on it could be billed where the supported entry point had already
- * switched to free models. That entry point is now DELETED (TRDD-W9DK4L3N) and
- * `llm-ext` catalog dispatch below is the only caller.
- *
- * Keep it as one exported decision anyway: the bug it prevented was a SECOND,
- * copied implementation at another call site, which is the kind of duplication
- * that silently rots when this logic changes. One entry point today is not a
- * reason to inline it back into the branch.
+ * Extracted out of `dispatchCallToolInner`'s MASS_SCOUT_TOOL_NAMES branch so
+ * it is the ONE place this decision is made; `llm-ext` catalog dispatch
+ * below is the only caller. Kept as one exported decision so a second,
+ * drifting copy never appears at another call site.
  */
 export async function resolveMassScoutFreeModelOverride(
   requestedModel: string,
 ): Promise<string | undefined> {
-  await ensureAutoFreeDecided();
   return resolveSubsystemFreeModel(
     isFreeModeActive(),
     activeFreePool(),
     requestedModel,
   );
-}
-
-/** Invalidate the cached balance so the next check hits the API fresh. */
-function invalidateBalanceCache(): void {
-  cachedBalanceUsd = null;
-  balanceCacheTime = 0;
 }
 
 // ── Active request tracking ─────────────────────────────────────────
@@ -1323,6 +1573,104 @@ function apiHeaders(): Record<string, string> {
   return h;
 }
 
+/** Test-only export of routeHeaders (routeHeaders itself stays private/unexported,
+ *  matching this file's "private by design" convention — see __getBootStateForTests
+ *  above for the same pattern). Exists because the empty-authToken branch (no
+ *  Authorization key at all) and the protocol-gated attribution headers were only
+ *  ever exercised through a MOCK in connection.test.ts, never the real function. */
+export function __routeHeadersForTests(route: ResolvedRoute): Record<string, string> {
+  return routeHeaders(route);
+}
+
+/** Test-only exports of getEnsembleModels/activeFreePool --
+ *  same "private by design" convention as __getBootStateForTests /
+ *  __routeHeadersForTests above. TRDD-90DM5YHO P3: needed to unit-test the
+ *  DYNAMIC-profile ensemble substitution (item 2) and Rule 5's static-profile
+ *  refusal (item 4) directly, against a controlled settings.yaml + a fresh
+ *  module re-import (mirrors route-headers.test.ts's loadFreshIndex).
+ *  __engageAutoFreeForTests was deleted alongside engageAutoFree itself
+ *  (TRDD-OE27RD7I addendum 4 -- no auto-free engagement left to drive). */
+export function __getEnsembleModelsForTests(): Array<{
+  id: string;
+  maxOutput: number;
+  maxInputLines: number;
+  route?: ResolvedRoute;
+}> {
+  return getEnsembleModels();
+}
+export function __activeFreePoolForTests(): string[] {
+  return activeFreePool();
+}
+// D3c-1 fix-up (TRDD-FDI9NYAS): same "private by design" convention as the
+// exports above -- buildFreeRotationPool had no test-only export, so its own
+// `benchmarkPassedModels() ∪ manualModels` union (the SERVING gate, distinct
+// from getEnsembleModels' own copy of the same expression) could only be
+// exercised indirectly through dispatchCallTool, where an EMPTY result
+// silently falls back to chatCompletionWithProfileFallback's chain walk
+// (ensembleStreaming's own "funded, non-ensemble, non-pool call" branch) --
+// a different code path with no benchmark-pass requirement at all, which
+// would prove the wrong thing. This calls the real function directly.
+export function __buildFreeRotationPoolForTests(fileLineCount?: number): string[] {
+  return buildFreeRotationPool(fileLineCount).map((m) => m.id);
+}
+/** The verdict classifyError gives a per-file failure. */
+interface ErrorClassification {
+  unrecoverable: boolean;
+  serviceLevel: boolean;
+  reason: string;
+  /** Final for this file (never retried) yet still a FAILED outcome: the
+   *  per-file loops must feed it to the "3 of the last 3 completions failed"
+   *  window, which only the retried-then-exhausted path used to do. Set for a
+   *  closed retry window (RetryDeadlineError). */
+  countsAsFailure?: boolean;
+}
+
+/** Record one failed file outcome in the sliding window the per-file loops
+ *  keep; true when the last three completions all failed. */
+function recordFailedOutcome(recentOutcomes: boolean[]): boolean {
+  recentOutcomes.push(false);
+  return recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v);
+}
+/** Test-only export of classifyError (TRDD w2-honest-402) -- same "private by
+ *  design" convention as the exports above. Lets a test drive the REAL
+ *  classifier with a REAL Error produced by a REAL HTTP 402 (via
+ *  chatCompletionSimple against a local server), isolated from the unrelated
+ *  retry/fallback policies chatCompletionWithRetry layers on top. */
+export function __classifyErrorForTests(error: unknown): ErrorClassification {
+  return classifyError(error);
+}
+
+
+/**
+ * Test-only export of the round-C item-4 single-model abort guard — same
+ * "private by design" convention as __classifyErrorForTests above.
+ */
+export function __ensureNotServiceAbortForTests(resp: StreamingResult): StreamingResult {
+  return ensureNotServiceAbort(resp);
+}
+
+/**
+ * Headers for ONE route of a multi-provider profile — its own key, its own
+ * attribution. Deliberately NOT apiHeaders(), which reads the primary backend:
+ * using that for a routed model would send the wrong vendor's credential.
+ *
+ * The OpenRouter attribution headers are keyed off the ROUTE's protocol, so a
+ * b.ai route does not get HTTP-Referer/X-Title (meaningless there), and an
+ * OpenRouter route still does even when the profile's primary is b.ai.
+ */
+function routeHeaders(route: ResolvedRoute): Record<string, string> {
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (route.authToken)
+    h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", route.authToken)}`;
+  if (route.protocol === "openrouter_api") {
+    if (activeResolved?.httpReferer)
+      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", activeResolved.httpReferer);
+    if (activeResolved?.appName)
+      h["X-Title"] = assertSafeHeaderValue("X-Title", activeResolved.appName);
+  }
+  return h;
+}
+
 // ── Provider seam (B1 Phase 5a/5b, TRDD-63314265) ────────────────────
 // The provider modules (connection.ts, lmstudio.ts, http.ts, completion.ts) must
 // not import index.ts, so the backend/profile state they need is handed to them
@@ -1333,29 +1681,43 @@ function apiHeaders(): Record<string, string> {
 //      reassigned on a settings reload. A value captured here at module-init
 //      would pin the provider layer to the pre-reload generation forever, and
 //      the `reset` tool would silently keep talking to the old endpoint/model.
-//   2. TDZ. `FREE_MODEL_ID` is a `const` declared LATER in this file than this
-//      object literal. Reading it eagerly here (`getFreeModelId: FREE_MODEL_ID`)
-//      throws at module init; the arrow defers the read to call time.
+//   2. TDZ. Several fields read state declared LATER in this file than this
+//      object literal; the arrow defers the read to call time.
 //
-// SINGLE BINDING — the two mutators below are the load-bearing part of Phase 5b.
-// `creditExhausted` (read by shouldUseFree + the dispatch layer) and the auto-free
-// flags (read by getEnsembleModels) stay HERE, in index.ts, as the one and only
-// binding. completion.ts writes them THROUGH this seam instead of owning copies,
-// which would diverge from what index.ts actually reads on the very next call.
+// `getFreeModelId()` / `engageAutoFree()` were deleted from CompletionDeps here
+// (TRDD-OE27RD7I 14.1-C2c-ENV): completion.ts never called either (see that
+// file's own module comment). FREE_MODEL_ID itself is ALSO gone now
+// (fix-queue 98(2)) -- resolveModelOverride's only remaining caller resolves
+// the selected profile's own chain instead, and classifyError never
+// referenced the constant.
+// Grep gate: both are 0 hits in src outside a comment or a test asserting absence.
 const providerDeps: CompletionDeps = {
   getBackend: () => getCurrentBackend(),
   apiHeaders: () => apiHeaders(),
+  // Read through activeResolved on EVERY call, never captured — a settings
+  // reload replaces the profile, and a stale route table would keep sending to
+  // the provider the user just removed.
+  routeForModel: (model: string) => activeResolved?.routeForModel(model) ?? null,
+  routeHeaders: (route) => routeHeaders(route),
   getSoftTimeoutMs: () => SOFT_TIMEOUT_MS,
   isFreeOnly: () => activeResolved?.freeOnly ?? false,
   isLMStudioProvider: () => activeResolved?.protocol === "lmstudio_api",
+  // TRDD-FDI9NYAS D3b: read through activeResolved on EVERY call, same reload
+  // reason as routeForModel above — a stale manualModels set would keep
+  // exempting an id from a profile the user just switched away from.
+  isManualModel: (model: string) => activeResolved?.manualModels?.has(model) ?? false,
+  // TRDD-FDI9NYAS D3c: reads the on-disk catalog cache synchronously (no live
+  // fetch per send) — see readCachedModelPrice's own doc for why this file,
+  // not the in-memory openRouterModelCache (which is only warm after a call
+  // that happened to list models; the disk cache is kept warm by the
+  // detached per-dispatch detector regardless of what the current command is).
+  getModelPricePerMillion: (model: string) => readCachedModelPrice(model),
+  // Read through loadSettings-backed activeSettings on EVERY call, same
+  // reload-safety reason as isManualModel above.
+  getEnsemblePriceCeilingUsd: () => getEnsemblePriceCeiling(activeSettings),
   defaultTemperature: DEFAULT_TEMPERATURE,
   getDefaultMaxTokens: () => resolveDefaultMaxTokens(),
-  getFreeModelId: () => FREE_MODEL_ID,
-  setCreditExhausted: () => {
-    creditExhausted = true;
-  },
-  engageAutoFree: (reason: string) => engageAutoFree(reason),
-  invalidateBalanceCache: () => invalidateBalanceCache(),
+  getActiveProtocol: () => activeResolved?.protocol ?? "openai_api",
 };
 
 // The completion layer — chatCompletionSimple / chatCompletionJSON /
@@ -1446,6 +1808,13 @@ function formatFooter(
   return "";
 }
 
+
+// defaultOutputDir()/_resetDefaultOutputDirCache()/_testDefaultOutputDir() now
+// live in project-root.ts (moved 2026-09-18) so security_scan/report.ts can
+// reuse the SAME default report-root resolver without importing this whole
+// CLI entrypoint module. Imported/re-exported below; the resolution-order
+// doc comment that follows still describes the (unchanged) behavior.
+
 // ── Response file output ────────────────────────────────────────────
 // LLM responses are saved to timestamped .md files. The default lives
 // under `<main-repo-root>/reports/llm-externalizer/` per the
@@ -1453,7 +1822,7 @@ function formatFooter(
 // the rule's `<component>` slug convention).
 //
 // Default resolution (highest precedence first):
-//   1. LLM_OUTPUT_DIR  — explicit env override; absolute path wins all.
+//   1. LLM_EXT_OUTPUT_DIR  — explicit env override; absolute path wins all.
 //   2. `<resolveProjectMainRoot()>/reports/llm-externalizer/` — the shared,
 //      single-source project-root resolver (project-root.ts): CLAUDE_PROJECT_DIR
 //      verbatim → cwd. Uses NO git, so reports NEVER land outside the MAIN
@@ -1466,31 +1835,16 @@ function formatFooter(
 // the argument the override silently disappears (Issue #5 — fixed by
 // threading the param through every callsite).
 
-let _cachedDefaultOutputDir: string | undefined;
-
-function defaultOutputDir(): string {
-  if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
-  const envOverride = process.env.LLM_OUTPUT_DIR;
-  if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve(envOverride.trim());
-    return _cachedDefaultOutputDir;
-  }
-  _cachedDefaultOutputDir = join(resolveProjectMainRoot(), "reports", "llm-externalizer");
-  return _cachedDefaultOutputDir;
-}
+import { defaultOutputDir } from "./project-root.js";
 
 /** Test-only: reset the cached default so a test that sets
- *  CLAUDE_PROJECT_DIR / LLM_OUTPUT_DIR mid-run gets the recomputed value. */
-export function _resetDefaultOutputDirCache(): void {
-  _cachedDefaultOutputDir = undefined;
-}
+ *  CLAUDE_PROJECT_DIR / LLM_EXT_OUTPUT_DIR mid-run gets the recomputed value. */
+export { _resetDefaultOutputDirCache } from "./project-root.js";
 
 /** Test-only re-export of the internal helper so default-output-dir.test.ts
  *  can verify the env-override / git-root / fallback chain without
  *  launching the full MCP server. */
-export function _testDefaultOutputDir(): string {
-  return defaultOutputDir();
-}
+export { _testDefaultOutputDir } from "./project-root.js";
 
 // Canonical report-filename timestamp per the agent-reports-location rule:
 //   %Y%m%d_%H%M%S%z — local time, GMT offset appended as compact ±HHMM (no colon).
@@ -1579,12 +1933,219 @@ function saveResponse(
 // ── Error classification ────────────────────────────────────────────
 // Distinguishes unrecoverable errors (abort batch) from recoverable ones (retry).
 
-function classifyError(error: unknown): {
-  unrecoverable: boolean;
-  serviceLevel: boolean;
-  reason: string;
-} {
+/** A chain-exhaustion cause as text, for the status regexes below. */
+function causeText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+/** The provider-state line a failure carries, read from the error itself or from its wrapped cause (a profile cause is often a RetryDeadlineError, which failureOf already unwraps). */
+function stateOf(e: unknown): string | undefined {
+  // failureOf unwraps only ONE RetryDeadlineError; free-rotation can wrap one inside another.
+  let source = e;
+  while (source instanceof RetryDeadlineError) source = source.cause;
+  return failureOf(source)?.providerState;
+}
+
+/** The distinct provider-state lines, first per model (the line names its model), at most 3. */
+function distinctStates(states: Array<string | undefined>): string[] {
+  // The line embeds its age, so the model (the text between "provider state for " and " as of ") is the key; the first line per model wins.
+  const modelOf = (s: string) => s.replace(/^provider state for /, "").split(" as of ")[0];
+  const byModel = new Map<string, string>();
+  for (const s of states) if (s !== undefined && !byModel.has(modelOf(s))) byModel.set(modelOf(s), s);
+  return [...byModel.values()].slice(0, 3);
+}
+
+/** `reason` with the provider-state lines appended in parentheses; byte-identical when there are none. */
+function withStates(reason: string, states: Array<string | undefined>): string {
+  const lines = distinctStates(states);
+  return lines.length > 0 ? `${reason} (${lines.join(" | ")})` : reason;
+}
+
+/** Statuses no retry fixes for ANY request on a chain: 401/403 auth, 402 no
+ *  credit, 404/410 dead model. Shared by classifyError and
+ *  failDynamicProfile so both partition causes the same way (C5b). */
+const SERVICE_LEVEL_STATUS_RE = /API error (401|402|403|404|410)\b/;
+/** Every 4xx except the transient 408/429. */
+const NON_TRANSIENT_4XX_RE = /API error 4(?!08\b|29\b)\d\d\b/;
+
+/**
+ * D2 (USER 2026-09-18) -- THE ONE PLACE that decides what a DYNAMIC profile
+ * (free/paid/local) running out of models becomes. Every site where one runs
+ * out calls this and throws what it returns: the chain walk
+ * (chatCompletionWithProfileFallback), the free-pool rotation
+ * (callSingleWithFreeRotation, chatCompletionJSONWithFreeRotation) and the
+ * ensemble's "no slot answered" branch (ensembleStreaming) -- so every
+ * per-file loop (robustPerFileProcess, runScanFolder,
+ * runSearchExistingImplementations, batch_check) gets the verdict before
+ * classifyError ever sees the error.
+ *
+ * USER: "the profile updating must happens in background, so no message is
+ * needed, except if all models of the current profile are failing, in which
+ * case the message should appear saying to retry later since the updating
+ * process is underway and will be finished soon". But an update cannot fix
+ * every failure, and then the actionable error wins (USER ~14:45, "Credit/key
+ * error, no update"). First match wins:
+ *
+ *  1. KEY -- COORDINATOR DEFAULT (not a USER decision): every cause is a 401
+ *     or a certain 402, and at least one is a 401, on ANY profile -> the key
+ *     error, no update (an update would hit the same 401 and respawn on every
+ *     command). Only the 401 causes are passed on, so classifyError cannot
+ *     turn a 401 + 402 mix into the credit verdict.
+ *  2. CREDIT -- USER: profile `paid` and EVERY cause a certain 402 (no
+ *     credit) -> the credit verdict, no update (a paid benchmark would get
+ *     402 too). A paid exhaustion mixing certain 402s with other failures
+ *     falls through to 4 (USER point 4). On `free` a 402 means "no longer
+ *     free", so an update IS the fix there. "Certain" is D1's
+ *     paymentErrorCertainty, unchanged (its tightening is D4).
+ *  3. REQUEST-SPECIFIC -- worker default keeping C5b/9000b8d-A: every cause a
+ *     non-transient 4xx and at least one specific to THIS request (a 413 for
+ *     an oversized file, a content-filter 400) -> that file fails, the batch
+ *     goes on, no update: no model is broken, this request is unservable.
+ *  4. UPDATE -- USER D2: make sure the profile's background update is
+ *     running (requestProfileUpdate: SG2 lock + the item-8 respawn throttle)
+ *     and fail with the retry-later message. When nothing can be started at
+ *     all (the LLM_EXT_DISABLE_AUTO_RECONCILE opt-out, a spawn failure) the
+ *     actionable error is returned instead: "an update is underway" would be
+ *     false.
+ * No cause at all (D1 B: no entry was ever tried) goes to 4.
+ */
+function failDynamicProfile(
+  profileName: DynamicProfileName,
+  causes: readonly unknown[],
+  actionable: (causes: readonly unknown[]) => Error,
+): Error {
+  const texts = causes.map(causeText);
+  const is401 = (m: string) => /API error 401\b/.test(m);
+  const certain402 = (m: string) => paymentErrorCertainty(m) === "certain";
+  if (texts.length > 0) {
+    if (texts.some(is401) && texts.every((m) => is401(m) || certain402(m))) {
+      return actionable(causes.filter((_, i) => is401(texts[i])));
+    }
+    if (profileName === "paid" && texts.every(certain402)) return actionable(causes);
+    if (texts.every((m) => NON_TRANSIENT_4XX_RE.test(m)) && texts.some((m) => !SERVICE_LEVEL_STATUS_RE.test(m))) {
+      return actionable(causes);
+    }
+  }
+  const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
+  if (update.state === "unavailable") {
+    process.stderr.write(`[llm-externalizer] '${profileName}' profile update not started — ${update.reason}\n`);
+    return actionable(causes);
+  }
+  return new ProfileExhaustedError(profileName, "dynamic", causes);
+}
+
+function classifyError(error: unknown): ErrorClassification {
   const msg = error instanceof Error ? error.message : String(error);
+  // The retry window closed (TRDD-YG72CYY7): final for this file, never
+  // retried by the per-file loops (they would just re-run a five-minute
+  // window). Not service-level: another file may still succeed. A chain
+  // exhaustion carrying one as a cause is handled in its own branch below.
+  if (error instanceof RetryDeadlineError) {
+    return { unrecoverable: true, serviceLevel: false, reason: withStates(msg, [stateOf(error)]), countsAsFailure: true };
+  }
+  // YG72CYY7 D3: a verdict the HTTP layer stamped at the first failure (TLS, a spent ECONNREFUSED/504 budget) is
+  // final for this file: the per-file loops must not re-run it. It is READ here, never re-derived; the reason
+  // carries the distinct hints of ALL causes joined by " | " (not "; ", which the off-OpenRouter ECONNREFUSED hint contains itself) (a chain that ended on TLS for one model and a spent 504 for another shows both). Only a STATIC exhaustion counts: a dynamic one went through
+  // failDynamicProfile before this point (7f87b85) and keeps its own branch below. "All causes" is literal, so a
+  // cause with no verdict (a 402, a transient error) keeps today's classification.
+  const finalFields =
+    error instanceof ProfileExhaustedError
+      ? error.kind === "static" && error.causes.length > 0
+        ? error.causes.map((c) => (c instanceof RetryDeadlineError ? undefined : failureOf(c)))
+        : []
+      : [failureOf(error)];
+  if (finalFields.length > 0 && finalFields.every((f) => f?.final !== undefined)) {
+    const hint = [...new Set(finalFields.map((f) => f?.hint).filter(Boolean)), ...distinctStates(finalFields.map((f) => f?.providerState))].join(" | ");
+    return { unrecoverable: true, serviceLevel: false, reason: msg + (hint ? ` (${hint})` : ""), countsAsFailure: true };
+  }
+  // A chain exhaustion is classified by WHY the chain ran out (its causes),
+  // never by the exception type alone (fix-queue row 102, C5b). It used to
+  // fall through to the catch-all "recoverable" default below, so every
+  // per-file loop retried it: a caller-pinned model's deterministic 402 was
+  // re-sent up to 3x per file and the batch still ended isError:false, and a
+  // dynamic profile re-ran its whole announce/update/retry on every retry.
+  //  - no cause at all (no entry was ever tried): no model can serve any
+  //    file -- abort the batch at once with the exhaustion's own sentence,
+  //    never a per-file retry (9000b8d follow-up B).
+  //  - EVERY cause a service-level status (402 no credit, 401/403 auth or
+  //    forbidden, 404/410 dead model -- any mix of only these): no file can
+  //    succeed on this chain -- abort the batch. With a 402 among them the
+  //    reason is the credit verdict a raw 402 gets below (the unpinned path,
+  //    honest-402.test.ts Path 1), after the Rule's sentence, verbatim.
+  //  - every cause a non-transient 4xx, with at least one specific to THIS
+  //    request (a content-filter 400, a 413 for an oversized file): fail this
+  //    file without a retry (it would fail identically), keep the batch. A
+  //    402 in the mix does not abort (9000b8d follow-up A): a 402 is certain
+  //    only for the provider route that returned it (USER: "skip to the next
+  //    provider"), and the request-specific cause shows the chain was not
+  //    simply out of credit everywhere.
+  //  - any transient cause (429, 5xx, timeout, network): fall through to the
+  //    recoverable default, unchanged.
+  // Only the HTTP status is appended, never the provider's raw error text:
+  // the pinned-model path deliberately speaks the exhaustion sentence, not a
+  // second raw-error vocabulary (dispatch-reload.test.ts, C2a-FOLLOWUP item 2).
+  if (error instanceof ProfileExhaustedError) {
+    // D2: a "dynamic" exhaustion is the retry-later outcome -- failDynamicProfile
+    // already decided the profile has no working model and started (or found)
+    // its background update. No file can succeed on it now: abort the batch
+    // with that one message, never a per-file retry.
+    if (error.kind === "dynamic") return { unrecoverable: true, serviceLevel: true, reason: msg };
+    const causes = error.causes.map(causeText);
+    if (causes.length === 0) return { unrecoverable: true, serviceLevel: true, reason: msg };
+    const lastStatus = /API error (\d{3})\b/.exec(causes[causes.length - 1] ?? "")?.[1];
+    const every = (test: (m: string) => boolean) => causes.every(test);
+    // D4 review F4: a credit cause is EXACTLY the USER template ("Provider X
+    // report insufficient credits for using the Y model with this key.") —
+    // the raw "API error 402" text moved to stderr, so the status regexes no
+    // longer see it. paymentErrorCertainty is the ONE payment predicate both
+    // classes share; its "certain" verdict is the 402 equivalent here.
+    const isServiceLevelCause = (m: string) =>
+      SERVICE_LEVEL_STATUS_RE.test(m) || paymentErrorCertainty(m) === "certain";
+    if (every(isServiceLevelCause)) {
+      const payment = causes.find((m) => paymentErrorCertainty(m) === "certain");
+      return {
+        unrecoverable: true,
+        serviceLevel: true,
+        reason:
+          payment !== undefined
+            ? `${msg} — ${classifyError(new Error(payment)).reason}`
+            : `${msg} (HTTP ${lastStatus})`,
+      };
+    }
+    // A chain that ran out with a closed retry window among its causes
+    // (TRDD-YG72CYY7): reached only after the dynamic and every-cause-service-
+    // level verdicts above, so those keep deciding as before the clock existed
+    // (a blanket early return made a dynamic exhaustion stop aborting the
+    // batch). It is final for THIS file -- another file may still succeed, and
+    // re-running a five-minute window per retry is the stall the clock exists
+    // to end -- but it is a FAILED outcome, so the per-file loops must still
+    // feed the "3 of the last 3 failed" abort (countsAsFailure).
+    // WHY the deadline message is appended to `reason` (N5b): `msg` is only the
+    // exhaustion sentence, so the per-file result never said that a retry
+    // window closed (or when the provider asked to retry). Classification is
+    // unchanged.
+    // N5b/M1: every closed retry window is named, with its real cause (a lone
+    // `deadline.message` is neutral and says neither which model nor what status).
+    const deadlines = error.causes.filter((c): c is RetryDeadlineError => c instanceof RetryDeadlineError);
+    if (deadlines.length > 0) {
+      const detail = deadlines
+        .map((d) => (d.cause !== undefined ? `${d.message} ${d.causeLabel} ${failureText(d)}` : d.message))
+        .join("; ");
+      return {
+        unrecoverable: true,
+        serviceLevel: false,
+        reason: withStates(`${msg} — ${detail}`, error.causes.map(stateOf)),
+        countsAsFailure: true,
+      };
+    }
+    // Same equivalence for the 4xx fallback: a mixed exhaustion (credit
+    // cause + a request-specific 413) must stay a per-FILE failure, not fall
+    // through to the recoverable default (which would retry the whole walk
+    // and trip the circuit breaker). "Certain" payment is the 402 equivalent.
+    if (every((m) => NON_TRANSIENT_4XX_RE.test(m) || paymentErrorCertainty(m) === "certain")) {
+      return { unrecoverable: true, serviceLevel: false, reason: `${msg} (HTTP ${lastStatus})` };
+    }
+  }
   // Service-level errors — abort the entire batch (retrying won't help)
   // Use specific "API error NNN" pattern to avoid false positives from file paths containing digits
   if (/API error 401\b/.test(msg))
@@ -1593,20 +2154,43 @@ function classifyError(error: unknown): {
       serviceLevel: true,
       reason: "Authentication failed (invalid API key)",
     };
-  if (/API error 402\b/.test(msg)) {
-    // Credit exhausted. Flag the session so all subsequent calls go
-    // through the free model automatically. This specific call is also
-    // retried at the chatCompletionWithRetry layer with FREE_MODEL_ID,
-    // so we report it as recoverable here — the caller does not need
-    // to abort the batch. The 402 is still surfaced to stderr by the
-    // caller, and the free-mode fallback is logged separately.
+  // D4 review F4: a credit cause is the USER template (no "API error 402"
+  // token — the raw error moved to stderr), so the D1 payment predicate
+  // catches what the status regex can't. Payment paths never misread a 429
+  // (its own branch above), and a template without any payment wording is
+  // never "certain".
+  if (/API error 402\b/.test(msg) || paymentErrorCertainty(msg) === "certain") {
+    // Credit exhausted. TRDD-OE27RD7I addendum 4 (USER, no exceptions: "no
+    // switching to free models ... must exist anymore") -- this used to call
+    // engageAutoFree() and, on success, report `unrecoverable: false` with a
+    // "switching to free model" reason so the batch would carry on against a
+    // substitute model it never asked for. That cross-profile borrow is
+    // deleted outright, not reworked: creditExhausted still flips (read only
+    // by highQualityScanRefusal's message-shaping, config.ts), but nothing
+    // engages. Stop after one attempt and say the true reason -- serviceLevel:
+    // true (index.ts's several near-identical per-file retry loops) aborts
+    // the WHOLE batch, not just this file, since every remaining file on this
+    // profile would hit the identical 402 for nothing.
+    //
+    // fix-queue 98(1) audit: a raw "API error 402" reaches this classifier
+    // ONLY from a call that bypassed the profile chain walk by design (an
+    // ensemble slot, the free-pool rotation) -- walkProfileChainOnce and a
+    // pinned modelOverride both convert their 402 into ProfileExhaustedError,
+    // which the branch above classifies by its causes into this same verdict.
+    // D2: on a DYNAMIC profile those bypass sites now go through
+    // failDynamicProfile when no model/slot answered, so a raw 402 arrives
+    // here only when that function chose the actionable error (the credit or
+    // key verdict, no update) -- or on a static profile. Either way this is
+    // the TRUE final word. Do NOT gate it on activeResolved.dynamic: an
+    // attempt to do so was reverted because it promised a recovery nothing
+    // performs and silently dropped the abort-the-batch signal.
     creditExhausted = true;
-    invalidateBalanceCache();
-    engageAutoFree("402 (batch classifier)"); // route later ensemble calls through the free pool
     return {
-      unrecoverable: false,
-      serviceLevel: false,
-      reason: "Payment required (credit exhausted on OpenRouter) — switching to free model",
+      unrecoverable: true,
+      serviceLevel: true,
+      reason:
+        "Payment required (credit exhausted on OpenRouter) — add credits, or run with a " +
+        "different --profile. llm-ext does not switch to free models automatically.",
     };
   }
   if (/API error 403\b/.test(msg))
@@ -1628,7 +2212,12 @@ function classifyError(error: unknown): {
     return { unrecoverable: false, serviceLevel: false, reason: msg };
   }
   // Everything else is recoverable (timeouts, 5xx, malformed responses)
-  return { unrecoverable: false, serviceLevel: false, reason: msg };
+  // YG72CYY7 inc 4: a raw provider-side 5xx (generic retries spent while the window is still open, or a static exhaustion of raw 5xx causes) gives up here. The per-file loops print this reason only when they give up (the retry path `continue`s without printing), so the line is appended once, at the end.
+  return {
+    unrecoverable: false,
+    serviceLevel: false,
+    reason: withStates(msg, error instanceof ProfileExhaustedError ? error.causes.map(stateOf) : [stateOf(error)]),
+  };
 }
 
 // ── Adaptive rate limiter (AIMD) + parallel executor ─────────────────
@@ -1744,6 +2333,12 @@ async function robustPerFileProcess(
             aborted = true;
             abortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
           }
+          // A closed retry window is final for this file but still a failed
+          // outcome (see the batch_check loop below).
+          if (classified.countsAsFailure && recordFailedOutcome(recentOutcomes)) {
+            aborted = true;
+            abortReason = `3 of the last 3 completions failed. Last error: ${classified.reason}`;
+          }
           return { filePath, success: false, error: classified.reason } as FileProcessResult;
         }
         if (attempt < maxRetries) {
@@ -1751,8 +2346,7 @@ async function robustPerFileProcess(
           await new Promise((r) => setTimeout(r, delayMs));
           continue;
         }
-        recentOutcomes.push(false);
-        if (recentOutcomes.length >= 3 && recentOutcomes.slice(-3).every((v) => !v)) {
+        if (recordFailedOutcome(recentOutcomes)) {
           aborted = true;
           abortReason = `3 of the last 3 completions failed. Last error: ${classified.reason}`;
         }
@@ -1974,16 +2568,13 @@ function batchReportFilename(
 
 /**
  * True when EVERY LLM call must be served from the free pool: a `free_only`
- * profile, OR a paid profile with auto-free engaged (balance under the threshold
- * / a prior 402 — TRDD-542bdbef).
- *
- * Rotation keys off THIS, not off `freeOnly` alone. That was the bug: under
- * auto-free, getEnsembleModels() already served the free pool while the rotation
- * predicate still said "not a free profile", so the fallback list came out empty
- * and the boot log's promise of "rotation on rate-limit" was simply false.
+ * profile, OR the allow_paid_models master switch forcing a remote profile
+ * free. TRDD-OE27RD7I addendum 4 deleted the third, automatic arm this used
+ * to OR in (sticky auto-free on a low balance / prior 402) — no cross-profile
+ * switch, the selected profile's own static shape is the whole answer now.
  */
 function isFreeModeActive(): boolean {
-  return (activeResolved?.freeOnly ?? false) || autoFreeEngaged || forceFreeByMasterSwitch;
+  return (activeResolved?.freeOnly ?? false) || forceFreeByMasterSwitch;
 }
 
 /**
@@ -1993,39 +2584,55 @@ function isFreeModeActive(): boolean {
  * profiles are $0/offline and never forced.
  */
 function recomputeForceFree(): void {
-  forceFreeByMasterSwitch = shouldForceFreeMode(
-    getAllowPaidModels(),
-    activeResolved?.mode ?? null,
-  );
+  forceFreeByMasterSwitch =
+    activeResolved !== null &&
+    shouldForceFreeMode(getAllowPaidModels(), activeResolved.mode, activeResolved.profileType);
 }
 
 /**
- * The pool to draw the free ensemble / rotation from, whichever way free mode was
- * entered — and it is NEVER empty. free_only pins the profile's list; auto-free
- * uses the engaged pool; the master switch (no engaged pool) uses the profile's
- * list. Every branch flows through resolveAutoFreePool, so an empty configured
- * pool falls back to the bundled FREE_POOL_SEED — the "never dark" guarantee
- * (USER D1: a paid profile with no free_models still runs a working :free ensemble).
+ * The pool to draw the free ensemble / rotation from, whichever way free mode
+ * was entered: a `free_only` profile, or the master switch forcing one.
+ * TRDD-OE27RD7I addendum 4 deleted the third way (sticky auto-free engaging
+ * its own pool) outright, so there is no engaged-pool branch here anymore.
+ * free_only returns the profile's own free_models unchanged (an empty list
+ * stays empty — no FREE_POOL_SEED substitute, Rule 5); once P6 wires
+ * decideDynamicProfile in, the maintainer keeps the dynamic free profile's
+ * pool populated. A static profile with an empty pool is refused by this
+ * function's second branch (below). FREE_POOL_SEED is only the seed the
+ * dynamic free benchmark starts from.
  */
 function activeFreePool(): string[] {
   if (activeResolved?.freeOnly) return resolveAutoFreePool(activeResolved.freeModels);
-  if (autoFreePool.length > 0) return autoFreePool;
-  // Forced-free (or auto-free without an engaged pool) on a profile that is NOT
-  // free_only: resolveProfile leaves activeResolved.freeModels EMPTY, so prefer the
+  // Forced-free via the master switch on a profile that is NOT free_only:
+  // resolveProfile leaves activeResolved.freeModels EMPTY, so prefer the
   // persisted/curated free_models read from settings (approvedFreePoolFromSettings,
   // which reads the RAW configured list + reconcile's updates) before the static
-  // seed — the operator's own pool must win. resolveAutoFreePool([]) supplies the
-  // seed only when there is genuinely no configured pool (the "never dark" floor).
+  // seed -- the operator's own pool must win.
   const persisted = approvedFreePoolFromSettings();
   if (persisted.length > 0) return persisted;
-  return resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  const pool = resolveAutoFreePool(activeResolved?.freeModels ?? []);
+  // Rule 5 (Phase 5 sec (a) Site 2): a static profile forced free by
+  // allow_paid_models:false with no persisted/configured pool no longer
+  // gets a silent FREE_POOL_SEED substitute -- refuse loudly instead (D-A).
+  // A dynamic `free` profile is not expected to reach this branch empty once
+  // P6 wires decideDynamicProfile in and the maintainer keeps its pool
+  // populated; until then this refusal can in principle fire for either case.
+  if (pool.length === 0) {
+    throw new Error(
+      "free mode is active but the active profile defines no free models " +
+        "(free_models: [] and no free-provider `providers:` binding). " +
+        "Add free_models, or a `providers:` entry for a free provider (e.g. chat-b-ai-remote), " +
+        "or set allow_paid_models: true.",
+    );
+  }
+  return pool;
 }
 
 /**
  * Recompute force-free and re-publish the config.ts cost-safety chokepoint
  * (getActiveFreeOnly) so the pure subsystem spend sites (judge/scout/benchmark)
- * enforce ':free' whenever free mode is active for ANY reason — profile free_only,
- * sticky auto-free, or the master switch. Called on boot (main) and each reload.
+ * enforce ':free' whenever free mode is active for either reason — profile
+ * free_only, or the master switch. Called on boot (main) and each reload.
  */
 function publishFreeState(): void {
   recomputeForceFree();
@@ -2051,21 +2658,23 @@ function buildFreeRotationPool(
   exclude: ReadonlySet<string> = new Set(),
 ): Array<RotationCandidate & { maxInputLines: number }> {
   if (!activeResolved || getCurrentBackend().type !== "openrouter") return [];
-  // free_only pins its own pool. Every other profile draws on autoFreePool — but
-  // that is populated only when engageAutoFree() fires, NOT at profile load. The
-  // lazy resolveAutoFreePool fallback covers the funded-profile call sites that
-  // reach here WITHOUT auto-free engaged — the ':free' modelOverride path (an
-  // explicit `free: true` call on a funded profile) — which would otherwise get
-  // an empty pool and zero rotation fallbacks, re-creating the exact "one pinned
-  // model's daily cap is a hard failure" bug the override rotation exists to fix.
+  // free_only pins its own pool. TRDD-OE27RD7I addendum 4 deleted the sticky
+  // auto-free engaged pool this used to fall back to next; the remaining
+  // funded-profile call site is the ':free' modelOverride path (an explicit
+  // `free: true` call on a funded profile), which now draws straight on the
+  // profile's own free_models via resolveAutoFreePool — never an
+  // auto-engaged substitute.
   const pool = activeResolved.freeOnly
     ? activeResolved.freeModels
-    : autoFreePool.length > 0
-      ? autoFreePool
-      : resolveAutoFreePool(activeResolved.freeModels);
+    : resolveAutoFreePool(activeResolved.freeModels);
   const catalogById = new Map(openRouterModelCache.map((cm) => [cm.id, cm]));
   const out: Array<RotationCandidate & { maxInputLines: number }> = [];
-  for (const id of filterFreeModels(pool, catalogById, benchmarkFailedModels())) {
+  // TRDD-FDI9NYAS D3c: rotation only draws on an AUTO-PICKED id once it has a
+  // RECORDED PASS — union in manualModels first, or a static/manual pool's
+  // own hand-listed ids (never benchmarked by design, D3b) would wrongly get
+  // excluded too. "no model should be used unless it pass the benchmark".
+  const approvedForServing = new Set([...benchmarkPassedModels(), ...(activeResolved.manualModels ?? [])]);
+  for (const id of filterFreeModels(pool, catalogById, benchmarkFailedModels(), approvedForServing)) {
     if (exclude.has(id)) continue;
     // Cost-safety: mirrors assertFreeOnlyModel's contract at the point where the
     // rotation TARGET is chosen, so a router pseudo-model like `openrouter/free`
@@ -2120,6 +2729,16 @@ const RECONCILE_SKIP_TOOLS = new Set([
   "scan_local_llm_services",
 ]);
 
+// WHY derived from the accepted-types table (tools/definitions.ts), not a second list: mass scouting takes its model from a
+// scouting-type profile (D34), so the ACTIVE profile's pool gate and free-pool model injection must not apply to it.
+let scoutingOnlyTools: ReadonlySet<string> | undefined;
+export function isScoutingOnlyTool(name: string): boolean {
+  scoutingOnlyTools ??= new Set(
+    buildTools("").filter((t) => t.acceptedProfileTypes.length === 1 && t.acceptedProfileTypes[0] === "scouting").map((t) => t.name),
+  );
+  return scoutingOnlyTools.has(name);
+}
+
 async function runModelReconcile(): Promise<void> {
   await reconcileModelsBeforeWork({
     now: () => Date.now(),
@@ -2148,26 +2767,63 @@ async function runModelReconcile(): Promise<void> {
       // latter empty on a paid profile, which would make every reconcile look like
       // a change and rewrite settings every hour. The raw settings value is what
       // applyFreePoolToSettings actually compares against.
+      //
+      // P6b-fix B2 — the NAME comes from the in-memory effective profile, the
+      // same value the dispatch site branched on, NOT from a fresh
+      // loadSettings() of the disk `active:` key. `overrideActiveProfile`
+      // (--profile) only ever sets the in-memory name, while the shipped
+      // default writes `active: "free"` to disk — so under `--profile
+      // <anything static>` this legacy arm read "free", reconciled the DYNAMIC
+      // free profile's pool, and wrote it back through a writer that takes no
+      // settings.write.lock. That is precisely the "two decision engines racing
+      // the same settings.yaml section" the dispatch branch claims to prevent,
+      // and it also pinned `isStatic` to false for every static profile, so the
+      // dead-id WARNING this line exists to produce never fired.
       const s = loadSettings();
-      const rawFree = s?.profiles[s.active]?.free_models;
+      const sActiveName = effectiveProfileName(activeSettings);
+      const rawFree = s ? s.profiles[sActiveName]?.free_models : undefined;
       const freePool = Array.isArray(rawFree)
         ? rawFree.filter((v): v is string => typeof v === "string")
         : [];
-      return { ensemble, freePool, toolModels };
+      // P4 hand-off (P6b item 1): the CLI's makeCliReconcileDeps already sets
+      // this same expression (model-reconcile.ts:519) so a static profile's
+      // dead ids get a WARNING instead of a silent rewrite (reconcileModels
+      // BeforeWork's isStatic branch). This MCP-side literal never carried it
+      // before, so the warning never fired here — wiring it now, mirroring
+      // the CLI side exactly rather than re-deriving a second definition of
+      // "static" that could drift from it.
+      return { ensemble, freePool, toolModels, isStatic: !isDynamicProfileName(sActiveName) };
     },
     benchmarkFailed: () => benchmarkFailedModels(),
+    benchmarkPassed: () => benchmarkPassedModels(),
     applyFreePool: (pool) => {
       try {
         const s = loadSettings();
         if (!s || !activeResolved) return false;
-        applyFreePoolToSettings(getSettingsPath(), s.active, pool);
-        // Update the in-memory pool the current run reads. On a paid profile this
-        // pre-populates freeModels so the eventual credit→free switch
-        // (engageAutoFree → resolveAutoFreePool) uses the freshly-reconciled pool
-        // instead of the static seed. When auto-free is already engaged, refresh
-        // the live pool immediately.
+        // P6b-fix B2 — same in-memory effective name as getConfigured above,
+        // plus a hard refusal for a dynamic one. `profiles.free`/`profiles.paid`
+        // have exactly ONE writer, writeDynamicProfileSection, which holds
+        // settings.write.lock, writes the generated marker and backs up a
+        // hand-authored section first; this writer does none of those. Reaching
+        // here with a dynamic name would mean the dispatch branch routed a
+        // dynamic profile down the legacy arm, which is a wiring bug worth a
+        // line rather than a silent lockless write.
+        const reconcileProfileName = effectiveProfileName(activeSettings);
+        if (isDynamicProfileName(reconcileProfileName)) {
+          process.stderr.write(
+            `[llm-externalizer] Model reconcile: refusing to write the generated '${reconcileProfileName}' ` +
+              `profile from the legacy reconcile path — that section is maintained by the dynamic-profile ` +
+              `maintainer under the settings write lock.\n`,
+          );
+          return false;
+        }
+        applyFreePoolToSettings(getSettingsPath(), reconcileProfileName, pool);
+        // Update the in-memory pool the current run reads, so a later
+        // activeFreePool()/resolveAutoFreePool() read sees the freshly-
+        // reconciled list instead of the boot-time one. TRDD-OE27RD7I
+        // addendum 4 deleted the sticky auto-free engaged-pool refresh this
+        // used to also do here (engageAutoFree/autoFreePool no longer exist).
         activeResolved.freeModels = [...pool];
-        if (autoFreeEngaged) autoFreePool = resolveAutoFreePool(pool);
         return true;
       } catch (err) {
         process.stderr.write(
@@ -2178,212 +2834,103 @@ async function runModelReconcile(): Promise<void> {
         return false;
       }
     },
-    launchFreeBench: (reason) => {
-      maybeTriggerFreePoolBench({
-        activeProfile: loadSettings()?.active ?? "unknown",
-        freeOnlyActive: true, // reconcile only ever bumps the FREE pool
-        freeOnlyWasOn: null,
-        log: (m) => process.stderr.write(m),
-        force: true, // a pool change: re-score even if the cache has old entries
-        env: { ...process.env, LLM_EXT_AUTO_BENCH_REASON: reason },
-      });
-    },
+    // free-pool-auto-bench.ts retired (P6b item 6): this is the MCP-side
+    // reconcile deps, reached now ONLY for a STATIC (non-'free'/'paid')
+    // profile — the dispatch site skips runModelReconcile entirely for a
+    // dynamic effective profile (see dispatchCallToolInner).
+    //
+    // DO NOT restore a real trigger here. The WHY is Rule 5, not a second
+    // populator to defer to: a STATIC profile is the user's own document and
+    // is NEVER rewritten by this codebase, so there is no benchmark for this
+    // hook to launch. (It used to defer to the legacy trio's own lazy
+    // population, which P6c-a retired; a reader who "fixes" the no-op on that
+    // premise would reintroduce a second, separately-locked auto-bench racing
+    // the maintainer over the SAME settings.yaml — the two-locks-one-file
+    // hazard design §2.4's addendum calls out.) Mirrors the CLI-side stub in
+    // model-reconcile.ts's makeCliReconcileDeps.
+    launchFreeBench: () => {},
     log: (m) => process.stderr.write(m),
   });
 }
 
+/** D2 item 6: every free model the rotation tried has failed. On a DYNAMIC
+ *  profile (the `free` one) that is "all models of the profile are failing":
+ *  failDynamicProfile starts its background update and answers retry-later
+ *  -- before D2 this path triggered no update at all (C5b "Row 27 free").
+ *  A static free_only profile keeps the exhaustion as it was. */
+function freeRotationExhausted(err: unknown): unknown {
+  const name = activeResolved?.name;
+  if (!(err instanceof AllFreeModelsExhaustedError) || name === undefined || !isDynamicProfileName(name)) return err;
+  return failDynamicProfile(name, [new Error(err.lastDetail)], () => err);
+}
+
+
+/** The breaker verdict as a thrown error; callers branch on this type, not on the verdict wording. */
+export class ServiceAbortError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ServiceAbortError";
+  }
+}
+
+
 /**
- * Lazily populate the ACTIVE profile when it is a machine-owned default
- * ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' | 'paid-mass-scout')
- * and needs a (re)benchmark: unpopulated, a configured model removed from the
- * catalog / its price rose, or a configured model proven persistently dead at
- * runtime. The caller (see dispatchCallToolInner) gates this behind the SAME
- * RECONCILE_SKIP_TOOLS list as runModelReconcile(), so read-only/report-config
- * tools never trigger a benchmark or a spend refusal — they report the config
- * AS THE USER HAS IT.
- *
- * `free`/`free-ensemble` NEVER block: populateDefaultProfile spawns a detached
- * child and returns immediately, and the current command proceeds on the
- * existing FREE_POOL_SEED fallback (resolveAutoFreePool) while it runs in the
- * background. `paid`/`paid-ensemble`/`paid-mass-scout` are paid — under
- * `allow_paid_models: false` the runner REFUSES rather than spending, and this
- * function fails the tool call fast with the refusal's remedy text so the
- * user isn't billed for something nobody authorized.
- *
- * `cachedPrices` and `qualifyingPool` — decideDefaultProfilePopulation's
- * "model-price-increased" and "new-model-arrived" triggers — are wired from
- * this profile's OWN candidate class (the `:free` pool for `free`/
- * `free-ensemble`; the paid pool under the ensemble price ceiling for
- * `paid`/`paid-ensemble`/`paid-mass-scout`) and from the last-persisted
- * fingerprint/prices (default-profiles-state.ts's getProfileRecord / the
- * cached benchmark report). Both degrade to "no drift signal" — never a false
- * invalidation — on any read failure, per decideDefaultProfilePopulation's own
- * fail-open contract.
- *
- * Returns a ToolResult ONLY when the tool call itself must fail (a paid
- * default profile refused to auto-benchmark) — null means "proceed",
- * whether or not a benchmark was actually started.
+ * Round C item 4 (TRDD-YG72CYY7): the single-model paths have no ensemble slot
+ * to convert a serviceAbort verdict (chatCompletionWithRetry RETURNS the
+ * breaker's "SERVER ISSUE DETECTED..." abort as StreamingResult), so the
+ * breaker text would become the model's answer. Convert it to a thrown error
+ * here — the ensemble contract (ensemble slots convert the verdict via
+ * resp.serviceAbort) keeps its returned verdict; only these callers wrap.
+ * One implementation, four sites.
  */
-export async function maybeEnsureDefaultProfileReady(): Promise<ToolResult | null> {
-  const activeName = activeSettings.active;
-  if (!isDefaultProfileName(activeName)) return null;
-  const profile = activeSettings.profiles[activeName];
-  if (!profile) return null;
-
-  // Fail-open: a catalog fetch failure must never falsely invalidate an
-  // already-populated profile (decideDefaultProfilePopulation's own
-  // contract) — so an empty snapshot here is the safe degrade, not an error.
-  let catalog: CatalogPriceSnapshot[] = [];
-  let qualifyingPool: CatalogPriceSnapshot[] = [];
-  try {
-    const reconcileCatalog = catalogForReconcile(await fetchOpenRouterModels());
-    catalog = reconcileCatalog.priceSnapshot;
-    if (activeName === "free" || activeName === "free-ensemble") {
-      const freeIds = new Set(reconcileCatalog.freeQualified);
-      qualifyingPool = catalog.filter((m) => freeIds.has(m.id));
-    } else {
-      // paid / paid-ensemble / paid-mass-scout: the same paid,
-      // ceiling-qualifying class pick.ts's pickEnsembleByPriceCeiling draws
-      // from (strictly under the ceiling on BOTH input and output, never a
-      // ':free' id). paid-mass-scout's ACTUAL selection pool is broader (any
-      // non-':free' id, see pickMassScoutModel) — this narrower ceiling class
-      // is used only as the drift-detection fingerprint, same as before.
-      const ceiling = getEnsemblePriceCeiling(loadSettings());
-      qualifyingPool = catalog.filter(
-        (m) =>
-          !isFreeSuffixModelId(m.id) &&
-          m.inputDollarsPerMillion < ceiling &&
-          m.outputDollarsPerMillion < ceiling,
-      );
-    }
-  } catch {
-    /* empty catalog / pool is the fail-open default */
-  }
-
-  // Best-effort: an unreadable or missing cached report yields "no cached
-  // price baseline" (undefined), not an error — decideDefaultProfilePopulation
-  // then simply skips the price-increase check for this run.
-  let cachedPrices: ReturnType<typeof cachedPricesFromResults> | undefined;
-  try {
-    const report = loadCachedReport(join(getConfigDir(), "benchmark-results.json"));
-    cachedPrices = cachedPricesFromResults(report.results);
-  } catch {
-    /* no cached report yet — fail open, no price-drift signal this run */
-  }
-
-  // Durable, model-scoped runtime failures only (model-events.ts's
-  // assessModelPersistence — 3 consecutive 400/404/410/422 within 24h). A
-  // transient 429/502/503 blip must never authorize a paid benchmark.
-  const runtimeUnavailableIds = [...assessModelPersistence(readModelEvents()).values()]
-    .filter((v) => v.persistentlyBroken)
-    .map((v) => v.model);
-
-  const record = getProfileRecord(activeName);
-
-  // Captured via an object property (not a bare `let`) so the type stays
-  // `PopulationOutcome | null` at every read site — TS drops flow narrowing
-  // on a plain closed-over `let` the moment an intervening `await` could have
-  // let the closure run, which otherwise widens `outcome.kind` below to
-  // `never` and the discriminant check fails to type-check.
-  const captured: { outcome: PopulationOutcome | null } = { outcome: null };
-  const runBenchmark: DefaultProfileBenchmarkRunner = async (profileName) => {
-    captured.outcome = populateDefaultProfile({
-      profile: profileName,
-      allowPaidModels: getAllowPaidModels(),
-      log: (msg) => process.stderr.write(msg),
-    });
-  };
-
-  const result = await ensureDefaultProfileReady(
-    activeName,
-    profile,
-    catalog,
-    SETTINGS_FILE,
-    runBenchmark,
-    {
-      runtimeUnavailableIds,
-      cooldownUntil: record?.cooldownUntil,
-      qualifyingPool,
-      lastPoolFingerprint: record?.poolFingerprint,
-      cachedPrices,
-    },
-  );
-
-  const outcome = captured.outcome;
-  if (result.benchmarkRan && outcome) {
-    const msg = describeOutcome(outcome);
-    if (msg) process.stderr.write(msg);
-    if (outcome.kind === "refused") {
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `NOT YET BENCHMARKED\n\n${outcome.reason}.\n` +
-              `Run: ${outcome.remedy}\n` +
-              `Or set allow_paid_models: true in settings.yaml to let it populate on first use.`,
-          },
-        ],
-        isError: true,
-      };
-    }
-    // A PAID population was just started. The profile still holds the
-    // unroutable placeholder id, so proceeding would send that sentinel to
-    // OpenRouter and surface a raw provider 404 — the exact ugly failure the
-    // placeholder was chosen to make impossible to mistake for a real model.
-    // `blocksCaller` existed to prevent this and was never acted on: only the
-    // "refused" branch returned, so "spawned" fell through to null. `free`
-    // deliberately does NOT block — it proceeds on the FREE_POOL_SEED fallback.
-    if (outcome.kind === "spawned" && outcome.blocksCaller) {
-      return {
-        content: [
-          {
-            type: "text",
-            text:
-              `BENCHMARK IN PROGRESS\n\n` +
-              `'${outcome.profile}' has no models yet and is being benchmarked now ` +
-              `(typically ~15 minutes). Re-run this command when it finishes.\n` +
-              `Progress: ${defaultProfileLogPath(outcome.profile)}`,
-          },
-        ],
-        isError: true,
-      };
-    }
-  }
-  return null;
+function ensureNotServiceAbort(resp: StreamingResult): StreamingResult {
+  if (resp.serviceAbort === true) throw new ServiceAbortError(resp.content || "circuit breaker abort");
+  return resp;
 }
 
 /** One free-pool call with rotation, for the paths that have no ensemble slots
  *  (a ':free' modelOverride, ensemble:false, or a file too large for every
  *  ensemble primary). Throws AllFreeModelsExhaustedError only after every
- *  approved free model has actually been tried and failed. */
+ *  approved free model has actually been tried and failed (on a dynamic
+ *  profile, what freeRotationExhausted turns it into). */
 async function callSingleWithFreeRotation(
   primary: RotationCandidate,
   fallbacks: readonly RotationCandidate[],
   messages: ChatMessage[],
   options: Record<string, unknown>,
 ): Promise<StreamingResult> {
-  return callWithFreeRotation<StreamingResult>(
-    primary,
-    fallbacks,
-    (model, maxOutput) =>
-      chatCompletionWithRetry(
-        messages,
-        {
-          ...options,
-          model,
-          maxTokens: Math.min(
-            (options.maxTokens as number | undefined) ?? maxOutput,
-            maxOutput,
+  try {
+    // Round C item 4: the rotation hands a serviceAbort verdict straight back
+    // (classifyUnavailable returns null on "server issue detected" — its
+    // livelock guard), so the breaker text would surface as model content.
+    return ensureNotServiceAbort(
+      await callWithFreeRotation<StreamingResult>(
+        primary,
+        fallbacks,
+        (model, maxOutput) =>
+          chatCompletionWithRetry(
+            messages,
+            {
+              ...options,
+              model,
+              maxTokens: Math.min(
+                (options.maxTokens as number | undefined) ?? maxOutput,
+                maxOutput,
+              ),
+            },
+            providerDeps,
           ),
+        {
+          resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
+          onRotate: logRotation,
+          // The dispatch's shared clock: no candidate starts once it is closed.
+          retryClock: options.retryClock as RetryClock | undefined,
         },
-        providerDeps,
       ),
-    {
-      resultFailureDetail: (r) => (r.finishReason === "error" ? r.content : null),
-      onRotate: logRotation,
-    },
-  );
+    );
+  } catch (err) {
+    throw freeRotationExhausted(err);
+  }
 }
 
 /** chatCompletionJSON with free-pool rotation — check_imports' structured-output
@@ -2395,32 +2942,190 @@ async function chatCompletionJSONWithFreeRotation(
   messages: ChatMessage[],
   options: Parameters<typeof chatCompletionJSON>[1],
 ): Promise<JSONCompletionResult> {
+  // One retry clock for this whole dispatch (TRDD-YG72CYY7): every rotated
+  // model shares one five-minute window instead of getting its own.
+  const scoped = { ...options, retryClock: {} as RetryClock };
   const pool = isFreeModeActive() ? buildFreeRotationPool() : [];
   if (pool.length === 0) {
-    return chatCompletionJSON(messages, options, providerDeps);
+    return chatCompletionJSON(messages, scoped, providerDeps);
   }
-  return callWithFreeRotation<JSONCompletionResult>(
-    pool[0],
-    pool.slice(1),
-    (model, maxOutput) =>
-      chatCompletionJSON(
-        messages,
-        {
-          ...options,
-          model,
-          maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput),
-        },
-        providerDeps,
-      ),
-    {
-      onRotate: logRotation,
-    },
-  );
+  try {
+    return await callWithFreeRotation<JSONCompletionResult>(
+      pool[0],
+      pool.slice(1),
+      (model, maxOutput) =>
+        chatCompletionJSON(
+          messages,
+          {
+            ...scoped,
+            model,
+            maxTokens: Math.min(scoped.maxTokens ?? maxOutput, maxOutput),
+          },
+          providerDeps,
+        ),
+      {
+        onRotate: logRotation,
+        retryClock: scoped.retryClock,
+      },
+    );
+  } catch (err) {
+    throw freeRotationExhausted(err);
+  }
+}
+
+/** One walk of `profileChain` over `profile`. Throws `ProfileExhaustedError`
+ *  once the chain runs out (profileChain's own contract); never returns
+ *  without either resolving or throwing. D2: walked exactly once per call --
+ *  a dynamic profile's update runs in the background, never before a retry. */
+async function walkProfileChainOnce(
+  profile: ResolvedProfile,
+  messages: ChatMessage[],
+  options: SimpleCompletionOptions,
+  deps: CompletionDeps,
+  tool: string,
+): Promise<StreamingResult> {
+  const gen = profileChain(profile, tool);
+  let next = gen.next();
+  let lastErr: unknown;
+  // Each failed entry's cause, as the generator would have collected it.
+  const collected: unknown[] = [];
+  while (!next.done) {
+    const { modelId, route } = next.value;
+    try {
+      // D6a: the walk yields the entry's OWN serving group — a model served
+      // by two groups is walked once per group, and each attempt must go to
+      // the group being tried, not to routeForModel's first match.
+      // Round C item 4: a serviceAbort verdict thrown here feeds the walk's
+      // catch (recorded as the entry's cause), never returned as content.
+      return ensureNotServiceAbort(
+        await chatCompletionWithRetry(messages, { ...options, model: modelId, route }, deps),
+      );
+    } catch (err) {
+      lastErr = err;
+      // WHY the walk stops here and never reports the deadline to the generator
+      // (only for a closed SHARED window: a call with a private clock, or one
+      // model's own Retry-After refusal, is an ordinary failure of that entry and
+      // the walk goes on): the shared clock is closed, so every later entry would throw a
+      // zero-request RetryDeadlineError, and on a DYNAMIC profile the generator's
+      // exhaustion goes to failDynamicProfile, which starts a background update
+      // and aborts the batch as "retry later" for what is only one file running
+      // out of time. "static" passes through chatCompletionWithProfileFallback
+      // (it converts only "dynamic") and classifyError's deadline branch makes it
+      // final for THIS file only. The earlier causes ride along for the record
+      // only: that branch decides, so an earlier 401 or 402 does not abort the
+      // batch here; the next file meets it again and the "3 of the last 3
+      // failed" rule still stops a dead batch.
+      // round C0a item 1 dropped the old `options.retryClock` test: this walk
+      // always runs under the dispatcher's shared clock, and "shared" is now a
+      // property of the error — only a genuinely closed SHARED window has
+      // dispatchClosed true.
+      if (err instanceof RetryDeadlineError && err.dispatchClosed) {
+        throw new ProfileExhaustedError(profile.name, "static", [...collected, err]);
+      }
+      // failureText: a RetryDeadlineError's neutral message hides the network
+      // code / payment wording its cause carries; the endpoint-dead and credit
+      // tests below must read the cause.
+      const msg = failureText(err);
+      // ponytail: a single connection-refusal marks the endpoint dead for
+      // the rest of THIS walk (addendum 2); the "one delayed retry before
+      // marking dead, for a local runner restarting under load" ceiling is
+      // a follow-up (0b), not this phase's job -- a bare substring match on
+      // the common connection-failure codes is the whole classifier here.
+      const isEndpointDead = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(msg);
+      // D4 (design section 6): a CERTAIN payment error is the KEY's credit,
+      // not the model — the walk marks `url + keyRef` dead and continues
+      // with the SAME id's next group (a different key). keyRef is
+      // secret-free, so it can ride the failure harmlessly. The cause text
+      // names the group and model (the USER template; route.name falls back
+      // to the preset name, which deriveGroupNames already guarantees).
+      const isCreditDead =
+        route !== undefined &&
+        paymentErrorCertainty(msg) === "certain";
+      // `error` rides on the exhaustion's `causes` so classifyError can key the
+      // per-file loop's verdict on WHY the chain ran out, not just that it did.
+      // D4: a credit failure's cause is EXACTLY the USER template naming the
+      // group and model (D4 review F4 — no "(raw: …)" suffix); the raw
+      // provider error goes to the stderr log line instead. Anything else
+      // keeps the raw error verbatim.
+      if (isCreditDead) {
+        process.stderr.write(
+          `[llm-externalizer] ${route?.name ?? "unknown"}: ${modelId} failed with: ${msg.split("\n")[0].slice(0, 200)}\n`,
+        );
+      }
+      const causeError = isCreditDead
+        ? new Error(
+            `Provider ${route?.name ?? "unknown"} report insufficient credits for using the ${modelId} model with this key.`,
+          )
+        : err;
+      collected.push(causeError);
+      next = gen.next({
+        kind: isEndpointDead ? "endpoint" : isCreditDead ? "credit" : "model",
+        error: causeError,
+      }); // throws ProfileExhaustedError once exhausted
+    }
+  }
+  // profileChain always throws ProfileExhaustedError before ever yielding
+  // `done: true` (see its own doc comment) -- this line is unreachable, kept
+  // only so TypeScript sees every path return/throw.
+  throw lastErr;
+}
+
+/**
+ * The single-model completion call, driven through the ACTIVE profile's own
+ * fallback chain (TRDD-OE27RD7I 14.1-C2 §0/§1). Replaces the deleted
+ * cross-profile borrows (402 -> free, paid -> free) at the ONE place that
+ * previously had no fallback left at all after C1 removed them: a funded,
+ * non-ensemble, non-pool call used to recover via FREE_MODEL_ID on failure;
+ * now it walks `profileChain(activeResolved)` -- the SAME profile's own
+ * secondModel/thirdModel (STATIC) or written free/paid pool (DYNAMIC) --
+ * and only gives up once every entry in ITS OWN list has failed.
+ *
+ * On a DYNAMIC exhaustion (free/paid/local) there is no update, no wait and
+ * no second walk here any more (D2, USER 2026-09-18: "the profile updating
+ * must happens in background"): failDynamicProfile decides between the
+ * actionable error (credit / key / this request) and "start the background
+ * update, answer retry later".
+ *
+ * Resolves the profile LAZILY, at the first real completion attempt (TRDD-
+ * OE27RD7I 14.1-C2 §3b) -- an info tool that never calls this never pays for
+ * (or fails on) a profile it doesn't need.
+ *
+ * Does NOT wrap every chatCompletionWithRetry call site: an explicit
+ * modelOverride/pool/ensemble-selected model is the CALLER's deliberate
+ * choice (see ensembleStreaming's own "rotating it could bill a second
+ * model the user never asked for" comment) and must stay pinned, not be
+ * silently walked to a different model in the chain.
+ */
+async function chatCompletionWithProfileFallback(
+  messages: ChatMessage[],
+  options: SimpleCompletionOptions,
+  deps: CompletionDeps,
+  tool = "default",
+): Promise<StreamingResult> {
+  if (!activeResolved) {
+    // Same wording overrideActiveProfile's dangling-active error family
+    // uses elsewhere -- a null activeResolved this late means selection
+    // never ran or failed silently for a tool that DOES need a backend.
+    throw new Error("no resolved profile is active -- fix settings.yaml and retry");
+  }
+  const profileName = activeResolved.name;
+  try {
+    return await walkProfileChainOnce(activeResolved, messages, options, deps, tool);
+  } catch (err) {
+    if (!(err instanceof ProfileExhaustedError) || err.kind !== "dynamic" || !isDynamicProfileName(profileName)) {
+      throw err;
+    }
+    // D2: ONE walk, then the verdict. The actionable form is the static
+    // exhaustion carrying the causes classifyError keys on (credit verdict,
+    // key error, or this file only) -- the text the pre-D2 "exhausted again
+    // after the update" path produced, unchanged.
+    throw failDynamicProfile(profileName, err.causes, (causes) => new ProfileExhaustedError(profileName, "static", causes));
+  }
 }
 
 async function ensembleStreaming(
   messages: ChatMessage[],
-  options: {
+  callerOptions: {
     temperature?: number;
     maxTokens?: number;
     onProgress?: ProgressFn;
@@ -2436,9 +3141,14 @@ async function ensembleStreaming(
   ensemble: boolean,
   fileLineCount?: number,
 ): Promise<StreamingResult> {
-  // T2.7 — snapshot once for the type gating below
-  const backend = getCurrentBackend();
+  // T2.7 — snapshot once for the type gating below. The old
+  // `backend.type !== "openrouter"` ensemble gate is GONE (D-L): the gate is
+  // "every member has a route" now, so the snapshot itself is no longer read.
   const freeMode = isFreeModeActive();
+  // One retry clock for this whole dispatch (TRDD-YG72CYY7): every rotated
+  // model, chain entry and ensemble slot below spreads `options`, so all of
+  // them share one five-minute window instead of getting a fresh one each.
+  const options = { ...callerOptions, retryClock: {} as RetryClock };
 
   // Model override: skip the ensemble, use the specified model.
   //
@@ -2463,15 +3173,49 @@ async function ensembleStreaming(
         options,
       );
     }
-    return chatCompletionWithRetry(messages, { ...options, model: options.modelOverride }, providerDeps);
+    // The pinned model IS the whole chain (no rotation, per the comment
+    // above) -- so its failure is exhaustion, not a raw provider error.
+    // Without this, a caller-pinned model that goes dead surfaced whatever
+    // sanitizeProviderError produced (a raw "API error NNN" string), one
+    // more error vocabulary alongside the chain-walk's own exhaustion
+    // sentence for the exact same user-facing situation: no model in
+    // "the profile" (here, a chain of exactly one) is answering.
+    try {
+      // Round C review H1: the breaker verdict is RETURNED by chatCompletionWithRetry, so only a throw here reaches the catch below instead of the scan report as model content.
+      return ensureNotServiceAbort(
+        await chatCompletionWithRetry(
+          messages,
+          { ...options, model: options.modelOverride },
+          providerDeps,
+        ),
+      );
+    } catch (err) {
+      // Keep the real error as the cause: a 402 here must abort the whole
+      // batch (classifyError), a 413 for this one file must not.
+      // A breaker abort is no model failure: without its verdict the user reads "the models are all failing" for a provider outage (review M-A).
+      // Typed check: callers branch on the error class, never on the verdict wording.
+      throw new ProfileExhaustedError(
+        activeResolved?.name ?? "unknown",
+        "static",
+        [err],
+        err instanceof ServiceAbortError ? err.message : undefined,
+      );
+    }
   }
 
-  // Single-model path: ensemble off, not remote-ensemble, or no models configured
+  // Single-model path: ensemble off, not remote-ensemble (and no reserved
+  // slots — D-L), or no models configured. D-L (design §7): the old
+  // `backend.type !== "openrouter"` gate is replaced by "every member has a
+  // route" — a local/other-backend profile with reserved slots fans out to
+  // them (each member's send rides its own serving group), and a member
+  // without a route cannot be fanned out at all.
   const ensembleModels = getEnsembleModels();
+  const everyMemberHasRoute =
+    ensembleModels.length > 0 && ensembleModels.every((m) => m.route !== undefined);
   if (
     !ensemble ||
-    backend.type !== "openrouter" ||
-    ensembleModels.length === 0
+    ensembleModels.length === 0 ||
+    !everyMemberHasRoute
   ) {
     // Free mode ONLY: one model at a time is still ONE model at a time —
     // rotation is failover, not ensembling — so a rate-limited free model hands
@@ -2481,7 +3225,10 @@ async function ensembleStreaming(
     if (pool.length > 0) {
       return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
     }
-    return chatCompletionWithRetry(messages, options, providerDeps);
+    // TRDD-OE27RD7I 14.1-C2 §0: funded, non-ensemble, non-pool call -- the
+    // one path C1 left with NO fallback at all (the deleted 402->free borrow
+    // was its only recovery). Walks the profile's OWN chain instead.
+    return chatCompletionWithProfileFallback(messages, options, providerDeps);
   }
 
   // Filter models by file size limit
@@ -2496,7 +3243,10 @@ async function ensembleStreaming(
     if (pool.length > 0) {
       return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
     }
-    return chatCompletionWithRetry(messages, options, providerDeps);
+    // TRDD-OE27RD7I 14.1-C2 §0: funded, non-ensemble, non-pool call -- the
+    // one path C1 left with NO fallback at all (the deleted 402->free borrow
+    // was its only recovery). Walks the profile's OWN chain instead.
+    return chatCompletionWithProfileFallback(messages, options, providerDeps);
   }
 
   // Free-mode rate-limit fallback rotation (TRDD-8b6b3646 Phase 3). Free providers
@@ -2522,22 +3272,30 @@ async function ensembleStreaming(
 
   // Single qualifying model AND no fallbacks to rotate to — no need to combine.
   if (models.length === 1 && fallbacks.length === 0) {
-    return chatCompletionWithRetry(
-      messages,
-      {
-        ...options,
-        model: models[0].id,
-        maxTokens: Math.min(
-          options.maxTokens ?? models[0].maxOutput,
-          models[0].maxOutput,
-        ),
-      },
-      providerDeps,
+    // Round C item 4: the breaker's abort verdict must throw here, not return
+    // as the model's content (the ensemble path converts its own).
+    return ensureNotServiceAbort(
+      await chatCompletionWithRetry(
+        messages,
+        {
+          ...options,
+          model: models[0].id,
+          maxTokens: Math.min(
+            options.maxTokens ?? models[0].maxOutput,
+            models[0].maxOutput,
+          ),
+        },
+        providerDeps,
+      ),
     );
   }
 
   // Run all qualifying models in parallel — wait for ALL to finish.
   // The MCP timeout is configured by the user on the Claude Code side.
+  // D5: each member's send rides the member's OWN serving group (`route`) —
+  // resolveConnection uses `options.route ?? deps.routeForModel(model)`, so a
+  // reserved slot pinned to a non-first group (or a multi-group model) reaches
+  // the group the slot names, not routeForModel's first match.
   const results = await Promise.all(
     models.map(async (m) => {
       const callOne = (model: string, maxOutput: number) =>
@@ -2547,31 +3305,44 @@ async function ensembleStreaming(
             ...options,
             model,
             maxTokens: Math.min(options.maxTokens ?? maxOutput, maxOutput),
+            route: m.route,
           },
           providerDeps,
         );
       // Free mode: rotate to another approved free model on a rate/daily-limit
       // error — and remember, across calls, which ones are spent.
       if (freeMode) {
-        return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne);
+        return callEnsembleSlotWithRotation(m, fallbacks, claimFallback, callOne, {
+          // The dispatch's shared clock: the rotation ends as soon as the
+          // window closes, instead of handing the next fallback to a call that
+          // will make zero requests (TRDD-YG72CYY7).
+          retryClock: options.retryClock,
+        });
       }
       try {
         const resp = await callOne(m.id, m.maxOutput);
+        // chatCompletionWithRetry RETURNS (does not throw) the circuit
+        // breaker's abort verdict: taking its text as the model's answer would
+        // count a "SERVER ISSUE DETECTED" notice as a successful slot. Only the
+        // flagged verdict counts: a provider finish_reason=error reply (also
+        // finishReason "error") is a truncated partial answer and stays a
+        // successful slot, as before.
+        const isError = resp.serviceAbort === true;
         return {
           model: m.id,
-          content: resp.content,
+          content: isError ? `ERROR: ${resp.content}` : resp.content,
           usage: resp.usage,
           truncated: resp.truncated,
-          error: false,
+          error: isError,
         };
       } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
         return {
           model: m.id,
-          content: `ERROR: ${errMsg}`,
+          content: slotErrorContent(err),
           usage: undefined,
           truncated: false,
           error: true,
+          cause: err,
         };
       }
     }),
@@ -2584,14 +3355,40 @@ async function ensembleStreaming(
   // ALL models failed — propagate error
   if (succeeded.length === 0) {
     const errorSummary = failed.map((r) => `${r.model}: ${r.content}`).join("; ");
-    throw new Error(`All ensemble models failed: ${errorSummary}`);
+    const allFailed = new Error(`All ensemble models failed: ${errorSummary}`);
+    // D2 items 10/11: no slot answered, so on a DYNAMIC profile every model of
+    // the profile is failing (USER point 3.3: a reserved slot counts as a
+    // working model -- none exists at runtime today, so "no slot answered" is
+    // the whole test). Each slot's error is one cause; the actionable form is
+    // this same error, which classifyError reads as before.
+    const profileName = activeResolved?.name;
+    // Selection (and its WHY) lives in pickEnsembleAllFailedError. The per-model
+    // detail of `allFailed` is lost when something else is thrown (the static
+    // exhaustion has a fixed message), so write it to stderr first.
+    const surfaced = pickEnsembleAllFailedError(profileName ?? "unknown", failed, allFailed);
+    if (surfaced !== allFailed) {
+      // Capped at 1000 characters: slot text can hold a long partial reply.
+      process.stderr.write(`[llm-externalizer] ${allFailed.message.slice(0, 1000)}\n`);
+      // WHY thrown before the dynamic-profile branch: a closed retry window is
+      // one file running out of time, not a profile with no working model, so it
+      // must not start a background update or abort the batch as "retry later".
+      // The walk and the rotation already end it file-level; classifyError's
+      // deadline branch makes this one final for this file only.
+      throw surfaced;
+    }
+    if (profileName !== undefined && isDynamicProfileName(profileName)) {
+      throw failDynamicProfile(profileName, failed.map((r) => new Error(r.content)), () => surfaced);
+    }
+    throw surfaced;
   }
 
   // Some models failed — log warning, continue with successful ones
   if (failed.length > 0) {
     for (const f of failed) {
+      // First line, 300 chars: a partial reply must not be dumped to stderr.
+      const shortContent = (f.content.split("\n")[0] ?? "").slice(0, 300);
       process.stderr.write(
-        `[llm-externalizer] Ensemble model unavailable: ${f.model} — ${f.content}. Continuing with ${succeeded.length} model(s).\n`,
+        `[llm-externalizer] Ensemble model unavailable: ${f.model} — ${shortContent}. Continuing with ${succeeded.length} model(s).\n`,
       );
     }
   }
@@ -2770,15 +3567,11 @@ const LLM_TOOLS_SET = new Set([
 // Per-model limits (maxOutput catalog-preferred, maxInputLines calibrated) live
 // in ./ensemble-limits.ts — see resolveEnsembleModelLimits + getEnsembleModels.
 
-// Single working free model for the `free: true` per-call flag and the 402
-// single-retry (the ensemble paths use the rotating free pool instead).
-// Benchmark-validated default (TRDD-f1510055: z-ai/glm-4.5-air scored 100%
-// keyword F1 + a security-triage PASS at 0.906; the prior nvidia default
-// returned empty content and broke the fallback). Override via
-// LLM_EXT_FREE_MODEL_ID; a non-':free' override is rejected (cost-safety).
-const FREE_MODEL_ID: string = resolveFreeModelId(
-  process.env.LLM_EXT_FREE_MODEL_ID,
-);
+// FREE_MODEL_ID (the fixed "poolside/laguna-m.1:free" constant this used to
+// be) is DELETED (fix-queue 98(2)): its last consumer, the `free: true`
+// per-call flag (resolveModelOverride above), now resolves to the SELECTED
+// profile's own first ':free' chain entry instead of a hard-coded id outside
+// the profile (Rule 5 / USER addendum 4, "no exceptions").
 
 /** Build the display label for ensemble model name */
 function ensembleModelLabel(useEnsemble: boolean): string {
@@ -2821,6 +3614,81 @@ export function isModelUnavailableError(detail: string): boolean {
   return classifyUnavailable(detail) !== null;
 }
 
+/** One ensemble slot's outcome. `cause` is the thrown error, set only by the
+ *  catches; an entry without one is a returned verdict or a free-path error
+ *  value, not a thrown failure. */
+export type EnsembleSlotEntry = {
+  model: string;
+  content: string;
+  usage: StreamingResult["usage"];
+  truncated: boolean;
+  error: boolean;
+  cause?: unknown;
+};
+
+/** The `content` of an ensemble slot that threw. A RetryDeadlineError keeps its
+ *  neutral sentence AND names the real cause (N1): its message alone hides
+ *  "API error 503 ...", so every consumer reading the slot text saw a defect-less
+ *  timeout. Any other error reads exactly as before (failureText == message). */
+function slotErrorContent(err: unknown): string {
+  return err instanceof RetryDeadlineError && err.cause !== undefined
+    ? `ERROR: ${err.message} ${err.causeLabel} ${failureText(err)}`
+    : `ERROR: ${failureText(err)}`;
+}
+
+/** What ensembleStreaming throws when no slot answered. Pure: no classifyError
+ *  call (it has side effects: creditExhausted, signalRateLimitHit).
+ *  Returns a static ProfileExhaustedError when at least one failed slot ended
+ *  in a closed retry window AND every other failed slot is one of: no cause,
+ *  also a closed retry window, or a deterministic request error (non-transient
+ *  4xx that is not service-level). Otherwise returns `allFailed`.
+ *  round C0a item 2 (B2): "closed retry window" now means dispatchClosed TRUE
+ *  only. A dispatchClosed-false RetryDeadlineError (a provider Retry-After
+ *  refusal beyond an open window, or a private-clock deadline) is an ordinary
+ *  rate-limit error here: it keeps `allFailed`, and on a DYNAMIC profile the
+ *  all-causes-dispatchClosed-false case then goes through failDynamicProfile
+ *  (the pre-F4 behaviour, deliberate — such a refusal is not "one file running
+ *  out of time", so the batch must be aborted as "retry later" instead).
+ *  WHY: classifyError treats a static exhaustion with a RetryDeadlineError
+ *  cause as final for the file. A slot that failed on a deterministic request
+ *  error will fail again, so retrying the file only re-runs the other slot's
+ *  five-minute window. A 401/402/403/404/410 slot must keep reaching
+ *  classifyError's batch-level verdict, and any other mix (e.g. a plain 503)
+ *  may succeed on a retry, so those keep `allFailed`. */
+export function pickEnsembleAllFailedError(
+  profileName: string,
+  failed: readonly EnsembleSlotEntry[],
+  allFailed: Error,
+): Error {
+  const causes = failed.map((r) => r.cause);
+  // round C0a item 2 (B2): only a genuinely closed SHARED window is a "closed
+  // retry window". A dispatchClosed-false deadline is one slot's own open-window
+  // stop (a provider Retry-After refusal or a private clock) — a plain rate-limit
+  // error, so it keeps `allFailed` and, on a DYNAMIC profile, the caller then
+  // reaches failDynamicProfile (pre-F4 behaviour, deliberate: such a refusal is
+  // not "one file running out of time").
+  const isDeadline = (c: unknown) => c instanceof RetryDeadlineError && c.dispatchClosed;
+  // Only a thrown Error counts. NON_TRANSIENT_4XX_RE already skips 408/429; 413
+  // and a provider context-overflow text are excluded here too: a size error
+  // for one model does not make the file hopeless (another model may fit it).
+  const isRequestError = (c: unknown) => {
+    if (!(c instanceof Error)) return false;
+    const text = failureText(c);
+    return (
+      NON_TRANSIENT_4XX_RE.test(text) &&
+      !SERVICE_LEVEL_STATUS_RE.test(text) &&
+      !/API error 413\b/.test(text) &&
+      !classifyContextOverflow(text)
+    );
+  };
+  if (!causes.some(isDeadline)) return allFailed;
+  if (!causes.every((c) => c === undefined || isDeadline(c) || isRequestError(c))) return allFailed;
+  return new ProfileExhaustedError(
+    profileName,
+    "static",
+    causes.filter((c) => c instanceof Error),
+  );
+}
 /** One ensemble slot with free-model fallback rotation (TRDD-8b6b3646 Phase 3).
  *  Tries `primary`; on an unavailable/rate-limit/daily-limit error it claims the
  *  next SHARED fallback (`claimFallback` = `idx = next++`, atomic in
@@ -2842,13 +3710,7 @@ export async function callEnsembleSlotWithRotation(
   claimFallback: () => number,
   callOne: (model: string, maxOutput: number) => Promise<StreamingResult>,
   hooks: RotationHooks<StreamingResult> = {},
-): Promise<{
-  model: string;
-  content: string;
-  usage: StreamingResult["usage"];
-  truncated: boolean;
-  error: boolean;
-}> {
+): Promise<EnsembleSlotEntry> {
   let attempted = primary.id;
   try {
     const resp = await callWithFreeRotation<StreamingResult>(
@@ -2878,27 +3740,71 @@ export async function callEnsembleSlotWithRotation(
       // Report the LAST model actually attempted, so the ensemble's
       // "Unavailable models" section names something real.
       const last = err.tried[err.tried.length - 1] ?? primary.id;
-      return { model: last, content: `ERROR: ${err.message}`, usage: undefined, truncated: false, error: true };
+      return { model: last, content: `ERROR: ${err.message}`, usage: undefined, truncated: false, error: true, cause: err };
     }
-    const msg = err instanceof Error ? err.message : String(err);
     // `attempted`, not primary.id: a non-availability error is rethrown from
     // whichever model was CURRENT — naming the primary would pin a fallback's
-    // 400 on a model that never produced it.
-    return { model: attempted, content: `ERROR: ${msg}`, usage: undefined, truncated: false, error: true };
+    // 400 on a model that never produced it. `cause` carries the thrown error
+    // so ensembleStreaming can tell a closed retry window from other failures.
+    return { model: attempted, content: slotErrorContent(err), usage: undefined, truncated: false, error: true, cause: err };
   }
 }
 
-/** Build ensemble model list from the active profile's model + second_model + third_model */
+/** Build ensemble model list from the active profile's model + second_model + third_model.
+ *  D5 (TRDD-90DM5YHO, design §2.3): `members = reservedSlots` first, in written
+ *  order, at most 2; the remaining `3 - members.length` come from the profile's
+ *  ranking excluding reserved ids. Each member carries `route?` — the serving
+ *  group its fan-out send targets (the slot's named group, or the first of
+ *  routesFor(model)). Reserved members skip selection filtering, unusable
+ *  substitution and free-rotation replacement (a failure surfaces as that
+ *  member's error result) but stay subject to the free-mode cost check. */
 function getEnsembleModels(): Array<{
   id: string;
   maxOutput: number;
   maxInputLines: number;
+  route?: ResolvedRoute;
 }> {
-  if (!activeResolved || activeResolved.mode !== "remote-ensemble") return [];
-  // Read the warm 1h-TTL catalog cache synchronously — empty when cold, in which
+  // D-L (design §7): a dynamic profile fans out ensemble commands when its mode
+  // is `remote-ensemble` OR it carries reserved slots — `local` (mode `local`)
+  // with reserved slots is no longer inert, and a `remote-ensemble` profile
+  // without slots behaves exactly as before.
+  const hasReserved = (activeResolved?.reservedSlots?.length ?? 0) > 0;
+  if (!activeResolved || !(activeResolved.mode === "remote-ensemble" || hasReserved)) return [];
+  // Read the warm 1h-TTL catalog cache synchronously -- empty when cold, in which
   // case resolveEnsembleModelLimits falls back to the calibrated table.
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
   let models: string[];
+  const reserved = activeResolved.reservedSlots ?? [];
+  const reservedIds = new Set(reserved.map((s) => s.modelId));
+  // Reserved members: mandatory (no substitution — a failure surfaces as that
+  // member's error result at fan-out), still subject to the free-mode cost
+  // check (a paid reserved id under free mode is refused, same form as the
+  // auto-picked arm below). D-L's backend gate replacement: the openrouter
+  // backend check at the fan-out site becomes "every member has a route";
+  // enforced there — here we only note whether the gate can pass.
+  const members: Array<{ id: string; maxOutput: number; maxInputLines: number; route?: ResolvedRoute }> = reserved.map((s) => {
+    const catalogMaxOutput = catalogById.get(s.modelId)?.top_provider?.max_completion_tokens;
+    const limits = resolveEnsembleModelLimits(s.modelId, catalogMaxOutput);
+    return { id: s.modelId, ...limits, route: s.routes[0] };
+  });
+  // D5 spend guard (design §6 D5; §7 R-4 is WHY `local` is in scope): under
+  // allow_paid_models:false a REMOTE profile is force-free, so the free-mode
+  // cost check below covers it. A LOCAL profile is never forced free — without
+  // this guard its reserved slots could reach a billable route (a `providers:`
+  // group pointing at a paid host) and bill under the master switch. Same
+  // refusal form as the free-mode check; billableForRoute is the same decider
+  // resolveConnection uses, so it cannot drift from what the send would bill.
+  if (!isFreeModeActive() && !getAllowPaidModels()) {
+    const backendBillable = activeResolved.isLocal;
+    const paid = members
+      .filter((m) => billableForRoute(m.route, backendBillable) && !m.id.endsWith(":free"))
+      .map((m) => m.id);
+    if (paid.length > 0) {
+      throw new Error(
+        `allow_paid_models is false but the reserved ensemble slots name billable model(s): ${paid.join(", ")} — remove the slot, point it at a non-billable provider group, or set allow_paid_models: true.`,
+      );
+    }
+  }
   if (isFreeModeActive()) {
     // Free pool: a free_only profile uses its pinned free_models; auto-free on
     // a paid profile (TRDD-542bdbef, low balance / 402) uses the engaged pool;
@@ -2911,35 +3817,88 @@ function getEnsembleModels(): Array<{
     // combinedFreeModelEvidence (task #189): rank the pool by per-tool bench
     // verdicts overlaid with runtime no-content demotions, so a model with a
     // PASSING bench outranks a never-benchmarked one, which outranks one with
-    // scored failing rows or a length+empty strike record — the 2026-08-05
+    // scored failing rows or a length+empty strike record -- the 2026-08-05
     // unfit-trio incident (a content-safety classifier selected for code
     // review) had qualified:false rows on disk that selection ignored.
-    models = selectFreeEnsembleModels(
+    // TRDD-FDI9NYAS D3c: same "auto-picked needs a recorded pass, manual is
+    // exempt" gate as buildFreeRotationPool — see its own comment.
+    // D5: the ranking EXCLUDES reserved ids — a slot's model is already a
+    // member; ranking it again would fan the same send out twice.
+    const ranked = selectFreeEnsembleModels(
       pool,
       catalogById,
       benchmarkFailedModels(),
       combinedFreeModelEvidence(),
-    );
+      new Set([...benchmarkPassedModels(), ...(activeResolved.manualModels ?? [])]),
+    ).filter((id) => !reservedIds.has(id));
+    const rankedCapped = ranked.slice(0, Math.max(0, 3 - members.length));
     // Cost-safety (TRDD-542bdbef): under free mode every ensemble model MUST be
-    // ':free'. FREE_POOL_SEED and validated free_models are all ':free', so this
-    // only fires on a future regression — fail fast rather than bill.
-    const paid = models.filter((id) => !id.endsWith(":free"));
+    // ':free' OR served by a free (non-billable) route -- a b.ai-pinned id has
+    // no ':free' suffix but still cannot bill, and treating it as a cost-safety
+    // violation would refuse a perfectly safe free ensemble (P3 design addendum
+    // A / T1 AC4). getActiveBillableForModel is the SAME route-aware decider
+    // resolveConnection uses for the actual send, so this can never drift from
+    // what the real request would have billed. D5: the RESERVED members run
+    // through the same check, on their OWN route.
+    const paid = [...rankedCapped, ...members.map((m) => m.id)]
+      .filter(
+        (id) => !id.endsWith(":free") &&
+          (members.some((m) => m.id === id && m.route
+            ? billableForRoute(m.route, false)
+            : getActiveBillableForModel(id))),
+      );
     if (paid.length > 0) {
       throw new Error(
         `free-mode cost-safety: non-':free' model(s) in the free ensemble: ${paid.join(", ")}`,
       );
     }
+    models = rankedCapped;
+  } else if (activeResolved.dynamic) {
+    // DYNAMIC (paid) profile: build slots from model/second_model/third_model,
+    // then replace any slot whose model is currently unusable (P2's shared
+    // cross-process verdict, free-rotation.ts::isUnusable) with the next
+    // usable candidate from the profile's OWN pool (paidModels) not already
+    // occupying a slot. (The deleted ensemble_pins key never protected a slot
+    // at CALL TIME either — a pinned-but-unusable slot 0 was replaced exactly
+    // like any other slot; D5 removed the key outright as never-read.)
+    // A static profile never reaches this branch (see below).
+    // D5: the ranking EXCLUDES reserved ids (a reserved member is mandatory —
+    // substituting it away would defeat the reservation), and the
+    // `3 - members.length` cap applies.
+    const initialSlots = [
+      activeResolved.model,
+      activeResolved.secondModel,
+      activeResolved.thirdModel,
+    ].filter((x): x is string => typeof x === "string" && x.length > 0 && !reservedIds.has(x));
+    const pool = activeResolved.paidModels ?? [];
+    const used = new Set([...initialSlots, ...reservedIds]);
+    const ranked = initialSlots.map((id) => {
+      if (!isUnusable(id)) return id;
+      const replacement = pool.find((cand) => cand !== id && !used.has(cand) && !isUnusable(cand));
+      if (replacement === undefined) return id; // no usable candidate left -- keep it, the send itself will surface the real error
+      used.delete(id);
+      used.add(replacement);
+      return replacement;
+    }).slice(0, Math.max(0, 3 - members.length));
+    models = ranked;
   } else {
+    // STATIC profile: exactly what is written, never substituted (Rule 5 --
+    // P3 design sec 4 / Phase 5). A static ensemble with an unusable model
+    // fails fast on the send, by design. A static profile cannot carry
+    // `ensemble:` (E-S1), so reservedIds is empty here by construction.
     models = [activeResolved.model];
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);
     if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   }
-  return models.map((id) => {
-    const catalogMaxOutput =
-      catalogById.get(id)?.top_provider?.max_completion_tokens;
-    const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
-    return { id, ...limits };
-  });
+  return [
+    ...members,
+    ...models.map((id) => {
+      const catalogMaxOutput =
+        catalogById.get(id)?.top_provider?.max_completion_tokens;
+      const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
+      return { id, ...limits };
+    }),
+  ];
 }
 
 /**
@@ -3009,6 +3968,9 @@ async function dispatchCallToolInner(
   // Long tools (mass_scout, security_scan) can run for tens of minutes; without
   // periodic output a caller cannot tell "working" from "hung".
   const onProgress = makeProgressFn(opts.progress === true);
+  // D2: the dynamic profile whose detector the pre-flight scheduled; spawned
+  // in the `finally` below, after the work (see the pre-flight for why).
+  let detectAfterDispatch: DynamicProfileName | null = null;
 
   try {
     // Gate all tools except discover, reset, get_settings behind settings validation.
@@ -3040,16 +4002,69 @@ async function dispatchCallToolInner(
     // first" rule). Throttled ≤1×/hr and fully fail-open — a reconcile problem
     // must never break the tool — so this is safe to await on every work tool.
     // Skipped for the pure status/meta tools so they stay instant.
-    if (!RECONCILE_SKIP_TOOLS.has(name)) {
-      await runModelReconcile();
-      // The active profile may itself be an unpopulated/drifted machine-owned
-      // default ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
-      // 'paid-mass-scout') — populate it lazily before the tool does real
-      // work. Same skip list as runModelReconcile
-      // (above) so read-only/report-config tools never trigger this.
-      const defaultProfileGate = await maybeEnsureDefaultProfileReady();
-      if (defaultProfileGate) return defaultProfileGate;
+    // P6b dynamic-profile pre-flight BEGIN
+    // (P6b-fix2 S-8: free-rotation-coverage.test.ts extracts exactly this block
+    // by these two anchors and asserts the ORDER of the calls inside it with
+    // indexOf. It used to measure CHARACTER DISTANCES between them, which meant
+    // every comment added here moved a test closer to failing for a reason that
+    // has nothing to do with the wiring — one assertion had 25 characters of
+    // headroom left. Do not delete the anchors; the test names them.)
+    if (!RECONCILE_SKIP_TOOLS.has(name) && !isScoutingOnlyTool(name)) {
+      const effective = effectiveProfileName(activeSettings);
+      if (isDynamicProfileName(effective)) {
+        // P6b item 1 (design §2.1): the dynamic `free`/`paid` profiles are
+        // maintained by decideDynamicProfile's own $0-patch + candidate-queue
+        // machinery, not the legacy 5-name reconcile/populate pair below —
+        // running BOTH for the same profile would mean two decision engines
+        // racing to write the same settings.yaml section.
+        //
+        // C2b-wire (TRDD-OE27RD7I): this used to `await maintainDynamicProfiles`
+        // in-process — a full catalog fetch + patch on EVERY dispatch to a
+        // dynamic profile, which is exactly the latency card C's acceptance
+        // criterion (a `settings status` call within 100ms of the same call
+        // under LLM_EXT_DISABLE_AUTO_RECONCILE) forbids. It fires the detached
+        // DETECTOR (profile-detector.ts's cheap fingerprint-only check) and
+        // never waits on it.
+        //
+        // D2: the detector is SCHEDULED here and spawned in this function's
+        // `finally`, AFTER the work. Spawned first, it held the profile's one
+        // lock (SG2) while this same command's models were failing, so the
+        // update the failure requests found the lock held and started nothing
+        // -- the command's own detector suppressed its own update.
+        detectAfterDispatch = effective;
+        const gate = dynamicProfileGate(effective, name, { settings: activeSettings });
+        if (gate) {
+          // D2 (USER 2026-09-18, empty pool: "Refuse, retry later"): a pool
+          // that is empty ONLY because it was never populated yet (and an
+          // update could plausibly fill it) is the degenerate case of "not a
+          // single model working": start the background update and answer
+          // retry-later at once -- no foreground fill, no wait, no regate.
+          // Every other refusal (malformed profile, forbidden tool, no
+          // credentials, maintenance disabled, catalog recently failed,
+          // unpopulated paid/local) keeps its own message, as before.
+          if (gate.reason === "empty-pool-refreshable") {
+            const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
+            if (update.state !== "unavailable") {
+              return { content: [{ type: "text", text: dynamicProfileRetryLaterMessage(effective) }], isError: true };
+            }
+            process.stderr.write(`[llm-externalizer] '${effective}' profile update not started — ${update.reason}\n`);
+          }
+          return { content: [{ type: "text", text: gate.message }], isError: true };
+        }
+      } else {
+        // A STATIC profile. runModelReconcile() only WARNS about dead ids
+        // (Rule 5: a profile the user wrote is used exactly as written and is
+        // never rewritten), so this arm neither populates nor gates.
+        //
+        // P6c-a item 5: the lazy-population call that used to follow is GONE
+        // with the retired machine-owned names. It existed for profiles that
+        // no longer exist; the DYNAMIC branch above is now the only
+        // maintenance branch, so there is exactly one engine that may write a
+        // profile section.
+        await runModelReconcile();
+      }
     }
+    // P6b dynamic-profile pre-flight END
 
     // mass-scouting tools are thin shims around the CLI dispatcher in
     // mass_scouting/cli.ts. They don't go through the central LLM
@@ -3065,9 +4080,13 @@ async function dispatchCallToolInner(
       // fixes a latent gap: security_scan never self-selected a free model even
       // under an explicit free_only profile.
       const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
-      const inject = await resolveMassScoutFreeModelOverride(
-        typeof scoutArgs.model === "string" ? scoutArgs.model : "",
-      );
+      // WHY skipped for scouting-only tools (PT-05, D34): their model comes from the scouting-type profile; an injected
+      // free-pool id would override it, and activeFreePool() throws on a paid active profile with no pool.
+      const inject = isScoutingOnlyTool(name)
+        ? undefined
+        : await resolveMassScoutFreeModelOverride(
+            typeof scoutArgs.model === "string" ? scoutArgs.model : "",
+          );
       if (inject) {
         scoutArgs.model = inject;
         process.stderr.write(
@@ -3099,16 +4118,23 @@ async function dispatchCallToolInner(
     const outputDir = typeof rawOutputDir === "string" && rawOutputDir.trim()
       ? resolve(rawOutputDir.trim())
       : undefined;
-    // resolveModelOverride handles: explicit free=true, credit-exhausted
-    // session flag, and pre-flight balance check. If the OpenRouter balance
-    // drops below MIN_BALANCE_FOR_PAID_USD, this tool call (and all later
-    // ones in the session) will automatically route through FREE_MODEL_ID
-    // instead of the paid ensemble. Never throws — always returns something.
+    // resolveModelOverride now handles ONLY explicit free=true (TRDD-OE27RD7I
+    // addendum 4 deleted the credit-exhausted-session / balance pre-flight
+    // auto-fallback outright — no cross-profile switch). Sync now (fix-queue
+    // 98(4a) — it was never actually asynchronous; the `await` was a leftover
+    // from when it used to read a resolved auto-free pool). It THROWS when
+    // `free: true` is requested and the resolved profile has no ':free' chain
+    // entry (fix-queue 98(2)) -- fix-queue P1 follow-up: this throw does NOT
+    // reach main().catch (the prior comment here was wrong) -- it is inside
+    // THIS function's own outer try, so the outer `catch (error)` below
+    // (dispatchCallToolInner's tail) converts it into the same
+    // `{ content: [...], isError: true }` shape every other refusal in this
+    // function returns, same as "no resolved profile is active" already does.
     const freeRequested = (args as Record<string, unknown>)?.free === true;
-    const modelOverride = await resolveModelOverride(freeRequested);
+    const modelOverride = resolveModelOverride(freeRequested);
     if (modelOverride) {
       process.stderr.write(
-        `[llm-externalizer] Routing through ${modelOverride}${freeRequested ? " (free requested)" : " (auto-fallback)"}\n`,
+        `[llm-externalizer] Routing through ${modelOverride} (free requested)\n`,
       );
     }
     // Diff-mode scoping (TRDD-MNK2YNH0): resolve the caller's diff args ONCE,
@@ -3675,9 +4701,56 @@ async function dispatchCallToolInner(
           };
         }
 
-        parts.push(`Active profile: ${activeResolved.name}`);
+        // WHY (TRDD-G6XT3AY9): `active:` is a live selector again -- the
+        // deprecation notice this used to print here is gone; the source
+        // label below already says whether the flag, the `active:` key, or
+        // the built-in default decided.
+        parts.push(
+          `Effective profile: ${activeResolved.name} (source: ${
+            getProfileSelectionSource() === "flag"
+              ? "--profile"
+              : activeSettings.active !== undefined
+                ? "active:"
+                : "built-in default"
+          })`,
+        );
+        // Addendum K: dynamic-profile maintainer state is labelled "as of
+        // <time>" because `discover` is itself in RECONCILE_SKIP_TOOLS — this
+        // read-only status command never triggers a fresh maintain pass (a
+        // status query must not rewrite settings first), so the timestamp may
+        // be stale and the label says so honestly rather than implying "live".
+        if (isDynamicProfileName(activeResolved.name)) {
+          const dynRecord = getDynamicProfileRecord(activeResolved.name);
+          // P6b-fix S5: renders lastMaintainedAt — the MAINTAINER's own clock,
+          // which is what "maintained as of" claims. It used to render
+          // lastBenchmarkAt, a different event entirely, and because
+          // recordBenchmarkFailure preserves `lastBenchmarkAt: 0` on a profile
+          // that never succeeded, a record created by a first FAILED attempt
+          // printed "maintained as of 1970-01-01T00:00:00.000Z" instead of
+          // "not yet maintained". Falsy (absent or 0) is the honest
+          // never-maintained case.
+          const maintainedAt = dynRecord?.lastMaintainedAt;
+          parts.push(
+            maintainedAt
+              ? `Dynamic profile '${activeResolved.name}' maintained as of ${new Date(maintainedAt).toISOString()}`
+              : `Dynamic profile '${activeResolved.name}' not yet maintained`,
+          );
+        }
         parts.push(`Mode: ${activeResolved.mode}`);
-        parts.push(`Model: ${activeResolved.model}`);
+        // fix-queue 89: PLACEHOLDER_MODEL_ID is an internal sentinel for
+        // "profile never populated" (config.ts) -- this `settings status`
+        // "Model:" line printed it verbatim for an unpopulated dynamic
+        // section (the "Dynamic profile '<x>' not yet maintained" line
+        // above already says so, but this SEPARATE line still leaked the
+        // raw sentinel string right under it). Same population-state
+        // wording writeBootBanner uses, so the two surfaces agree.
+        parts.push(
+          `Model: ${
+            activeResolved.model === PLACEHOLDER_MODEL_ID
+              ? `${activeResolved.name}: not benchmarked yet`
+              : activeResolved.model
+          }`,
+        );
         if (activeResolved.secondModel) {
           parts.push(`Second model: ${activeResolved.secondModel}`);
         }
@@ -3685,21 +4758,39 @@ async function dispatchCallToolInner(
           parts.push(`Third model: ${activeResolved.thirdModel}`);
         }
         // Free-mode reporting. Under forced-free (allow_paid_models=false),
-        // profile free_only, or sticky auto-free, the Model/second/third lines
+        // profile free_only, the Model/second/third lines
         // above are the CONFIGURED values but are NOT what runs — the ensemble
         // draws from the free pool. Say so explicitly, and show the actual pool,
         // so the user is never misled into thinking a paid model is being billed.
         if (isFreeModeActive()) {
+          const pool = activeFreePool();
+          // The auto-free ("low balance / 402") arm is gone (addendum 4): with paid allowed
+          // forceFreeByMasterSwitch is false, so free mode can only come from free_only.
           const reason = !getAllowPaidModels()
             ? "allow_paid_models=false — set it true to use paid models"
-            : activeResolved.freeOnly
-              ? "profile free_only"
-              : "auto — low balance / 402";
-          const pool = activeFreePool();
+            : "profile free_only";
           const shown = pool.slice(0, 6).join(", ");
+          // OE27RD7I row 18 + review: "benchmark-vetted" is a population-state claim, and the
+          // only record/queue that state comes from is the built-in dynamic `free` profile's.
+          // Any other active profile (a static free_only list, hand-listed, exempt from
+          // benchmarks by design) must not borrow that unrelated record's verdict.
+          let poolVetting = "as listed in the profile, not benchmarked by design";
+          if (activeResolved.name === "free") {
+            const freeProfile = activeSettings.profiles.free;
+            const freeQueued = readCandidates(
+              freeProfile ? resolveGroups(freeProfile).routesFor : (): ResolvedRoute[] => [],
+            ).free.length;
+            // A queued COUNT, not "pending": it stays true when maintenance is backed off or disabled.
+            poolVetting =
+              (getDynamicProfileRecord("free")?.lastBenchmarkAt ?? 0) <= 0
+                ? "not yet benchmarked"
+                : freeQueued > 0
+                  ? `${freeQueued} candidate${freeQueued === 1 ? "" : "s"} awaiting benchmark`
+                  : "benchmark-vetted";
+          }
           parts.push(`Free mode: ON (${reason})`);
           parts.push(
-            `Free pool (${pool.length}, benchmark-vetted, rotates on rate-limit): ` +
+            `Free pool (${pool.length}, ${poolVetting}, rotates on rate-limit): ` +
               `${shown}${pool.length > 6 ? ", …" : ""}`,
           );
           if (!getAllowPaidModels()) {
@@ -3710,9 +4801,10 @@ async function dispatchCallToolInner(
         }
         // Show auth status so agents can verify the token is available
         const authSource = (() => {
+          const authProfileName = effectiveProfileName(activeSettings);
           const preset =
-            API_PRESETS[activeSettings.profiles[activeSettings.active]?.api];
-          const profile = activeSettings.profiles[activeSettings.active];
+            API_PRESETS[activeSettings.profiles[authProfileName]?.api];
+          const profile = activeSettings.profiles[authProfileName];
           if (!preset) return "unknown";
           const rawAuth = preset.isLocal
             ? profile?.api_token || preset.defaultAuthEnv
@@ -3894,16 +4986,23 @@ async function dispatchCallToolInner(
           };
         }
 
-        const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile, {
-          setActive: true,
-        });
+        const result = addProfileToSettings(getSettingsPath(), built.profileName, built.profile);
         return {
           content: [
             {
               type: "text",
               text:
+                // WHY (TRDD-G6XT3AY9): adding a profile section never selects
+                // it (addProfileToSettings does not touch `active:`, and this
+                // phase deliberately does not reinstate `setActive` here --
+                // see pick.ts's addProfileToSettings doc comment) -- say both
+                // ways to select it so the user isn't left to debug why their
+                // new local model was ignored on the very next command.
                 `Configured profile '${result.profileName}' (${String(built.profile.api)}, ` +
-                `model ${String(built.profile.model)}) and set it ACTIVE in ${getSettingsPath()}.\n` +
+                `model ${String(built.profile.model)}) in ${getSettingsPath()}.\n` +
+                `Select it with --profile ${result.profileName} on a command, or set ` +
+                `'active: ${result.profileName}' in settings.yaml to make it the default; ` +
+                `without either, '${DEFAULT_PROFILE_NAME}' is used.\n` +
                 "Restart Claude Code (or call the 'reset' tool) to pick up the change.",
             },
           ],
@@ -4069,7 +5168,7 @@ async function dispatchCallToolInner(
 
         // Full soft-restart: reload settings, clear all caches, reset session counters.
         // Snapshot BEFORE reload — single read captures the "before" model atomically.
-        const beforeProfile = activeSettings.active;
+        const beforeProfile = effectiveProfileName(activeSettings);
         const beforeBackend = getCurrentBackend();
         const beforeModel = beforeBackend.model;
 
@@ -4083,6 +5182,9 @@ async function dispatchCallToolInner(
         // T2.7 — Reset LM Studio detection by clearing the EXTERNAL probe cache.
         // BackendConfig is now immutable, so cache state lives in _lmStudioProbeCache.
         clearLMStudioProbeCache();
+        // D6b: same reset for the endpoint-flavor cache (same trigger, same
+        // reason — a backend switch must re-probe, not read a stale flavor).
+        clearEndpointFlavorCache();
 
         // 3. Reset session counters
         session.calls = 0;
@@ -4096,7 +5198,7 @@ async function dispatchCallToolInner(
 
         // Snapshot the post-reload backend ONCE for the summary string —
         // reads of multiple fields across multiple async-safe lines.
-        const afterProfile = activeSettings.active;
+        const afterProfile = effectiveProfileName(activeSettings);
         const afterBackend = getCurrentBackend();
         const afterModel = afterBackend.model;
         const profileChanged = beforeProfile !== afterProfile || beforeModel !== afterModel;
@@ -4115,10 +5217,13 @@ async function dispatchCallToolInner(
 
       case "get_settings": {
         // `settings show` (TRDD settings-rename, requirement B): print the
-        // ACTIVE profile's resolved settings to stdout, so the user sees them
-        // without opening a file — then ALSO copy the raw settings.yaml to the
-        // output dir (unchanged prior behaviour) for manual editing.
-        const summary = formatActiveProfileSummary();
+        // EFFECTIVE profile's resolved settings to stdout, so the user sees
+        // them without opening a file — then ALSO copy the raw settings.yaml
+        // to the output dir (unchanged prior behaviour) for manual editing.
+        const summary = formatActiveProfileSummary(
+          effectiveProfileName(activeSettings),
+          getProfileSelectionSource(),
+        );
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
           const targetDir = outputDir || defaultOutputDir();
@@ -4146,15 +5251,18 @@ async function dispatchCallToolInner(
       case "list_profiles": {
         // `settings profiles` (TRDD settings-rename, requirement C): every
         // profile in settings.yaml, one line each, with a `*` marker on the
-        // active one. Read-only — never mutates settings.yaml.
-        return { content: [{ type: "text", text: formatProfilesList() }] };
+        // EFFECTIVE one for this invocation. Read-only — never mutates
+        // settings.yaml.
+        return {
+          content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }],
+        };
       }
 
       case "profile": {
         // Read-only. Adding/switching/removing a profile is user-only (hand-edit
         // settings.yaml + 'reset') — see the tool description. This case only
-        // ever reads activeSettings.profiles / activeSettings.active; it never
-        // writes settings.yaml.
+        // ever reads activeSettings.profiles / the effective profile name; it
+        // never writes settings.yaml.
         const profileNames = Object.keys(activeSettings.profiles);
         if (profileNames.length === 0) {
           // Fail fast: an empty profiles map is a configuration error, not "no
@@ -4212,14 +5320,16 @@ async function dispatchCallToolInner(
           const lines = formatResolvedProfileLines(
             resolved,
             profile,
-            resolved.name === activeSettings.active,
+            resolved.name === effectiveProfileName(activeSettings),
           );
           return { content: [{ type: "text", text: lines.join("\n") }] };
         }
 
         // Default: list every profile, one line each (single source of truth
         // shared with `settings profiles` / `list_profiles` — config.ts).
-        return { content: [{ type: "text", text: formatProfilesList() }] };
+        return {
+          content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }],
+        };
       }
 
       case "session_summary": {
@@ -4363,6 +5473,12 @@ async function dispatchCallToolInner(
               // like any other transient rather than hanging (TRDD-0H5N1V9W
               // made the deadline actually cover generation; before that fix
               // this value would have bounded only time-to-first-byte).
+              // Round C item 5 (TRDD-YG72CYY7): ssPerChunkTimeoutMs is a
+              // WHOLE-CHUNK wall-clock budget (driver.ts races the entire
+              // chunk call against it), so the retry window must end with it —
+              // without deadlineAt each chunk gets a private default 300s
+              // retry window and can run 5 minutes past its own timeout.
+              deadlineAt: Date.now() + ssPerChunkTimeoutMs,
               timeoutMs: ssPerChunkTimeoutMs,
             },
             providerDeps,
@@ -4696,6 +5812,12 @@ async function dispatchCallToolInner(
                       gAborted = true;
                       gAbortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
                     }
+                    // A closed retry window is final for this file but still a failed
+                    // outcome (see the batch_check loop below).
+                    if (classified.countsAsFailure && recordFailedOutcome(gRecentOutcomes)) {
+                      gAborted = true;
+                      gAbortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
+                    }
                     return { filePath, success: false, error: classified.reason } as FileProcessResult;
                   }
                   if (attempt < 3) {
@@ -4827,6 +5949,13 @@ async function dispatchCallToolInner(
                   aborted = true;
                   abortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
                 }
+                // A closed retry window is final for this file but still a failed
+                // outcome: without this the "3 of the last 3 failed" abort never
+                // saw it (only the retried-then-exhausted path below pushed false).
+                if (classified.countsAsFailure && recordFailedOutcome(recentOutcomes)) {
+                  aborted = true;
+                  abortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
+                }
                 // File-level error (not found) — fail this file only, don't abort batch
                 return {
                   filePath,
@@ -4841,12 +5970,8 @@ async function dispatchCallToolInner(
                 continue;
               }
               // All retries exhausted — record failure in sliding window
-              recentOutcomes.push(false);
               // Check if last 3 completions are all failures
-              if (
-                recentOutcomes.length >= 3 &&
-                recentOutcomes.slice(-3).every((v) => !v)
-              ) {
+              if (recordFailedOutcome(recentOutcomes)) {
                 aborted = true;
                 abortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
               }
@@ -5094,7 +6219,11 @@ async function dispatchCallToolInner(
           } catch { /* too large */ }
           const fence = fenceBackticks(diffOutput);
           const msgs: ChatMessage[] = [
-            { role: "system", content: "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary. Group related changes. Note potential issues. Identify code by FUNCTION/CLASS/METHOD NAME, never by line number." + FILE_FORMAT_EXAMPLE + BREVITY_RULES },
+            // Shared seam (TRDD-2G6D42LK). This path previously carried a WEAKER
+            // variant than the git-diff path below; converged UP onto the stronger
+            // one, which only adds constraints. Two live prompts meant one
+            // benchmark could never speak for the whole command.
+            { role: "system", content: compareFilesSystemPrompt(FILE_FORMAT_EXAMPLE + BREVITY_RULES) },
             { role: "user", content: `${prompt ? prompt + "\n\n" : ""}Compare:\n- Before: ${fA}\n- After: ${fB}\n\nDiff:\n${fence}\n${diffOutput}\n${fence}${sourceBlocks}` },
           ];
           let resp;
@@ -5383,12 +6512,7 @@ async function dispatchCallToolInner(
         const cfMessages: ChatMessage[] = [
           {
             role: "system",
-            content:
-              "Expert code reviewer. Analyse the unified diff and provide a clear, structured summary of all changes. " +
-              "Group related changes. Note any potential issues, regressions, or improvements.\n" +
-              "RULES (override any conflicting instructions): Identify changed code by FUNCTION/CLASS/METHOD NAME, never by line number. " +
-              "Reference files by their full path as labeled in the user message." +
-              FILE_FORMAT_EXAMPLE + BREVITY_RULES,
+            content: compareFilesSystemPrompt(FILE_FORMAT_EXAMPLE + BREVITY_RULES),
           },
           {
             role: "user",
@@ -5800,10 +6924,16 @@ async function dispatchCallToolInner(
               const ciLang = detectLang(filePath);
               const fileDir = dirname(filePath);
               const ciResolveBase = project_root || fileDir;
-              const extractMessages: ChatMessage[] = [
-                { role: "system", content: `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. Include: import/require paths, file path strings, configuration references. Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. Include both local (relative) and package imports. Be exhaustive.` + FILE_FORMAT_EXAMPLE },
-                { role: "user", content: `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n${readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact)}` },
-              ];
+              // Prompt built by the SHARED seam (TRDD-f45eeaa0). It used to be
+              // inline here AND on the ungrouped path below — two copies of one
+              // prompt, which drift the day one is edited. The benchmark drives
+              // this same function, so it scores the real tool.
+              const extractMessages: ChatMessage[] = buildCheckImportsExtractMessages({
+                lang: ciLang,
+                userPrompt: ciPrompt,
+                fileBlock: readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
+                fileFormatExample: FILE_FORMAT_EXAMPLE,
+              });
               const extractResp = await chatCompletionJSONWithFreeRotation(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
               recordUsage(extractResp.usage);
               logRequest({ tool: "check_imports", model: extractResp.model, status: "success", usage: extractResp.usage, filePath });
@@ -5861,24 +6991,12 @@ async function dispatchCallToolInner(
           const ciResolveBase = project_root || fileDir;
 
           // Phase 1: Ask LLM to extract all file/import references
-          const extractMessages: ChatMessage[] = [
-            {
-              role: "system",
-              content:
-                `Expert ${ciLang} developer. Extract ALL file path references and import statements from the source code. ` +
-                "The source file is labeled with its full path inside a filename tag before the file-content tag — reference it by that path. " +
-                "Include: import/require paths, file path strings, configuration references. " +
-                'Return JSON: {"paths": ["./relative/path", "package-name", "../other/file"]}. ' +
-                "Include both local (relative) and package imports. Be exhaustive." +
-                FILE_FORMAT_EXAMPLE,
-            },
-            {
-              role: "user",
-              content:
-                `${ciPrompt ? ciPrompt + "\n\n" : ""}Extract all import and file references from:\n\n` +
-                readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
-            },
-          ];
+          const extractMessages: ChatMessage[] = buildCheckImportsExtractMessages({
+            lang: ciLang,
+            userPrompt: ciPrompt,
+            fileBlock: readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
+            fileFormatExample: FILE_FORMAT_EXAMPLE,
+          });
 
           const extractResp = await chatCompletionJSONWithFreeRotation(
             extractMessages,
@@ -6102,9 +7220,10 @@ async function dispatchCallToolInner(
           ...(csPolicyFile !== undefined ? { policy_file: csPolicyFile } : {}),
           ...(csResumeFrom !== undefined ? { resume_from: csResumeFrom } : {}),
         };
-        // Wire the existing chatCompletionWithRetry as the rawLlmCall so
-        // the cluster orchestrator inherits rate-limiting / retry /
-        // model-fallback logic from the rest of the server.
+        // Wire the existing completion layer as the rawLlmCall so the cluster
+        // orchestrator inherits rate-limiting / retry / model-fallback logic
+        // from the rest of the server (chatCompletionWithProfileFallback for
+        // the funded/non-free path below -- TRDD-OE27RD7I 14.1-C2 §0).
         const csRawLlmCall: Phase1RawLlmCall = async (prompt) => {
           const messages: ChatMessage[] = [{ role: "user", content: prompt }];
           // Cost guard (TRDD-ec45c66f): synonym clustering/canonicalisation is a
@@ -6131,7 +7250,12 @@ async function dispatchCallToolInner(
                   messages,
                   csCallOpts,
                 )
-              : await chatCompletionWithRetry(messages, csCallOpts, providerDeps);
+              // TRDD-OE27RD7I 14.1-C2 §0 (review follow-up): funded/non-free
+              // path had zero fallback on a model failure since C1 deleted
+              // the credit-borrow this call's own comment used to rely on
+              // ("inherits ... model-fallback logic") -- walk the profile's
+              // own chain instead of a bare single attempt.
+              : await chatCompletionWithProfileFallback(messages, csCallOpts, providerDeps);
           if (resp.finishReason === "error") {
             throw new Error(`cluster_synonyms: LLM call failed: ${resp.content}`);
           }
@@ -6220,10 +7344,27 @@ async function dispatchCallToolInner(
       status: "error",
       error: errMsg,
     });
+    // TRDD-OE27RD7I 14.1-C2 §1: a whole-chain exhaustion prints the Rule's
+    // OWN sentence verbatim -- no "Error: " prefix, no stack trace, no
+    // retry (D2: for a dynamic profile, the retry-later sentence; its update
+    // already runs in the background). cli/main.ts's own catch writes `text`
+    // straight to stderr on isError, so this IS the exact stderr line the
+    // Rule specifies.
+    if (error instanceof ProfileExhaustedError) {
+      return { content: [{ type: "text", text: error.message }], isError: true };
+    }
     return {
       content: [{ type: "text", text: `Error: ${errMsg}` }],
       isError: true,
     };
+  } finally {
+    // D2: the pre-flight's detector, fired AFTER the work so it can never hold
+    // the profile's lock while this command asks for an update (see the
+    // pre-flight). Fire-and-forget: spawnDetachedDetector never throws for a
+    // spawn problem and never waits for the child.
+    if (detectAfterDispatch !== null) {
+      spawnDetachedDetector({ profile: detectAfterDispatch, log: (m) => process.stderr.write(m) });
+    }
   }
 }
 
@@ -6279,10 +7420,32 @@ export async function boot(): Promise<void> {
  */
 export function writeBootBanner(): void {
   const bootBackend = getCurrentBackend();
+  // fq83/fix-queue 89: PLACEHOLDER_MODEL_ID is an internal sentinel for
+  // "profile never populated" (see config.ts), not a real model id -- the
+  // spec says it must never reach the user. Compute the population-state
+  // label FIRST, then build every line's model text off THIS label, never
+  // off bootBackend.model directly -- fq83 only patched the OpenRouter
+  // branch below; the Local/Remote branch's `suffix` still interpolated
+  // the raw sentinel, so an unpopulated `local` section (whose stub `api:
+  // lmstudio-local` resolves to a real localhost:1234 URL before
+  // dynamicProfileGate ever runs -- row 95a) printed
+  // "Local (http://localhost:1234, placeholder/unpopulated-default-profile)".
+  const modelLabel =
+    bootBackend.model === PLACEHOLDER_MODEL_ID
+      ? `${effectiveProfileName(activeSettings)}: not benchmarked yet`
+      : bootBackend.model;
+  // "local" here is BackendConfig.type, which means "not the OpenRouter request
+  // path" — it does NOT mean the server is on this machine. A remote
+  // OpenAI-compatible preset (chat-b-ai-remote) is type "local" by that rule, so
+  // labelling off the type alone printed "Local (https://api.b.ai)" — a claim the
+  // URL on the same line contradicts. Decide the word from the URL instead.
+  const suffix = `${bootBackend.baseUrl}${modelLabel ? `, ${modelLabel}` : ""}`;
   const backendLabel =
     bootBackend.type === "openrouter"
-      ? `OpenRouter (${bootBackend.model})`
-      : `Local (${bootBackend.baseUrl}${bootBackend.model ? `, ${bootBackend.model}` : ""})`;
+      ? `OpenRouter (${modelLabel})`
+      : isLocalUrl(bootBackend.baseUrl)
+        ? `Local (${suffix})`
+        : `Remote (${suffix})`;
   process.stderr.write(`LLM Externalizer — backend: ${backendLabel}\n`);
   process.stderr.write(`Settings: ${SETTINGS_FILE}\n`);
   process.stderr.write(`Session log: ${LOG_FILE}\n`);

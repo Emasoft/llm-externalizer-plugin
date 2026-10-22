@@ -2,7 +2,6 @@
 // ~/.claude/rules via the MCP server subprocess). Offline + sandboxed: source
 // + destination are tmp dirs under /tmp (an allowed write root), env saved/restored.
 
-import { describe, it, expect, afterEach } from "vitest";
 import {
   mkdtempSync,
   mkdirSync,
@@ -12,6 +11,7 @@ import {
   rmSync,
   readdirSync,
 } from "node:fs";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -43,6 +43,11 @@ function mkSource(content: string): string {
   return p;
 }
 
+// The suite-wide hermetic setup sets LLM_EXT_INSTALL_RULE=0; this file tests installation itself, so it
+// clears the opt-out (afterEach restores the saved value). Every call passes an explicit rulesDir.
+beforeEach(() => {
+  delete process.env.LLM_EXT_INSTALL_RULE;
+});
 afterEach(() => {
   for (const [k, v] of Object.entries(savedEnv)) {
     if (v === undefined) delete process.env[k];

@@ -40,6 +40,9 @@
   "cpv": {
     "skillaudit_advisory": true,
     "pipeline_profile": "remote-validation",
+    "exclude_paths": [
+      "design/archived/TRDD-20260916_153721+0200-90DM5YHO-multi-provider-profiles-and-the-b-ai-free-provider.md"
+    ],
     "pipeline": {
       "intentional_divergence": [
         "scripts/publish.py",

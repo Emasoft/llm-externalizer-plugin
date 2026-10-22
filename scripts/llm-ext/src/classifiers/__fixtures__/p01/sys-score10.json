@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"model\":\"typesafe/jev-1.13-20260917\",\"answers\":{\"urgency\":{\"type\":\"score\",\"score\":7.4,\"legend\":{\"0\":\"level 0\",\"1\":\"level 1\",\"2\":\"level 2\",\"3\":\"level 3\",\"4\":\"level 4\",\"5\":\"level 5\",\"6\":\"level 6\",\"7\":\"level 7\",\"8\":\"level 8\",\"9\":\"level 9\"},\"probabilities\":{\"0\":0,\"1\":0,\"2\":0,\"3\":0.02,\"4\":0.05,\"5\":0.07,\"6\":0.08,\"7\":0.16,\"8\":0.33,\"9\":0.29},\"confidence\":0.55}},\"usage\":{\"input_tokens\":376,\"output_tokens\":18,\"cost\":0.000015792},\"provider\":\"TypeSafe\"}"
+}

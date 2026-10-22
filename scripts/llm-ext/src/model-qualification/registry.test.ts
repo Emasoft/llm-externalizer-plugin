@@ -78,9 +78,13 @@ describe("TOOL_MODEL_REGISTRY", () => {
 
   it("carries requirements-only descriptors (benchmark:null) for tools without a dataset yet", () => {
     // code_task LEFT this list in P2b (its code-audit corpus), scan_folder in P2c (its
-    // mass-search corpus) and check_against_specs in P2d (its spec-adherence corpus) —
-    // all three now have a real golden dataset.
-    for (const t of ["check_imports", "compare_files", "chat", "cluster_synonyms"]) {
+    // mass-search corpus) and check_against_specs in P2d (its spec-adherence corpus).
+    // check_imports (TRDD-f45eeaa0), then compare_files and check_references
+    // (TRDD-2G6D42LK), LEFT this list once each had a runner AND its
+    // update-all WORKLOAD_DESCRIBERS entry — a benchmark id the pipeline
+    // cannot run is a claim, not a capability, so the descriptor and the runner
+    // land together. The list shrinks as datasets land; never padded to pass.
+    for (const t of ["chat", "cluster_synonyms"]) {
       const d = getToolDescriptor(t);
       expect(d, `${t} registered`).toBeDefined();
       expect(d!.benchmark, `${t} has no dataset yet`).toBeNull();

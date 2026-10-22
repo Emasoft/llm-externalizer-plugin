@@ -1,0 +1,8 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json",
+  "cache-control": "private, no-store"
+ },
+ "body": "{\"data\":{\"is_management_key\":false,\"is_provisioning_key\":false}}"
+}

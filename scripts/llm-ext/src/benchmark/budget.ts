@@ -136,12 +136,18 @@ export class SpendLedger {
   private spent = 0;
   private trip: string | null = null;
   private readonly log: SpendEntry[] = [];
+  /** Optional crash-safe sink invoked with each BOOKED (actual, not reserved)
+   *  amount as `record()` runs — e.g. the paid dynamic-profile maintainer
+   *  wires this to `bookDailySpend` so a crashed child cannot hide its
+   *  spend (design §2.5). Never allowed to throw out of `record()`. */
+  private readonly onBook?: (usd: number) => void;
 
-  constructor(capUsd: number) {
+  constructor(capUsd: number, opts: { onBook?: (usd: number) => void } = {}) {
     if (!Number.isFinite(capUsd) || capUsd < 0) {
       throw new Error(`SpendLedger: cap must be a finite non-negative USD amount, got ${capUsd}`);
     }
     this.capUsd = capUsd;
+    this.onBook = opts.onBook;
   }
 
   get spentUsd(): number {
@@ -195,6 +201,15 @@ export class SpendLedger {
     if (!Number.isFinite(actualUsd) || actualUsd < 0) return;
     this.spent += actualUsd;
     this.log.push({ label, usd: actualUsd });
+    if (actualUsd > 0 && this.onBook) {
+      // Best-effort: a broken sink must never break the benchmark it is only
+      // observing. See the class-level onBook doc comment.
+      try {
+        this.onBook(actualUsd);
+      } catch {
+        /* the sink's own problem — never let it interrupt the run */
+      }
+    }
     if (this.spent > this.capUsd && this.trip === null) {
       this.trip = `actual spend $${this.spent.toFixed(4)} exceeded the $${this.capUsd.toFixed(2)} cap on '${label}'`;
     }

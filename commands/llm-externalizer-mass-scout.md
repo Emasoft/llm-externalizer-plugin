@@ -32,9 +32,10 @@ Every action follows that shape: `register`, `preclassify`, `estimate`,
 
 **ALWAYS fold the action word into the hyphenated subcommand — never
 pass it through as a positional argument.** `llm-ext mass-scout search …`
-(with a space) silently drops the word `search` and runs the bare
-end-to-end scout; only the missing required flags stop it. The correct
-form is always `llm-ext mass-scout-search …`.
+(with a space) fails fast with `unexpected argument 'search' (all inputs
+are named flags)` and exits 1 — it does NOT run the bare end-to-end
+scout. The correct form is `llm-ext mass-scout-search …`, or the grouped
+spelling `llm-ext scout search …`.
 
 No action word = the **end-to-end scout run** (`llm-ext mass-scout`,
 documented below). The flag SSOT for every action is

@@ -73,9 +73,11 @@ beforeEach(() => {
   // (code_task's single-file branch does not forward its own output_dir to
   // processFileCheck — index.ts:350 in code-task/core.ts — so the env var is
   // the only lever that covers every surface here.)
-  setEnv("LLM_OUTPUT_DIR", outDir);
-  // Booting a profile can fire a detached free-pool benchmark spawn; opt out.
-  setEnv("LLM_EXT_DISABLE_FREE_POOL_AUTO_BENCH", "1");
+  setEnv("LLM_EXT_OUTPUT_DIR", outDir);
+  // A dynamic-profile dispatch can fire a detached benchmark spawn (P6b's
+  // maintainer, dynamic-maintainer.ts); opt out. free-pool-auto-bench.ts's
+  // own boot-time spawn (P6b item 6, TRDD-90DM5YHO) is retired entirely.
+  setEnv("LLM_EXT_DISABLE_AUTO_RECONCILE", "1");
 });
 
 afterEach(() => {

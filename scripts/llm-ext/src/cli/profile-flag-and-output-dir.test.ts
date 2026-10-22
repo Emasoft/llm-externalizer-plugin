@@ -36,12 +36,14 @@ const TWO_PROFILE_SETTINGS_YAML = [
   "    model: model-a",
   "    url: http://127.0.0.1:1",
   "    timeout: 5",
+  "    profile-type: local",
   "  prof-b:",
   "    mode: local",
   "    api: generic-local",
   "    model: model-b",
   "    url: http://127.0.0.1:1",
   "    timeout: 5",
+  "    profile-type: local",
   "",
 ].join("\n");
 
@@ -64,8 +66,32 @@ async function runRaw(args: string[]): Promise<RunResult> {
       env: {
         ...process.env,
         LLM_EXT_CONFIG_DIR: tmpConfigDir,
-        LLM_OUTPUT_DIR: outputDir,
+        LLM_EXT_OUTPUT_DIR: outputDir,
         LLM_EXT_INSTALL_RULE: "0",
+        // Without --profile, item 2 (P6a) now resolves the default to the
+        // built-in "free" profile. TWO independent code paths react to that
+        // by spawning a DETACHED child process (src/bench-spawn.ts) that
+        // inherits this env -- keeping LLM_EXT_CONFIG_DIR == tmpConfigDir
+        // and still writing to it (lock file, log) after this test file's
+        // afterAll (src/test-tmpdir-tracker.ts) has already rmSync'd it,
+        // recreating the directory out from under the cleanup and tripping
+        // src/test-tmpdir-guard.ts at the very end of the run. The surviving
+        // spawner is default-profiles-runner.ts (first-ever use of the 'free'
+        // profile populates it), gated by
+        // LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION -- with a real
+        // OPENROUTER_API_KEY/BAI_API_KEY in the environment the detached
+        // populator made real, slow OpenRouter retries, and it leaked only
+        // under real keys / parallel file execution, never in isolation. This
+        // file's "without --profile" test doesn't care about population
+        // behaviour, so disabling it removes the race instead of racing it.
+        //
+        // P6c-a (fix-queue 30): the second switch that used to sit here --
+        // the free-pool auto-bench opt-out -- is GONE. P6b retired the module
+        // it gated (free-pool-auto-bench.ts), so it had no reader left; an env
+        // var in a test that disables nothing reads as coverage it does not
+        // provide. LLM_EXT_DISABLE_AUTO_RECONCILE is the surviving opt-out for
+        // ALL dynamic maintenance (design addendum F).
+        LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION: "1",
       },
       // 60s, not 15s: this spawns a cold Node process running the real CLI, and
       // the gate that runs it (publish.py) runs it while the machine is also
@@ -101,17 +127,21 @@ async function runRaw(args: string[]): Promise<RunResult> {
 
 describe("--profile <name> global flag", () => {
   it("positioned AFTER the command overrides the active profile for this call", async () => {
-    // settings.yaml's active is prof-a; override to prof-b.
+    // settings.yaml's active is prof-a; override to prof-b. P6a retired the
+    // "Active profile:" line for "Effective profile: <name> (source: ...)" —
+    // this test is about --profile FLAG POSITIONING, not the retirement
+    // itself (see active-profile-retirement.test.ts for that), so it only
+    // needs the source to read "--profile".
     const r = await runRaw(["discover", "--profile", "prof-b", "--quiet"]);
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toMatch(/Active profile: prof-b/);
+    expect(r.stdout).toMatch(/Effective profile: prof-b \(source: --profile\)/);
     expect(r.stdout).toMatch(/Model: model-b/);
   });
 
   it("positioned BEFORE the command also overrides the active profile", async () => {
     const r = await runRaw(["--profile", "prof-b", "discover", "--quiet"]);
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toMatch(/Active profile: prof-b/);
+    expect(r.stdout).toMatch(/Effective profile: prof-b \(source: --profile\)/);
   });
 
   it("an unknown profile fails fast and lists the real available profiles", async () => {
@@ -126,6 +156,8 @@ describe("--profile <name> global flag", () => {
     const tmpConfigDir = mkdtempSync("/tmp/__llm_ext_profileflag_immut_");
     const settingsPath = join(tmpConfigDir, "settings.yaml");
     writeFileSync(settingsPath, TWO_PROFILE_SETTINGS_YAML, "utf-8");
+    // The 14.1.0 migration is a one-time step of the first command after an upgrade (profile.test.ts "design" test); this test is about what the --profile flag does to the file, so the step is recorded as already applied.
+    writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added"] }), "utf-8");
 
     await execFileAsync(
       "node",
@@ -145,10 +177,16 @@ describe("--profile <name> global flag", () => {
     expect(afterContent).toMatch(/^active: prof-a$/m);
   });
 
-  it("without --profile the settings.yaml active profile is used as before", async () => {
+  it("without --profile the flag's absence falls through to settings.yaml's active: (TRDD-G6XT3AY9)", async () => {
+    // WHY: `active:` is a live selector again -- precedence is --profile flag
+    // > active: > built-in default, so omitting --profile now reads prof-a
+    // (this fixture's `active:` value), not the built-in 'free'.
+    // active-precedence.test.ts covers this rule end to end at the unit
+    // level (the function the CLI calls); this copy stays focused on this
+    // file's own subject (--profile flag behaviour through 'discover').
     const r = await runRaw(["discover", "--quiet"]);
     expect(r.exitCode).toBe(0);
-    expect(r.stdout).toMatch(/Active profile: prof-a/);
+    expect(r.stdout).toMatch(/Effective profile: prof-a \(source: active:\)/);
   });
 });
 
@@ -162,12 +200,21 @@ describe("-o / --output_dir on report-writing commands (profile+output-flags tas
     // test below for the nonexistent-leaf case).
     const emptyDir = mkdtempSync("/tmp/__llm_ext_profileflag_scanempty_");
     const outDir = mkdtempSync("/tmp/__llm_ext_profileflag_scanout_");
+    // P6b-fix3 R-2(a): `--profile prof-a` is PINNED. This test's subject is
+    // option parsing (`-o` reaching the tool's own validation), not profile
+    // state. Unpinned, the run falls through to the built-in 'free' profile —
+    // whose pool is empty in a throwaway config dir — and the dynamic-profile
+    // gate refuses BEFORE the launcher's "instructions" error is ever reached,
+    // so the assertion below failed for a reason that has nothing to do with
+    // `-o`. prof-a is a local, unreachable profile, so this stays offline.
     const r = await runRaw([
       "scan",
       "folder",
       emptyDir,
       "-o",
       outDir,
+      "--profile",
+      "prof-a",
       "--quiet",
     ]);
     expect(r.exitCode).not.toBe(0);
@@ -203,6 +250,14 @@ describe("output_dir threading survives on the report-writing commands", () => {
     const someInput = mkdtempSync("/tmp/__llm_ext_profileflag_csinput_");
     writeFileSync(join(someInput, "a.txt"), "hello", "utf-8");
     const outDir = mkdtempSync("/tmp/__llm_ext_profileflag_csout_");
+    // P6b-fix4 S2 (same fix as R-2(a) on the sibling above): `--profile prof-a`
+    // is PINNED. This test's subject is option parsing (`-o` reaching the tool's
+    // own validation), not profile state. Unpinned, the run falls through to the
+    // built-in 'free' profile — whose pool is empty in a throwaway config dir —
+    // and the dynamic-profile gate refuses BEFORE the tool's own error is ever
+    // reached, which satisfies both `not.toMatch` assertions below for a reason
+    // that has nothing to do with `-o`: the case could not fail for what it
+    // claims. prof-a is a local, unreachable profile, so this stays offline.
     const r = await runRaw([
       "check",
       "specs",
@@ -211,9 +266,16 @@ describe("output_dir threading survives on the report-writing commands", () => {
       join(someInput, "a.txt"),
       "-o",
       outDir,
+      "--profile",
+      "prof-a",
       "--quiet",
     ]);
     expect(r.exitCode).not.toBe(0);
+    // P6b-fix4 S2: the POSITIVE assertion the case was missing. Two `not.toMatch`
+    // assertions can be satisfied by any other failure — including a gate refusal
+    // that never reached the tool — so the error has to be the tool's OWN, about
+    // the spec file it could not read.
+    expect(r.stderr).toMatch(/Cannot read spec file/);
     expect(r.stderr).not.toMatch(/unknown flag/);
     expect(r.stderr).not.toMatch(/no output option/);
   });

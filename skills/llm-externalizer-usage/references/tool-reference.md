@@ -101,7 +101,7 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 |-----------|-------|--------|-------|
 | `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). |
 | `temperature` | Fixed | 0.1 | Not configurable. Optimized for factual/code analysis. |
-| `output_dir` | All content tools | string | Custom output directory for reports (default: `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim with cwd fallback — never derived from git; `$LLM_OUTPUT_DIR` overrides the default). |
+| `output_dir` | All content tools | string | Custom output directory for reports (default: `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim with cwd fallback — never derived from git; `$LLM_EXT_OUTPUT_DIR` overrides the default). |
 | `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
 | `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
 | `folder_path` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | string | Absolute path to a folder to scan. Can be combined with `input_files_paths`. |
@@ -163,7 +163,7 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 - **600s base timeout** per LLM request. Extended automatically when reasoning models are actively thinking.
 - **No project context**: The remote LLM knows NOTHING about your project. ALWAYS include brief context in instructions.
 - **File paths only**: ALWAYS pass file paths in `input_files_paths`, NEVER paste contents into `instructions`.
-- **Output location**: All responses saved to `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never git; override with `output_dir` or `$LLM_OUTPUT_DIR`). Tool returns ONLY the file path — never inline content.
+- **Output location**: All responses saved to `<main-project-dir>/reports/llm-externalizer/` (anchored on `$CLAUDE_PROJECT_DIR` verbatim, cwd fallback — never git; override with `output_dir` or `$LLM_EXT_OUTPUT_DIR`). Tool returns ONLY the file path — never inline content.
 - **Auto-batching**: If input files exceed context window, they are automatically split into batches.
 - **Rate limiting**: Adaptive RPS auto-detected from OpenRouter balance ($1 ≈ 1 RPS, max 500). Self-adjusts on 429 errors. Up to 200 in-flight. Local = sequential.
 

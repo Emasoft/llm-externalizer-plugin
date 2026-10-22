@@ -121,3 +121,42 @@ describe("parseArgs — --update-all defaults to a run that CANNOT spend", () =>
     expect(o.budgetUsd).toBe(DEFAULT_BUDGET_USD);
   });
 });
+
+// TRDD-29VF8RWK / TRDD-ZZV1XL3C — `--dry-run` is documented twice as making no API
+// calls, and a measured `--code-task --dry-run` run billed real money because the flag
+// reached no sub-task phase. 771c984 refused the combination at $0; index.ts now honours
+// it for all nine at their shared dispatch chokepoint, so parseArgs ACCEPTS it again.
+// These tests pin that the flag survives parsing next to every sub-task flag — the
+// refusal must not creep back, or the plan-only path becomes unreachable dead code.
+describe("parseArgs — --dry-run reaches the sub-task benchmarks", () => {
+  const subTaskFlags = [
+    "--security-triage",
+    "--search-existing",
+    "--code-task",
+    "--scan-folder",
+    "--check-specs",
+    "--summarize-benchmark",
+    "--topics-benchmark",
+    "--sem-dedup-benchmark",
+    "--describe-benchmark",
+  ];
+
+  for (const flag of subTaskFlags) {
+    it(`accepts ${flag} together with --dry-run, in either order`, () => {
+      expect(parse(flag, "--dry-run").dryRun).toBe(true);
+      expect(parse("--dry-run", flag).dryRun).toBe(true);
+    });
+  }
+
+  it("still honours --dry-run on the keyword sweep and --update-all", () => {
+    expect(parse("--dry-run").dryRun).toBe(true);
+    expect(parse("--update-all", "--dry-run").dryRun).toBe(true);
+  });
+
+  it("keeps an explicit roster alongside --dry-run so the plan can name it", () => {
+    const o = parse("--code-task", "z-ai/glm-5.3-flash", "--dry-run");
+    expect(o.dryRun).toBe(true);
+    expect(o.codeTask).toBe(true);
+    expect(o.codeTaskModels).toContain("z-ai/glm-5.3-flash");
+  });
+});

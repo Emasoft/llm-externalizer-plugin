@@ -18,10 +18,21 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { setValidationBypassForTests } from "../benchmark/validated.js";
+import { DEFAULT_MODEL } from "../security_scan/types";
+import {
+  DEFAULT_SCOUT_ACCURACY_THRESHOLD,
+  DEFAULT_SCOUT_ACCURACY_TARGET_BYTES,
+  getConfigDir,
+} from "../config";
+import {
+  recordScoutAccuracy,
+  scoutAccuracyHash,
+} from "./scout-accuracy-ledger";
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { _resetDefaultOutputDirCache } from "../project-root";
 
 import {
   parseFilterToken,
@@ -151,6 +162,33 @@ beforeEach(() => {
   // These tests exercise the mass_scout CLI plumbing with a MOCKED fetch (no real
   // spend); bypass the IRON RULE validation gate, which is not under test here.
   setValidationBypassForTests(true);
+  // TRDD-FKAR9VPK D5: scout/chain/propose-fieldset now sit behind the
+  // scouting-profile require gate. These tests exercise PLUMBING, not the
+  // gate (scout-gate.test.ts owns that), so seed the profile BY HAND as YAML
+  // (A9d — no benchmark invocation) plus a ledger PASS for the DEFAULT_MODEL
+  // head under the default settings hash. Tests that assert the refusal shape
+  // of the gate itself live in scout-gate.test.ts.
+  writeFileSync(
+    join(getConfigDir(), "settings.yaml"),
+    [
+      "allow_paid_models: true",
+      "profiles:",
+      "  scouting:",
+      "    mode: remote",
+      "    api: openrouter-remote",
+      "    url: https://openrouter.ai/api",
+      '    api_key: "$OPENROUTER_API_KEY"',
+      `    model: ${DEFAULT_MODEL}`,
+      `    paid_models: [${DEFAULT_MODEL}]`,
+      "",
+    ].join("\n"),
+    "utf-8",
+  );
+  recordScoutAccuracy(
+    DEFAULT_MODEL,
+    scoutAccuracyHash(DEFAULT_SCOUT_ACCURACY_THRESHOLD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES),
+    { pass: true, inconclusive: false, accuracy: 0.99 },
+  );
   workdir = join(
     tmpdir(),
     `cli-test-${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -531,6 +569,11 @@ describe("runMassScoutCli — scout", () => {
     const md = readFileSync(reportPath, "utf-8");
     expect(md).toContain("# Mass-scouting report");
     expect(md).toContain("cli-job-1");
+    // write-roots fix (c9b, 2026-09-18): the default report dir used to be
+    // `<mainRoot>/reports/mass_scouting/`, OUTSIDE the USER-approved
+    // `reports/llm-externalizer/` tree — pin the nested path so a regression
+    // back to the bare `reports/mass_scouting/` default is caught here.
+    expect(reportPath).toContain(join(mainRoot, "reports", "llm-externalizer", "mass_scouting"));
   });
 
   it("scout --output-dir overrides the default report directory", async () => {
@@ -573,6 +616,66 @@ describe("runMassScoutCli — scout", () => {
     expect(reportPath.startsWith(customDir)).toBe(true);
     expect(reportPath).not.toContain(join("reports", "mass_scouting"));
     expect(existsSync(reportPath)).toBe(true);
+  });
+
+  it("honors LLM_EXT_OUTPUT_DIR when no mainRoot is injected (c9c)", async () => {
+    /** Regression for c9c: resolveReportDir used to always pass a non-empty
+     *  mainRoot (via the now-removed defaultMainRoot()) into defaultOutputDir(),
+     *  which treats ANY non-empty override as explicit and bypasses
+     *  LLM_EXT_OUTPUT_DIR by design (project-root.ts) — so the env var was
+     *  silently ignored for every production scout report. This test omits
+     *  opts.mainRoot entirely (the real production shape) and unsets
+     *  CLAUDE_PROJECT_DIR too, so a regression back to the old fallback would
+     *  land the report under cwd instead of the env dir asserted below. */
+    writeFiles({ "src/a.ts": "export const a = 1\n" });
+    writeFieldset();
+    await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
+    const envOutputDir = join(workdir, "env-output-dir");
+    const oldEnvOutputDir = process.env.LLM_EXT_OUTPUT_DIR;
+    const oldProjectDir = process.env.CLAUDE_PROJECT_DIR;
+    process.env.LLM_EXT_OUTPUT_DIR = envOutputDir;
+    delete process.env.CLAUDE_PROJECT_DIR;
+    _resetDefaultOutputDirCache();
+    try {
+      const opts: CliRunOptions = {
+        apiKey: "test-key",
+        fetchImpl: fakeFetch({ is_async: false, summary: "tiny" }),
+        // No mainRoot injected — the real shape a production CLI/MCP call uses.
+      };
+      const r = await runMassScoutCli(
+        [
+          "scout",
+          "--db",
+          dbPath,
+          "--fields-file",
+          fieldsetPath,
+          "--job-id",
+          "cli-envdir-1",
+          "--source-root",
+          sourceRoot,
+          "--workers",
+          "1",
+          "--no-smoke-test",
+        ],
+        opts,
+      );
+      expect(r.exitCode).toBe(0);
+      const m = r.stdout.match(/report=(\S+)/);
+      expect(m).not.toBeNull();
+      const reportPath = m![1]!;
+      expect(reportPath).toContain(join(envOutputDir, "mass_scouting"));
+      // Stronger than the containment check above: proves the path is ROOTED under
+      // envOutputDir, not merely a substring match against some other coincidentally-
+      // matching path (the old cwd-fallback bug produced a wholly different absolute path).
+      expect(reportPath.startsWith(envOutputDir)).toBe(true);
+      expect(existsSync(reportPath)).toBe(true);
+    } finally {
+      if (oldEnvOutputDir === undefined) delete process.env.LLM_EXT_OUTPUT_DIR;
+      else process.env.LLM_EXT_OUTPUT_DIR = oldEnvOutputDir;
+      if (oldProjectDir === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+      else process.env.CLAUDE_PROJECT_DIR = oldProjectDir;
+      _resetDefaultOutputDirCache();
+    }
   });
 
   it("missing OPENROUTER_API_KEY returns a clear error", async () => {

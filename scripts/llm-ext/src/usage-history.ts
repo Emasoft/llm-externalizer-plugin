@@ -204,7 +204,13 @@ export function formatHistoryLine(fields: {
   durationMs: number;
   costUsd: number;
   opId: string;
+  /** Wire endpoint of the request (L1-10), e.g. `decisions`; omitted for calls that have none. */
+  endpoint?: string;
 }): string {
+  // WHY a strict name: the reader finds this field from the right of the line, so it must never contain the " - " separator.
+  if (fields.endpoint !== undefined && !ENDPOINT_RE.test(fields.endpoint)) {
+    throw new RangeError(`endpoint must match ${ENDPOINT_RE}, got ${JSON.stringify(fields.endpoint)}`);
+  }
   const toolField = fields.params
     ? `${fields.tool}(${fields.params})`
     : `${fields.tool}()`;
@@ -216,7 +222,103 @@ export function formatHistoryLine(fields: {
     formatDuration(fields.durationMs),
     formatCost(fields.costUsd),
     fields.opId,
+    // WHY an optional 8th field and not a new column in place: lines without it stay byte-identical to the 7-field format already on disk.
+    ...(fields.endpoint === undefined ? [] : [`endpoint=${fields.endpoint}`]),
   ].join(" - ");
+}
+
+const ENDPOINT_RE = /^[a-z][a-z0-9-]*$/;
+const OP_ID_RE = /^op-[0-9a-f]{8}$/;
+// WHY the (direct) alternative: recordRequest labels a call made outside any invocation context `(direct)`.
+const TOOL_START_RE = /^(?:\(direct\)|[^\s()]+)\(/;
+
+/** One parsed history line. `endpoint` is absent on lines written before L1-10 and on calls without an endpoint. */
+export interface HistoryEntry {
+  timestamp: string;
+  project: string;
+  tool: string;
+  ok: boolean;
+  durationMs: number;
+  costUsd: number;
+  opId: string;
+  endpoint?: string;
+}
+
+/** Parses a 7-field (old) or 8-field (with endpoint) history line; throws on anything else. */
+export function parseHistoryLine(line: string): HistoryEntry {
+  const bad = (why: string): Error => new Error(`not a history line (${why}): ${JSON.stringify(line.slice(0, 120))}`);
+  const f = line.split(" - ");
+  let endpoint: string | undefined;
+  const last = f[f.length - 1] ?? "";
+  if (last.startsWith("endpoint=")) {
+    endpoint = last.slice("endpoint=".length);
+    if (!ENDPOINT_RE.test(endpoint)) throw bad("bad endpoint");
+    f.pop();
+  }
+  // WHY parse from the right: timestamp is first, but project and the tool params may themselves contain " - ".
+  if (f.length < 7) throw bad("too few fields");
+  const n = f.length;
+  const [status, dur, cost, opId] = [f[n - 4]!, f[n - 3]!, f[n - 2]!, f[n - 1]!];
+  if (status !== "SUCCESS" && status !== "FAIL") throw bad("status");
+  if (!OP_ID_RE.test(opId)) throw bad("op-id");
+  const ms = /^(\d+)ms$/.exec(dur);
+  const sec = /^(\d+(?:\.\d)?)s$/.exec(dur);
+  if (!ms && !sec) throw bad("duration");
+  const usd = /^\$(\d+\.\d{6})$/.exec(cost);
+  if (!usd) throw bad("cost");
+  // WHY the first field that looks like name( : a tool name has no spaces, a project path with " - " in it has them before any "(".
+  let toolAt = -1;
+  for (let i = 2; i <= n - 5; i++) {
+    if (TOOL_START_RE.test(f[i]!)) {
+      toolAt = i;
+      break;
+    }
+  }
+  if (toolAt < 0) throw bad("tool");
+  const entry: HistoryEntry = {
+    timestamp: f[0]!,
+    project: f.slice(1, toolAt).join(" - "),
+    tool: f.slice(toolAt, n - 4).join(" - "),
+    ok: status === "SUCCESS",
+    durationMs: ms ? Number(ms[1]) : Math.round(Number(sec![1]) * 1000),
+    costUsd: Number(usd[1]),
+    opId,
+  };
+  if (endpoint !== undefined) entry.endpoint = endpoint;
+  return entry;
+}
+
+/** Every entry of the history log; a missing log is an empty history and a malformed line is an error naming its line number. */
+export function readHistory(): HistoryEntry[] {
+  let text: string;
+  try {
+    text = readFileSync(getHistoryPath(), "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw e;
+  }
+  const out: HistoryEntry[] = [];
+  text.split("\n").forEach((l, i) => {
+    if (l.length === 0) return;
+    try {
+      out.push(parseHistoryLine(l));
+    } catch (e) {
+      throw new Error(`history.log line ${i + 1}: ${(e as Error).message}`, { cause: e });
+    }
+  });
+  return out;
+}
+
+/** Requests and USD per endpoint; entries without the field are grouped as `unspecified`. */
+export function countByEndpoint(entries: readonly HistoryEntry[]): Record<string, { requests: number; costUsd: number }> {
+  const out: Record<string, { requests: number; costUsd: number }> = {};
+  for (const e of entries) {
+    const k = e.endpoint ?? "unspecified";
+    const cur = (out[k] ??= { requests: 0, costUsd: 0 });
+    cur.requests += 1;
+    cur.costUsd += e.costUsd;
+  }
+  return out;
 }
 
 // ── Atomic append ────────────────────────────────────────────────────────
@@ -251,6 +353,8 @@ export function recordRequest(req: {
   ok: boolean;
   durationMs: number;
   costUsd: number;
+  /** Wire endpoint (L1-10); callers that have none omit it and write the 7-field line. */
+  endpoint?: string;
 }): void {
   try {
     const ctx = ctxStore.getStore();
@@ -263,6 +367,7 @@ export function recordRequest(req: {
       durationMs: req.durationMs,
       costUsd: req.costUsd,
       opId: ctx?.opId ?? newOpId(),
+      endpoint: req.endpoint,
     });
     appendHistoryLine(line);
   } catch {

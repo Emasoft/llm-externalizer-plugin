@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\"model\":\"typesafe/jev-1.13-20260917\",\"answers\":{\"team\":{\"type\":\"choice\",\"choice\":\"other\",\"probabilities\":{\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\":0.18,\"other\":0.82},\"confidence\":0.64}},\"usage\":{\"input_tokens\":333,\"output_tokens\":38,\"cost\":0.000013986},\"provider\":\"TypeSafe\"}"
+}

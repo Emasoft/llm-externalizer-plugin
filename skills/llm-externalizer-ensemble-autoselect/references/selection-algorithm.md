@@ -8,20 +8,28 @@ code is authoritative. Edit the code SoT, then update this file to match.
 
 A model is **eligible** only if every one of these holds:
 
-1. `pricing.prompt`     **strictly less than** `$1.00 / 1M tokens`
-2. `pricing.completion` **strictly less than** `$1.00 / 1M tokens`
+1. `pricing.prompt`     **at or under** the ensemble price ceiling (default
+   `$1.30 / 1M tokens`, settings-overridable — see "The one price rule" below)
+2. `pricing.completion` **at or under** the same ceiling
 3. `context_length` ≥ 128,000 tokens
 4. `top_provider.max_completion_tokens` ≥ 64,000 tokens (or unlimited)
 5. `supported_parameters` includes `structured_outputs` OR `response_format`
 6. `supported_parameters` includes `reasoning` OR `include_reasoning`
 7. ID does not end in `:free` (free-tier models log prompts upstream)
 
-The cost ceiling is intentionally aggressive — an ensemble call hits all three
-models, so a $2/M model triples the per-call cost. Models like
-`gemini-3.1-flash-lite-preview` (output $1.50/M) and `openai/gpt-5.4-nano`
-(output $1.25/M) **do not qualify** under this filter. To use them anyway,
-the operator must `--include` them as baselines (skipping the filter) or set
-them manually in `settings.yaml`.
+### The one price rule (USER 2026-09-18)
+
+There is exactly **one** price ceiling, `ensemble_price_ceiling_usd_per_million`
+in `settings.yaml` (default `$1.30`), and it applies to **input and output
+EACH, independently** — never their sum. A model at exactly the ceiling on
+both sides qualifies ("under" means `<=`, not `<`). There used to be two
+separate, smaller hard-coded caps here ($1.00 for auto-selection, $1.25 for
+the global benchmark spend cap) — both are gone; every gate now reads the
+same configurable ceiling. Models like `gemini-3.1-flash-lite-preview`
+(output $1.50/M) still do not qualify under the default ceiling. To use a
+pricier model anyway, the operator must `--include` it as a baseline
+(skipping the filter), set it manually in `settings.yaml`, or raise
+`ensemble_price_ceiling_usd_per_million`.
 
 ## Ranking (after the hard filters)
 

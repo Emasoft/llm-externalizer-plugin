@@ -4,15 +4,19 @@
  * returns ONLY the paths + a one-line counter (TRDD §4); all detail lives in
  * these two files.
  *
- * The timestamp / slug / report-dir helpers are re-implemented locally (no
- * mass_scouting import) and honor the agent-reports-location rule: local time
- * + GMT offset, under <main-root>/reports/security_scan/ unless output_dir is
- * given.
+ * The timestamp / slug helpers are re-implemented locally (no mass_scouting
+ * import) and honor the agent-reports-location rule: local time + GMT
+ * offset. The report-dir default routes through defaultOutputDir()
+ * (project-root.ts) — the SAME resolver every other llm-ext report uses —
+ * under <project-root>/reports/llm-externalizer/security_scan/ unless
+ * output_dir is given: `reports/llm-externalizer/` is the USER-approved
+ * write-roots exception (2026-09-18); a bare `reports/security_scan/`
+ * default is not.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import { resolveProjectMainRoot } from "../project-root";
+import { defaultOutputDir } from "../project-root";
 
 import type { GroupVerdict } from "./judge";
 import type { DedupGroup, SkippedRecord } from "./intake";
@@ -26,12 +30,12 @@ import {
 
 // ── Path helpers (local, agent-reports-location compliant) ───────────────
 
-function defaultMainRoot(): string {
-  // Single source of truth — see project-root.ts.
-  return resolveProjectMainRoot();
-}
-
-/** Resolve the report directory. Explicit output_dir wins; else <root>/reports/security_scan/. */
+/** Resolve the report directory. Explicit output_dir wins; else
+ *  <defaultOutputDir(mainRoot)>/security_scan/ (defaultOutputDir is the
+ *  single project-report-root resolver, project-root.ts). `mainRoot` is a
+ *  caller-injected override (tests, `deps.mainRoot`) — it bypasses
+ *  defaultOutputDir's cache/env-override exactly like
+ *  resolveProjectMainRoot's own `override` param does. */
 export function resolveReportDir(
   outputDir: string | undefined,
   mainRoot?: string,
@@ -39,7 +43,7 @@ export function resolveReportDir(
   if (outputDir && outputDir.length > 0) {
     return isAbsolute(outputDir) ? outputDir : resolve(process.cwd(), outputDir);
   }
-  return join(mainRoot ?? defaultMainRoot(), "reports", "security_scan");
+  return join(defaultOutputDir(mainRoot), "security_scan");
 }
 
 /** Local-time + GMT-offset compact stamp: YYYYMMDD_HHMMSS±HHMM. */

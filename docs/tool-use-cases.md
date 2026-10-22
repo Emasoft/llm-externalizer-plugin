@@ -183,7 +183,7 @@ and, only when it has — or when you pass `force` for an explicit audit — run
 tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a
 healthy/empty ledger NO benchmark runs and every recommendation is "keep the
 incumbent" (zero false positives, zero spend). Writes a report to
-`reports/auto-replace/` and NEVER touches settings — `llm-ext` is read-only and
+`reports/llm-externalizer/auto-replace/` and NEVER touches settings — `llm-ext` is read-only and
 cannot rewrite its own config. **To adopt a recommendation**, hand-edit
 `~/.llm-externalizer/settings.yaml` with the recommended model id, then run
 `llm-ext reset` (configuration stays user-only — see

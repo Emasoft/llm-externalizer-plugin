@@ -50,6 +50,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - [Plugin commands](#plugin-commands) (`/llm-externalizer:*` — what you type in Claude Code)
 - [CLI commands](#cli-commands) (direct `llm-ext <command>` calls — for skills, custom agents, scripts)
 - [Agents](#agents) (internal, dispatched by commands)
+- [Breaking changes in 14.1.0](#breaking-changes-in-1410)
 - [Configuration](#configuration)
 - [Troubleshooting](#troubleshooting)
 - [Plugin structure](#plugin-structure)
@@ -120,7 +121,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **50 CLI commands** — 27 core/utility (`chat`, `code-task`, `scan-folder`, `high-quality-scan`, `compare-files`, `check-references`, `check-imports`, `check-against-specs`, `search-existing-implementations`, `cluster-synonyms`, `summarize`, `topics`, `sem-deduplicate`, `describe`, `batch-check`, `review-plan`, `rules-check`, `discover`, `reset`, `get-settings`, `profile`, `list-profiles`, `session-summary`, `scan-local-llm-services`, `or-model-info`, `or-model-info-table`, `or-model-info-json`) + 16 mass-scout (`mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export`, `mass-scout-jobs-list`, `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-list-bundled-fieldsets`, `mass-scout-diff`, `mass-scout-chain`) + 7 security / model-qualification (`security-scan`, `security-triage-benchmark`, `search-existing-benchmark`, `assess-model`, `check-model-health`, `discover-new-models`, `check-tool-replacements`). The CLI is **read-only by design** — there are no `set-settings`, `change-model`, `fix-code`, `batch-fix`, `merge-files`, `split-file`, `revert-file`, or `custom-prompt` commands (configuration is user-only; `custom_prompt` was merged into `chat`). The `max_retries: 3` parameter on per-file commands (chat/code-task/scan-folder) replaces the older `batch-check` workflow (parallel execution + exponential backoff + circuit breaker); `batch-check` itself is DEPRECATED.
 - **6 internal agents** — setup wizard + reviewer + 4 fixer variants (parallel/serial × Sonnet/Opus). The setup-agent ships with five preloaded Hugging Face helper skills (`huggingface-best`, `huggingface-local-models`, `huggingface-mlx-models`, `hf-cli`, `huggingface-community-evals`) — all marked `user-invocable: false`. See [Agents](#agents).
 - **3 backend modes** — `local` (sequential), `remote` (parallel, single model), `remote-ensemble` (parallel, three models → combined report).
-- **6 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter.
+- **7 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, generic local, OpenRouter, chat.b.ai.
 - **Auto-batching** — First-Fit-Decreasing bin-packing packs 1–5 files per LLM request (~400 KB per batch). The LLM never sees the whole codebase at once.
 - **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
 - **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's `SECRET_PATTERNS` set now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
@@ -201,6 +202,31 @@ If you prefer conversational install, paste this repo URL in Claude and ask it t
 https://github.com/Emasoft/llm-externalizer-plugin
 ```
 
+### Global `llm-ext` command
+
+Claude Code puts a plugin's `bin/` on `PATH` only inside its own sessions, so `llm-ext` in a plain
+terminal would otherwise be "command not found". A `SessionStart` hook (matcher `startup|resume`)
+installs or refreshes a small POSIX-`sh` wrapper at `~/.local/bin/llm-ext` every time a Claude Code
+session starts or resumes. The wrapper resolves the real CLI at run time — first the current
+session's own plugin `bin/` if one is on `PATH`, otherwise the user-scope install path Claude Code
+recorded in `installed_plugins.json` — so it keeps working across plugin updates without going stale
+like a symlink into a version-specific cache dir would.
+
+- **Opt out:** set `LLM_EXT_NO_PATH_SHIM=1` — either in the `env` block of `~/.claude/settings.json`,
+  or exported in your shell before starting Claude Code — to turn the hook off entirely.
+- **Uninstalling the plugin** does not remove `~/.local/bin/llm-ext`. It fails loudly instead
+  rather than silently doing nothing: with no user-scope record left, the wrapper exits with
+  `expected exactly one user-scope llm-externalizer install … found 0 (of 0 …)`;
+  delete `~/.local/bin/llm-ext` by hand once you've uninstalled.
+- **Project-scope-only installs** make the wrapper fail outside a Claude Code session, since there is
+  no user-scope record to fall back to (`llm-ext: expected exactly one user-scope llm-externalizer
+  install … found 0 (of N …)`).
+- **Two plugin versions installed** (e.g. during an upgrade) may each rewrite `~/.local/bin/llm-ext`
+  in turn — harmless, since the wrapper always resolves the current install path at run time rather
+  than baking one in.
+- **Native Windows** (`cmd.exe`/PowerShell) is skipped — an `sh` script in `~/.local/bin` isn't
+  runnable there.
+
 ---
 
 ## First run
@@ -262,7 +288,7 @@ You can hard-code the key (or a different env-var reference) in a profile inside
 
 ```yaml
 profiles:
-  paid-ensemble:
+  my-paid-profile:
     mode: remote-ensemble
     api: openrouter-remote
     api_key: sk-or-v1-...        # literal — do NOT commit this file
@@ -294,19 +320,15 @@ When more than one source is set, the resolution order is:
 2. Literal value in `settings.yaml::profiles.<name>.api_key`
 3. Claude Code keychain (`userConfig.openrouter_api_key`) — **does not currently reach the CLI**; see above
 
-The `paid-ensemble` profile is one of the five machine-managed defaults — it self-populates the top 3 models under the price ceiling once `allow_paid_models: true` is set in `settings.yaml` and (1) or (2) above supplies a key.
+The built-in `paid` profile self-populates the best model(s) under the price ceiling once `allow_paid_models: true` is set in `settings.yaml` and (1) or (2) above supplies a key, and benchmarks new candidates in the background within `paid_benchmark_daily_cap_usd` (default $0.50/day).
 </details>
 
 <details>
 <summary><b>B. OpenRouter free tier (Nemotron — free, single model)</b></summary>
 
-Same OpenRouter key as option A (any free account works). Switch the active profile to the free one in `~/.llm-externalizer/settings.yaml` (Windows: `%USERPROFILE%\.llm-externalizer\settings.yaml`; WSL2: `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`):
+Same OpenRouter key as option A (any free account works). Pass `--profile <name>` for a free static profile you defined, or just omit `--profile` — every call already uses the built-in `free` profile by default.
 
-```yaml
-active: remote-free
-```
-
-See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for the full profile block.
+See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for a static-profile example.
 
 > [!WARNING]
 > The free provider logs your prompts. Use only on open-source code.
@@ -319,7 +341,6 @@ See [Configuration → B. Remote free (Nemotron)](#b-remote-free-nemotron) for t
 top-level `allow_paid_models` switch in `settings.yaml` governs all paid spend:
 
 ```yaml
-active: remote-ensemble-mine
 allow_paid_models: false      # ← DEFAULT (absent ⟺ false). Zero paid spend.
 profiles:
   # ... your profiles, paid models and all ...
@@ -327,11 +348,12 @@ profiles:
 
 While `allow_paid_models` is **false** (the default):
 
-- Every **remote (OpenRouter)** profile is forced to its free pool at boot,
-  regardless of the `model` / `second_model` / `third_model` it configures — the
-  ensemble runs 3 benchmark-vetted `:free` models. A profile with **no**
-  `free_models` list still runs free: the server auto-discovers a `:free` pool at
-  $0 (falling back to a bundled seed), so **nothing ever goes dark**.
+- Every **remote (OpenRouter)** STATIC profile is forced to its free pool at
+  boot, regardless of the `model` / `second_model` / `third_model` it
+  configures. A STATIC profile with **no** `free_models` list and no
+  free-provider route now **refuses** with a clear error instead of silently
+  borrowing a bundled seed — pin `free_models`, or pass `--profile free` for
+  the always-on built-in free profile (see "Built-in dynamic profiles" below).
 - **Local** profiles are untouched — they are $0/offline, never "paid".
 - Even paid **benchmarks** are refused: `--allow-paid-models-tests` cannot
   override the master switch. One switch = zero paid spend of any kind.
@@ -364,9 +386,9 @@ This makes `free_only` a reliable zero-spend switch for every session that share
 this `settings.yaml`.
 
 ```yaml
-active: my-free-ensemble
+# pass --profile my-free-only-profile on the call
 profiles:
-  my-free-ensemble:
+  my-free-only-profile:
     mode: remote-ensemble
     api: openrouter-remote
     free_only: true
@@ -403,24 +425,18 @@ security_triage_benchmark   models: ["deepseek/deepseek-v4-flash:free", "openai/
 Models never benchmarked stay in (unverified, not excluded); only a *recorded
 failure* drops a model.
 
-**Automatic free mode on low balance (no config needed).** Even on a *paid*
-profile, when the OpenRouter balance drops below **$1.00** (or a `402` fires
-mid-call), the server auto-engages free mode for the rest of the session: every
-tool — `chat`, `code_task`, `scan_folder`, `check_*`, `compare_files`,
-`cluster_synonyms`, `search_existing_implementations`, **and** `security_scan` /
-`mass_scout` — routes through the bundled free pool (the same
-requirements-filtered, rate-limit-rotating ensemble), so calls succeed at `$0`
-instead of failing with "Budget limit exceeded" (which made agents abandon the
-tool). The funded profile's models reactivate on the next server restart once
-the wallet is topped up. Tune via:
-
-| Env var | Effect |
-|---|---|
-| `LLM_EXT_FREE_BELOW_USD` | Balance threshold (USD) that triggers auto-free. Default `1.00`; non-finite/≤0 → `1.00`. |
-| `LLM_EXT_FREE_MODEL_ID` | The single free model for the `free: true` flag + the 402 single-retry (the ensemble paths use the rotating pool). Default `poolside/laguna-m.1:free` (most-available + best security-triage of the validated pool). A non-`:free` value is rejected. |
-
-An explicit `free_only` profile is still the way to *force* free regardless of
-balance; auto-free is the safety net for the low-balance case.
+**Exhausted balance on a paid profile.** There is no automatic switch to free
+models: a `402` on a paid profile falls back to the next benchmarked model of
+that *same* profile. Once every model in it has failed with a `402` (no
+credit), the command exits with the credit error and starts no profile update
+(a re-benchmark would get the same `402`). If other failures are mixed in, the
+command starts the `paid` profile's update in the background and exits at once
+with "no model of the 'paid' profile is working right now; the profile update
+is underway in the background and will be finished soon — retry later"; no
+command ever waits for an update. Free is never engaged
+implicitly — choose it explicitly with `--profile free` or `active: free`.
+Consequence: with an exhausted balance, `--profile paid` exits with the credit
+error rather than silently switching to free.
 
 > [!WARNING]
 > Free providers log your prompts. Use only on open-source code.
@@ -486,10 +502,10 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-install-statusline` | Install the bundled multi-tier statusline (credit balance, model, context bar, LLM tokens & cost, git, usage limits) | Updated `settings.json` |
 | `/llm-externalizer:llm-externalizer-update-all` | **The whole model refresh in ONE command** — discover the live catalog, requirement-gate every tool, run every benchmark, rank, and atomically write the winners (ensemble + each `tool_models.<tool>` + the `free_models` pool). Defaults to a **provably $0** free-model refresh (incl. the free-models search); `--paid` / `--both` spend under a **hard `--budget-usd` cap** (default $2.00) that aborts *before* the first call if the pre-flight estimate exceeds it. `--dry-run` prints the plan + estimate and spends nothing | Update report + updated `settings.yaml` |
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
-| `/llm-externalizer:llm-externalizer-bench-free-pool` | Auto-fill the benchmark candidate set from the active profile's `free_models` (or the bundled `FREE_POOL_SEED`) — one flag instead of N `--include`s. Resolves the pool against the live catalog: a configured non-`:free` id is admitted only when the catalog prices it at exactly `$0` (fail-fast otherwise), and zero-cost open-beta models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are auto-discovered into the sweep. Composes with `--security-triage`. The same sweep runs automatically when `free_only` flips ON and the cache has no `:free` entries (TRDD-f1510055, TRDD-WJND1N2W) | Benchmark report (zero-cost) |
+| `/llm-externalizer:llm-externalizer-bench-free-pool` | Auto-fill the *benchmark candidate set* from the given `--profile`'s `free_models` (or the bundled `FREE_POOL_SEED`) — one flag instead of N `--include`s. This is a benchmark-candidate seed, not the runtime model-selection fallback described in "Breaking changes in 14.1.0" above — a static profile still refuses at call time if it has no `free_models`; this command just needs *something* to benchmark. Resolves the pool against the live catalog: a configured non-`:free` id is admitted only when the catalog prices it at exactly `$0` (fail-fast otherwise), and zero-cost open-beta models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are auto-discovered into the sweep. Composes with `--security-triage`. The same sweep runs automatically when `free_only` flips ON and the cache has no `:free` entries (TRDD-f1510055, TRDD-WJND1N2W) | Benchmark report (zero-cost) |
 | `/llm-externalizer:llm-externalizer-assess-model` | Assess one model against every LLM tool's per-tool requirements (free — no LLM call, just a public catalog fetch); shows per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass | Per-tool requirements table |
-| `/llm-externalizer:llm-externalizer-check-model-health` | Self-check the CONFIGURED model(s) of the active profile (free — no LLM call, one public catalog fetch): presence (removed/deprecated), cost drift vs a seeded baseline, and requirements regression per served tool. Advisory only — never changes settings | Health summary + `reports/model-health/` report |
-| `/llm-externalizer:llm-externalizer-discover-new-models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run (free — no LLM call, one public catalog fetch); each new id assessed against every tool's requirements. `[qualifying-only]` hides arrivals that fit no tool. Advisory only — never changes settings | Arrivals summary + `reports/model-arrivals/` report |
+| `/llm-externalizer:llm-externalizer-check-model-health` | Self-check the CONFIGURED model(s) of the active profile (free — no LLM call, one public catalog fetch): presence (removed/deprecated), cost drift vs a seeded baseline, and requirements regression per served tool. Advisory only — never changes settings | Health summary + `reports/llm-externalizer/model-health/` report |
+| `/llm-externalizer:llm-externalizer-discover-new-models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run (free — no LLM call, one public catalog fetch); each new id assessed against every tool's requirements. `[qualifying-only]` hides arrivals that fit no tool. Advisory only — never changes settings | Arrivals summary + `reports/llm-externalizer/model-arrivals/` report |
 | `/llm-externalizer:llm-externalizer-security-triage-benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset via the real judge pipeline; recommends the best same-or-cheaper passer (never pricier) | Recommendation + JSON/markdown report |
 | `/llm-externalizer:llm-externalizer-search-existing-benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over known duplicate locations, no LLM judge) by driving the real search-existing pipeline; recommends the best same-or-cheaper passer (never pricier) | Recommendation + JSON/markdown report |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
@@ -531,7 +547,7 @@ drops the action word).
 | `list-bundled-fieldsets` | Enumerate the plugin-shipped fieldsets accepted as `--fields-file bundled:<name>` (`code-audit`, `skill-audit`, `security-audit`, `pr-review`) | Markdown list (or `[{name, path, fields}]` JSON) |
 | `diff` | Compare two jobs row-by-row → `only_from` / `only_to` / `identical` / `changed` (+ changed-key list). Confirms a re-scout actually changed what you expected | Markdown summary (or structured JSON) |
 | `chain` | Run a second scout pass on the subset of a prior job's rows that match a `--filter "$.path:OP:value"` expression, using a fresh fieldset. Drills deeper without re-scouting the whole tree | New job's mass-scout markdown report under `reports/mass_scouting/` + counter line |
-| `/llm-externalizer:llm-externalizer-security-scan` | **Injection-hardened** security triage (NOT mass_scout). Adjudicates a batch of `targets[]` (snippet \| file_path+line+context_lines \| path_glob) + per-category rubrics into per-item `{verdict, confidence, reason, injection_observed}`; nonce-delimited envelope + strict json_schema + fail-safe-to-`uncertain` | JSON + markdown report under `reports/security_scan/` + counter line |
+| `/llm-externalizer:llm-externalizer-security-scan` | **Injection-hardened** security triage (NOT mass_scout). Adjudicates a batch of `targets[]` (snippet \| file_path+line+context_lines \| path_glob) + per-category rubrics into per-item `{verdict, confidence, reason, injection_observed}`; nonce-delimited envelope + strict json_schema + fail-safe-to-`uncertain` | JSON + markdown report under `reports/llm-externalizer/security_scan/` + counter line |
 
 Bundled fieldsets shipped with the plugin: `code-audit`, `skill-audit`, `security-audit`, `pr-review` (pass as `--fields-file bundled:<name>`). The CLI also exposes every tool as `bin/llm-ext mass-scout-<subcommand>` — see `--help` for the full flag list.
 
@@ -554,7 +570,7 @@ No parameters. Read-only; edit `~/.llm-externalizer/settings.yaml` directly then
 | `--diff <path>` | file path | no | — | Unified-diff file to narrow scope. Mutually exclusive with `--base` |
 | `--base <ref>` | git ref | no | auto-detect `origin/HEAD` → `main` → `master` | Auto-generate diff via `git diff <ref>...HEAD` |
 | `--max-files <N>` | integer | no | `10000` | File cap — higher than `scan_folder`'s 2500 because duplicate hunts scan the whole codebase |
-| `--free` | flag | no | off | Use the free Nemotron model. Provider logs prompts — avoid on proprietary code |
+| `--free` | flag | no | off | Use the selected profile's own first `:free` model, or refuse if it has none. Provider logs prompts — avoid on proprietary code |
 
 ### `/llm-externalizer:llm-externalizer-scan-and-fix`
 
@@ -596,14 +612,14 @@ No parameters. Honors the `REFRESH_INTERVAL` env var (seconds; default `3`) when
 Wraps the `cluster-synonyms` command (`bin/llm-ext cluster-synonyms`). Inputs: `input_file` (JSONL of `{id, sentence}`), `output_dir`, optional `embeddings_file`, `policy_file`, `resume_from`.
 
 ### `/llm-externalizer:llm-externalizer-update-all`
-The entire model pipeline as one command: `llm-ext-benchmark --update-all`. It discovers the live OpenRouter catalog, applies each tool's requirements from the model-qualification registry, runs every tool that HAS a benchmark, ranks the survivors, and atomically writes the winners into `settings.yaml` — the ensemble (`model`/`second_model`/`third_model`), each `tool_models.<tool>`, and the `free_models` pool. It ends with one machine-readable `[OK]`/`[FAILED]` line and a report.
+The entire model pipeline as one command: `llm-ext-benchmark --update-all`. It discovers the live OpenRouter catalog, applies each tool's requirements from the model-qualification registry, runs every tool that HAS a benchmark, ranks the survivors, and atomically writes the winners into `settings.yaml` — the ensemble (`model`/`second_model`/`third_model`), each `tool_models.<tool>`, and the `free_models` pool. It ends with one machine-readable `[OK]`/`[FAILED]` line and a report. **Target profile:** `--profile <name>` > `active:` in `settings.yaml` > the built-in `free` profile. **Cost mode:** if the target profile has `free_only: true`, `--paid`/`--both` are refused before anything runs — that profile is a standing zero-spend guarantee, not a per-run override; pass `--update-all` alone (`--free`, the default), or turn off `free_only` for that profile first. Otherwise, `--free`/`--paid`/`--both` decides what each phase (the ensemble re-pick and every per-tool benchmark) is allowed to spend, all capped by `--budget-usd`.
 
 **Honest gating.** The report labels every tool **benchmark-proven** (a model actually ran that tool's golden dataset and passed) or **requirement-gated** (checked only against cost/context/output/params — *no benchmark exists for that tool yet*). An unbenchmarked tool never reads as if it had been tested.
 
 **Cost.** `--update-all` alone is **$0**: it sweeps only zero-cost models, enforced at the HTTP chokepoint (a priced model is refused *before* the request is sent), and it performs the free-models search that rewrites `free_models`. `--paid`/`--both` spend real money under a hard `--budget-usd` cap (default **$2.00**), enforced twice — a worst-case pre-flight estimate aborts the run before the first call (naming the exact `--budget-usd` that would authorize it), and every individual call is reserved against the cap before it is sent. `--dry-run` prints the full plan and the estimate and spends nothing.
 
 ### `/llm-externalizer:llm-externalizer-benchmark`
-Runs the OpenRouter model-selection harness (`llm-ext-benchmark`) over your sample. Candidates are pre-ranked at `$0` by two catalog quality indexes — the codex `coding_index` and the design-arena code-categories ELO — before any paid run; `--qualifying-top-n N` caps how many top-ranked candidates are benchmarked (spend control; explicit `--include` baselines are never capped). Zero-cost models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are valid candidates. Use `--assess-model <id>` for the free requirements check, or `--security-triage [--model <id>]` for the judged `security_scan` benchmark.
+Runs the OpenRouter model-selection harness (`llm-ext-benchmark`) over your sample. Candidates are pre-ranked at `$0` by two catalog quality indexes — the codex `coding_index` and the design-arena code-categories ELO — before any paid run; `--qualifying-top-n N` caps how many top-ranked candidates are benchmarked (spend control; explicit `--include` baselines are never capped). Zero-cost models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are valid candidates. Use `--assess-model <id>` for the free requirements check, or `--security-triage [--model <id>]` for the judged `security_scan` benchmark. With no `--profile`, the run's cost gate follows `active:` in `settings.yaml` (else the built-in `free` profile) — a non-`free` `active:` lets paid models run.
 
 ### `/llm-externalizer:llm-externalizer-assess-model`
 
@@ -613,7 +629,7 @@ Runs the OpenRouter model-selection harness (`llm-ext-benchmark`) over your samp
 
 ### `/llm-externalizer:llm-externalizer-check-model-health`
 
-No parameters — always inspects the **active** profile from `~/.llm-externalizer/settings.yaml`. Free (no LLM call, one public catalog fetch, no API key). For the main / second / third model and every `tool_models` entry it reports presence (removed/deprecated = **CRITICAL**), cost drift vs the seeded baseline at `~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool requirements regression (**WARN**). Writes a Markdown report to `<project>/reports/model-health/`. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --check-health`.
+No parameters — always inspects the **active** profile from `~/.llm-externalizer/settings.yaml`. Free (no LLM call, one public catalog fetch, no API key). For the main / second / third model and every `tool_models` entry it reports presence (removed/deprecated = **CRITICAL**), cost drift vs the seeded baseline at `~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool requirements regression (**WARN**). Writes a Markdown report to `<project>/reports/llm-externalizer/model-health/`. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --check-health`.
 
 ### `/llm-externalizer:llm-externalizer-discover-new-models`
 
@@ -621,7 +637,7 @@ No parameters — always inspects the **active** profile from `~/.llm-externaliz
 |---|---|---|---|---|
 | `qualifying-only` | positional flag | no | report all | When present, list only arrivals that meet ≥1 tool's requirements |
 
-Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRouter catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json`; each NEW model id is assessed against every LLM tool's per-tool requirements. Writes a Markdown report to `<project>/reports/model-arrivals/`. First run seeds the snapshot and reports zero arrivals. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --new-arrivals [--qualifying-only]`.
+Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRouter catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json`; each NEW model id is assessed against every LLM tool's per-tool requirements. Writes a Markdown report to `<project>/reports/llm-externalizer/model-arrivals/`. First run seeds the snapshot and reports zero arrivals. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --new-arrivals [--qualifying-only]`.
 
 ### `/llm-externalizer:llm-externalizer-security-triage-benchmark`
 
@@ -636,7 +652,7 @@ Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRou
 | `models=<id,[id...]>` | string | no | auto-discover same-or-cheaper pool | Explicit OpenRouter model id(s) to qualify for `search_existing_implementations`. Needs `$OPENROUTER_API_KEY` |
 | `qualifying_top_n=<N>` | number | no | 16 | Cap the auto-discovered candidate pool (cheapest-first) |
 | `force` | positional flag | no | use cache | Ignore the per-model-per-day cache and re-run every model |
-| `output_dir=<abs path>` | string | no | `<main-root>/reports/search-existing-benchmark/` | Report directory |
+| `output_dir=<abs path>` | string | no | `<main-root>/reports/llm-externalizer/search-existing-benchmark/` | Report directory |
 
 Qualifies a model for the duplicate-detection task by driving the REAL
 search-existing pipeline against a labeled golden-fixture codebase and scoring
@@ -651,7 +667,7 @@ edits source or config. CLI equivalent: `llm-ext-benchmark --search-existing [<i
 |---|---|---|---|---|
 | `models=<id,[id...]>` | string | no | auto-discover same-or-cheaper pool | Explicit candidate model id(s) forwarded to each benchmark that runs |
 | `force` | positional flag | no | only run when degraded | Run every benchmarked tool's benchmark even when its incumbent is NOT degraded (operator audit) |
-| `output_dir=<abs path>` | string | no | `<main-root>/reports/auto-replace/` | Report directory |
+| `output_dir=<abs path>` | string | no | `<main-root>/reports/llm-externalizer/auto-replace/` | Report directory |
 
 READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool
 benchmark (`security_scan`, `search_existing_implementations`), checks its
@@ -662,6 +678,8 @@ replacement. On a healthy ledger no benchmark runs. This command wraps the
 recommends, it **never** rewrites settings. To adopt a recommendation, run the
 CLI writer (the sole writer path): `llm-ext-benchmark --auto-replace --apply`
 (`--apply` requires `--auto-replace`; run `reset` afterwards; honors `free_only`).
+**Target profile:** `--profile <name>` > `active:` in `settings.yaml` > the built-in
+`free` profile — with a non-`free` `active:`, paid models can be adopted.
 
 ### Mass-scouting parameter notes
 
@@ -732,7 +750,7 @@ The base 8-tool pipeline plus 8 follow-on tools for fieldset authoring, job intr
 | `mass_scout_diff` | Compare two jobs row-by-row; counts only_in_a / only_in_b / changed (with changed_keys) |
 | `mass_scout_chain` | Re-scout the SUBSET of an existing job's results matching a JSON-extract filter, with a fresh fieldset |
 
-The CLI exposes every sub-command as its own hyphenated command, `bin/llm-ext mass-scout-<subcommand>` (e.g. `bin/llm-ext mass-scout-register`) — NOT `mass-scout <subcommand>` with a space; the latter silently falls back to plain `mass-scout` and ignores the extra word. On the slash-command side, the single `/llm-externalizer:llm-externalizer-mass-scout` dispatcher covers all 16 actions (it folds the action word into the hyphenated CLI subcommand for you). The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
+The CLI exposes every sub-command as its own hyphenated command, `bin/llm-ext mass-scout-<subcommand>` (e.g. `bin/llm-ext mass-scout-register`) — NOT `mass-scout <subcommand>` with a space; the latter fails fast with `unexpected argument '<subcommand>' (all inputs are named flags)` and exits 1. The grouped spelling `bin/llm-ext scout <action>` (e.g. `scout register`) works too. On the slash-command side, the single `/llm-externalizer:llm-externalizer-mass-scout` dispatcher covers all 16 actions (it folds the action word into the hyphenated CLI subcommand for you). The `llm-externalizer-mass-scouting` skill walks through the full pipeline including the bundled fieldsets, troubleshooting flowchart, and worked example.
 
 ### Security tools
 
@@ -798,6 +816,8 @@ verbatim instead of summarizing it, mid-run, the run falls back automatically to
 eligible model and re-chunks the remaining (unsent) work to its context — already-checkpointed
 chunk/fold summaries are untouched. If every eligible model is exhausted this way, the command
 exits non-zero rather than reporting a false success.
+The kebab-case spelling of a catalog command name is supported, not deprecated:
+`session-summary` is the supported CLI spelling of `session_summary`.
 
 | Flag | Purpose |
 |---|---|
@@ -815,6 +835,19 @@ exits non-zero rather than reporting a false success.
 | `--checkpoint <path>` | Override the checkpoint file. Default: derived deterministically from the transcript path under `~/.llm-externalizer/session-summary-checkpoints/`. |
 | `--output <path>` | Custom output directory for the summary report. Default: `<main-project-dir>/reports/llm-externalizer/`. |
 | `--stdout` | Print the summary TEXT directly to stdout (no report file written; banner/progress still go to stderr). |
+
+**Checkpoint durability.** Each checkpoint is written to a sibling temporary file, then
+renamed into place. Process termination leaves the previous complete checkpoint or the new
+one, possibly with a leftover temporary file; before the first successful checkpoint there
+is no previous checkpoint to resume. No `fsync` is performed, so this does not guarantee
+durability across a machine crash or power loss.
+
+**Caller time bounds.** `--chunk-timeout-s` (`--chunk_timeout_s`) limits each attempt, not
+total runtime. The observed 91–1478 seconds per chunk on v13.5.0 is historical evidence,
+not a current latency guarantee. A caller needing a total-time bound must enforce an external
+deadline that ends the process, especially with `--until-done` (`--until_done`), which retries
+whole compactions. Resuming still requires the checkpoint and transcript to pass the
+command’s normal validation; a bound too short to finish a chunk can repeatedly discard its progress.
 
 **What it reports.** Alongside the model, chunk count and prune ratio, the command prints
 the outcome — how much smaller the summary is than the transcript it replaces — to stderr
@@ -879,7 +912,7 @@ the requirements **and** passes that tool's benchmark. See
 | `assess_model` | Assess ONE model against EVERY LLM tool's per-tool requirements — free: no LLM call, no token cost (just a public catalog fetch, no API key). Per-tool `OK` / `NO` + which qualifying tools also need a benchmark pass |
 | `check_model_health` | Self-check the CONFIGURED model(s) of the active profile — free: no LLM call, one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/` |
 | `discover_new_models` | Autodiscover models that newly appeared in the catalog since the last run — free: no LLM call, one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/` |
-| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner — for every benchmarked tool (`security_scan`, `search_existing_implementations`), checks the incumbent model's ledger health and, when degraded (or with `force`), runs that tool's benchmark to recommend the best same-or-cheaper replacement. On a healthy ledger no benchmark runs. Advisory ONLY — writes a report to `reports/auto-replace/` + returns its path; **never** writes settings. Adopt via the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path) |
+| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner — for every benchmarked tool (`security_scan`, `search_existing_implementations`), checks the incumbent model's ledger health and, when degraded (or with `force`), runs that tool's benchmark to recommend the best same-or-cheaper replacement. On a healthy ledger no benchmark runs. Advisory ONLY — writes a report to `reports/llm-externalizer/auto-replace/` + returns its path; **never** writes settings. Adopt via the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path) |
 | `security_triage_benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset, scored via the real judge pipeline; recommends the best same-or-cheaper PASSER (never a pricier model). Cached per-model-per-day. Env: `$OPENROUTER_API_KEY` |
 
 ### `answer_mode` (every multi-file analysis tool)
@@ -899,12 +932,12 @@ the requirements **and** passes that tool's benchmark. See
 
 | Parameter | Default | Description |
 |---|---|---|
-| `output_dir` | `<project>/reports/llm-externalizer/` | Absolute path for reports. Default is anchored on `$CLAUDE_PROJECT_DIR` (cwd fallback) — never derived from git. Overridable here or via `$LLM_OUTPUT_DIR` |
+| `output_dir` | `<project>/reports/llm-externalizer/` | Absolute path for reports. Default is anchored on `$CLAUDE_PROJECT_DIR` (cwd fallback) — never derived from git. Overridable here or via `$LLM_EXT_OUTPUT_DIR` |
 | `max_retries` | `1` | Per-file retries in mode 0. Set `3` for parallel + retry + circuit breaker |
 | `redact_regex` | — | JavaScript regex — matches become `[REDACTED:USER_PATTERN]` |
 | `scan_secrets` | `true` | Run the secret detector on every input file before sending to the LLM |
 | `redact_secrets` | `true` | Replace detected secrets with `[REDACTED:LABEL]` instead of aborting (paired with `scan_secrets`) |
-| `free` | `false` | Use the free Nemotron model |
+| `free` | `false` | Use the selected profile's own first `:free` model, or refuse if it has none |
 | `max_payload_kb` | `400` | Max payload per LLM request |
 
 ---
@@ -927,6 +960,50 @@ All six agents are **internal** — users dispatch them via slash commands, not 
 
 ---
 
+## Breaking changes in 14.1.0
+
+- **`active:` is a real default-profile pointer again.** Precedence is
+  `--profile <name>` > `active: <name>` in `settings.yaml` > the built-in
+  `free` profile. `active:` may name any profile, dynamic or static. A fresh
+  install writes `active: free`. A dangling `active:` value (naming a
+  profile that no longer exists) only errors when it would actually be
+  selected — info commands and an explicit `--profile` still run.
+- **Three built-in dynamic profiles: `free`, `paid`, `local`.** They are
+  generated and refreshed automatically — `free` for the latest free
+  OpenRouter models, `paid` for the latest paid OpenRouter models, `local`
+  for the llama.cpp / OpenAI-compatible / LM Studio / Ollama endpoints
+  detected on this machine. All other profile names are STATIC, hand-written
+  by the user (see
+  ["Built-in dynamic profiles"](#built-in-dynamic-profiles-free-paid-and-local);
+  the retired former placeholder names are in `CHANGELOG.md`).
+- **No cross-profile fallback.** On a model failure, llm-ext falls back to
+  the next model of the SAME profile only — dynamic profiles in
+  benchmark-rating order, static profiles in the listed order. It never
+  switches to `free`, `local`, or any other profile: "no switching to free
+  models (or local models) must exist anymore. llm-ext must stick to the
+  selected profile in `--profile <profile name>` (or free profile if
+  omitted). no change of profile must be allowed once the command is
+  executed."
+- **A STATIC profile no longer auto-falls back to bundled free models.** A
+  static profile forced to free mode (`allow_paid_models: false`) with no
+  `free_models` and no free-provider route now **refuses** with a clear
+  error, instead of silently borrowing `FREE_POOL_SEED`.
+- **A dynamic profile's ownership boundary is enforced.** Inside `free`/
+  `paid`/`local`, `selection` and `high_quality_model` are yours to edit
+  (`paid` also owns `providers`) — every other key is now refused instead of
+  silently dropped on the next regeneration (see
+  ["Built-in dynamic profiles"](#built-in-dynamic-profiles-free-paid-and-local)).
+- **The `paid` profile's price ceiling moved.** The top-level
+  `ensemble_price_ceiling_usd_per_million` key is retired — set
+  `profiles.paid.selection.price_ceiling_usd_per_million` instead (default
+  still $1.3/M, input AND output each `<=` the ceiling). On first boot after
+  upgrading, llm-ext moves an existing top-level value there for you and
+  deletes the old key; if both are set to different values it leaves the
+  file untouched and refuses every command until you delete the top-level
+  key by hand.
+
+---
+
 ## Configuration
 
 The settings file lives at:
@@ -935,10 +1012,140 @@ The settings file lives at:
 - **Windows:** `%USERPROFILE%\.llm-externalizer\settings.yaml`
 - **WSL2** (Linux side, addressed from Windows): `\\wsl$\Ubuntu\home\<user>\.llm-externalizer\settings.yaml`
 
-The plugin creates it on first install with five machine-managed profiles — `free` (the default), `free-ensemble`, `paid`, `paid-ensemble`, `paid-mass-scout` — that choose and refresh their own models (see [First run → B1](#b1-free-by-default--the-allow_paid_models-master-switch)). The two `free*` ones cost nothing and populate on first use; the three `paid*` ones stay unpopulated until `allow_paid_models: true`. There is deliberately no free mass-scout: mass-scouting fires thousands of requests and a free tier rate-limits it. Edit it with any text editor, save, then run `llm-ext reset` to purge the caches (a restart is not required — every CLI call re-reads it fresh anyway).
+The plugin creates it on first install with three built-in DYNAMIC profiles —
+`free`, `paid`, and `local` — plus a single `active: free` line pointing at
+the default one (see ["Built-in dynamic profiles `free`, `paid`, and
+`local`"](#built-in-dynamic-profiles-free-paid-and-local) below). `free`
+costs nothing and populates on first use; `paid` stays unpopulated until
+`allow_paid_models: true`; `local` populates from whatever compatible
+endpoint is detected on this machine. Every other profile name is STATIC —
+used exactly as written, never modified by llm-ext. Edit the file with any
+text editor, save, then run `llm-ext reset` to purge the caches (a restart
+is not required — every CLI call re-reads it fresh anyway).
 
 > [!NOTE]
 > The setup wizard uses `scripts/setup/build-snippet.py` to safely quote `settings.yaml` values via stdlib-only logic (no PyYAML at this step) so an attacker who controls a model name or env-var reference cannot trigger arbitrary code execution through a malicious YAML constructor. Documented model IDs are also verified against OpenRouter's live `/v1/models` endpoint by `scripts/publish.py` as a CI gate on every release.
+
+### Built-in dynamic profiles `free`, `paid`, and `local`
+
+Three profile names are **DYNAMIC**: llm-ext owns their `settings.yaml` sections (each
+marked `# <-- do not touch, generated by llm-ext -->`), re-generates them as soon as a
+change is detected (new/removed OpenRouter models or repriced ones for `free`/`paid`,
+new or updated local endpoints for `local`), drops dead or repriced models immediately,
+benchmarks newcomers in the background, and keeps the best model per command. A
+hand-written `free:`/`paid:`/`local:` block is backed up once to `~/.llm-externalizer/backups/`
+(as `settings-before-generated-<name>-<ts>.yaml` from the pick CLI, or
+`settings-before-regenerate-<name>-<ts>.yaml` from the dynamic maintainer),
+then regenerated. Every other profile name is **STATIC** — created by hand by the user,
+used exactly as written, never modified by llm-ext; a failing model in a static profile
+fails with the provider error and is never silently replaced by a model from outside the
+profile.
+
+**The ownership boundary inside a dynamic profile (14.1.0).** llm-ext rewrites only its
+own GENERATED keys (`mode`, `api`, `model`, `free_models`, `tool_models`, etc., one at a
+time) — it never touches a subsection you add yourself. As of 14.1.0 every dynamic profile's
+USER-OWNED set includes `selection` (auto-pick constraints) and `high_quality_model`; `paid`
+additionally owns `providers` (llm-ext writes no provider bindings of its own onto `paid`
+today, so it is yours to hand-edit there — `free` and `local` still generate their own
+`providers` bindings and refuse a hand-written one). Every owned key survives every
+regeneration byte for byte, comments and all. Any OTHER key inside a dynamic profile is
+now **refused** at load time rather than silently dropped on the next regeneration — rename
+your own hand-picked profile instead of using `free`/`paid`/`local` if you want to choose
+every model yourself. The `paid` profile's auto-pick price ceiling (see next section) now
+lives inside its `selection` subsection for exactly this reason: it is yours to set, and
+llm-ext will never overwrite it.
+
+- **`free`** — OpenRouter `:free` models plus chat.b.ai (`glm-5.3-flash`, a soft-pinned
+  ensemble slot when `$BAI_API_KEY` is set). All checks and benchmarks run at $0. This
+  is the profile used whenever both `--profile` and `active:` are omitted.
+- **`paid`** — paid OpenRouter models. Benchmarking new candidates only happens with
+  `allow_paid_models: true`, and only within `paid_benchmark_daily_cap_usd` (default
+  `0.50` USD/day; `0` disables paid benchmarking).
+- **`local`** — the llama.cpp / OpenAI-compatible / LM Studio / Ollama endpoints
+  detected on this machine. Regenerated as soon as a new or updated local endpoint is
+  detected.
+
+**Fallback and maintenance.** The command's own path never updates or benchmarks: it
+runs whichever profile was selected, and a parallel detached process checks in the
+background for changes (new/removed models, changed costs, new/updated local endpoints)
+and, if any, spawns another detached process to run the update/scan/benchmark so the
+*next* command sees the refreshed pool — the current command never waits on it. A
+command may spawn one background change check for its profile, at most once per
+minute; a detected change starts one background update, which finishes on its own; no
+check or update starts without a command. A single lock per profile (free, paid, local) per config directory (the lock file lives under the config directory, so two different LLM_EXT_CONFIG_DIR values get independent singletons)
+guards its change check and its update/benchmark together, so however many commands run
+at once, at most one background process per profile is ever doing update/benchmark work
+(three total, one per profile) — while a profile's benchmark is running, that profile's
+own change check does not start a second process; other profiles are
+unaffected. On a model failure, llm-ext falls back to the next model
+of the SAME profile: for a dynamic
+profile, benchmark-rating order over the written validated list; for a static profile,
+the order the user listed. A dynamic profile whose whole validated list has failed
+starts its update in the background (unless one is already running, or one finished
+less than 30 minutes ago and the model catalog has not changed since) and exits
+non-zero at once with "no model of the '<profile>' profile is working right now; the
+profile update is underway in the background and will be finished soon — retry
+later." The command never waits for the update, and while the profile still has a
+working model an update runs without any message. When the failure is one an update
+cannot fix, that error is shown instead and no update starts: every model of `paid`
+answered `402` (no credit), or the API key was rejected (`401`); a failure specific to
+one file (for example a `413` for a file too large for every model) fails only that
+file. A static profile whose whole list has failed
+exits non-zero with "the models in the selected profile are all failing; retry later or
+change the profile." There is no cross-profile fallback in either case.
+
+**Selection.** Precedence is `--profile <name>` > `active: <name>` in `settings.yaml` >
+the built-in `free` profile. `active:` is a single line and may name any profile,
+dynamic or static; a fresh install writes `active: free`. If `active:` is missing, the
+default profile is `free`. A dangling `active:` value (naming a profile that does not
+exist) errors only when it would actually be selected — info commands (`llm-ext
+settings status` / `settings show`) and an explicit `--profile` still run regardless.
+`llm-ext settings status` / `settings show` print `Effective profile: <name> (source:
+--profile | active | default)`.
+
+**Honest limits — when a dynamic profile cannot serve a call:**
+
+| Case | What happens |
+|---|---|
+| `free`: every model unusable this run | exits at once with the retry-later message naming the profile; its update runs in the background |
+| `free` unpopulated on a fresh machine (empty `free_models` and a provider credential present) | exits at once with the same retry-later message and starts the update in the background, which writes a first pool within seconds (e.g. the b.ai pinned model when `$BAI_API_KEY` is set) and then benchmarks it; re-run the command shortly after. Nothing waits for it |
+| `free` unpopulated with no provider credential, maintenance disabled (`LLM_EXT_DISABLE_AUTO_RECONCILE=1`), or the catalog fetch just failed | refuses immediately, naming that cause — an update cannot fix any of the three any faster |
+| `paid` with `allow_paid_models: false` | refuses: `paid profile needs allow_paid_models: true in settings.yaml` |
+| `paid` unpopulated and today's benchmark budget is used up | refuses, resumes tomorrow (UTC), or raise `paid_benchmark_daily_cap_usd` |
+| `paid`: every paid model returns 402 | refuses: the OpenRouter account has no credit |
+| `free` + `mass_scout`/`mass_scout_chain`/`mass_scout_propose_fieldset`/`security_scan`/`high_quality_scan` | refuses by profile **name** (`--profile free`), not by mode — the exact text is `no free model is fit for <tool>; use --profile paid`, with ` (paid models are off: set allow_paid_models: true)` appended while `allow_paid_models` is false. `mass_scout_chain`, `mass_scout_propose_fieldset` and `security_scan` have no fitness benchmark and are always refused; `mass_scout` and `high_quality_scan` are FITNESS-GATED (TRDD-HBCCFOUF): the refusal lifts once the tool's own benchmark (`mass-scout-throughput` / `hq-scan-quality`) has recorded a conclusive PASS for some `:free` model — until then it applies. A STATIC `free_only` profile is **not** refused here — it runs them on its own configured `:free` models, at the user's own risk (that profile is the user's explicit configuration, not the built-in default) |
+
+"Never fails" means: never fails because a *configured* model went away, got
+repriced, or started rejecting calls. It cannot manufacture a model when the
+provider class itself is down — that is reported plainly, never papered over
+with a model from outside the profile.
+
+**Spend and write bounds live per config directory, not per machine.** The paid
+daily spend cap (`paid_benchmark_daily_cap_usd`, default `0.50`), the 6-hour floor
+between successful sweeps, the failure cooldown, and the lock over the generated
+sections are all state under `LLM_EXT_CONFIG_DIR` — running two config dirs on one
+machine (or one account) doubles the effective cap, by design. With
+`allow_paid_models: true`, **any** dispatch — even one made with `--profile free`
+— can spawn the paid benchmark in the background, bounded by that same cap, floor
+and cooldown; this is new, observable spend beyond what a `--profile paid` call by
+itself would cause. `--apply-profile <name>` on a non-`free_only` profile
+similarly authorizes spend, but only behind `allow_paid_models: true` and the
+benchmark's own `--allow-paid-models-tests`.
+
+`profiles.free` and `profiles.paid` each have exactly one writer, the dynamic
+maintainer: `llm-ext-benchmark --apply-free-pool free`/`paid` and `update-all
+--profile free`/`paid` now refuse rather than silently overwrite the generated
+section — use `--populate-default-profile <name>` to seed a fresh install's
+dynamic profile by hand instead. A STATIC `free_only` profile no longer gets
+automatic population of `benchmark-results.json` at boot (the retired background
+populator used to do that); `--bench-free-pool` remains the manual path.
+
+**Known limitation, not a feature:** on a machine with only a `chat.b.ai`
+credential (no OpenRouter key), the provisional `free` pool boots configured
+when the OpenRouter catalog snapshot is EMPTY. Once a catalog is cached from an
+earlier run, the pool would mix b.ai and OpenRouter `:free` ids, so the write is
+skipped on every dispatch and `free` never populates on that machine — the
+gate's own message does not yet name this specific cause.
 
 ### Profile modes
 
@@ -952,7 +1159,7 @@ The plugin creates it on first install with five machine-managed profiles — `f
 
 ```yaml
 # ~/.llm-externalizer/settings.yaml   (or %USERPROFILE%\.llm-externalizer\settings.yaml)
-active: remote-ensemble
+# pass --profile remote-ensemble on the call, or set active: remote-ensemble
 
 profiles:
   remote-ensemble:
@@ -971,7 +1178,7 @@ Every file is reviewed by all three models in parallel; the report combines thei
 A single call to NVIDIA's free Nemotron tier on OpenRouter. One model, no ensemble, no cost.
 
 ```yaml
-active: remote-free
+# pass --profile remote-free on the call
 
 profiles:
   remote-free:
@@ -987,7 +1194,7 @@ profiles:
 ### C. Local — LM Studio (Qwen 3.5 27B)
 
 ```yaml
-active: local-lmstudio
+# pass --profile local-lmstudio on the call
 
 profiles:
   local-lmstudio:
@@ -1002,7 +1209,7 @@ profiles:
 ### D. Local — Ollama
 
 ```yaml
-active: local-ollama
+# pass --profile local-ollama on the call
 
 profiles:
   local-ollama:
@@ -1115,10 +1322,10 @@ gates never bump a tool to a *pricier* model than its incumbent.
 | `LM_API_TOKEN` | `lmstudio-local`, `generic-local` presets |
 | `VLLM_API_KEY` | `vllm-local` preset |
 | `LLM_EXT_CONFIG_DIR` | Settings + history-log directory (default `~/.llm-externalizer`) |
-| `LLM_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
+| `LLM_EXT_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/` |
-| `LLM_EXT_FREE_BELOW_USD` | OpenRouter balance (USD) below which the server auto-engages free mode for every tool (default `1.00`; non-finite/≤0 → `1.00`). See "B2. OpenRouter free-only ensemble". |
-| `LLM_EXT_FREE_MODEL_ID` | Single `:free` model for the `free: true` flag + the 402 single-retry (default `poolside/laguna-m.1:free`). A non-`:free` value is rejected. The ensemble paths use the rotating free pool. |
+| `LLM_EXT_FREE_BELOW_USD` | No longer used — the automatic free mode on low balance is removed (14.1.0). A paid profile falls back only within its own pool; free is used only when explicitly selected with `--profile free` or `active: free`. |
+| `LLM_EXT_FREE_MODEL_ID` | No longer used — the `free: true` flag resolves to the selected profile's own first `:free` chain entry now, never a single hard-coded id (14.1.0, fix-queue 98(2)). |
 | `LLM_EXT_REASONING_EFFORT` | Reasoning effort sent to OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). **Reasoning tokens are billed even though the trace is discarded** — `xhigh` can be ~10× the per-call cost of no reasoning, so the default is `high`. `off` disables reasoning on every call. `mass_scout` and `cluster_synonyms` never reason regardless of this setting. |
 | `LLM_EXT_DUMP_REQUESTS` | Cost-audit hook. Set to a file path to append the **exact wire payload** (model + byte size + full JSON body) of every chat/code_task/ensemble request to that file, so you can verify there is no unexpected prompt/file inflation. Off unless set. The dumped body contains your prompt + file content — treat the file as sensitive. |
 

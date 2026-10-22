@@ -2,6 +2,11 @@
 name: llm-externalizer-setup-agent
 description: Interactive setup wizard for the llm-externalizer plugin. Detects platform (OS, arch, RAM, GPU), finds installed local-model runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), assists with installation when none are present, helps download Hugging Face models (installing the `hf` CLI if missing), runs five calibrated compatibility tests (smoke, structured output, code understanding, long context, output length), then generates a ready-to-paste settings.yaml profile snippet. Use when the user says "set up llm-externalizer", "configure my local model", "I can't get the externalizer to work", "which local model should I use", "test my model for compatibility", or invokes /llm-externalizer-setup.
 model: sonnet
+# cacheTtl: 1h — this agent is an INTERACTIVE wizard (waits on human answers,
+# model downloads, five calibration tests), so gaps between turns routinely
+# exceed the 5m default and would otherwise re-pay a full cache write each turn.
+experimental:
+  cacheTtl: "1h"
 skills:
   - huggingface-best
   - huggingface-local-models
@@ -480,19 +485,21 @@ Read back `$CLAUDE_PLUGIN_DATA/setup/profile.yaml` and print it to the user insi
 2. Open ~/.llm-externalizer/settings.yaml in your editor.
 3. Under the existing `profiles:` key, paste the block above (mind YAML
    indentation — 2 spaces).
-4. If you want this profile to be the default, set `active: <new-profile-name>`
-   at the top of the file.
-5. Save the file.
-6. Run `llm-ext reset` to purge caches and reload settings.
+4. Save the file.
+5. Run `llm-ext reset` to purge caches and reload settings.
+6. Pass `--profile <new-profile-name>` on your llm-ext calls to use it for one
+   call, or set `active: <new-profile-name>` in settings.yaml to make it the
+   standing default (precedence: --profile > active: > the built-in `free`
+   profile).
 ```
 
 ### Step 7 — Verify
 
-After the user confirms they have pasted and saved, run `llm-ext discover` and report: active profile name, mode, api preset, model, auth status, service health. If `discover` returns the expected profile with `service_health: ok`, output one line: `Setup complete — try /llm-externalizer:llm-externalizer-discover any time to re-check health.`
+After the user confirms they have pasted and saved, run `llm-ext discover --profile <new-profile-name>` and report: profile name, mode, api preset, model, auth status, service health. If `discover` returns the expected profile with `service_health: ok`, output one line: `Setup complete — try /llm-externalizer:llm-externalizer-discover any time to re-check health.`
 
 If `discover` does NOT see the new profile, walk the user through diagnostics:
 - Did the file get saved with valid YAML? (`python3 -c "import yaml, os; yaml.safe_load(open(os.path.expanduser('~/.llm-externalizer/settings.yaml')))"`)
-- Is `active:` set correctly?
+- Was `--profile <new-profile-name>` passed on the `discover` call, or is `active:` in settings.yaml still pointing at a different profile?
 - Did `llm-ext reset` actually run (look for the reset confirmation)?
 
 ## Recovery & corner cases

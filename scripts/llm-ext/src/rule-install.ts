@@ -2,12 +2,15 @@
  * Install (or update) the plugin's "how to use me" rule into the Claude rules
  * dir (`~/.claude/rules/use-llm-externalizer.md`).
  *
- * WHY THE MCP SERVER DOES THIS: Claude Code's file-write hooks gate the main
- * agent's Write/Edit/Bash tools and can forbid writing outside the project
- * folder. The MCP server, however, runs as a SUBPROCESS whose own filesystem
- * writes are not gated by those hooks — so it can place the rule in the user's
- * global config where the agent cannot. The rule then loads in every future
- * session so any agent knows how to drive this plugin.
+ * WHY THIS EXISTS: llm-ext is a plain CLI (the MCP server was removed and MCP
+ * is now banned outright for this project) invoked from a login shell or a
+ * Claude Code session that has no prior knowledge of it. Installing the usage
+ * rule at CLI startup means every future Claude Code session — this project
+ * or any other — loads the rule automatically and knows how to drive llm-ext
+ * without being told. Writing into `~/.claude/rules/` is normally outside
+ * llm-ext's allowed write roots (`~/.llm-externalizer/`, the plugin folder,
+ * the plugin data folder); this exact path is a USER-APPROVED exception to
+ * that write-roots rule (2026-09-18) — see the P14.1 write-roots audit.
  *
  * Safety contract:
  *   - BEST-EFFORT: never throws into the caller; the server must boot even if

@@ -16,16 +16,16 @@
  * gets a real benchmark, to avoid abstracting a selection mechanism from a
  * single instance (the premature-abstraction trap the TRDD §1 warns against).
  * Today `security_scan` has a benchmark in this registry, and the
- * `free`/`free-ensemble`/`paid`/`paid-ensemble` default profiles reuse the
- * keyword-classification benchmark via the existing benchmark/pick.ts path.
- * `mass_scout` (the `paid-mass-scout` default profile) has its OWN dedicated
- * benchmark — src/mass_scouting/calibrate-payload-size.test.ts — measuring
+ * `free`/`paid` dynamic profiles reuse the keyword-classification benchmark
+ * via the existing benchmark/pick.ts path.
+ * `mass_scout` (a `tool_models` head on the `paid` profile) has its OWN
+ * dedicated benchmark — src/mass_scouting/calibrate-payload-size.test.ts — measuring
  * per-record classification accuracy across ~11 payload sizes against a
  * hand-crafted JSON Schema (deliberately bypassing the scout fieldset DSL's
  * array_enum repair/dedup, which would corrupt the positional per-record
  * semantics that benchmark relies on); it is gated on CALIBRATE=1 +
- * OPENROUTER_API_KEY (not run automatically) and is NOT yet wired into
- * `paid-mass-scout`'s automatic population — see pick.ts's
+ * OPENROUTER_API_KEY (not run automatically) and is NOT yet wired into the
+ * mass-scout head's automatic population — see pick.ts's
  * pickMassScoutModel for the currently-shipped cost-ascending selection and
  * the note on what wiring the calibration in would require. The rest carry
  * requirements only (benchmark: null).
@@ -113,14 +113,14 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   check_references: {
     tool: "check_references",
     requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Symbol-reference validation. Validation-accuracy benchmark dataset is incremental.",
+    benchmark: "check-references",
+    note: "Symbol-reference validation. Gated by the check-references benchmark (TRDD-2G6D42LK). The graded question is narrowed to NAMED IMPORT BINDINGS — is the symbol still exported by the dependency? — because \"find every broken reference\" would need an oracle that decides which identifiers count as references, admitting dynamic access, reflection and re-export chains. Default/namespace/type-only imports and re-export chains are excluded EXPLICITLY. The corpus pairs a consumer at commit N-1 with its dependency at commit N across real export renames, and is BALANCED (2 broken, 2 intact) so that calling every binding broken fails on the merits — the only one of the three new benchmarks where precision GATES, because here a false alarm sends a developer chasing a healthy reference.",
   },
   check_imports: {
     tool: "check_imports",
     requirements: criteria({ requireReasoning: false }),
-    benchmark: null,
-    note: "Import-path validation. Validation-accuracy benchmark dataset is incremental.",
+    benchmark: "check-imports",
+    note: "Import-path extraction. Gated by the check-imports benchmark (TRDD-f45eeaa0): five files copied verbatim from this repo's own src/, whose DECLARED specifiers are derived mechanically from the bytes. It grades PHASE 1 only — the only phase a model performs, since the server resolves the paths itself — and scores RECALL-ONLY, because the tool's prompt also asks for file-path strings and configuration references that the oracle cannot know about, so gating on precision would fail a model for obeying its instructions. The runner drives the real prompt seam, schema and file rendering; a WORKLOAD_DESCRIBERS entry prices it before any spend.",
   },
   check_against_specs: {
     tool: "check_against_specs",
@@ -131,8 +131,8 @@ export const TOOL_MODEL_REGISTRY: Record<string, ToolModelDescriptor> = {
   compare_files: {
     tool: "compare_files",
     requirements: criteria({ requireReasoning: false, minContextTokens: 128_000 }),
-    benchmark: null,
-    note: "Two-file change summary. Change-summary benchmark dataset is incremental.",
+    benchmark: "compare-files",
+    note: "Two-file change summary. Gated by the compare-files benchmark (TRDD-2G6D42LK): five real `git show` diffs from this repo, whose changed TOP-LEVEL symbols are derived mechanically from the diff bytes. Scores RECALL over those symbols — which is exactly what the tool's own prompt asks for (\"Identify changed code by FUNCTION/CLASS/METHOD NAME\") — and deliberately does NOT gate precision, because prose naming something outside the truth set is usually good summarising, not error. Recall sits at 0.70 rather than check_imports' 0.95: extraction is mechanical, summarising abstracts, and a higher bar would push models toward identifier lists.",
   },
   chat: {
     tool: "chat",

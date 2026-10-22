@@ -20,6 +20,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { withUsageContext } from "../usage-history.js";
+import { BENCH_LOCK_PATH_ENV, releaseOwnBenchLockOnExit } from "../bench-lock.js";
 import { buildGroundTruth, BENCHMARK_KEYWORDS } from "./ground-truth.js";
 import {
   DEFAULT_CRITERIA,
@@ -33,6 +34,7 @@ import {
   fetchProgrammingModels,
   type OpenRouterModel,
   type QualifiedModel,
+  type ModelCriteria,
 } from "./discover.js";
 import { runBenchmarkOnModel, keywordPromptChars, type RunOutcome } from "./runner.js";
 import { recordGeneralKeywordPasses } from "./validated.js";
@@ -48,11 +50,7 @@ import {
   pickTopN,
   pickEnsembleByPriceCeiling,
   pickMassScoutModel,
-  updateFreeDefaultProfile,
-  updateFreeEnsembleDefaultProfile,
-  updatePaidDefaultProfile,
-  updatePaidEnsembleDefaultProfile,
-  updateMassScoutDefaultProfile,
+  writeDynamicProfileSection,
   renderEnsembleBlock,
   ENSEMBLE_SLOTS,
   type CachedReport,
@@ -60,10 +58,21 @@ import {
   type EnsembleSlot,
   type PickedModel,
 } from "./pick.js";
+import { paymentErrorCertainty } from "./free-mode.js";
+import { registeredTools } from "../model-qualification/registry.js";
+import { readCandidates, clearCandidates } from "../dynamic-candidates.js";
+import { bookDailySpend } from "./daily-spend.js";
 import { runUpdateAll, estimateWorkloadCostUsd, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
-import { ASSUMED_MAX_OUTPUT_TOKENS } from "./budget.js";
+import {
+  ASSUMED_MAX_OUTPUT_TOKENS,
+  SpendLedger,
+  makeBudgetedGlobalFetch,
+  type ModelPrice,
+  type PriceLookup,
+} from "./budget.js";
 import type { BenchmarkWorkload } from "./workload-types.js";
 import { runSecurityTriageBenchmark } from "./security-triage/index.js";
+import { runScoutAccuracyBenchmark } from "./scout-accuracy.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
 import { runCodeAuditBenchmark } from "./code-task/index.js";
 import { runScanFolderBenchmark } from "./scan-folder/index.js";
@@ -92,7 +101,7 @@ import {
   runDiscoverNewArrivals,
   renderNewArrivalsText,
 } from "../model-qualification/new-arrivals.js";
-import { resolveProjectMainRoot } from "../project-root.js";
+import { defaultOutputDir } from "../project-root.js";
 import {
   getConfigDir,
   getSettingsPath,
@@ -103,10 +112,25 @@ import {
   profileFreeModels,
   FREE_POOL_SEED,
   getEnsemblePriceCeiling,
+  DEFAULT_PROFILE_NAME,
+  isDynamicProfileName,
+  resolveGroups,
+  effectiveProfileName,
+  type Profile,
+  type ResolvedRoute,
 } from "../config.js";
-import { recordBenchmarkSuccess, recordBenchmarkFailure } from "../default-profiles-state.js";
+import {
+  recordBenchmarkSuccess,
+  recordBenchmarkFailure,
+  recordDynamicBenchmarkAt,
+  updateDynamicProfileRecord,
+} from "../default-profiles-state.js";
 import { poolFingerprint, type CatalogPriceSnapshot } from "../default-profiles.js";
 import { toCatalogPriceSnapshot } from "../model-reconcile.js";
+// TRDD-C9SXX7HO (D2): the 'local' dynamic profile's only inputs — a probe of
+// well-known local server ports, never the OpenRouter catalog.
+import { discoverLocalLlmServices } from "../local_discovery/scan.js";
+import { buildLocalProfileSection, localEndpointFingerprint } from "../local-profile.js";
 
 import { parseArgs, type CliOptions } from "./cli-args.js";
 
@@ -135,12 +159,6 @@ function resolveFixturesDir(): string {
     if (existsSync(join(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:\n  ${candidates.join("\n  ")}`);
-}
-
-function resolveMainRoot(): string {
-  // Single source of truth — see project-root.ts (CLAUDE_PROJECT_DIR verbatim →
-  // cwd; no git). Anchors benchmark reports in the main project dir.
-  return resolveProjectMainRoot();
 }
 
 // ── The single machine-readable contract (P1 zero-token model pipeline) ──────
@@ -274,16 +292,233 @@ function benchmarkCachePath(): string {
 function refuseUnsafeUpdateAll(opts: CliOptions): CliResult | null {
   if (!opts.updateAll || opts.updateMode === "free") return null;
   const settings = loadSettings();
-  if (!settings || !settings.active) return null; // the phase reports a missing profile
-  const active = settings.profiles[settings.active];
-  if (!active) return null;
-  if (!resolveProfile(settings.active, active).freeOnly) return null;
+  if (!settings) return null; // the phase reports a missing/unreadable settings file
+  // P6b-fix2 B-1 (row99: `active:` reinstated, TRDD-G6XT3AY9) — the TARGET
+  // profile: `--profile` when given, else `active:` in settings.yaml, else
+  // the built-in default. See benchmarkTargetProfile's own doc comment.
+  const profileName = benchmarkTargetProfile(opts.profile);
+  const target = settings.profiles[profileName];
+  if (!target) return null;
+  if (!resolveProfile(profileName, target).freeOnly) return null;
   return {
     ok: false,
     code: 2,
     summary:
-      `--update-all --${opts.updateMode} refused: profile '${settings.active}' has free_only: true, which means it must never spend. ` +
+      `--update-all --${opts.updateMode} refused: profile '${profileName}' has free_only: true, which means it must never spend. ` +
       `Run --update-all (free, $0), or turn off free_only in ${getSettingsPath()} first — that is a deliberate decision, not a flag override`,
+  };
+}
+
+/**
+ * The profile a write in THIS CLI targets (P6b-fix2 B-1).
+ *
+ * `llm-ext-benchmark` runs as its own process. 5502ca5/c1646e6 (TRDD-G6XT3AY9,
+ * 14.1.0) reinstated the settings.yaml `active:` key as the live
+ * default-profile pointer, so it is back IN this resolution: the explicit
+ * `--profile`/queue argument wins when given, else `active:` via
+ * config.ts's effectiveProfileName() — the same resolver cli/main.ts uses —
+ * else the built-in DEFAULT_PROFILE_NAME when settings can't be loaded at
+ * all. GENERATED sections (`free`/`paid`) are still written only by the
+ * dynamic maintainer (under the settings write lock, with the generated
+ * marker and a backup of any hand-authored section); this function only
+ * decides WHICH profile name a write targets, not who is allowed to write it.
+ */
+function benchmarkTargetProfile(explicit: string | null | undefined): string {
+  // row99 fix-queue (14.1.0 reinstated `active:`, TRDD-G6XT3AY9): mirrors
+  // cli/main.ts's own precedence exactly -- `--profile` (explicit) wins,
+  // else `active:` in settings.yaml via effectiveProfileName(), the ONE
+  // resolver every other reader (validateSettings, boot, settings
+  // show/status, and now this benchmark CLI) agrees on -- no second copy of
+  // the precedence rule. `active:` was previously excluded on purpose
+  // (p14.1-c2 review, 5502ca5 item 3a, when `active:` was still the RETIRED
+  // disk key); 5502ca5/c1646e6 reinstated it as the live default-profile
+  // pointer, so that exclusion no longer applies. Settings unreadable here
+  // falls back to DEFAULT_PROFILE_NAME -- main() already refuses to dispatch
+  // any phase that reads the resolved profile when settings cannot be
+  // loaded (settingsIndependentPhase), so this fallback is only ever reached
+  // by a phase that never uses it for real work.
+  return benchmarkTargetProfileOrNull(explicit) ?? DEFAULT_PROFILE_NAME;
+}
+
+/**
+ * The profile UNREADABLE-settings-safe resolver (row99 fix-queue item 5,
+ * S5): same precedence as benchmarkTargetProfile above, but returns null
+ * instead of silently falling back to DEFAULT_PROFILE_NAME when
+ * settings.yaml can't be loaded. main()'s generatedRefusal computation uses
+ * this for --update-all / --auto-replace --apply / --adopt so an unreadable
+ * settings.yaml reaches the REAL settings-unreadable refusal further down
+ * (or runUpdateAllPhase's own check) instead of benchmarkTargetProfile's
+ * 'free' fallback wrongly tripping the GENERATED-profile refusal (fail-fast
+ * rule: no fallback that hides which check actually failed).
+ */
+function benchmarkTargetProfileOrNull(explicit: string | null | undefined): string | null {
+  if (explicit) return explicit;
+  const s = loadSettings();
+  return s ? effectiveProfileName(s) : null;
+}
+
+/**
+ * The profile whose `free_only` governs this run's COST GATE (P6b-fix3 S-2').
+ *
+ * `setActiveFreeOnly` decides which candidates the runner is allowed to bill
+ * for, so it must name the profile the command actually WRITES — otherwise two
+ * flags have to agree and nothing enforces it. Before this, main published
+ * `benchmarkTargetProfile(opts.profile)` for every phase, so
+ * `--code-task-benchmark --apply-profile ens` with no `--profile` published
+ * `profiles.free`'s `free_only: true`: runner.ts skipped every non-zero-cost
+ * candidate and the phase reported "no eligible same-or-cheaper passer, so
+ * nothing was written to 'ens'" — a silent no-op that looked like a verdict.
+ * Pre-P6b this happened to work for anyone whose disk `active:` named a
+ * non-free_only profile, which is why it surfaced only now.
+ *
+ * Order mirrors the write targets: `--apply-profile` when set, then the
+ * populators' own name (they also set the flag themselves once their phase
+ * starts — this makes main agree with them rather than publishing `free`'s
+ * gate while populating `paid`), else the general target.
+ *
+ * Exported for `generated-profile-writes.test.ts`: the value it returns is
+ * consumed by `setActiveFreeOnly` deep inside a sweep that needs the network, so
+ * the resolution itself is the only part a hermetic test can observe.
+ */
+export function costGateProfile(opts: CliOptions): string {
+  if (opts.applyProfile) return opts.applyProfile;
+  if (opts.populateDefaultProfile) return opts.populateDefaultProfile;
+  // P6c tidy (fix-queue item 51): --apply-free-pool and --adopt are each their own
+  // write target too (416/417 below resolve them the same way for their own
+  // generated-profile refusal) — costGateProfile used to fall through to the
+  // general target for both, publishing the WRONG profile's free_only when
+  // neither --apply-profile nor --populate-default-profile was also set. Harmless
+  // today (--adopt only reads the public no-auth catalog; --apply-free-pool is $0
+  // by construction) but the gate should still name the profile actually written.
+  if (opts.applyFreePool) return opts.applyFreePool;
+  if (opts.adoptModel) return benchmarkTargetProfile(opts.adoptProfile ?? opts.profile);
+  return benchmarkTargetProfile(opts.profile);
+}
+
+/**
+ * Refuse a command that would write a GENERATED section, BEFORE it writes
+ * anything (P6b-fix2 B-1).
+ *
+ * The writers in pick.ts throw for a dynamic name, which is the right last line
+ * of defence but the wrong user experience: `--update-all` writes the ensemble,
+ * THEN the free pool, so a throw at the second writer left settings.yaml
+ * half-updated and the run dead with a stack trace. Refusing here — in the same
+ * usage-error phase as refuseUnsafeUpdateAll, before preflight — means nothing
+ * has been written when the user is told, and the exit is a clean code 2.
+ */
+function refuseGeneratedProfileTarget(command: string, profileName: string): CliResult | null {
+  if (!isDynamicProfileName(profileName)) return null;
+  return {
+    ok: false,
+    code: 2,
+    summary:
+      `${command} refused: '${profileName}' is a GENERATED dynamic profile — llm-ext owns that section and ` +
+      `writes it only through the dynamic-profile maintainer. Use ` +
+      `'llm-ext-benchmark --populate-default-profile ${profileName}' instead, or pass --profile <name> ` +
+      `to target a static profile`,
+  };
+}
+
+// row99 fix-queue / fail-fast (CLAUDE.md "no fallback that hides a failure"):
+// main()'s settings/profile resolution used to swallow an unreadable
+// settings.yaml or an unresolvable active profile and run the sweep anyway
+// ("best-effort on bad settings"). That is only safe for the handful of
+// phases below that never read the resolved free_only / free pool / target
+// profile before returning — everything else (the default keyword sweep,
+// --auto-replace, --security-triage/--search-existing/--code-task/
+// --scan-folder/--check-specs, the four text-tool benchmarks, and a bare
+// --bench-free-pool) MUST fail fast instead of dispatching on a wrong or
+// default free_only value. Exemptions, each verified by reading the phase
+// it routes to:
+//   --dry-run          — every dry-run branch (the 9 sub-task ones and the
+//                         default sweep's own) returns before `freeOnly` is
+//                         read anywhere downstream.
+//   --update-all        — runUpdateAllPhase() calls loadSettings()/
+//                         resolveProfile() itself and fails fast on its own
+//                         (see the settings/settings.profiles[profileName]
+//                         check at the top of that function).
+//   --populate-default-profile — routes to its own free/local/paid writers,
+//                         none of which take main()'s freeOnly/activeFreeModels.
+//   --assess-model, --check-health, --new-arrivals — doc'd "free": a public,
+//                         no-auth OpenRouter catalog fetch only, no freeOnly
+//                         or allow_paid_models read.
+//   --from-cache         — reads the JSON sidecar off disk, no network, no
+//                         freeOnly read.
+//   --adopt              — assessModelById() + applyToolModelToSettings/
+//                         applyEnsembleSlotToSettings write the target
+//                         profile directly; does not consume main()'s
+//                         resolved freeOnly/activeFreeModels.
+function settingsIndependentPhase(opts: CliOptions): boolean {
+  return (
+    opts.dryRun ||
+    opts.updateAll ||
+    opts.populateDefaultProfile !== null ||
+    opts.assessModel !== null ||
+    opts.checkHealth ||
+    opts.newArrivals ||
+    opts.fromCache ||
+    opts.adoptModel !== null
+  );
+}
+
+// row99 fix-queue item 3: `--dry-run` is exempt above so the 9 sub-task
+// benchmarks' AND the default sweep's OWN dry-run branch (the "print the
+// plan, spend $0" short-circuits inside/around runKeywordSweep) can still
+// run on a broken settings file — but their REAL (non-dry-run) run DOES read
+// the resolved freeOnly/activeFreeModels and would refuse for the exact
+// cause `settingsFailureCause` names. The other 7 exemptions are exempt
+// unconditionally — --update-all etc. never read main()'s resolved value
+// even for real, so a broken settings.yaml does not predict a refusal for
+// them and this must return false for those, dry-run or not.
+export function dryRunWouldMaskRefusal(opts: CliOptions, settingsFailureCause: string | null): boolean {
+  // settingsIndependentPhase already reads every one of the 7 exemption
+  // flags plus opts.dryRun and nothing else (no closures, no I/O), so
+  // asking it the same question with dry-run forced off is exactly this
+  // function's 7-condition check, with one source of truth (kept as ONE
+  // list rather than a hand-copied second one that could drift).
+  //
+  // Exported (review of 43e3694, S3) so a unit test can call it directly
+  // with a real EXEMPT, NON-write command's parsed opts (e.g. --check-health
+  // --dry-run) and prove the false branch — no CLI code path actually
+  // reaches this function for those commands (they dispatch unconditionally,
+  // never consulting opts.dryRun), so a CLI-spawn test could never exercise
+  // that branch; see settings-resolution-failfast.test.ts's replacement for
+  // former case (j), which was vacuous for the same reason.
+  return opts.dryRun && settingsFailureCause !== null && !settingsIndependentPhase({ ...opts, dryRun: false });
+}
+
+/**
+ * The remedy clause for "active profile 'X' is not configured" (row99
+ * fix-queue item 4, S4). A GENERATED name ('free'/'paid'/'local') really
+ * does populate itself the moment any llm-ext command runs — "run any
+ * llm-ext command once" is true advice for it. A STATIC `active:` name that
+ * simply isn't defined in settings.yaml never auto-generates, so the same
+ * remedy would be a false promise; name the real problem instead.
+ */
+function notConfiguredRemedy(activeName: string): string {
+  return isDynamicProfileName(activeName)
+    ? "run any llm-ext command once to generate the free/paid/local sections"
+    : "the profile named by active: (or --profile) does not exist in settings.yaml";
+}
+
+/**
+ * The refusal for "settings.yaml itself could not be loaded" (review of
+ * 43e3694, S2). Used by BOTH the write-phase guard (--update-all /
+ * --auto-replace --apply / --adopt, before any catalog fetch) and the
+ * sweep's own unreadable-settings branch further down in main() — one text,
+ * one place to fix. The remedy used to also recommend --dry-run alongside
+ * --check-health/--assess-model, but a WRITE command's own --dry-run is
+ * refused by this SAME guard (settings-resolution-failfast.test.ts case (j):
+ * `--update-all --dry-run` on unreadable settings still refuses outright) —
+ * recommending it here is wrong advice for exactly the callers that reach
+ * this helper, so it is dropped from the shared text rather than kept for
+ * the one caller where it happens to hold.
+ */
+function unreadableSettingsRefusal(settingsPath: string): CliResult {
+  return {
+    ok: false,
+    code: 2,
+    summary: `settings.yaml unreadable or invalid at ${settingsPath} — refusing to run (no cost-mode fallback; fix the file, or use a settings-independent command such as --check-health/--assess-model)`,
   };
 }
 
@@ -304,6 +539,101 @@ async function main(): Promise<CliResult> {
   setPaidBenchmarksAllowed(opts.allowPaidModelsTests);
   // Usage errors first, environment second — see validateCombinations.
   validateCombinations(opts);
+  // C2b-wire (TRDD-OE27RD7I): the ONLY argv default-profiles-runner.ts's
+  // spawnDetachedDetector ever spawns this script with. Cheap, read-only
+  // fingerprint check (never a benchmark, never a settings.yaml write) — runs
+  // before every other phase's write-guards/catalog fetch below and exits
+  // directly, exactly like the sub-task --dry-run short-circuit further down
+  // exits before spending anything.
+  if (opts.detectProfileChanges !== null) {
+    const { detectProfileChanges } = await import("../profile-detector.js");
+    await detectProfileChanges(opts.detectProfileChanges, { log: (m) => process.stderr.write(m) });
+    process.exit(0);
+  }
+  // P6b-fix2 B-1: every command that WRITES a profile section refuses a
+  // generated one here — before preflight, before the catalog fetch, before the
+  // sweep, and above all before the first of its several writes.
+  //
+  // P6b-fix3 N-3: this now runs BEFORE refuseUnsafeUpdateAll. DEFAULT_PROFILE_NAME
+  // is `free`, so on a shipped config `--update-all --paid` hit the free_only
+  // refusal first and was told to "turn off free_only in settings.yaml" — advice
+  // to hand-edit a GENERATED section the maintainer overwrites on the next
+  // dispatch, about a profile the user never named. The generated-target refusal
+  // is the true and actionable one for that command, so it speaks first; the
+  // free_only refusal below is still reached for every STATIC target.
+  //
+  // P6b-fix3 S-1': `--apply-profile <name>` is in the chain. It is the write
+  // target of five phases (the four tool-model benchmarks and the top-N pick)
+  // and was absent, so `--apply-profile free` ran the WHOLE sweep — billable on
+  // a paid profile — and only then took pick.ts's throw. Nothing was
+  // half-written, but the money was already spent: "before any write" has to
+  // mean before the spend that produces the thing to write.
+  // getConfigDir()'s M8 path-traversal guard can THROW (not just return
+  // null) for a LLM_EXT_CONFIG_DIR outside home/tmp — benchmarkTargetProfile's
+  // `active:` fallback and the settingsPath/costGateProfile resolution below
+  // both reach it. Unguarded, that would reject main() with a stack trace
+  // instead of the one-line [FAILED] refusal every other config-level
+  // problem in this function produces (see the module-bootstrap comment on
+  // why a rejection is NOT equivalent: it still prints one final line, but
+  // at exit code 1, not the 2 every other refusal here uses, and only after
+  // a stack trace to stderr).
+  let generatedRefusal: CliResult | null;
+  try {
+    // review of 43e3694 (S1): the real question a WRITE phase (--update-all,
+    // --auto-replace --apply, --adopt) needs answered is "can settings.yaml
+    // itself be loaded", independent of whether the profile NAME came from
+    // settings or from an explicit --profile/--adopt-profile flag.
+    // benchmarkTargetProfileOrNull returns an explicit name immediately
+    // without ever calling loadSettings(), so checking "is the TARGET null"
+    // missed `--adopt x --adopt-profile mystatic` on an unreadable
+    // settings.yaml (target = 'mystatic', never null) — main() fell through
+    // to the write phase and reached assessModelById's catalog fetch, which
+    // then threw uncaught instead of a clean [FAILED] refusal.
+    const settingsUnreadable = loadSettings() === null;
+    const updateAllTarget = opts.updateAll ? benchmarkTargetProfileOrNull(opts.profile) : null;
+    const autoReplaceApplyTarget =
+      opts.autoReplace && opts.apply ? benchmarkTargetProfileOrNull(opts.profile) : null;
+    const adoptTarget = opts.adoptModel ? benchmarkTargetProfileOrNull(opts.adoptProfile ?? opts.profile) : null;
+    // Refuse HERE, before refuseGeneratedProfileTarget below (which a
+    // resolved-or-explicit target trivially passes, since
+    // isDynamicProfileName(null-ish) is never true) and before any later
+    // settings read, so no write path can slip past the generated-profile
+    // guard on unreadable settings, and --adopt in particular never reaches
+    // assessModelById's catalog fetch further down.
+    if (settingsUnreadable && (opts.updateAll || (opts.autoReplace && opts.apply) || opts.adoptModel !== null)) {
+      return unreadableSettingsRefusal(getSettingsPath());
+    }
+    generatedRefusal =
+      (opts.applyProfile ? refuseGeneratedProfileTarget("--apply-profile", opts.applyProfile) : null) ??
+      (updateAllTarget ? refuseGeneratedProfileTarget("--update-all", updateAllTarget) : null) ??
+      (autoReplaceApplyTarget
+        ? refuseGeneratedProfileTarget("--auto-replace --apply", autoReplaceApplyTarget)
+        : null) ??
+      (opts.applyFreePool ? refuseGeneratedProfileTarget("--apply-free-pool", opts.applyFreePool) : null) ??
+      (adoptTarget ? refuseGeneratedProfileTarget("--adopt", adoptTarget) : null);
+  } catch (err) {
+    // review-followup (row99): NOT "settings.yaml unreadable or invalid" —
+    // loadSettings() itself already reports that case by returning null
+    // rather than throwing (see the `!s` branch below). What actually throws
+    // here in practice is getConfigDir()'s M8 path-traversal guard, which is
+    // a LLM_EXT_CONFIG_DIR location problem, not a YAML syntax problem; a
+    // message claiming the wrong cause sends the caller to edit a file that
+    // was never broken.
+    //
+    // row99 fix-queue item 1 (S1): name ONLY LLM_EXT_CONFIG_DIR here — the
+    // dropped clause ("or use a settings-independent command such as
+    // --check-health/--assess-model/--dry-run") was wrong advice for exactly
+    // those three commands, since this same catch runs for EVERY phase (see
+    // the second occurrence of this message further down): on a bad
+    // LLM_EXT_CONFIG_DIR, --check-health itself would be told to run
+    // --check-health.
+    return {
+      ok: false,
+      code: 2,
+      summary: `settings/config could not be resolved: ${err instanceof Error ? err.message : String(err)} — refusing to run (no cost-mode fallback; fix LLM_EXT_CONFIG_DIR)`,
+    };
+  }
+  if (generatedRefusal !== null) return generatedRefusal;
   // Config-level refusals rank WITH usage errors, not with environment checks.
   const refusal = refuseUnsafeUpdateAll(opts);
   if (refusal !== null) return refusal;
@@ -315,17 +645,94 @@ async function main(): Promise<CliResult> {
   // any non-':free' model. Free mode benchmarks the user's free pool ($0); to
   // benchmark a paid model, switch off free_only. Best-effort on bad settings.
   let activeFreeModels: readonly string[] = [];
+  // Row 92 fix-queue: mirrors _activeFreeOnly (still published below for the
+  // out-of-scope subsystems that read it — judge.ts, scout.ts, cli.ts), but the
+  // keyword sweep below now takes it as an explicit parameter instead of reading
+  // the global from inside runner.ts's cost gate.
+  //
+  // Fail-fast settings/profile resolution (row99 fix-queue). Previously this
+  // caught any error and silently ran the sweep on `freeOnly = true` /
+  // `activeFreeModels = []` regardless of WHY resolution failed — a
+  // "best-effort on bad settings" fallback that CLAUDE.md's fail-fast rule
+  // forbids: the code must work as intended or exit with an error, never
+  // paper over a broken config and dispatch anyway.
+  //
+  // `freeOnly` is typed WITHOUT an initializer: every leaf below either
+  // assigns it from a successfully-resolved profile or `return`s a non-zero
+  // CliResult first, so tsc's definite-assignment analysis proves there is no
+  // reachable read of an unset value — see settingsIndependentPhase's doc
+  // comment for exactly which flags are exempt and why. Each branch here
+  // assigns-or-returns directly (no separate "did resolution fail?" flag
+  // joined back afterwards) because tsc cannot correlate two independently
+  // assigned variables across sibling branches — an earlier version used a
+  // shared `resolutionError` string checked in a second `if` after this one
+  // and tsc could not see that "resolutionError set" and "freeOnly unset"
+  // always coincide, even though they logically do.
+  let freeOnly: boolean;
+  // row99 fix-queue item 2: getSettingsPath() (-> getConfigDir()'s M8
+  // path-traversal guard) and costGateProfile() (-> benchmarkTargetProfile's
+  // own loadSettings() fallback) can both THROW, not just fail informatively
+  // — guarded together so a throw here refuses with the same one-line
+  // [FAILED], code 2, as every other config-level refusal in this function,
+  // instead of rejecting main() (module bootstrap: exit 1, stack trace on
+  // stderr — see the comment on the generatedRefusal try above).
+  let settingsPath: string;
+  let s: ReturnType<typeof loadSettings>;
+  let activeName: string;
   try {
-    const s = loadSettings();
-    const active = s?.profiles[s.active];
-    if (s && active) {
+    settingsPath = getSettingsPath();
+    s = loadSettings();
+    // P6b-fix2 B-1 (row99: `active:` reinstated, TRDD-G6XT3AY9): the profile
+    // this RUN targets. With no --profile that is now `active:` in
+    // settings.yaml via config.ts's effectiveProfileName() when set, else the
+    // built-in default — benchmarkTargetProfile's own doc comment has the
+    // full precedence. The difference from a bare `--profile <static>` is that
+    // it publishes THAT profile's free_only to the cost chokepoint instead of
+    // the resolved default's.
+    // P6b-fix3 S-2': the profile this run WRITES, which for --apply-profile and
+    // the populators is not benchmarkTargetProfile — see costGateProfile.
+    activeName = costGateProfile(opts);
+  } catch (err) {
+    // review-followup (row99): same reasoning as the generatedRefusal catch
+    // above — this is almost always getConfigDir()'s M8 path guard, not a
+    // YAML problem, so the message must not name settings.yaml specifically.
+    //
+    // row99 fix-queue item 1 (S1): this IS the "second try" that runs for
+    // EVERY phase, including --check-health/--assess-model/--dry-run — see
+    // the comment on the generatedRefusal catch above for why the dropped
+    // clause was actively wrong advice here.
+    return {
+      ok: false,
+      code: 2,
+      summary: `settings/config could not be resolved: ${err instanceof Error ? err.message : String(err)} — refusing to run (no cost-mode fallback; fix LLM_EXT_CONFIG_DIR)`,
+    };
+  }
+  // row99 fix-queue item 3: recorded ONLY when resolution genuinely failed
+  // AND the run is proceeding anyway because it's exempt (settingsIndependentPhase).
+  // A --dry-run of a phase that DOES read freeOnly/activeFreeModels for real
+  // (the 9 sub-task benchmarks + the default keyword sweep — see
+  // settingsIndependentPhase's own doc comment) reads this to warn honestly
+  // that dropping --dry-run would refuse; the other 7 exempt flags never read
+  // the resolved profile even in their real run, so their own dry-run branch
+  // (if any) must NOT consult this — see dryRunWouldMaskRefusal below.
+  let settingsFailureCause: string | null = null;
+  const active = s ? s.profiles[activeName] : undefined;
+  if (s && active) {
+    let resolved: ReturnType<typeof resolveProfile> | null = null;
+    let resolveErrorMessage: string | null = null;
+    try {
       // Publish the master switch for this separate benchmark process, so
       // assertPaidBenchmarkAllowed's getAllowPaidModels() check (USER D4) is
       // correct here too — a paid benchmark is refused unless allow_paid_models
       // is true, regardless of --allow-paid-models-tests. Absent ⟺ false (free).
       setAllowPaidModels(s.allow_paid_models === true);
-      const resolved = resolveProfile(s.active, active);
+      resolved = resolveProfile(activeName, active);
+    } catch (err) {
+      resolveErrorMessage = err instanceof Error ? err.message : String(err);
+    }
+    if (resolved) {
       setActiveFreeOnly(resolved.freeOnly);
+      freeOnly = resolved.freeOnly;
       // Read the pool UNCONDITIONALLY, not via resolved.freeModels — that one is
       // gated on the per-profile `free_only`, so for anyone whose free mode comes
       // from the top-level allow_paid_models switch it is [] and --bench-free-pool
@@ -334,9 +741,43 @@ async function main(): Promise<CliResult> {
       // downstream by resolveFreePool's non-$0 fail-fast, so widening the source
       // here cannot admit a priced model.
       activeFreeModels = profileFreeModels(active);
+    } else if (!settingsIndependentPhase(opts)) {
+      return {
+        ok: false,
+        code: 2,
+        summary: `profile '${activeName}' in ${settingsPath} could not be resolved: ${resolveErrorMessage} — refusing to run (no cost-mode fallback; fix the file, or use a settings-independent command such as --check-health/--assess-model/--dry-run)`,
+      };
+    } else {
+      // Reached only by a settings-independent phase (never reads freeOnly
+      // below) — just what makes the assignment definite for tsc. row99
+      // item 3: record WHY, so a --dry-run of a phase whose real run DOES
+      // read freeOnly can say so honestly instead of printing a clean [OK].
+      freeOnly = true;
+      // review-followup (row99): match the "not configured" branch's remedy
+      // suffix below, so both settingsFailureCause messages read the same way.
+      settingsFailureCause = `profile '${activeName}' in ${settingsPath} could not be resolved: ${resolveErrorMessage} — fix the file, or pass --profile <name>`;
     }
-  } catch {
-    /* settings not loadable — leave flag false; the phase reports any real error */
+  } else if (!settingsIndependentPhase(opts)) {
+    // review of 43e3694 (S2): the unreadable-settings case shares
+    // unreadableSettingsRefusal with the write-phase guard above — one
+    // text, one place to fix.
+    if (!s) return unreadableSettingsRefusal(settingsPath);
+    // An upgraded install can have a settings.yaml that predates the
+    // free/paid/local generated sections (nothing has run yet to write
+    // them), so the remedy is not just "the name is wrong" — and "run any
+    // llm-ext command once" is only true advice for a GENERATED name (see
+    // notConfiguredRemedy's own doc comment).
+    return {
+      ok: false,
+      code: 2,
+      summary: `active profile '${activeName}' is not configured in ${settingsPath} — refusing to run (no cost-mode fallback; ${notConfiguredRemedy(activeName)}, or pass --profile <name>)`,
+    };
+  } else {
+    // Reached only by a settings-independent phase — see comment above.
+    freeOnly = true;
+    settingsFailureCause = !s
+      ? `settings.yaml unreadable or invalid at ${settingsPath}`
+      : `active profile '${activeName}' is not configured in ${settingsPath} — ${notConfiguredRemedy(activeName)}, or pass --profile <name>`;
   }
 
   // --bench-free-pool (TRDD-f1510055; semantic + auto-discovering in TRDD-WJND1N2W P3b):
@@ -440,10 +881,64 @@ async function main(): Promise<CliResult> {
   // --populate-default-profile routes to the SINGLE-profile refresh: unlike
   // --update-all (which writes whatever settings.active happens to be, plus every
   // registered tool), this sweeps and writes EXACTLY the named machine-managed
-  // default profile ('free' | 'free-ensemble' | 'paid' | 'paid-ensemble' |
-  // 'paid-mass-scout') and nothing else ('free' and 'free-ensemble' share one sweep).
+  // dynamic profile ('free' | 'paid') and nothing else.
   if (opts.populateDefaultProfile !== null) {
     return runPopulateDefaultProfilePhase(opts);
+  }
+
+  // --dry-run for the NINE sub-task benchmarks (TRDD-ZZV1XL3C). It lives HERE,
+  // above the dispatch, because this is the single chokepoint every sub-task
+  // phase routes through — one implementation instead of nine, and a tenth
+  // benchmark added later inherits it by construction rather than by remembering.
+  //
+  // WHY IT MUST PRECEDE THE DISPATCH: each runXPhase() fetches the catalog and
+  // starts calling models. Measured 2026-08-29 (TRDD-29VF8RWK): `--code-task
+  // --dry-run` billed real money because the flag reached no phase. A plan-only
+  // mode implemented INSIDE the phases would have to be honoured nine times and
+  // would regress the moment someone adds the tenth.
+  //
+  // Zero HTTP calls of any kind: the roster is reported from the argv the user
+  // supplied. When they named no models the roster is genuinely not known yet —
+  // it is auto-discovered from the live catalog — so this says exactly that
+  // rather than fetching it, because "prints the plan and spends NOTHING" is the
+  // contract and a catalog fetch is still a call.
+  const subTaskDryRun: ReadonlyArray<readonly [boolean, string, readonly string[]]> = [
+    [opts.securityTriage, "security-triage", opts.triageModels],
+    [opts.scoutAccuracy, "scout-accuracy", []],
+    [opts.searchExisting, "search-existing", opts.searchExistingModels],
+    [opts.codeTask, "code-task", opts.codeTaskModels],
+    [opts.scanFolder, "scan-folder", opts.scanFolderModels],
+    [opts.checkSpecs, "check-specs", opts.checkSpecsModels],
+    [opts.summarizeBenchmark, "text-summarize", opts.summarizeBenchmarkModels],
+    [opts.topicsBenchmark, "text-topics", opts.topicsBenchmarkModels],
+    [opts.semDedupBenchmark, "text-sem-dedup", opts.semDedupBenchmarkModels],
+    [opts.describeBenchmark, "text-describe", opts.describeBenchmarkModels],
+  ];
+  if (opts.dryRun) {
+    const active = subTaskDryRun.find(([on]) => on);
+    if (active) {
+      const [, task, models] = active;
+      console.log(`[dry-run] benchmark: ${task}`);
+      if (models.length > 0) {
+        console.log(`[dry-run] roster (${models.length} explicit): ${models.join(", ")}`);
+      } else {
+        console.log(
+          "[dry-run] roster: auto-discovered from the live OpenRouter catalog at run time — " +
+            "not resolved here, because resolving it is itself a request. Name model id(s) " +
+            `after --${task === "security-triage" ? "security-triage --model" : task} to see an exact roster.`,
+        );
+      }
+      // row99 fix-queue item 3: this phase's REAL run reads freeOnly/
+      // activeFreeModels (via runXPhase(opts, freeOnly, ...) below) — a
+      // dry-run must not look clean when dropping --dry-run would refuse.
+      if (dryRunWouldMaskRefusal(opts, settingsFailureCause)) {
+        console.log(`the real run would refuse: ${settingsFailureCause}`);
+      }
+      return {
+        ok: true,
+        summary: `dry run — ${task} plan printed, no API calls made, $0 spent`,
+      };
+    }
   }
 
   // --security-triage routes to the security_scan triage benchmark — a wholly
@@ -451,6 +946,14 @@ async function main(): Promise<CliResult> {
   // the security_scan judge pipeline and gates auto-selection on a pass.
   if (opts.securityTriage) {
     return runSecurityTriagePhase(opts);
+  }
+
+  // --scout-accuracy routes to the scout-accuracy benchmark (TRDD-FKAR9VPK D2):
+  // probes cheap paid models on the positional fixture and writes the STATIC
+  // 'scouting' profile the mass-scout CLI's require gate reads. Zero survivors
+  // exits non-zero with the per-candidate best accuracy for retuning.
+  if (opts.scoutAccuracy) {
+    return runScoutAccuracyPhase(opts);
   }
 
   // --search-existing routes to the search_existing_implementations benchmark —
@@ -505,7 +1008,7 @@ async function main(): Promise<CliResult> {
   // or --force) runs that tool's benchmark to recommend the best same-or-cheaper
   // replacement. ADVISORY unless --apply is also passed (the sole writer path).
   if (opts.autoReplace) {
-    return runAutoReplacePhase(opts);
+    return runAutoReplacePhase(opts, freeOnly);
   }
 
   // --adopt routes to the scripted adoption writer (the new-arrival path) — free
@@ -541,8 +1044,13 @@ async function main(): Promise<CliResult> {
     return runPickPhase(cache.results, opts);
   }
 
-  const sweep = await runKeywordSweep(opts);
+  const sweep = await runKeywordSweep(opts, freeOnly);
   if (sweep.dryRun) {
+    // row99 fix-queue item 3: the default sweep's real run reads freeOnly —
+    // see dryRunWouldMaskRefusal's doc comment.
+    if (dryRunWouldMaskRefusal(opts, settingsFailureCause)) {
+      console.log(`the real run would refuse: ${settingsFailureCause}`);
+    }
     return {
       ok: true,
       summary: `dry-run — ${sweep.candidates} candidate(s) + ${sweep.baselines} baseline(s) would run; no API call made, $0 spent`,
@@ -603,12 +1111,23 @@ export interface SweepOutcome {
  * and re-implementing the sweep there would be a second source of truth for the
  * roster rules.
  */
-async function runKeywordSweep(
+export async function runKeywordSweep(
   opts: CliOptions,
+  // Row 92 fix-queue: the cost-safety gate (runner.ts) now takes free_only as an
+  // explicit RunnerOptions field instead of a module global — every caller of this
+  // sweep resolves its OWN profile's free_only and passes it straight through.
+  freeOnly: boolean,
   // P4: --update-all passes a BUDGETED fetch so every keyword call is reserved against
   // the run's spend cap before it is sent. Undefined elsewhere → plain global fetch,
   // i.e. production behavior for every pre-existing caller is byte-for-byte unchanged.
   fetchImpl?: (url: string, init: RequestInit) => Promise<Response>,
+  // P5 §2.5 requirement 1/2: when supplied (and `fetchImpl` is not already a budgeted
+  // wrapper the caller built itself), every paid call in this sweep is reserved before
+  // it is sent and its ACTUAL cost is booked via `ledger`'s `onBook` the moment the
+  // response returns — replacing the old post-sweep lump booking, which lost every
+  // in-flight call's spend on a mid-sweep crash. Also used below to stop the sweep once
+  // the ledger trips (requirement 2), regardless of which of the two params wrapped it.
+  ledger?: SpendLedger,
 ): Promise<SweepOutcome> {
   const fixturesDir = resolveFixturesDir();
   const truth = buildGroundTruth(fixturesDir, BENCHMARK_KEYWORDS);
@@ -636,11 +1155,24 @@ async function runKeywordSweep(
   // buildBenchmarkRoster filters the candidate pool and looks up
   // baselines in the baseline pool (which may be broader).
   const baselineLookup = allModels.length > 0 ? allModels : categoryModels;
+  // D0 (TRDD-AL8GIZYA, plan item 2a): discover.ts's DEFAULT_CRITERIA only
+  // mirrors the ceiling's DEFAULT (import-cycle leaf-module constraint), so
+  // this settings-aware caller must swap in the real, resolved ceiling —
+  // same pattern as runPopulatePaidDefaultProfile below — or raising
+  // profiles.paid.selection.price_ceiling_usd_per_million would never admit
+  // pricier auto-discovered candidates into the keyword sweep.
+  const sweepCeiling = getEnsemblePriceCeiling(loadSettings());
+  const sweepCriteria: ModelCriteria = {
+    ...DEFAULT_CRITERIA,
+    maxInputDollarsPerMillion: sweepCeiling,
+    maxOutputDollarsPerMillion: sweepCeiling,
+  };
   const { candidates: discovered, baselines } = buildBenchmarkRoster(
     categoryModels,
-    DEFAULT_CRITERIA,
+    sweepCriteria,
     opts.includeIds,
     baselineLookup,
+    sweepCeiling,
   );
   // Quality-rank the auto-discovered candidates by their catalog codex/design-
   // arena indexes (best first), then optionally restrict to --qualifying-top-n,
@@ -648,7 +1180,14 @@ async function runKeywordSweep(
   // candidates first (TRDD-WJND1N2W P2). Baselines (explicit --include) are
   // never reordered or capped — the user asked for those by name.
   const ranked = rankByQualityIndex(discovered);
-  const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
+  // WHY benchFreePool forces 0: --bench-free-pool parks the resolved $0 pool in
+  // includeIds (baselines), but buildBenchmarkRoster still auto-discovers PAID
+  // candidates from the category=programming list; those made
+  // assertPaidBenchmarkAllowed refuse the whole free-pool run ("paid benchmarks
+  // are off"). Same remedy runEnsembleSweep uses in free mode: topN 0 empties the
+  // auto-discovered list so the roster is exactly the free pool.
+  const effectiveTopN = opts.benchFreePool ? 0 : opts.qualifyingTopN;
+  const candidates = effectiveTopN !== null ? ranked.slice(0, effectiveTopN) : ranked;
   console.error(`[benchmark] Roster: ${candidates.length} candidate(s), ${baselines.length} baseline(s).`);
   for (const m of candidates) {
     console.error(`  CAND  ${m.id.padEnd(40)} ctx=${m.contextTokens}  in=$${m.inputDollarsPerMillion.toFixed(3)}  out=$${m.outputDollarsPerMillion.toFixed(3)}`);
@@ -676,14 +1215,32 @@ async function runKeywordSweep(
     ...baselines.map((m) => ({ model: m, isBaseline: true })),
   ];
 
-  // Global price-cap fail-fast on the FULL roster before any send. Candidates
-  // were already dropped by filterModels; baselines (explicit --include) are the
-  // ones this catches — the user's cap now overrides the old "explicit includes
-  // are never capped" behaviour: an over-$1.25/1M include refuses the run, $0 spent.
-  assertModelsUnderPriceCap(roster.map((r) => r.model));
+  // Global price-cap fail-fast on the AUTO-DISCOVERED candidates only, before
+  // any send. USER 2026-09-18 "no, manual is manual" (TRDD-DS6OM3KX): a
+  // baseline named explicitly via --include is manual and must NOT be
+  // refused for price — only auto-picked candidates are gated. Candidates
+  // were already dropped by filterModels via sweepCriteria above, so this is
+  // a fail-fast net, not the primary filter.
+  assertModelsUnderPriceCap(candidates, sweepCeiling);
   // The keyword sweep is the DEFAULT paid benchmark, so it needs the opt-in too:
   // a paid candidate/baseline without --allow-paid-models-tests refuses, $0 spent.
   assertPaidBenchmarkAllowed(roster.map((r) => r.model));
+
+  // Per-call price lookup for the budgeted fetch below, built from the roster's own
+  // catalog prices — no second price source, so the guard can never disagree with
+  // what the roster itself already knows a model costs.
+  const priceById = new Map<string, ModelPrice>(
+    roster.map((r) => [
+      r.model.id,
+      { inputDollarsPerMillion: r.model.inputDollarsPerMillion, outputDollarsPerMillion: r.model.outputDollarsPerMillion },
+    ]),
+  );
+  const priceOf: PriceLookup = (id) => priceById.get(id);
+  // Only wrap here when the caller did not already hand us a budgeted fetch (the
+  // --update-all path wraps its own ledger before calling in) — this is what makes
+  // requirement 1 real: every paid call now reserves-then-records through `ledger`
+  // instead of the sweep reporting one lump sum after it returns.
+  const effectiveFetch = fetchImpl ?? (ledger ? makeBudgetedGlobalFetch(ledger, priceOf) : undefined);
 
   const results = new Map<
     string,
@@ -692,15 +1249,39 @@ async function runKeywordSweep(
 
   // Sequential rather than parallel — the benchmark is small, and serialising
   // avoids stacking up rate-limit hits on a single OpenRouter account.
+  let skippedForSpendCap = 0;
   for (const { model, isBaseline } of roster) {
+    if (ledger?.tripped) {
+      // The spend cap tripped on an earlier call this sweep (requirement 2 — for the
+      // 'paid' default profile the ledger's cap IS the day's remaining budget, so this
+      // is exactly "dailyRemainingUsd() reached 0 mid-run"). The in-flight call that
+      // tripped it already finished; every remaining candidate is skipped WITHOUT
+      // being sent and recorded as a skip (not a network error) so the report/CLI can
+      // say how many were skipped and why.
+      skippedForSpendCap++;
+      console.error(`[benchmark]   SKIP  ${model.id} — spend cap reached (${ledger.tripped})`);
+      results.set(model.id, {
+        model,
+        outcome: {
+          modelId: model.id,
+          ok: false,
+          error: `spend cap reached: ${ledger.tripped} — skipped, not sent`,
+          latencyMs: 0,
+        },
+        score: null,
+        isBaseline,
+      });
+      continue;
+    }
     console.error(`[benchmark] Running ${model.id} …`);
     const outcome = await runBenchmarkOnModel(model, truth.keywords, truth.fixtures, {
       apiKey,
+      freeOnly,
       httpReferer: "https://github.com/Emasoft/llm-externalizer-plugin",
       xTitle: "llm-externalizer-benchmark",
       reasoningEffort: opts.reasoningEffort,
       seed: opts.seed,
-      fetchImpl,
+      fetchImpl: effectiveFetch,
     });
     let score: ModelScore | null = null;
     if (outcome.ok) {
@@ -713,6 +1294,9 @@ async function runKeywordSweep(
       console.error(`[benchmark]   ERR — ${outcome.error}`);
     }
     results.set(model.id, { model, outcome, score, isBaseline });
+  }
+  if (skippedForSpendCap > 0) {
+    console.error(`[benchmark] spend cap reached — skipped ${skippedForSpendCap} remaining candidate(s), not sent.`);
   }
 
   const reportPath = opts.reportPath ?? buildReportPath();
@@ -760,7 +1344,13 @@ async function runKeywordSweep(
   // later ':free'-only run silently revoke a paid model's IRON RULE validation for
   // every rank-0 tool. Recorded from `parsed.results` (not `results`) so the ledger
   // and the sidecar can never disagree about a row's shape.
-  recordGeneralKeywordPasses(parsed.results, timestamp);
+  // D4 review F2: the scope is the sweep's own COST MODE — this shared record
+  // point serves main()'s plain benchmark (any profile via --profile, including
+  // 'paid'), update-all's ensemble phase, and auto-replace; the caller-passed
+  // freeOnly is the one signal all three agree on. A paid sweep skips certain-402
+  // rows (the key's credit, not the model); a free sweep records them (the model
+  // stopped being free).
+  recordGeneralKeywordPasses(parsed.results, timestamp, freeOnly ? "free" : "paid");
 
   return {
     dryRun: false,
@@ -785,14 +1375,18 @@ async function runKeywordSweep(
 async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
   const settingsPath = getSettingsPath();
   const settings = loadSettings();
-  if (!settings || !settings.active) {
+  // P6b-fix2 B-1 (row99: `active:` reinstated, TRDD-G6XT3AY9): the target is
+  // --profile, else `active:` in settings.yaml, else the built-in default —
+  // see benchmarkTargetProfile's own doc comment. main() has already refused
+  // a generated target before any work ran.
+  const profileName = benchmarkTargetProfile(opts.profile);
+  if (!settings || !settings.profiles[profileName]) {
     return {
       ok: false,
       code: 2,
-      summary: `--update-all needs an active profile in ${settingsPath}, but none is configured`,
+      summary: `--update-all needs the profile '${profileName}' in ${settingsPath}, but it is not configured`,
     };
   }
-  const profileName = settings.active;
   const resolved = resolveProfile(profileName, settings.profiles[profileName]);
 
   // Re-pick exactly as many ensemble slots as the profile ALREADY runs (never a
@@ -815,13 +1409,22 @@ async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
       qualifyingTopN: opts.qualifyingTopN,
       ensembleTopN,
       force: opts.force,
-      mainRoot: resolveMainRoot(),
+      // review of 43e3694 (S5): NO mainRoot override here — update-all's
+      // report used to ALWAYS resolve one (resolveMainRoot()), which made
+      // writeReport's defaultOutputDir(opts.mainRoot) treat it as an
+      // explicit override and skip the LLM_EXT_OUTPUT_DIR env check every
+      // real run takes, while --auto-replace's own defaultOutputDir() call
+      // (no argument) always honoured it — two commands disagreeing on the
+      // same env var. mainRoot is now optional in UpdateAllOptions and left
+      // unset here, so the real CLI honours LLM_EXT_OUTPUT_DIR exactly like
+      // auto-replace; only a test that injects mainRoot directly still gets
+      // an override.
       onProgress: (m) => console.error(`[update-all] ${m}`),
     },
     {
       fetchCatalog: () => fetchProgrammingModels(),
       describeEnsembleWorkload: describeKeywordWorkload,
-      runEnsembleSweep: async ({ models, restrictToModels, fetchImpl, topN }) => {
+      runEnsembleSweep: async ({ models, restrictToModels, fetchImpl, topN, freeOnly }) => {
         // Reuse the ONE sweep implementation (runKeywordSweep). In FREE mode the roster
         // must be EXACTLY the resolved zero-cost pool: qualifyingTopN=0 empties the
         // auto-discovered (paid) candidate list, and the pool rides in as --include
@@ -835,7 +1438,7 @@ async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
           fromCache: false,
           pickTopN: topN,
         };
-        const sweep = await runKeywordSweep(sweepOpts, fetchImpl);
+        const sweep = await runKeywordSweep(sweepOpts, freeOnly, fetchImpl);
         let picks: PickedModel[] = [];
         let pickError: string | null = null;
         try {
@@ -958,22 +1561,41 @@ function describeKeywordWorkload(): BenchmarkWorkload {
  */
 export interface PopulateDefaultProfileDeps {
   fetchCatalog: () => Promise<OpenRouterModel[]>;
-  runSweep: (sweepOpts: CliOptions) => Promise<SweepOutcome>;
+  // Row 92 fix-queue: freeOnly is now an explicit required param (matches
+  // runKeywordSweep's own signature) — each populate-* caller below already knows
+  // its own free_only synchronously (it just called setActiveFreeOnly with it), so
+  // there is no reason to route it back through the global for THIS sweep.
+  // Optional ledger (P5 §2.5): the 'paid' profile call site passes one so every call
+  // this sweep makes books incrementally instead of in one post-sweep lump. Other
+  // callers (the free profile) pass none — unaffected, $0 either way.
+  runSweep: (sweepOpts: CliOptions, freeOnly: boolean, ledger?: SpendLedger) => Promise<SweepOutcome>;
 }
 
 const defaultPopulateDefaultProfileDeps: PopulateDefaultProfileDeps = {
   fetchCatalog: () => fetchProgrammingModels(),
-  runSweep: (sweepOpts) => runKeywordSweep(sweepOpts),
+  runSweep: (sweepOpts, freeOnly, ledger) => runKeywordSweep(sweepOpts, freeOnly, undefined, ledger),
 };
 
+
 /**
- * `--populate-default-profile NAME` phase. Unlike --update-all (which writes whatever
- * `settings.active` happens to be, plus every registered tool), this sweeps and writes
- * EXACTLY the requested machine-managed default profile(s) — 'free' | 'free-ensemble' |
- * 'paid' | 'paid-ensemble' | 'paid-mass-scout' — and nothing else. `name` is already
- * validated to be one of the five (cli-args.ts's isDefaultProfileName gate) by the time
- * this runs. `free` and `free-ensemble` share ONE benchmark sweep (see
- * runPopulateFreeDefaultProfile) since they draw from the same passing free_models pool.
+ * Per-tool model map for a dynamic profile's generated section (design §1.2
+ * `tool_models`). No per-command benchmark exists yet for most tools (addendum
+ * M), so every registered tool head is the SAME general-ranking pick — this is
+ * a NAMED simplification, not silent: the report states it per tool, and each
+ * tool upgrades to its own head the day a per-command benchmark exists for it.
+ */
+function buildToolModels(headModelId: string): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const tool of registeredTools()) map[tool] = headModelId;
+  return map;
+}
+
+/**
+ * `--populate-default-profile NAME` phase. Unlike --update-all (which writes the
+ * effective profile plus every registered tool), this sweeps and writes EXACTLY the
+ * requested machine-managed profile — 'free', 'paid' or 'local' — and nothing else.
+ * `name` is already validated to be one of the three (cli-args.ts's
+ * isDynamicProfileName gate) by the time this runs.
  */
 export async function runPopulateDefaultProfilePhase(
   opts: CliOptions,
@@ -987,22 +1609,83 @@ export async function runPopulateDefaultProfilePhase(
     throw new Error("runPopulateDefaultProfilePhase called without --populate-default-profile");
   }
   const settingsPath = getSettingsPath();
-  if (name === "free" || name === "free-ensemble") {
+  if (name === "free") {
     return runPopulateFreeDefaultProfile(opts, settingsPath, deps);
+  }
+  // TRDD-C9SXX7HO (D2): 'local' takes neither `deps` (no catalog fetch, no
+  // keyword sweep) — it is a local-port probe, not a benchmark, so it is
+  // routed here BEFORE the paid call, which would otherwise treat "not free"
+  // as "must be paid" and run the OpenRouter pipeline against it.
+  if (name === "local") {
+    return runPopulateLocalDefaultProfile(settingsPath);
   }
   return runPopulatePaidDefaultProfile(opts, settingsPath, name, deps);
 }
 
 /**
- * The 'free' AND 'free-ensemble' default profiles: ONE sweep of the zero-cost
- * pool, under the SAME free_only chokepoint --bench-free-pool / --update-all
- * --free already rely on (setActiveFreeOnly + the runner's own runtime guard)
- * — provably $0, never the paid path. Both profiles are written with the
- * IDENTICAL passing pool (best-first): `free` uses freeModels[0] at runtime
- * (mode: remote), `free-ensemble` uses freeModels[0..2] (mode:
- * remote-ensemble) — see resolveProfile in config.ts. Writing both from one
- * sweep means a caller of EITHER name keeps both current, and never runs the
- * (identical) sweep twice.
+ * The 'local' dynamic profile (TRDD-C9SXX7HO): $0, no benchmark, no
+ * OpenRouter catalog. Probes the well-known local LLM server ports
+ * (local_discovery/scan.ts) and writes exactly what is found — this is why
+ * it does not call decideDynamicProfile/setActiveFreeOnly/runSweep at all,
+ * unlike its free/paid siblings: there is no price to rank or prune by, and
+ * ranking/pruning it by catalog price is exactly what the card forbids.
+ *
+ * The SAME function backs both `--populate-default-profile local` and the
+ * change detector's updater: default-profiles-runner.ts's
+ * populateDefaultProfile spawns this exact CLI mode for `local` too (it does
+ * not know or care which caller asked).
+ */
+async function runPopulateLocalDefaultProfile(settingsPath: string): Promise<CliResult> {
+  const services = await discoverLocalLlmServices();
+  const next = buildLocalProfileSection(services);
+  const result = writeDynamicProfileSection(settingsPath, "local", () => next, {
+    notify: (msg) => process.stderr.write(`${msg}\n`),
+  });
+  // `local` has no separate catalog-based maintainer pass to bank this the
+  // way free/paid's `maintainOneDynamicProfile` does on every decide — this
+  // populate IS the only writer, so it must bank the fingerprint itself, or
+  // profile-detector.ts's local detector would compare every future probe
+  // against a baseline that never moves (a permanent false "changed").
+  //
+  // fix-queue 95b/96(4): `lastMaintainedAt` is what `settings status`
+  // actually renders ("Dynamic profile 'local' maintained as of ..." vs
+  // "not yet maintained" -- index.ts, dynRecord?.lastMaintainedAt) -- this
+  // used to stamp only `lastBenchmarkAt`, a DIFFERENT field free/paid's own
+  // maintainer writes for a real catalog benchmark, so `settings status`
+  // kept saying "not yet maintained" even right after a successful populate.
+  // Both fields are stamped by the SAME probe, never a benchmark: `local`
+  // has no catalog to benchmark against, only well-known ports to probe
+  // (discoverLocalLlmServices above) -- `lastBenchmarkAt` stays for
+  // profile-detector.ts's fingerprint-comparison use, `lastMaintainedAt` is
+  // the one `settings status` reads.
+  updateDynamicProfileRecord("local", (prev) => ({
+    lastBenchmarkAt: Date.now(),
+    lastMaintainedAt: Date.now(),
+    poolFingerprint: localEndpointFingerprint(services),
+    modelIds: next.free_models ?? [],
+    failCount: 0,
+    modelSpecFingerprints: prev?.modelSpecFingerprints,
+  }));
+  const providerCount = next.providers?.length ?? 0;
+  return {
+    ok: true,
+    summary:
+      providerCount > 0
+        ? `populate-default-profile local: wrote 'local' (changed=${result.changed}) — ` +
+          `${next.model} (+${providerCount - 1} more endpoint(s) in providers)`
+        : "populate-default-profile local: no local endpoint detected — 'local' left unpopulated",
+  };
+}
+
+/**
+ * The 'free' dynamic profile: ONE sweep of the zero-cost pool, under the SAME
+ * free_only chokepoint --bench-free-pool / --update-all --free already rely on
+ * (setActiveFreeOnly + the runner's own runtime guard) — provably $0, never
+ * the paid path. The profile is written with the passing pool, best-first:
+ * `free` uses freeModels[0] as its head and the rest as the rotation chain
+ * (mode: remote), or freeModels[0..2] as the ensemble slots under mode
+ * remote-ensemble — see resolveProfile in config.ts. One pool, one profile;
+ * P6c-a retired the separate ensemble name that used to share this sweep.
  */
 async function runPopulateFreeDefaultProfile(
   opts: CliOptions,
@@ -1015,9 +1698,10 @@ async function runPopulateFreeDefaultProfile(
   // re-run refreshes what it already owns), falling back to FREE_POOL_SEED — same
   // fallback --bench-free-pool uses when the active profile pins nothing.
   let configured: readonly string[] = FREE_POOL_SEED;
+  let freeProfile: Profile | undefined;
   try {
     const settings = loadSettings();
-    const freeProfile = settings?.profiles?.free;
+    freeProfile = settings?.profiles?.free;
     if (freeProfile) {
       const pool = profileFreeModels(freeProfile);
       if (pool.length > 0) configured = pool;
@@ -1026,8 +1710,50 @@ async function runPopulateFreeDefaultProfile(
     /* settings not loadable — FREE_POOL_SEED is still a valid $0 seed */
   }
 
+  // p14.1-c2c, D6a: resolved ONCE, before readCandidates() below, so the SAME
+  // lookup both (a) is the routing readCandidates()/pruneUnroutedFreeCandidates
+  // prunes the queue against (see dynamic-candidates.ts's readCandidates
+  // docstring — this call site now supplies its own instead of letting
+  // readCandidates re-derive it) and (b) drives routeServedFreeIds'
+  // catalog-lookup bypass right below. One source, one resolveGroups() call,
+  // never two disagreeing views of the same profile's routes. readCandidates
+  // now REQUIRES a real routesFor function (3c/3e review of 51a100c +
+  // 93cc031: the old `null` opt-out silently re-enabled fix-queue row 82) —
+  // an always-empty lookup is the correct "no free profile yet" value here.
+  // D6a: one resolveGroups() call; routesFor drives both (a) the queue
+  // pruning in readCandidates and (b) routeServedFreeIds' catalog-lookup
+  // bypass below. An id is route-served-free when ANY group serving it is a
+  // free provider (two accounts of one free provider are both $0).
+  const routesFor = freeProfile ? resolveGroups(freeProfile).routesFor : (): ResolvedRoute[] => [];
+
+  // Benchmark configured ∪ queued (design §2.4): a candidate the maintainer
+  // discovered since the last sweep is judged alongside what's already live,
+  // so the ranking reflects newcomers rather than waiting for a second pass.
+  const queue = readCandidates(routesFor);
+  const queuedIds = queue.free.map((e) => e.id);
+  const configuredSet = new Set(configured);
+  const candidateIds = [...configured, ...queuedIds.filter((id) => !configuredSet.has(id))];
+
+  // TRDD-38QAM06E root cause 2: resolveFreePool classifies ONLY against the live
+  // OpenRouter catalog, so an id served by a `providers[]` route to a DIFFERENT
+  // provider (e.g. b.ai's glm-5.3-flash, bound via BAI_PRESET_API) is absent from
+  // that catalog and gets rejected outright — even though the route is $0 by
+  // construction (ApiPreset.isFreeProvider) and never billable, and is re-pinned
+  // below regardless of the sweep outcome. default-profiles.ts's
+  // decideDynamicProfile writes the `providers[]` binding into the SAME patch
+  // that queues the routed id, so by the time this runs `freeProfile.providers`
+  // already carries the route for any queued/configured id that legitimately
+  // needs one — this reads that existing route (never re-derives pricing per-id
+  // against a second catalog) and excludes route-served ids from the OpenRouter
+  // $0 check entirely, so resolveFreePool only ever judges ids it can price.
+  const routeServedFreeIds = new Set<string>();
+  for (const id of candidateIds) {
+    if (routesFor(id).some((r) => r.isFreeProvider)) routeServedFreeIds.add(id);
+  }
+  const catalogCandidateIds = candidateIds.filter((id) => !routeServedFreeIds.has(id));
+
   const catalog = await deps.fetchCatalog();
-  const { pool: discoveredPool, rejected } = resolveFreePool(configured, catalog, {
+  const { pool: discoveredPool, rejected } = resolveFreePool(catalogCandidateIds, catalog, {
     autoDiscover: true,
     autoDiscoverTopN: opts.qualifyingTopN ?? 16,
   });
@@ -1047,7 +1773,6 @@ async function runPopulateFreeDefaultProfile(
   const freeIds = freeSuffixOnly(discoveredPool);
   if (freeIds.length === 0) {
     recordBenchmarkFailure("free", Date.now());
-    recordBenchmarkFailure("free-ensemble", Date.now());
     return {
       ok: false,
       code: 2,
@@ -1060,7 +1785,7 @@ async function runPopulateFreeDefaultProfile(
   if (opts.dryRun) {
     return {
       ok: true,
-      summary: `dry-run — would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free'/'free-ensemble' default profiles; $0, nothing written`,
+      summary: `dry-run — would sweep ${freeIds.length} zero-cost ':free' model(s) for the 'free' default profile; $0, nothing written`,
     };
   }
 
@@ -1084,42 +1809,88 @@ async function runPopulateFreeDefaultProfile(
   };
   let sweep: SweepOutcome;
   try {
-    sweep = await deps.runSweep(sweepOpts);
+    sweep = await deps.runSweep(sweepOpts, true);
   } catch (err) {
     recordBenchmarkFailure("free", Date.now());
-    recordBenchmarkFailure("free-ensemble", Date.now());
     throw err;
   }
+  // Verdicts land in the general keyword-sweep ledger EVERY run (pass or fail
+  // per model) — validatedModelsForTool (§1.3's resolveModelChain fallback
+  // filter) reads it, so a model that just failed cannot re-enter a tool's
+  // chain until it passes again.
+  recordGeneralKeywordPasses(sweep.results);
   const passing = passingFreePoolIds(sweep.results);
   if (passing.length === 0) {
     recordBenchmarkFailure("free", Date.now());
-    recordBenchmarkFailure("free-ensemble", Date.now());
+    clearCandidates("free", queuedIds); // judged (all failed) — don't re-benchmark forever
     return {
       ok: false,
       code: 2,
       summary:
-        "--populate-default-profile free: no ':free' model passed the sweep — " +
-        "'free'/'free-ensemble' profiles left unchanged",
+        "--populate-default-profile free: no ':free' model passed the sweep — 'free' profile left unchanged",
       reportPath: sweep.reportPath || undefined,
     };
   }
-  // Same passing pool written to BOTH profiles — see this function's docstring.
-  const w = updateFreeDefaultProfile(settingsPath, passing);
-  const wEnsemble = updateFreeEnsembleDefaultProfile(settingsPath, passing);
+
+  // D5 (TRDD-90DM5YHO): the generated b.ai prepend + binding is GONE. The b.ai
+  // route is the user's own `providers` group (seeded once by the
+  // bai-reserved-seed migration step, never regenerated), and its model rides
+  // a reserved slot read by getEnsembleModels — llm-ext no longer writes
+  // either into the generated section, so this sweep ranks ONLY the
+  // benchmarked OpenRouter ':free' ids it measured. The old comment block
+  // here explained why the pin had to live in free_models[0] with its route;
+  // that whole mechanism (and the ensemble_pins half-read it depended on) is
+  // deleted in this slice.
+  const pool = passing;
+  const next: Profile = {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    api_key: "$OPENROUTER_API_KEY",
+    free_only: true,
+    free_models: pool,
+    // The tool heads stay on the benchmarked OpenRouter winner: `passing` is
+    // what this sweep actually measured.
+    tool_models: buildToolModels(passing[0]),
+    // Under free_only these three are IGNORED — resolveProfile rebuilds them from
+    // the pool. Written anyway so `settings show` and a human reading the file
+    // see the same three models the runtime will serve.
+    model: pool[0],
+  };
+  if (pool[1]) next.second_model = pool[1];
+  if (pool[2]) next.third_model = pool[2];
+
+  // P6b-fix2 S-9: the benchmark child REPLACES the whole section with its own
+  // result, so it ignores what is currently there — but it takes the same
+  // patch-function shape, so the decision is still applied under the writer's
+  // lock rather than against a document parsed before it.
+  const result = writeDynamicProfileSection(settingsPath, "free", () => next, {
+    notify: (msg) => process.stderr.write(`${msg}\n`),
+  });
   const fingerprint = poolFingerprint(qualifyingPool);
-  recordBenchmarkSuccess("free", fingerprint, w.newPool, Date.now());
-  recordBenchmarkSuccess("free-ensemble", fingerprint, wEnsemble.newPool, Date.now());
+  recordBenchmarkSuccess("free", fingerprint, passing, Date.now());
+  // P6b-fix B3: the DYNAMIC keyspace gets the benchmark clock too, and only
+  // that — the maintainer owns the fingerprints (see recordDynamicBenchmarkAt).
+  // Without this, `settings status` and the maintainer's own carry-forward had
+  // no lastBenchmarkAt for a dynamic profile at all: this child recorded
+  // exclusively into the legacy keyspace, which nothing on the dynamic path reads.
+  // P6b-fix2 N-6: this is reached only on the SUCCESS path, so the dynamic
+  // record's lastBenchmarkAt means "last SUCCESSFUL population", never "last
+  // run" — the four failure paths bank a cooldown via recordBenchmarkFailure
+  // instead and deliberately leave this clock alone.
+  recordDynamicBenchmarkAt("free", Date.now());
+  clearCandidates("free", queuedIds); // judged this sweep, pass or fail — don't re-queue forever
+
   return {
     ok: true,
     summary:
-      `populate-default-profile free: wrote ${w.newPool.length} model(s) to '${w.profileName}' and ` +
-      `'${wEnsemble.profileName}' — ${w.newPool.join(", ")}`,
+      `populate-default-profile free: wrote ${passing.length} model(s) to 'free' ` +
+      `(changed=${result.changed}) — ${passing.join(", ")}`,
     reportPath: sweep.reportPath || undefined,
   };
 }
 
 /**
- * The 'paid' / 'paid-ensemble' / 'paid-mass-scout' default profiles: PAID.
+ * The 'paid' dynamic profile: PAID.
  * Bounded by the SAME worst-case pre-flight estimate + abort that --update-all's
  * paid phase uses (see update-all.ts::runUpdateAll, the "PRE-FLIGHT COST
  * ESTIMATE" step) — computed here over the same requirement-gated,
@@ -1131,26 +1902,54 @@ async function runPopulateFreeDefaultProfile(
 async function runPopulatePaidDefaultProfile(
   opts: CliOptions,
   settingsPath: string,
-  name: "paid" | "paid-ensemble" | "paid-mass-scout",
+  name: "paid",
   deps: PopulateDefaultProfileDeps,
 ): Promise<CliResult> {
   setActiveFreeOnly(false);
 
+  // `paid` absorbed the retired ensemble/mass-scout profiles (design §1.2 + P5
+  // spec item 4): ONE sweep produces the full dynamic `paid` section (top-3
+  // ensemble slots, the full ranked pool, and every tool head including
+  // mass_scout) in one write.
+  // readCandidates now requires a routesFor function (3c/3e, D6a); only
+  // queue.paid is read below (the lookup only affects .free pruning), so an
+  // always-empty function is correct here — this call never had free-profile
+  // routing in scope.
+  const queue = readCandidates((): ResolvedRoute[] => []);
+  const queuedIds = queue.paid.map((e) => e.id);
+
   const catalog = await deps.fetchCatalog();
-  const { candidates: discovered } = buildBenchmarkRoster(catalog, DEFAULT_CRITERIA, [], catalog);
+  // USER 2026-09-18 "one ceiling, <=": discover.ts cannot import config.ts
+  // (import-cycle leaf-module constraint), so DEFAULT_CRITERIA only mirrors
+  // the ceiling's DEFAULT value. This IS the settings-aware caller -- swap in
+  // the real, settings-resolved ceiling instead of the fixed $1.00 candidate
+  // gate the old DEFAULT_CRITERIA used, so raising
+  // ensemble_price_ceiling_usd_per_million actually admits pricier candidates.
+  const discoveryCeiling = getEnsemblePriceCeiling(loadSettings());
+  const priceCriteria: ModelCriteria = {
+    ...DEFAULT_CRITERIA,
+    maxInputDollarsPerMillion: discoveryCeiling,
+    maxOutputDollarsPerMillion: discoveryCeiling,
+  };
+  const { candidates: discovered } = buildBenchmarkRoster(catalog, priceCriteria, queuedIds, catalog, discoveryCeiling);
   const ranked = rankByQualityIndex(discovered);
   const candidates = opts.qualifyingTopN !== null ? ranked.slice(0, opts.qualifyingTopN) : ranked;
   if (candidates.length === 0) {
-    recordBenchmarkFailure(name, Date.now());
+    // Always banked under 'paid' — success is ALSO always banked under 'paid'
+    // below, so a single key holds this profile's cooldown/fingerprint state.
+    // Splitting success under one key and failure under another would let a
+    // successful run never clear an old cooldown, or vice versa — a real
+    // state-corruption bug caught in review (it was reachable while three
+    // retired names all routed here).
+    recordBenchmarkFailure("paid", Date.now());
     return {
       ok: false,
       code: 2,
       summary: `--populate-default-profile ${name}: no candidate model met the requirement gate — nothing to benchmark`,
     };
   }
-  // The candidate set the picker will select from — banked on success (and
-  // reused, unchanged, whichever of paid/paid-ensemble/paid-mass-scout
-  // actually writes) as the drift-detection baseline for THIS profile name.
+  // The candidate set the picker will select from — banked on success as the
+  // drift-detection baseline for the 'paid' profile.
   const qualifyingPool: CatalogPriceSnapshot[] = candidates.map((c) => ({
     id: c.id,
     inputDollarsPerMillion: c.inputDollarsPerMillion,
@@ -1172,7 +1971,13 @@ async function runPopulatePaidDefaultProfile(
     // ABORT BEFORE SPENDING A CENT — same rule and same message shape as
     // --update-all's pre-flight abort (runUpdateAll), so the fix is always the same
     // typed decision: raise --budget-usd, shrink --qualifying-top-n, or go --free.
-    recordBenchmarkFailure(name, Date.now());
+    // Always banked under 'paid' — success is ALSO always banked under 'paid'
+    // below, so a single key holds this profile's cooldown/fingerprint state.
+    // Splitting success under one key and failure under another would let a
+    // successful run never clear an old cooldown, or vice versa — a real
+    // state-corruption bug caught in review (it was reachable while three
+    // retired names all routed here).
+    recordBenchmarkFailure("paid", Date.now());
     return {
       ok: false,
       code: 2,
@@ -1187,65 +1992,142 @@ async function runPopulatePaidDefaultProfile(
   if (opts.dryRun) {
     return {
       ok: true,
-      summary: `dry-run — would sweep ${candidates.length} candidate(s) for the '${name}' default profile; worst case $${estimatedUsd.toFixed(4)}, nothing sent, nothing written`,
+      summary: `dry-run — would sweep ${candidates.length} candidate(s) for the 'paid' default profile; worst case $${estimatedUsd.toFixed(4)}, nothing sent, nothing written`,
     };
   }
 
+  // Crash-safe incremental spend booking (design §2.5, requirement 1): every paid
+  // call this sweep makes books its ACTUAL cost into daily-spend.json the moment
+  // SpendLedger.record() runs (via `onBook`), so a sweep that crashes mid-way still
+  // leaves every completed call's spend on disk — replacing the old post-sweep lump
+  // `bookDailySpend(sum of results)`, which booked nothing on a crash. `opts.budgetUsd`
+  // is already this run's cap — for the 'paid' profile specifically,
+  // default-profiles-runner.ts pre-caps it to the day's remaining budget before
+  // spawning this process, so the ledger tripping below IS "the daily cap was reached
+  // mid-run" (requirement 2). A MANUAL run (`--populate-default-profile paid` typed
+  // by the user) is not pre-capped there — its ledger still books into
+  // daily-spend.json but is bounded by --budget-usd alone, because the user asked
+  // for it explicitly (requirement 3, unchanged from before).
   let sweep: SweepOutcome;
   try {
-    sweep = await deps.runSweep(opts);
+    // Constructed INSIDE the try: SpendLedger's constructor throws on a non-finite
+    // or negative capUsd, and every other failure path here banks a 'paid' cooldown
+    // (see the comment below) — building it outside would let a malformed
+    // opts.budgetUsd skip that invariant on this one path (review finding).
+    const ledger = new SpendLedger(opts.budgetUsd, { onBook: bookDailySpend });
+    sweep = await deps.runSweep(opts, false, ledger);
   } catch (err) {
-    recordBenchmarkFailure(name, Date.now());
+    // Always banked under 'paid' — success is ALSO always banked under 'paid'
+    // below, so a single key holds this profile's cooldown/fingerprint state.
+    // Splitting success under one key and failure under another would let a
+    // successful run never clear an old cooldown, or vice versa — a real
+    // state-corruption bug caught in review (it was reachable while three
+    // retired names all routed here).
+    recordBenchmarkFailure("paid", Date.now());
     throw err;
   }
+  // D4 (D3c-2 review F1): the certain-402 no-verdict skip is PAID-scope — on
+  // the paid sweep a 402 is the key's credit; on the free sweep it means the
+  // model stopped being free and the ledger must record the fail verdict.
+  recordGeneralKeywordPasses(sweep.results, new Date().toISOString(), "paid");
 
-  if (name === "paid" || name === "paid-ensemble") {
-    const topN = name === "paid" ? 1 : 3;
     const ceiling = getEnsemblePriceCeiling(loadSettings());
-    const picks = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN });
-    if (picks.length === 0) {
-      recordBenchmarkFailure(name, Date.now());
+    const picks3 = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN: 3 });
+    if (picks3.length === 0) {
+      // Always banked under 'paid' — success is ALSO always banked under 'paid'
+    // below, so a single key holds this profile's cooldown/fingerprint state.
+    // Splitting success under one key and failure under another would let a
+    // successful run never clear an old cooldown, or vice versa — a real
+    // state-corruption bug caught in review (it was reachable while three
+    // retired names all routed here).
+    recordBenchmarkFailure("paid", Date.now());
+      clearCandidates("paid", queuedIds);
       return {
         ok: false,
         code: 2,
-        summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — '${name}' profile left unchanged`,
+        summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — 'paid' profile left unchanged`,
         reportPath: sweep.reportPath || undefined,
       };
     }
-    if (name === "paid") updatePaidDefaultProfile(settingsPath, picks);
-    else updatePaidEnsembleDefaultProfile(settingsPath, picks);
-    recordBenchmarkSuccess(
-      name,
-      poolFingerprint(qualifyingPool),
-      picks.map((p) => p.modelId),
-      Date.now(),
-    );
-    return {
-      ok: true,
-      summary: `populate-default-profile ${name}: wrote ${picks.length} model(s) — ${picks.map((p) => p.modelId).join(", ")}`,
-      reportPath: sweep.reportPath || undefined,
-    };
-  }
+    // The FULL ranked, ceiling-qualified pool (not just the top 3) — this is
+    // `paid_models`, the fallback chain every tool walks past its tool_models
+    // head (design §1.3's resolveModelChain).
+    const fullPool = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN: candidates.length });
 
-  // 'paid-mass-scout' — pickMassScoutModel throws (never returns a ':free' id) rather
-  // than silently falling back; surface that as a normal [FAILED] outcome.
-  let pick: PickedModel;
+    // mass_scout NEVER gets a ':free' id and pickMassScoutModel enforces that by
+    // throwing rather than silently falling back — best-effort here: a throw
+    // just means mass_scout keeps the general-ranking head like every other
+    // tool (buildToolModels's addendum-M simplification), not a failed write.
+    // TRDD-FKAR9VPK D6: the mass-scout DISPATCH model comes from the 'scouting'
+    // profile / scout-accuracy ledger — this slot is no longer the mass-scout
+    // dispatch head (it stays written by the paid maintainer).
+    let massScoutModelId: string | undefined;
   try {
-    pick = pickMassScoutModel(sweep.results);
-  } catch (err) {
-    recordBenchmarkFailure(name, Date.now());
-    return {
-      ok: false,
-      code: 2,
-      summary: `--populate-default-profile paid-mass-scout: ${(err as Error).message}`,
-      reportPath: sweep.reportPath || undefined,
-    };
+    massScoutModelId = pickMassScoutModel(sweep.results).modelId;
+  } catch {
+    massScoutModelId = undefined;
   }
-  const w = updateMassScoutDefaultProfile(settingsPath, pick);
-  recordBenchmarkSuccess(name, poolFingerprint(qualifyingPool), [w.newModelId], Date.now());
-  return {
+  const toolModels = buildToolModels(picks3[0].modelId);
+  if (massScoutModelId) toolModels.mass_scout = massScoutModelId;
+
+  // TRDD-FDI9NYAS D3c-2 (D2 report Item 9): a sweep row that failed with a
+  // CERTAIN payment error is the key's credit, not the model — the id was
+  // never judged. Keep every previously-written paid_models id whose row was
+  // a certain-402, in its previous relative order (after the freshly ranked
+  // pool), so one broke key cannot silently shrink the serving pool its
+  // users depend on. model/second/third stay benchmark picks: an unjudged id
+  // never heads the chain.
+  const certain402Ids = new Set(
+    sweep.results
+      .filter((r) => r.ok === false && paymentErrorCertainty(r.error ?? "") === "certain")
+      .map((r) => r.modelId),
+  );
+
+  const next: Profile = {
+    mode: "remote-ensemble",
+    api: "openrouter-remote",
+    api_key: "$OPENROUTER_API_KEY",
+    model: picks3[0].modelId,
+    paid_models: fullPool.map((p) => p.modelId),
+    tool_models: toolModels,
+  };
+  if (picks3[1]) next.second_model = picks3[1].modelId;
+  if (picks3[2]) next.third_model = picks3[2].modelId;
+
+  // P6b-fix2 S-9: same shape as the `free` child above — a full replacement,
+  // decided under the writer's own lock. The patch reads the section ON DISK
+  // INSIDE the lock (that is what currentSection is for), so the retention
+  // above can never race a concurrent maintainer write.
+  const result = writeDynamicProfileSection(settingsPath, "paid", (current) => {
+    const previous = current?.paid_models;
+    const fresh = next.paid_models;
+    if (previous && previous.length > 0 && fresh) {
+      const freshSet = new Set(fresh);
+      const unjudged = previous.filter((id) => certain402Ids.has(id) && !freshSet.has(id));
+      if (unjudged.length > 0) next.paid_models = [...fresh, ...unjudged];
+    }
+    return next;
+  }, {
+    notify: (msg) => process.stderr.write(`${msg}\n`),
+  });
+  recordBenchmarkSuccess(
+    "paid",
+    poolFingerprint(qualifyingPool),
+    fullPool.map((p) => p.modelId),
+    Date.now(),
+  );
+  // P6b-fix B3, same as the `free` child above: the benchmark clock, never the
+  // fingerprint — the maintainer is the single producer of that.
+  // P6b-fix2 N-6: success path only — "last SUCCESSFUL population", not "last
+  // run" (see the same note at the `free` child above).
+  recordDynamicBenchmarkAt("paid", Date.now());
+  clearCandidates("paid", queuedIds);
+
+    return {
     ok: true,
-    summary: `populate-default-profile paid-mass-scout: wrote '${w.newModelId}'`,
+    summary:
+      `populate-default-profile ${name}: wrote 'paid' (changed=${result.changed}) — ` +
+      `${picks3.map((p) => p.modelId).join(", ")} (+${fullPool.length - picks3.length} more in paid_models)`,
     reportPath: sweep.reportPath || undefined,
   };
 }
@@ -1272,6 +2154,48 @@ async function runSecurityTriagePhase(opts: CliOptions): Promise<CliResult> {
     ok: true,
     summary: `triage benchmark done — recommended ${result.recommendedModelId} (changed=${result.changed}), spend $${result.costUsd.toFixed(6)}`,
     reportPath: result.mdReportPath,
+  };
+}
+
+/**
+ * --scout-accuracy phase (TRDD-FKAR9VPK D2): run the scout-accuracy benchmark
+ * and write the STATIC 'scouting' profile. Zero survivors -> non-zero exit
+ * with the per-candidate best accuracy (the retune diagnostic).
+ */
+async function runScoutAccuracyPhase(opts: CliOptions): Promise<CliResult> {
+  console.error("[scout-accuracy] mass-scout scouting-profile benchmark");
+  let result;
+  try {
+    result = await runScoutAccuracyBenchmark({
+      force: opts.force,
+      budgetUsd: opts.budgetUsd,
+      onProgress: (m) => process.stderr.write(`[scout-accuracy] ${m}\n`),
+    });
+  } catch (err) {
+    return {
+      ok: false,
+      code: 2,
+      summary: `scout-accuracy failed: ${(err as Error).message}`,
+    };
+  }
+  if (!result.ok) {
+    return {
+      ok: false,
+      code: 2,
+      summary: result.summaryLine,
+      reportPath: result.jsonReportPath,
+    };
+  }
+  if (result.previousHeadModelId) {
+    console.error(
+      `[scout-accuracy] replaced existing scouting profile (previous model: ${result.previousHeadModelId})`,
+    );
+  }
+  process.stdout.write(`recommended_model=${result.survivors[0]?.id ?? ""}\n`);
+  return {
+    ok: true,
+    summary: result.summaryLine,
+    reportPath: result.jsonReportPath,
   };
 }
 
@@ -1633,9 +2557,17 @@ async function runTextToolPhase(
  * ~/.llm-externalizer/settings.yaml via applyToolModelToSettings (the CLI/cron-
  * only writer behind the read-only-MCP guardrail). Exit 3 on any write failure.
  */
-async function runAutoReplacePhase(opts: CliOptions): Promise<CliResult> {
+async function runAutoReplacePhase(opts: CliOptions, freeOnly: boolean): Promise<CliResult> {
   console.error("[auto-replace] cross-tool auto-replacement planner");
+  // P6b-fix2 B-1: the planner resolves each tool's INCUMBENT from a profile, and
+  // --apply below WRITES to one. They must be the same profile or the
+  // recommendation is about a model the write does not touch — the planner's
+  // default reader keys on `active:` on its own (row99: `active:` is the
+  // live default-profile pointer again, TRDD-G6XT3AY9), so it is named
+  // explicitly here with the same rule every write target uses.
+  const targetProfile = benchmarkTargetProfile(opts.profile);
   const { findings, reportMarkdown } = await planToolReplacements({
+    profileName: targetProfile,
     candidateModels: opts.searchExistingModels.length > 0 ? opts.searchExistingModels : undefined,
     force: opts.force,
     onProgress: (m) => console.error(`[auto-replace] ${m}`),
@@ -1646,11 +2578,23 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<CliResult> {
   // automated verdict at all — the agent was asked to eyeball "is this 404
   // persistent?". planEnsembleRotation answers that with the ledger's code
   // threshold (assessModelPersistence), so no judgment happens up here.
-  const ensemble = planEnsembleRotation();
+  // P6b-fix3 B-1': the ensemble half names the SAME profile as the tool half and
+  // as --apply's write target. It had no profile parameter at all, so it read the
+  // `active:` key on its own — on the shipped config that is "free", which made
+  // `--auto-replace --apply --profile ens` take both the rotation verdict
+  // (rotationNeeded) and the re-pick arity (topN = ensemble.slots.length, which
+  // applyPicksToSettings turns into the written profile's `mode`) from
+  // `profiles.free`'s slot health, then write them into `profiles.ens`.
+  const ensemble = planEnsembleRotation({ profileName: targetProfile });
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
 
   // Persist the advisory report (always — same posture as every other phase).
-  const reportPath = join(resolveProjectMainRoot(), "reports", "auto-replace", `${compactStamp()}-auto-replace.md`);
+  // row99c SF6: was join(resolveProjectMainRoot(), "reports", "auto-replace", ...)
+  // — a second, un-approved report root outside <project>/reports/llm-externalizer/
+  // (USER write-roots rule, 2026-09-18; see project-root.ts's own doc comment).
+  // defaultOutputDir() is the single source of truth for that root; route
+  // through it instead of hand-rolling resolveProjectMainRoot()+"reports" again.
+  const reportPath = join(defaultOutputDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, fullReport, "utf-8");
 
@@ -1690,21 +2634,24 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<CliResult> {
     return { ok: true, summary: `advisory — ${scope}; nothing written`, reportPath };
   }
 
-  // --apply: adopt every changed recommendation. The incumbent profile name is
-  // the active profile (the planner resolved incumbents from it). Resolve it
-  // here so the writer targets the same profile the health verdict came from.
+  // --apply: adopt every changed recommendation, into the SAME profile the
+  // planner above resolved the incumbents from — otherwise the write targets a
+  // model no health verdict was taken about.
   const settingsPath = getSettingsPath();
-  let profileName: string;
-  try {
+  // P6b-fix2 B-1: --profile, else the built-in default. Reading the disk
+  // `active:` here pointed --apply's tool_models writes at the generated
+  // `free` section on every default install.
+  const profileName = targetProfile;
+  {
     const settings = loadSettings();
-    if (!settings || !settings.active) {
-      throw new Error(
-        `--apply needs an active profile in ${settingsPath}, but none is configured.`,
-      );
+    if (!settings || !settings.profiles[profileName]) {
+      return {
+        ok: false,
+        code: 3,
+        summary: `--apply failed: profile '${profileName}' is not configured in ${settingsPath}.`,
+        reportPath,
+      };
     }
-    profileName = settings.active;
-  } catch (err) {
-    return { ok: false, code: 3, summary: `--apply failed: ${(err as Error).message}`, reportPath };
   }
 
   if (recommended.length === 0 && !ensemble.rotationNeeded) {
@@ -1752,7 +2699,7 @@ async function runAutoReplacePhase(opts: CliOptions): Promise<CliResult> {
       fromCache: false,
       pickTopN: topN,
     };
-    const sweep = await runKeywordSweep(sweepOpts);
+    const sweep = await runKeywordSweep(sweepOpts, freeOnly);
     let picks: PickedModel[];
     try {
       picks = pickTopN(sweep.results, { topN, minMeanF1: opts.minMeanF1, requireSchema: true });
@@ -1806,16 +2753,10 @@ async function runAdoptPhase(opts: CliOptions): Promise<CliResult> {
   const modelId = opts.adoptModel as string;
   const target = opts.adoptInto as string; // validateCombinations guarantees both are set
   const settingsPath = getSettingsPath();
-  let profileName = opts.adoptProfile;
-  if (profileName === null) {
-    const settings = loadSettings();
-    if (!settings || !settings.active) {
-      throw new Error(
-        `--adopt needs a profile: none given via --adopt-profile and no active profile in ${settingsPath}`,
-      );
-    }
-    profileName = settings.active;
-  }
+  // P6b-fix2 B-1: --adopt-profile, then --profile, then the built-in default.
+  // The old fallback was the disk `active:` key, which the shipped config sets
+  // to the generated 'free' section.
+  const profileName = benchmarkTargetProfile(opts.adoptProfile ?? opts.profile);
 
   console.error(`[adopt] assessing ${modelId} against every LLM tool's requirements …`);
   const assessment = await assessModelById(modelId); // throws when the id is not in the catalog
@@ -2003,8 +2944,27 @@ function runPickPhase(
   };
 }
 
-function buildReportPath(): string {
-  const root = resolveMainRoot();
+export function buildReportPath(): string {
+  // Fix-queue item 29: an isolated run (LLM_EXT_CONFIG_DIR set — every hermetic
+  // test, and any CI invocation that wants $0-safe isolation) must never write
+  // outside the sandbox it was given. resolveMainRoot() falls back to
+  // process.cwd() when CLAUDE_PROJECT_DIR is unset, so a benchmark spawned with
+  // cwd = the real repo (the common case for a subprocess test) wrote its
+  // markdown report straight into the live repo's reports/benchmark/ even
+  // though the run itself was fully isolated otherwise. getConfigDir() already
+  // honors LLM_EXT_CONFIG_DIR (see benchmarkCachePath above, same reasoning) —
+  // route through it whenever the caller opted into isolation, so an isolated
+  // config dir also isolates the report.
+  //
+  // Write-roots rule (2026-09-18): the non-isolated (production) branch used
+  // to join resolveMainRoot() + "reports"/"benchmark" directly, landing at
+  // <project-root>/reports/benchmark/ — OUTSIDE every USER-approved write
+  // root. Route it through defaultOutputDir() instead (the single approved
+  // exception root, <project-root>/reports/llm-externalizer/) and nest
+  // "benchmark" under that.
+  const reportDir = process.env.LLM_EXT_CONFIG_DIR
+    ? join(getConfigDir(), "reports", "benchmark")
+    : join(defaultOutputDir(), "benchmark");
   const now = new Date();
   const pad = (n: number): string => String(n).padStart(2, "0");
   const offsetMin = -now.getTimezoneOffset();
@@ -2012,7 +2972,7 @@ function buildReportPath(): string {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join(root, "reports", "benchmark", `${ts}-model-comparison.md`);
+  return join(reportDir, `${ts}-model-comparison.md`);
 }
 
 // Install a usage-history context so every per-model OpenRouter call made by
@@ -2044,6 +3004,16 @@ function buildReportPath(): string {
 // THIS file is the actual process entry point (`node dist/benchmark.js`), never when a
 // test merely imports it in-process or spawns it as a child with an inherited env.
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  // Item 66 — arm the lock release FIRST, before anything that can throw.
+  // A detached auto-bench child is handed the lock its parent claimed (and
+  // stamped with THIS pid via commitBenchLock); until now nothing deleted that
+  // file when the run finished, so every completed population left a lock
+  // behind — the P6d dogfood finding. Armed here rather than inside main()
+  // because a throw during argv parsing is itself an exit path that must
+  // release. Absent env var = a hand-run benchmark, which owns no lock and so
+  // must never delete one.
+  const ownedLockPath = process.env[BENCH_LOCK_PATH_ENV];
+  if (ownedLockPath) releaseOwnBenchLockOnExit(ownedLockPath);
   withUsageContext({ tool: "cli:benchmark", params: "" }, () =>
     main().then(
       (result) => {
