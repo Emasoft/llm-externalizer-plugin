@@ -275366,7 +275366,7 @@ function resolveInvocation(argv, tools) {
 // src/cli/main.ts
 import { readFileSync as readFileSync44 } from "node:fs";
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.1.0";
+var VERSION = "14.1.1";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

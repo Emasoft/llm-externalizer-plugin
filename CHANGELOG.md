@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.1.1] - 2026-10-22
+
+### Fixed
+
+- Fix: 14.1.1 - Linux CI temp paths, gated statusline debug test, owner-login redaction, changelog wording
+
+
 ## [14.1.0] - 2026-10-22
 
 ### Added
