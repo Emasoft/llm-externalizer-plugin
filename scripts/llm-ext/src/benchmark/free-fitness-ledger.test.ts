@@ -19,8 +19,8 @@ let prevCfgDir: string | undefined;
 
 beforeEach(() => {
   // "/tmp" (not os.tmpdir()) on purpose: getConfigDir refuses a config dir
-  // outside $HOME or /private/tmp (its own path-traversal guard).
-  cfg = mkdtempSync(join("/private/tmp", "fitness-cfg-"));
+  // outside $HOME or /tmp (→ /private/tmp on macOS) (its own path-traversal guard).
+  cfg = mkdtempSync(join("/tmp", "fitness-cfg-"));
   prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
   process.env.LLM_EXT_CONFIG_DIR = cfg;
 });

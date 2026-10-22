@@ -54,10 +54,10 @@ let configDir: string;
 const ORIGINAL_CONFIG_DIR = process.env.LLM_EXT_CONFIG_DIR;
 
 beforeEach(() => {
-  // config.ts's getConfigDir() only allows a dir under $HOME or /private/tmp
-  // (macOS's canonicalized /tmp) — os.tmpdir() resolves under /var/folders/…
+  // config.ts's getConfigDir() only allows a dir under $HOME or /tmp (→ /private/tmp on macOS);
+  // os.tmpdir() resolves under /var/folders/…
   // and gets rejected, so anchor explicitly in the allowed tree.
-  configDir = mkdtempSync(join("/private/tmp", "llm-ext-backfill-test-"));
+  configDir = mkdtempSync(join("/tmp", "llm-ext-backfill-test-"));
   process.env.LLM_EXT_CONFIG_DIR = configDir;
 });
 

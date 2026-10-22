@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Highlights
 
-Curated notes for 14.1.0; the generated commit list follows.
+Curated notes for 14.1.0; the generated entry is the "Added" section above.
 
 **Added**
 

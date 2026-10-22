@@ -66,7 +66,7 @@ let prevCfgDir: string | undefined;
 let prevKey: string | undefined;
 
 beforeEach(() => {
-  cfg = mkdtempSync(join("/private/tmp", "hq-cfg-"));
+  cfg = mkdtempSync(join("/tmp", "hq-cfg-"));
   prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
   prevKey = process.env.OPENROUTER_API_KEY;
   process.env.LLM_EXT_CONFIG_DIR = cfg;

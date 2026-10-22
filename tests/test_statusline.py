@@ -310,6 +310,32 @@ def test_log_tier_debug_writes_under_its_own_folder_when_enabled(
     assert "cols=120" in dbg_path.read_text()
 
 
+
+def test_log_tier_debug_is_gated_by_claude_statusline_debug(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """_log_tier_debug writes ONLY when CLAUDE_STATUSLINE_DEBUG is set.
+
+    The sibling test above only covers the enabled case, so it still passes
+    if the gate is deleted. Ungated, this appends one line every 3s per
+    concurrent session forever, with no rotation and no size cap (measured
+    2026-08-29 at 128 MB), so the disabled case needs its own assertion."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("LLM_EXT_CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.delenv("CLAUDE_STATUSLINE_DEBUG", raising=False)
+    mod = _load_statusline_module()
+    own = tmp_path / "claude"
+    own.mkdir()
+    monkeypatch.setattr(mod, "_CACHE_DIR", own)
+
+    mod._log_tier_debug(120, 80, 2)
+    assert not (own / "statusline-debug.log").exists(), "wrote while gated"
+
+    monkeypatch.setenv("CLAUDE_STATUSLINE_DEBUG", "1")
+    mod._log_tier_debug(120, 80, 2)
+    assert "cols=120" in (own / "statusline-debug.log").read_text()
+
+
 # ---------------------------------------------------------------------------
 # End-to-end CLI smoke
 # ---------------------------------------------------------------------------

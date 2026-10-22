@@ -1079,7 +1079,7 @@ profiles:
 `;
 
   it('(a) booting with a b.ai reserved slot seeds the slot but the candidate queue stays EMPTY and no benchmark covers the reserved id', async () => {
-    cfgDir = mkdtempSync(join('/private/tmp', 'llm-ext-f6a-'));
+    cfgDir = mkdtempSync(join('/tmp', 'llm-ext-f6a-'));
     writeFileSync(join(cfgDir, 'settings.yaml'), PAID_RESERVED_YAML, 'utf-8');
     process.env.LLM_EXT_CONFIG_DIR = cfgDir;
     // The seed only runs when $BAI_API_KEY resolves; boot records the seed
@@ -1120,7 +1120,7 @@ profiles:
   });
 
   it('(b) a reserved id arriving through the NORMAL catalog path stays benchmarkable/evictable — no reserved-name special case blocks the sweep', async () => {
-    cfgDir = mkdtempSync(join('/private/tmp', 'llm-ext-f6b-'));
+    cfgDir = mkdtempSync(join('/tmp', 'llm-ext-f6b-'));
     // The user DELETED the reserved slot (their to delete — the seed never
     // re-runs) but kept vendor/reserved-x in paid_models: from the machinery's
     // point of view it is now an ordinary catalog id, and the ordinary rules

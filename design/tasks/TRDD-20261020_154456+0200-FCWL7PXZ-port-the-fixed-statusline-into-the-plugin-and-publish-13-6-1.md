@@ -1,10 +1,10 @@
 ---
 trdd-id: FCWL7PXZ
 title: Port the fixed statusline into the plugin and publish 13.6.1 from origin/main
-column: dev
+column: publish
 status: tasked
 created: 2026-10-20T15:44:56+0200
-updated: 2026-10-21T22:26:02+0200
+updated: 2026-10-22T11:09:18+0200
 current-owner: main-agent@llm-externalizer
 created-by: main-agent@llm-externalizer
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer
 approval-datetime: 2026-10-20T15:44:56+0200
-implementation-commits: [bef39c54, b29828f3, 50f8fa2c, 39738b4f, a5e0aeb7, b7d55c8f, 644844f4, b99a26e0, eb9eb705, c00805e0, f79476b9, 0b2ee2d6, 88d633c2, ca4120cd, a01e3355, b8947e9d, 09e8c229, 229e2838, 0ca7dae]
+implementation-commits: [bef39c54, b29828f3, 50f8fa2c, 39738b4f, a5e0aeb7, b7d55c8f, 644844f4, b99a26e0, eb9eb705, c00805e0, f79476b9, 0b2ee2d6, 88d633c2, ca4120cd, a01e3355, b8947e9d, 09e8c229, 229e2838, 0ca7dae, 4bdd9b1b, 8cbd288b, 54d72244]
 ---
 
 # Port the fixed statusline into the plugin and publish 13.6.1 from origin/main
@@ -137,7 +137,7 @@ states, made explicit in the code.
 
 - **The 2-line CHANGELOG redaction.** `origin/main:CHANGELOG.md` lines 9197 and 10239 carry the
   owner's login (fact 10). The local lineage's redaction is exactly those two lines (the word
-  `emanuelsabetta` → `Emasoft`). It is deliberately kept as its own commit, so a
+  `<owner-login>` → `Emasoft`). It is deliberately kept as its own commit, so a
   reviewer reading the release diff sees the statusline change and the redaction as two separable
   things.
 
@@ -620,16 +620,16 @@ specify it in detail.
 Step 4's verification covers the local install only. These are the release-level checks, so
 "the release succeeded" is a list that can be ticked rather than a judgement call:
 
-- [ ] `git ls-remote --tags origin v13.6.1` resolves, and the resolver tag
+- [x] (verified for v14.1.0, which replaced 13.6.1) `git ls-remote --tags origin v13.6.1` resolves, and the resolver tag
       `llm-externalizer--v13.6.1` exists alongside it.
-- [ ] `gh release view v13.6.1` exists, with notes extracted from the 13.6.1 changelog entry.
-- [ ] `origin/main`'s `.claude-plugin/plugin.json` reads `13.6.1`.
-- [ ] The marketplace repo shows the plugin at 13.6.1 (the chain has three links after the
+- [x] (verified for v14.1.0, which replaced 13.6.1) `gh release view v13.6.1` exists, with notes extracted from the 13.6.1 changelog entry.
+- [x] (verified for v14.1.0, which replaced 13.6.1) `origin/main`'s `.claude-plugin/plugin.json` reads `13.6.1`.
+- [x] (verified for v14.1.0, which replaced 13.6.1) The marketplace repo shows the plugin at 13.6.1 (the chain has three links after the
       push — the marketplace's own submodule update, its CI, its release — so this is a
       separate check, not implied by the push).
-- [ ] A fresh `claude plugin install` yields a `scripts/statusline/statusline.py` that is
+- [x] (verified for v14.1.0, which replaced 13.6.1) A fresh `claude plugin install` yields a `scripts/statusline/statusline.py` that is
       byte-identical to `~/.claude/statusline.py`.
-- [ ] `grep -c '<owner-login>' CHANGELOG.md` in the released tree returns 0.
+- [x] (verified for v14.1.0, which replaced 13.6.1) `grep -c '<owner-login>' CHANGELOG.md` in the released tree returns 0.
 - [ ] The released `tests/test_statusline.py` contains the two behavioural tests from Step 2b,
       and they pass in the released tree.
 
@@ -744,6 +744,7 @@ PORTED TO THE CORRECT BASE 2026-10-20: the fixes are now on the LOCAL redacted l
 ## Approval log
 
 - 2026-10-20T15:44:56+0200 — MANDATE issued by main-agent@llm-externalizer (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-22T11:06:48+0200 — column → publish by main-agent@llm-externalizer-plugin. 14.1.0 published and installed; acceptance box 7 waits for the next release to ship the gated debug test
 
 ## CHANGE 2 — the measured facts (2026-10-20, second review round)
 
@@ -786,3 +787,6 @@ THE CODE COMMENT — scripts/publish.py's comment above the two CPV invocations 
 2026-10-21 bench fix 310cb5ce (free-pool run no longer aborts on paid candidates). Review fork findings and dispositions: (a) test bypasses main() parking — REFUTED by a real dry run of the rebuilt CLI with a copy of the live settings: "Roster: 0 candidate(s), 18 baseline(s)", exit 0. (b) gate may class baselines as paid — REFUTED by reading discover.ts assertPaidBenchmarkAllowed: it uses isFreeModeEligible(id, prices), and the pool is resolved to catalog price $0. (c) --top silently ignored under --bench-free-pool — ACCEPTED as intended, same as runEnsembleSweep's free mode. (5) --apply-free-pool path — REFUTED: it throws unless --bench-free-pool is set (index.ts:241). Discovery still fetches the catalog — ACCEPTED, the same public fetch the pool resolution already needs. Unverified: a full non-dry free-pool run. Publish blocker found the same day: the push set origin/main..HEAD carries the owner login in commits 3c0079eb, 6a6301fd, 88d633c2 (message) and b3c68b1a; the card text is now redacted to a placeholder, but the history needs the second filter-repo pass from TRDD-DRRUTC2M before any push.
 2026-10-21 publish stopped for a USER decision. (1) The auto-mode classifier denied running filter-repo in a throwaway clone, so no rewrite and no push has run. (2) Two USER rulings conflict. 2026-10-09, on WBZJRSQB, verbatim: "no need to publish llm-externalizer without having first completed the full plan created in plan mode." 2026-10-21, verbatim: "make the llm-ext working, publish and install it!" The release branch carries 1025 unpublished commits, including unfinished classifier-plan work. Options put to the USER: A, publish 14.1.0 from the redacted release branch, which needs the second redaction pass and a force-push; or B, publish a 13.6.1 patch on top of origin/main, a fast-forward with no history rewrite, carrying only the statusline fix and what applies cleanly. Corrections to the command list from the review: use git branch -M main (a rewritten main already exists in the clone); also disable notify-marketplace.yml during the force-push, because it fires on a push to main that changes plugin.json; DRRUTC2M step 6 (gh release edit on v9.4.0, v9.4.1 and v9.10.0) is a separate approval; after the force-push the local repo still holds the name-bearing commits and must never push again until it is re-cloned; publish.py shellchecks gitignored .sh files under reports/, which breaks check-only on a dev tree (needs its own card).
 - 2026-10-21 Release scope and caveats from the ACPIIS6Y close review: (1) 14.1.0 must include skills/llm-externalizer-cli-reference (ACPIIS6Y closed on the claim that it ships with this release; verify after install). (2) ACPIIS6Y box 2 means the skill-creator authoring steps only; its eval loop was skipped. (3) The post-rewrite SHA remap must cover design/archived/ as well as design/tasks/, including ACPIIS6Y's implementation-commits [6dffb832, 6cb8e26c, 045337b0] and the follow-up fix commit. (4) COMMIT FREEZE on release/13.6.1 from the moment the user runs filter-repo in builds_dev/publish-14.1.0/repo: any later commit must be redacted and replayed onto the rewritten history by hand.
+- 2026-10-22 PUBLISHED 14.1.0 (USER, verbatim: "consider me away and decide yourself. just base your decisions on verified facts. but publish and install the llm-externalizer plugin new version! with the new skill!"). Route: fast-forward squash, no history rewrite. A fresh clone (builds_dev/publish-14.1.0-ff) got one commit 4bdd9b1b on top of origin/main v13.6.0 whose tree equals local 62eb18cb; publish.py then added 8cbd288b chore(release): v14.1.0, tags v14.1.0 and llm-externalizer--v14.1.0, and the GitHub release. All gates passed (typecheck, lint, build, npm test, ruff, shellcheck, claude plugin validate, pytest, CPV). Verified after: both tags on origin; release v14.1.0 not draft; origin/main plugin.json 14.1.0; marketplace.json 14.1.0; claude plugin update installed 14.1.0 at user scope; skills/llm-externalizer-cli-reference present in the install; installed statusline.py byte-identical to ~/.claude/statusline.py after re-running install_statusline.py; owner login count 0 in the released CHANGELOG and tree; a shell without the session plugin bin resolves llm-ext 14.1.0 (this session still runs 13.6.0 until restart). Local: cherry-picked 8cbd288b as 54d72244, local tree now equals origin/main; COMMIT FREEZE LIFTED. CONSEQUENCE for every future publish: public and local histories have no common ancestor after v13.6.0 redaction differences, so publish again by the same squash route (fresh clone, commit-tree of the local tree on origin/main) or after DRRUTC2M rewrites public history. Left open as follow-ups: the card and branch still say 13.6.1; the 14.1.0 CHANGELOG Highlights sentence "the generated commit list follows" is inaccurate (cosmetic, fix in the next release).
+- 2026-10-22 Acceptance: boxes 1-6 ticked, each verified against v14.1.0 (the release that replaced the planned 13.6.1; evidence in the line above). Box 7 is NOT met: the released tests/test_statusline.py has the rotation test but its debug test (test_log_tier_debug_writes_under_its_own_folder_when_enabled) checks only the enabled case and passes with the gate deleted. The gate itself ships (statusline.py:537). Fix committed locally: test_log_tier_debug_is_gated_by_claude_statusline_debug, mutation-verified (gate removed in a scratch copy: it FAILS "wrote while gated"; unmutated: passes; full file 29 passed). Card parked in publish until the next release ships that test; then tick box 7 and close.
+- 2026-10-22 CORRECTION to the publish line above: "owner login count 0 in the released tree" checked only the exact macOS username. A broader case-insensitive sweep found ONE misspelled variant of the owner login in this card (line 140, a redaction-mapping description) in the published 14.1.0 tree; the CHANGELOG is clean, and v13.6.0 had shipped the exact login in its CHANGELOG. Redacted locally to <owner-login>; it leaves the published tree with the next release (both forms remain in public git history, which is TRDD-DRRUTC2M). Also: post-push CI on 8cbd288b FAILED, 22 tests in 5 files, all ENOENT mkdtemp under the macOS-only /private/tmp on the Linux runner (test portability, not product code); the local publish gate passed because it runs on macOS. Fix dispatched; ships in 14.1.1 with the gated debug test (box 7) and this redaction.
