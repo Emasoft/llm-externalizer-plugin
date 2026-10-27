@@ -20,7 +20,7 @@ implementation-commits: [5c06fd5d]
 
 # A profile rewrite never writes an ensemble its own settings check rejects
 
-On 2026-10-22 the automatic free-profile rewrite passed only 1 of 6 free models and wrote it with mode remote-ensemble (scripts/llm-ext/src/benchmark/index.ts, the free populate writer). The settings check (config.ts, free_only remote-ensemble needs at least 2 members) rejects that, so every llm-ext command exited 1 on this machine until 2026-10-27, when the settings file was set to mode remote by hand. The paid writer has the same shape: it always writes remote-ensemble, and the check rejects a non-free ensemble without second_model.
+On 2026-10-22 the automatic free-profile rewrite passed only 1 of 6 free models and wrote it with mode remote-ensemble (scripts/llm-ext/src/benchmark/index.ts, the free populate writer). The settings check (config.ts, free_only remote-ensemble needs at least 2 members) rejects that, so every llm-ext command exited 1 until the settings file was set to mode remote by hand. The paid writer has the same shape: it always writes remote-ensemble, and the check rejects a non-free ensemble without second_model.
 
 ## Acceptance
 - [x] the free writer writes mode remote when fewer than 2 models pass, remote-ensemble otherwise

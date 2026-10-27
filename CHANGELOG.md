@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Fix: 14.1.2 - a profile rewrite with one passing model now writes single-model mode instead of an ensemble the settings check rejects (this broke every command), --estimate refuses runs the real command would refuse, a refused call is final (no retries, no circuit-breaker trips, and the message no longer says retry later), and a 401 stops same-model retries
+- Fix: 14.1.2 - a profile rewrite with one passing model now writes single-model mode instead of an ensemble the settings check rejects (this broke every command), --estimate refuses runs the real command would refuse, a call refused before anything is sent is no longer retried and no longer trips the circuit breaker (when every cause is such a refusal, the "all failing" message drops "retry later"), and a 401 stops same-model retries
 
 ## [14.1.1] - 2026-10-22
 
