@@ -183,6 +183,74 @@ function isMarkedDynamicSection(settingsPath: string, name: DynamicProfileName):
   return profileSectionMarkerState(parseDocument(text), name) === "marked";
 }
 
+
+export type RegenerateInvalidSectionOutcome =
+  | { kind: "not-applicable" }
+  | { kind: "user-keys-invalid"; errors: string[] }
+  | { kind: "concurrent-fix" }
+  | { kind: "regenerated"; regenerated: Profile; backupPath: string | undefined; errors: string[] };
+
+/**
+ * fix-queue 56: the back-up-and-regenerate repair for a MARKED generated
+ * section (`free`/`paid`) that already fails `validateProfile` for a reason no
+ * pending patch caused. Shared by the maintainer pass (which then repopulates
+ * the pool) and by index.ts's dispatch path (which runs it inline, because an
+ * invalid ACTIVE profile is refused as NOT CONFIGURED before the maintainer
+ * can run -- the 2026-10-22 outage). Writes settings.yaml, with a backup, only
+ * for kind "regenerated".
+ */
+export function regenerateInvalidMarkedSection(args: {
+  name: DynamicProfileName;
+  settingsPath: string;
+  current: Profile;
+  nowMs: number;
+}): RegenerateInvalidSectionOutcome {
+  const { name, settingsPath, current, nowMs } = args;
+  // Only a MARKED section is ours to regenerate — see isMarkedDynamicSection's
+  // own comment for why an unmarked one is out of scope here (migration or
+  // validateSettings already own it).
+  if (!isMarkedDynamicSection(settingsPath, name)) return { kind: "not-applicable" };
+  // D0 (TRDD-AL8GIZYA, design section 3.2 rule 4): a user-owned-key error
+  // (selection/high_quality_model) is NEVER a regeneration trigger — it is the
+  // user's own data, and the regenerated placeholder would sit right next to it
+  // untouched, so there is nothing for a regeneration to fix.
+  const userKeysValidation = validateUserOwnedKeys(name, current);
+  if (!userKeysValidation.valid) return { kind: "user-keys-invalid", errors: userKeysValidation.errors };
+  const currentValidation = validateProfile(name, current);
+  // Coordinator review B-1: `validateProfile` ALSO enforces the Remote-auth
+  // rule, so a perfectly-configured section is "invalid" on any dispatch where
+  // the API key is simply not exported. Detected with the structured
+  // `credentialUsable` check, never by matching error text. A credential gap
+  // (even alongside a structural defect) is NOT a regeneration trigger.
+  const currentCredentialOnly = !credentialUsable(current, current);
+  if (currentValidation.valid || currentCredentialOnly) return { kind: "not-applicable" };
+  const regenerated = unpopulatedDefaultProfile(name);
+  // Backup runs inside the lock callback, on ONLY the branch that overwrites,
+  // so it names precisely the bytes overwritten (coordinator review S-1).
+  let backupPath: string | undefined;
+  const regenResult = writeDynamicProfileSection(
+    settingsPath,
+    name,
+    // Re-validate the section AS IT IS UNDER THE LOCK: a concurrent writer may
+    // have fixed it since `current` was read; never clobber a fresher valid
+    // write with a stale "it was invalid" verdict (adversarial review fq56).
+    (currentSection) => {
+      if (currentSection !== undefined && validateProfile(name, currentSection).valid) {
+        return currentSection;
+      }
+      // fix-queue row 72: shared backupSettingsFile — no `wrapError`, a backup
+      // failure must throw its raw error to the caller's catch-and-log.
+      backupPath = backupSettingsFile(settingsPath, "settings-before-regenerate", name, { nowMs });
+      return regenerated;
+    },
+    // The writer's own notify is for the UNMARKED-section backup; this section
+    // IS marked, so suppress it to avoid a second, misleading notice.
+    { nowMs, notify: () => {} },
+  );
+  if (!regenResult.changed) return { kind: "concurrent-fix" };
+  return { kind: "regenerated", regenerated, backupPath, errors: currentValidation.errors };
+}
+
 export interface MaintainDynamicProfilesInput {
   /** The real OpenRouter model fetcher — index.ts passes its own
    *  fetchOpenRouterModels (the disk cache in catalog-cache.ts wraps
@@ -319,119 +387,27 @@ async function maintainOneDynamicProfile(args: {
   // runs, is what makes the distinction: already-invalid is handled here
   // (backup + regenerate, addendum K's shape reused for a MARKED section);
   // patch-introduced is unaffected and still hits the skip below.
-  if (
-    current !== undefined &&
-    !args.alreadyRegenerated &&
-    // Only a MARKED section is ours to regenerate — see
-    // isMarkedDynamicSection's own comment for why an unmarked one is
-    // out of scope here (migration or validateSettings already own it).
-    isMarkedDynamicSection(settingsPath, name)
-  ) {
-    // D0 (TRDD-AL8GIZYA, design section 3.2 rule 4): a user-owned-key error
-    // (selection/high_quality_model) is NEVER a regeneration trigger — it is
-    // the user's own data, and writeDynamicProfileSection's regenerated
-    // placeholder would sit right next to it untouched (the writer is
-    // GENERATED-only now), so there is nothing for a regeneration to fix
-    // here; only logging and skipping is correct.
-    const userKeysValidation = validateUserOwnedKeys(name, current);
-    if (!userKeysValidation.valid) {
+  if (current !== undefined && !args.alreadyRegenerated) {
+    const repair = regenerateInvalidMarkedSection({ name, settingsPath, current, nowMs });
+    if (repair.kind === "user-keys-invalid") {
       log(
-        `[llm-externalizer] dynamic profile '${name}': ${userKeysValidation.errors.join("; ")} — maintenance skipped, nothing written. Fix it and llm-ext resumes maintaining the generated keys.\n`,
+        `[llm-externalizer] dynamic profile '${name}': ${repair.errors.join("; ")} — maintenance skipped, nothing written. Fix it and llm-ext resumes maintaining the generated keys.\n`,
       );
       return false;
     }
-    const currentValidation = validateProfile(name, current);
-    // Coordinator review B-1 (blocker), hardened per the follow-up adversarial
-    // review: `validateProfile` ALSO enforces the Remote-auth rule (config.ts's
-    // base-preset check ~1561 and the `providers[]`-route check ~1681) — the
-    // SAME error shape a structural defect produces. A perfectly-configured,
-    // marked, populated section is "invalid" by this same check on ANY
-    // dispatch where $OPENROUTER_API_KEY (or a route's own var) simply is not
-    // exported right now — a cron, a spawn without `zsh -lc`, or the
-    // `-u OPENROUTER_API_KEY -u BAI_API_KEY` test leg. Pre-fix, that case fell
-    // through untouched to the EXISTING missingKeyVar/routeCredentialUsable
-    // skip further down.
-    //
-    // FIRST version of this fix filtered `currentValidation.errors` by
-    // string-matching `"requires 'api_key'"` — a real but brittle coupling
-    // to `validateProfile`'s free-text wording, flagged by the follow-up
-    // review as the strongest reason not to trust the fix (a future rewording
-    // there would silently reopen B-1 with no compile-time signal). Replaced
-    // with the SAME two structured checks (`missingProviderKeyVar`,
-    // `coerceProviderBindings(...).some(...)`) the skip branch below already
-    // uses for exactly this distinction — no dependency on error text at all.
-    // True when `current`'s ONLY problem (as far as `credentialUsable` can
-    // tell) is an unresolved credential — the case that must NOT trigger
-    // backup + regenerate. A section with BOTH a credential gap AND a
-    // structural defect still counts as "has a credential problem" here (this
-    // predicate is deliberately coarse, matching what the skip branch below
-    // already decides) and so falls through to the missing-key skip rather
-    // than being regenerated, UNTIL the key is exported — the next keyed
-    // dispatch re-validates `current` clean and regenerates then. A known,
-    // named limitation (see the report's disclosure), not a silent one.
-    const currentCredentialOnly = !credentialUsable(current, current);
-    if (!currentValidation.valid && !currentCredentialOnly) {
-      const regenerated = unpopulatedDefaultProfile(name);
-      // Coordinator review S-1 (follow-up, 89bc887+): the backup used to run
-      // BEFORE the lock, unconditionally — so on the "still invalid under the
-      // lock" path, the bytes it preserved could already differ from the
-      // bytes about to be overwritten (a concurrent write landing in that
-      // exact window, the same race S-9/the callback below already accounts
-      // for). Moved inside the callback, on ONLY the branch that actually
-      // returns `regenerated` (i.e. only when we are about to overwrite) —
-      // `backupPath` is set there and nowhere else, so it names precisely
-      // what was overwritten, never a stale snapshot.
-      let backupPath: string | undefined;
-      const regenResult = writeDynamicProfileSection(
-        settingsPath,
-        name,
-        // Adversarial review finding (fq56): `current`/`currentValidation` were
-        // read from THIS pass's `settings` (loaded before the writer's lock),
-        // and `isMarkedDynamicSection` re-parses the file OUTSIDE the lock too
-        // — same race window S-9 (above) already guards the normal patch write
-        // against: a concurrent benchmark child could have replaced this
-        // section with a VALID one in between. Re-validate the section AS IT
-        // IS UNDER THE LOCK before overwriting it — if a concurrent writer
-        // already fixed it, keep that (never clobber a fresher valid write
-        // with a stale "it was invalid" verdict); only write the placeholder,
-        // and only back up, when the under-lock content is STILL invalid.
-        (currentSection) => {
-          if (currentSection !== undefined && validateProfile(name, currentSection).valid) {
-            return currentSection;
-          }
-          // fix-queue row 72: shared backupSettingsFile (benchmark/pick.ts) —
-          // no `wrapError` here, deliberately: a backup failure on this path
-          // must throw its raw error and bubble to maintainDynamicProfiles'
-          // own catch-and-log, not abort with a custom message the way
-          // writeDynamicProfileSection's unmarked-section backup does.
-          backupPath = backupSettingsFile(settingsPath, "settings-before-regenerate", name, { nowMs });
-          return regenerated;
-        },
-        {
-          nowMs,
-          // The writer's own notify is for design §2.6's "unmarked hand-authored
-          // section" backup — this section IS marked, so that branch never
-          // fires and this callback never runs. Suppressed anyway so a future
-          // change to that guard cannot print a second, misleading notice here.
-          notify: () => {},
-        },
+    if (repair.kind === "concurrent-fix") {
+      // No backup was taken; returning here — instead of recursing into a
+      // provisional refill — is what stops this pass from clobbering the
+      // fresher write a concurrent writer landed under the lock.
+      log(
+        `[llm-externalizer] dynamic profile '${name}': a concurrent write already fixed it under the lock — nothing done this pass.\n`,
       );
-      if (!regenResult.changed) {
-        // The under-lock re-check found the section ALREADY valid — a
-        // concurrent writer fixed it in the window between this pass's
-        // `settings` read and the lock. No backup was taken (the callback's
-        // valid-branch returns `currentSection` unchanged, never touching
-        // `backupPath`); returning here — instead of recursing into a
-        // provisional refill — is what stops this pass from clobbering that
-        // fresher write.
-        log(
-          `[llm-externalizer] dynamic profile '${name}': a concurrent write already fixed it under the lock — nothing done this pass.\n`,
-        );
-        return false;
-      }
+      return false;
+    }
+    if (repair.kind === "regenerated") {
       log(
         `[llm-externalizer] dynamic profile '${name}': the current section was already invalid ` +
-          `(${currentValidation.errors.join("; ")}) — backed it up to ${backupPath} and regenerated it; continuing.\n`,
+          `(${repair.errors.join("; ")}) — backed it up to ${repair.backupPath} and regenerated it; continuing.\n`,
       );
       // Retry ONCE against the now-regenerated (valid, unpopulated) section so
       // this pass still makes progress instead of merely leaving a notice —
@@ -440,7 +416,7 @@ async function maintainOneDynamicProfile(args: {
       // fresh-install dispatch (addendum J).
       return maintainOneDynamicProfile({
         ...args,
-        settings: { ...settings, profiles: { ...settings.profiles, [name]: regenerated } },
+        settings: { ...settings, profiles: { ...settings.profiles, [name]: repair.regenerated } },
         alreadyRegenerated: true,
       });
     }

@@ -230,7 +230,7 @@ import {
 // no longer runs the maintainer at all -- every profile update happens in a
 // detached child (default-profiles-runner.ts's requestProfileUpdate /
 // spawnDetachedDetector, profile-detector.ts).
-import { dynamicProfileGate } from "./dynamic-maintainer.js";
+import { dynamicProfileGate, regenerateInvalidMarkedSection } from "./dynamic-maintainer.js";
 // C2b-wire + D2: the detached DETECTOR (fired at the end of every dispatch on
 // a dynamic profile, never awaited) and the background update a command
 // requests when its profile has no working model (never awaited either).
@@ -726,6 +726,68 @@ function reloadSettingsFromDisk(): SettingsReloadResult {
   // no error shape to translate here.
   applyNewSettings(newSettings);
   return { ok: true, error: "" };
+}
+
+
+/** Section names regenerated inline in this process (at most once each). */
+const inlineRegeneratedThisProcess = new Set<string>();
+
+/**
+ * WHY (TRDD-5Q79QZM7): the dispatch gate answers NOT CONFIGURED to every
+ * command BEFORE the dynamic maintainer -- the only code that backs up and
+ * regenerates a marked generated section that fails validateProfile -- can run
+ * (the 2026-10-22 outage). So the same repair (regenerateInvalidMarkedSection,
+ * shared with the maintainer) runs inline, once per section per process, when
+ * the profile this call uses (free/paid) itself fails validation, and settings
+ * are re-evaluated. MEASURED 2026-10-28 on the real broken 2026-10-22 file: the
+ * one-model free ensemble itself is now fixed at boot by a migration (reserved
+ * slot), so today this path serves other validation failures of a marked
+ * section; a missing credential, invalid user-owned keys and unmarked sections
+ * are NOT repaired. Returns "" when settings became valid; otherwise one line
+ * saying the repair was attempted and why it did not help.
+ */
+function repairInvalidActiveGeneratedProfile(): string {
+  const effective = effectiveProfileName(activeSettings);
+  if (effective !== "free" && effective !== "paid") return "";
+  // The profile the call will use: overrideActiveProfile (--profile) rewrites
+  // activeSettings.active, and effectiveProfileName reads it. The shared repair
+  // only acts when THIS profile itself fails validateProfile, so an error that
+  // belongs to another profile (classifier, scouting) never triggers a rewrite.
+  if (inlineRegeneratedThisProcess.has(effective)) {
+    return `Inline repair of '${effective}' was already done once in this process and the section is invalid again; not repeating it.`;
+  }
+  const current = activeSettings.profiles[effective];
+  if (!current) return "";
+  let outcome: ReturnType<typeof regenerateInvalidMarkedSection>;
+  try {
+    outcome = regenerateInvalidMarkedSection({
+      name: effective,
+      settingsPath: getSettingsPath(),
+      current,
+      nowMs: Date.now(),
+    });
+  } catch (err) {
+    return `Inline repair of '${effective}' was attempted and failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  if (outcome.kind === "not-applicable") {
+    return `Inline repair of '${effective}' was not applicable (the profile itself passes validation, is unmarked, or the only problem is a missing credential).`;
+  }
+  if (outcome.kind === "user-keys-invalid") {
+    return `Inline repair of '${effective}' was refused: ${outcome.errors.join("; ")} (user-owned keys are never regenerated).`;
+  }
+  if (outcome.kind === "regenerated") {
+    // Latch: a section that stays invalid must not rewrite itself (and add a
+    // backup) on every call of this process.
+    inlineRegeneratedThisProcess.add(effective);
+    process.stderr.write(
+      `[llm-externalizer] '${effective}' was invalid (${outcome.errors.join("; ")}) — backed it up to ${outcome.backupPath} and regenerated it.\n`,
+    );
+  }
+  const reload = reloadSettingsFromDisk();
+  if (!reload.ok) {
+    return `Inline repair of '${effective}' was attempted (${outcome.kind}) but settings are still invalid: ${reload.error}`;
+  }
+  return "";
 }
 
 /**
@@ -4007,15 +4069,20 @@ async function dispatchCallToolInner(
       // in the first place, so it must run even while settings are misconfigured.
       name !== "scan_local_llm_services"
     ) {
-      return {
-        content: [
-          {
-            type: "text",
-            text: `NOT CONFIGURED\n\n${settingsError}\n\nQuick fix: edit ${SETTINGS_FILE} manually in your editor, then call the "reset" tool (or restart Claude Code).\nRun the "discover" tool to see the current profile status.`,
-          },
-        ],
-        isError: true,
-      };
+      // WHY (TRDD-5Q79QZM7): repair an invalid marked generated active profile
+      // here, once, instead of refusing -- see repairInvalidActiveGeneratedProfile.
+      const repairNote = repairInvalidActiveGeneratedProfile();
+      if (!settingsValid) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `NOT CONFIGURED\n\n${settingsError}\n\n${repairNote ? `${repairNote}\n\n` : ""}Quick fix: edit ${SETTINGS_FILE} manually in your editor, then call the "reset" tool (or restart Claude Code).\nRun the "discover" tool to see the current profile status.`,
+            },
+          ],
+          isError: true,
+        };
+      }
     }
 
     // Assess the model situation BEFORE the work runs (the user's "always assess

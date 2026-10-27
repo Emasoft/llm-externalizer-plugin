@@ -204,6 +204,7 @@ export default defineConfig({
       // integration proof (a real CLI process), this file is the unit-level
       // proof (mocked maintainDynamicProfiles, call-count assertions).
       'src/empty-pool-wait.test.ts',
+      'src/inline-active-repair.test.ts',
       // FREE_FORBIDDEN_TOOLS vs the FREE-FORBIDDEN markers in the mass-scout
       // dispatch (P6b-fix2 B-2): the list claims "this handler sends LLM
       // completions on the profile's head", and this is what keeps the claim
