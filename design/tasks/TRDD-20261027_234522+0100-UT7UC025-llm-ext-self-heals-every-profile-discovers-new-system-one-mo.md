@@ -4,7 +4,7 @@ title: llm-ext self-heals every profile, discovers new system-one models, falls 
 column: design
 status: tasked
 created: 2026-10-27T23:45:22+0100
-updated: 2026-10-27T23:46:34+0100
+updated: 2026-10-27T23:48:02+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -89,3 +89,4 @@ https://huggingface.co/srv-sngh/Ornith-9B-mlx-nvfp4
 ## USER decisions
 
 - 2026-10-27 (verbatim): "you can try also those of 3B parameters" — the local fallback size cap rises from under 2B to 3B parameters, so Nanbeige4.2-3B and its MLX builds and LiquidAI d1-3B are now candidates beside LFM3-1.7B.
+- 2026-10-27 (verbatim): "you must use krill for nanbeinge4.2" — Nanbeige4.2 runs through Krill (https://github.com/srvsngh99/Krill), not through a generic MLX or Ollama runner. Krill itself is not yet researched.
