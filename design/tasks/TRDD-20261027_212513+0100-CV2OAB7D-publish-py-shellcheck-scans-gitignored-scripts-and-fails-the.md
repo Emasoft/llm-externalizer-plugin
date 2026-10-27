@@ -1,0 +1,30 @@
+---
+trdd-id: CV2OAB7D
+title: publish.py shellcheck scans gitignored scripts and fails the local gate
+column: todo
+status: tasked
+created: 2026-10-27T21:25:13+0100
+updated: 2026-10-27T21:25:13+0100
+current-owner: main-agent@llm-externalizer-plugin
+created-by: main-agent@llm-externalizer-plugin
+task-type: bugfix
+min-approval-requirement: none
+assignee: main-agent@llm-externalizer-plugin
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@llm-externalizer-plugin
+approval-datetime: 2026-10-27T21:25:13+0100
+---
+
+# publish.py shellcheck scans gitignored scripts and fails the local gate
+
+Observed 2026-10-27: publish.py --check-only failed only at shellcheck, on reports/classifiers-probe/p01/probe.sh, which .gitignore line 83 (/reports/) ignores and which never ships. The 3 tracked .sh files pass shellcheck. publish.py builds its sh_files list (around line 398) by walking the tree, not from git ls-files, so any agent-written script under reports/ or a _dev folder turns the local gate and the pre-push hook red.
+
+## Acceptance
+- [ ] the shellcheck step checks only tracked .sh files (git ls-files)
+- [ ] a test or a dry run shows an ignored script no longer fails the gate
+
+## Approval log
+
+- 2026-10-27T21:25:13+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
