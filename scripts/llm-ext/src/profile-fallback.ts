@@ -21,6 +21,7 @@
  */
 import { DYNAMIC_PROFILE_NAMES, type DynamicProfileName, type ResolvedProfile, type ResolvedRoute } from "./config.js";
 import { getProfileRecord } from "./default-profiles-state.js";
+import { IRON_RULE_REFUSAL_PREFIX } from "./benchmark/validated.js";
 
 function isDynamicProfileName(name: string): name is DynamicProfileName {
   return (DYNAMIC_PROFILE_NAMES as readonly string[]).includes(name);
@@ -69,6 +70,12 @@ export interface ChainFailure {
 // all read the SAME one constant instead of copies that could drift apart.
 export const STATIC_PROFILE_EXHAUSTED_MESSAGE =
   "the models in the selected profile are all failing; retry later or change the profile";
+// USER ruling 2026-10-24 (TRDD-VAORGKVF), verbatim: "When every cause is an IRON RULE
+// refusal, drop only \"retry later\" from the sentence and keep \"change the profile\",
+// for every profile kind." A refusal is a $0 verdict reached before anything is sent;
+// a retry cannot change it, so "retry later" would be false.
+export const REFUSED_PROFILE_EXHAUSTED_MESSAGE =
+  "the models in the selected profile are all failing; change the profile";
 // D2 (USER 2026-09-18, verbatim: "the profile updating must happens in background,
 // so no message is needed, except if all models of the current profile are failing,
 // in which case the message should appear saying to retry later since the updating
@@ -121,7 +128,12 @@ export class ProfileExhaustedError extends Error {
   /** `detail` (static only) is appended to the message so message and stack agree; used for a breaker abort, which is a provider outage, not a model failure. */
   constructor(profileName: string, kind: "static" | "dynamic", causes: readonly unknown[] = [], detail?: string) {
     super(
-      (kind === "static" ? STATIC_PROFILE_EXHAUSTED_MESSAGE : dynamicProfileRetryLaterMessage(profileName)) +
+      (kind === "static"
+        ? causes.length > 0 &&
+          causes.every((c) => (c instanceof Error ? c.message : String(c)).startsWith(IRON_RULE_REFUSAL_PREFIX))
+          ? REFUSED_PROFILE_EXHAUSTED_MESSAGE
+          : STATIC_PROFILE_EXHAUSTED_MESSAGE
+        : dynamicProfileRetryLaterMessage(profileName)) +
         (detail === undefined ? "" : ` — ${detail}`),
     );
     this.name = "ProfileExhaustedError";

@@ -29,7 +29,7 @@
  * marker (resolveBenchmarkScriptPath is the only thing replaced in
  * bench-spawn.ts), so the REAL requestProfileUpdate, lock and spawn decide.
  */
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1205,6 +1205,149 @@ describe("9000b8d follow-up (B) — a chain exhaustion with NO recorded cause", 
 // non-payment service-level arm renders the LAST cause's status. If a future
 // change ever makes an "(HTTP undefined)" render reachable, the verdict
 // shapes around it are already pinned here.
+// TRDD-VAORGKVF: an IRON RULE refusal (assertModelValidated) is a $0 verdict reached before anything is sent. No test below uses setValidationBypassForTests: the real gate fires on PAID_YAML, whose ids are absent from every ledger.
+const IRON_PREFIX_LINES = (lines: string[], prefix: string) => lines.filter((l) => l.startsWith(prefix));
+
+describe("TRDD-VAORGKVF — a refused IRON RULE call is final and never feeds the circuit breaker", () => {
+  // A prior test's retries or sleeping breaker must not leak a failure count into these.
+  beforeEach(async () => {
+    (await import("./provider/completion.js")).resetServiceHealthForTests();
+  });
+  it(
+    "all-refused chain, 2-file scan_folder: no retry, no breaker food, no update, the 'Validate it' remedy reaches the user (controls: zero POSTs, isError)",
+    async () => {
+      const srv = await startScriptedServer(() => "ok");
+      installMarker();
+      const { idx, cleanup } = await loadFreshIndex(PAID_YAML);
+      const completion = await import("./provider/completion.js");
+      completion.resetServiceHealthForTests();
+      const fetchSpy = redirectFetchTo(srv.url);
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const folder = tempDir("folder");
+        writeFileSync(join(folder, "a.txt"), "hello world\n", "utf-8");
+        writeFileSync(join(folder, "b.txt"), "second file\n", "utf-8");
+        const result = await idx.dispatchCallTool("scan_folder", {
+          folder_path: folder,
+          instructions: "find bugs",
+          output_dir: tempDir("out"),
+        });
+        const text = textOf(result);
+        const lines = stderrSpy.mock.calls.map((c) => String(c[0]));
+        expect(IRON_PREFIX_LINES(lines, "[model-retry]"), `lines:\n${lines.join("")}`).toHaveLength(0);
+        expect(IRON_PREFIX_LINES(lines, "[circuit-breaker]"), `lines:\n${lines.join("")}`).toHaveLength(0);
+        expect(completion.serviceFailureCountForTests()).toBe(0);
+        expect(await requestedUpdates(), "an update cannot validate a rank-3 tool: no update").toBe(0);
+        expect(text).toContain("Validate it");
+        expect(text).not.toContain("retry later");
+        // Controls: the gate fired before the wire, and the batch failed.
+        expect(srv.postsFor("vendor/paid-head") + srv.postsFor("vendor/paid-a") + srv.postsFor("vendor/paid-b")).toBe(0);
+        expect(result.isError, `text:\n${text}`).toBe(true);
+      } finally {
+        stderrSpy.mockRestore();
+        fetchSpy.mockRestore();
+        cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "positive chain: with only vendor/paid-b validated for scan_folder the walk skips the refused entries and sends exactly one POST, to paid-b",
+    async () => {
+      const srv = await startScriptedServer(() => "ok");
+      installMarker();
+      const { idx, cfgDir, cleanup } = await loadFreshIndex(PAID_YAML);
+      writeFileSync(
+        join(cfgDir, "scan-folder-results.json"),
+        JSON.stringify({
+          "vendor/paid-b::2026-10-24T00:00:00Z::x": { date: "2026-10-24T00:00:00Z", failureReasons: [] },
+        }),
+        "utf-8",
+      );
+      const validated = await import("./benchmark/validated.js");
+      validated.clearValidatedMemo();
+      const fetchSpy = redirectFetchTo(srv.url);
+      const stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      try {
+        const result = await idx.dispatchCallTool("scan_folder", {
+          folder_path: folderWithOneFile(),
+          instructions: "find bugs",
+          output_dir: tempDir("out"),
+        });
+        const lines = stderrSpy.mock.calls.map((c) => String(c[0]));
+        expect(result.isError, `text:\n${textOf(result)}`).toBe(false);
+        expect(srv.postsFor("vendor/paid-b")).toBe(1);
+        expect(srv.postsFor("vendor/paid-head") + srv.postsFor("vendor/paid-a")).toBe(0);
+        expect(IRON_PREFIX_LINES(lines, "[model-retry]")).toHaveLength(0);
+      } finally {
+        stderrSpy.mockRestore();
+        fetchSpy.mockRestore();
+        cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "classifyError: a raw refusal and a static exhaustion of refusals are unrecoverable at service level and keep the remedy (control: no 'undefined')",
+    async () => {
+      const { idx, cleanup } = await loadFreshIndex(STATIC_CHAIN_YAML);
+      try {
+        const { ProfileExhaustedError } = await import("./profile-fallback.js");
+        const { IRON_RULE_REFUSAL_PREFIX } = await import("./benchmark/validated.js");
+        const refusal = `${IRON_RULE_REFUSAL_PREFIX}vendor/x' is not validated for scan_folder. No LLM call was made, no money was spent. Validate it: llm-ext-benchmark --allow-paid-models-tests — or configure a model already validated for this tool. No model is validated for scan_folder yet.`;
+        const raw = idx.__classifyErrorForTests(new Error(refusal));
+        expect(raw).toMatchObject({ unrecoverable: true, serviceLevel: true });
+        const exhausted = idx.__classifyErrorForTests(
+          new ProfileExhaustedError("twoentry", "static", [new Error(refusal), new Error(refusal)]),
+        );
+        expect(exhausted).toMatchObject({ unrecoverable: true, serviceLevel: true });
+        expect(exhausted.reason).toContain("Validate it");
+        expect(exhausted.reason).not.toContain("undefined");
+      } finally {
+        cleanup();
+      }
+    },
+    30_000,
+  );
+
+  it(
+    "all-refusal static exhaustion drops retry later and keeps change the profile; a mixed-cause one keeps the full sentence",
+    async () => {
+      const { ProfileExhaustedError, STATIC_PROFILE_EXHAUSTED_MESSAGE, REFUSED_PROFILE_EXHAUSTED_MESSAGE } = await import("./profile-fallback.js");
+      const { IRON_RULE_REFUSAL_PREFIX } = await import("./benchmark/validated.js");
+      const refusal = new Error(`${IRON_RULE_REFUSAL_PREFIX}vendor/x' is not validated for scan_folder. No LLM call was made. Validate it: llm-ext-benchmark --allow-paid-models-tests`);
+      const allRefused = new ProfileExhaustedError("x", "static", [refusal, refusal]);
+      expect(allRefused.message).toBe(REFUSED_PROFILE_EXHAUSTED_MESSAGE);
+      expect(allRefused.message).not.toContain("retry later");
+      const mixed = new ProfileExhaustedError("x", "static", [refusal, new Error("API error 429 (openrouter): rate limited")]);
+      expect(mixed.message).toBe(STATIC_PROFILE_EXHAUSTED_MESSAGE);
+    },
+    30_000,
+  );
+
+  it(
+    "classifyError: the all-refusal static exhaustion reason starts with the refused sentence, keeps the remedy, has no retry later",
+    async () => {
+      const { idx, cleanup } = await loadFreshIndex(STATIC_CHAIN_YAML);
+      try {
+        const { ProfileExhaustedError, REFUSED_PROFILE_EXHAUSTED_MESSAGE } = await import("./profile-fallback.js");
+        const { IRON_RULE_REFUSAL_PREFIX } = await import("./benchmark/validated.js");
+        const refusal = `${IRON_RULE_REFUSAL_PREFIX}vendor/x' is not validated for scan_folder. No LLM call was made, no money was spent. Validate it: llm-ext-benchmark --allow-paid-models-tests — or configure a model already validated for this tool. No model is validated for scan_folder yet.`;
+        const exhausted = idx.__classifyErrorForTests(
+          new ProfileExhaustedError("twoentry", "static", [new Error(refusal), new Error(refusal)]),
+        );
+        expect(exhausted.reason.startsWith(REFUSED_PROFILE_EXHAUSTED_MESSAGE)).toBe(true);
+        expect(exhausted.reason).toContain("Validate it");
+        expect(exhausted.reason).not.toContain("retry later");
+      } finally {
+        cleanup();
+      }
+    },
+    30_000,
+  );
+});
 describe("D5 pinning row (F-gamma) — the ProfileExhaustedError reason renders", () => {
   it("a template-only certain cause re-classifies through the payment predicate (no status token needed)", async () => {
     const { idx, cleanup } = await loadFreshIndex(STATIC_CHAIN_YAML);

@@ -26,7 +26,7 @@ import { bookDailySpend, dailySpendPath } from "./daily-spend.js";
 // P6b-fix3 N-9: resolveProfile/validateSettings are how "is the b.ai pin still in
 // the SERVING chain, and does the file still load?" is asserted — the two
 // questions the old shape answered wrongly and silently.
-import { getSettingsPath, setAllowPaidModels, setActiveFreeOnly, resolveProfile, validateSettings } from "../config.js";
+import { getSettingsPath, setAllowPaidModels, setActiveFreeOnly, resolveProfile, validateSettings, validateProfile, type Profile } from "../config.js";
 import { getProfileRecord, getDynamicProfileRecord } from "../default-profiles-state.js";
 import { enqueueCandidates } from "../dynamic-candidates.js";
 
@@ -571,6 +571,75 @@ describe("--populate-default-profile", () => {
     expect(record?.failCount).toBe(0);
   });
 
+  it("TRDD-2GIA66AK: free sweep where exactly one ':free' model passes writes mode 'remote' and the section passes validateProfile", async () => {
+    // Old code hardcoded mode "remote-ensemble", which validateProfile rejects
+    // for a free_only pool of 1 member -> this test failed on it.
+    const prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test-dummy";
+    try {
+      const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
+      const deps: PopulateDefaultProfileDeps = {
+        fetchCatalog: async () => [model("v/paid", 0.5, 0.5)],
+        runSweep: async (): Promise<SweepOutcome> => ({
+          dryRun: false,
+          candidates: 0,
+          baselines: 2,
+          results: [
+            result({ modelId: "v/alpha:free", meanF1: 0.99 }),
+            result({ modelId: "v/beta:free", pass: false, meanF1: 0.2 }),
+          ],
+          reportPath: "",
+          passers: 1,
+          total: 2,
+        }),
+      };
+
+      const r = await runPopulateDefaultProfilePhase(opts, deps);
+
+      expect(r.ok).toBe(true);
+      const written = readSettings(settingsPath).profiles.free;
+      expect(written.free_models).toEqual(["v/alpha:free"]);
+      expect((written as { mode?: string }).mode).toBe("remote");
+      expect(validateProfile("free", written as unknown as Profile).errors).toEqual([]);
+    } finally {
+      if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevKey;
+    }
+  });
+
+  it("TRDD-2GIA66AK: paid sweep yielding exactly one pick writes mode 'remote' and the section passes validateProfile", async () => {
+    // Old code hardcoded mode "remote-ensemble" with no second_model, which
+    // validateProfile rejects -> this test failed on it.
+    const prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "sk-or-test-dummy";
+    try {
+      const opts = { ...baseOpts(), populateDefaultProfile: "paid" as const };
+      const deps: PopulateDefaultProfileDeps = {
+        fetchCatalog: async () => [model("v/a", 0.2, 0.2)],
+        runSweep: async (): Promise<SweepOutcome> => ({
+          dryRun: false,
+          candidates: 1,
+          baselines: 0,
+          results: [result({ modelId: "v/a", meanF1: 0.99, inputDollarsPerMillion: 0.2, outputDollarsPerMillion: 0.2 })],
+          reportPath: "",
+          passers: 1,
+          total: 1,
+        }),
+      };
+
+      const r = await runPopulateDefaultProfilePhase(opts, deps);
+
+      expect(r.ok).toBe(true);
+      const written = readSettings(settingsPath).profiles.paid;
+      expect(written.model).toBe("v/a");
+      expect(written.second_model).toBeUndefined();
+      expect((written as { mode?: string }).mode).toBe("remote");
+      expect(validateProfile("paid", written as unknown as Profile).errors).toEqual([]);
+    } finally {
+      if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevKey;
+    }
+  });
   it("--populate-default-profile paid selects via pickMassScoutModel and writes the 'paid' profile's tool_models.mass_scout (it absorbed the retired mass-scout profile — P5)", async () => {
     const opts = { ...baseOpts(), populateDefaultProfile: "paid" as const };
     const catalog = [model("v/cheap", 0.05, 0.05)];

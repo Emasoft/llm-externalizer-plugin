@@ -29,5 +29,5 @@ Record of what shipped as v14.1.1 on 2026-10-22, so a commit id leads back to a 
 
 ## Acceptance
 
-- [x] the release is on GitHub (tag v14.1.1) and installed at user scope as 14.1.1
+- [x] the release is on GitHub (tag v14.1.1, release workflow run 39757155492 green)
 - [ ] implementation-commits holds the post-rewrite ids of the squash and release commits (or the public rewrite was dropped and the ids above are final)

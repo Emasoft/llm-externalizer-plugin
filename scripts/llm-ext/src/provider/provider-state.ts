@@ -18,7 +18,7 @@ export interface ProviderStateEntry {
   endpoints: ProviderEndpointState[];
 }
 
-// Pending owner question Q3: 90 or 95. 90 is the "poor" bound of uptimeLevel in or-model-info.ts.
+// Owner ruling 2026-10-23 (TRDD-YG72CYY7 Q3): 90. 90 is the "poor" bound of uptimeLevel in or-model-info.ts.
 export const PROVIDER_DEGRADED_UPTIME_PCT = 90;
 
 const MAX_LISTED = 3;

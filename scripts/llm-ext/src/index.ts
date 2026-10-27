@@ -249,6 +249,7 @@ import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/securi
 import { buildCheckImportsExtractMessages } from "./check-imports/prompt.js";
 import { compareFilesSystemPrompt } from "./compare-files/prompt.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "./benchmark/free-mode.js";
+import { IRON_RULE_REFUSAL_PREFIX, profileUpdateCanValidate } from "./benchmark/validated.js";
 import { applyFreePoolToSettings, addProfileToSettings } from "./benchmark/pick.js";
 import {
   discoverLocalLlmServices,
@@ -2026,6 +2027,11 @@ function failDynamicProfile(
       return actionable(causes);
     }
   }
+  // TRDD-VAORGKVF (COORDINATOR DEFAULT, not a USER ruling): an IRON RULE refusal is a $0 ledger verdict reached before anything is sent. The paid/free populate writes only the rank-0 keyword ledger (benchmark/index.ts recordGeneralKeywordPasses; measure r2 item 2), so for a tool ranked above 0 no update can cure it and "an update is underway" would be false. This EXTENDS the principle in the doc comment above ("an update cannot fix every failure, and then the actionable error wins"). Rank-0 tools, and any refusal whose tool name cannot be read from its text, fall through to the update branch.
+  if (texts.length > 0 && texts.every((m) => m.startsWith(IRON_RULE_REFUSAL_PREFIX))) {
+    const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
+    if (refusedTools.every((t) => t !== undefined && !profileUpdateCanValidate(t))) return actionable(causes);
+  }
   const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
   if (update.state === "unavailable") {
     process.stderr.write(`[llm-externalizer] '${profileName}' profile update not started — ${update.reason}\n`);
@@ -2100,16 +2106,22 @@ function classifyError(error: unknown): ErrorClassification {
     // longer see it. paymentErrorCertainty is the ONE payment predicate both
     // classes share; its "certain" verdict is the 402 equivalent here.
     const isServiceLevelCause = (m: string) =>
-      SERVICE_LEVEL_STATUS_RE.test(m) || paymentErrorCertainty(m) === "certain";
+      SERVICE_LEVEL_STATUS_RE.test(m) ||
+      paymentErrorCertainty(m) === "certain" ||
+      m.startsWith(IRON_RULE_REFUSAL_PREFIX); // TRDD-VAORGKVF: a refusal is final for every file
     if (every(isServiceLevelCause)) {
       const payment = causes.find((m) => paymentErrorCertainty(m) === "certain");
+      // TRDD-VAORGKVF: precedence: a certain-payment cause wins (the credit verdict above); the first refusal text is appended only when no certain-payment cause exists, so its "Validate it: ..." remedy reaches the user and no "(HTTP undefined)" is printed (measure r1 item 5).
+      const refusal = causes.find((m) => m.startsWith(IRON_RULE_REFUSAL_PREFIX));
       return {
         unrecoverable: true,
         serviceLevel: true,
         reason:
           payment !== undefined
             ? `${msg} — ${classifyError(new Error(payment)).reason}`
-            : `${msg} (HTTP ${lastStatus})`,
+            : refusal !== undefined
+              ? `${msg} — ${refusal}`
+              : `${msg} (HTTP ${lastStatus})`,
       };
     }
     // A chain that ran out with a closed retry window among its causes
@@ -2148,6 +2160,8 @@ function classifyError(error: unknown): ErrorClassification {
   }
   // Service-level errors — abort the entire batch (retrying won't help)
   // Use specific "API error NNN" pattern to avoid false positives from file paths containing digits
+  // TRDD-VAORGKVF: a raw IRON RULE refusal is final: every file in the batch runs the same tool on the same model, so every file would be refused identically. A raw refusal reaches here from the single-model ensemble and callModel paths; the multi-slot ensemble join was not traced.
+  if (msg.startsWith(IRON_RULE_REFUSAL_PREFIX)) return { unrecoverable: true, serviceLevel: true, reason: msg };
   if (/API error 401\b/.test(msg))
     return {
       unrecoverable: true,
@@ -2739,6 +2753,12 @@ export function isScoutingOnlyTool(name: string): boolean {
   return scoutingOnlyTools.has(name);
 }
 
+// WHY one function (TRDD-CQSODQ78): the dispatch pre-flight and the CLI --estimate branch must agree on whether the selected dynamic profile may run. --estimate returns before dispatchCallTool, so without this shared check it priced a run the real command refuses (paid without allow_paid_models).
+export function profileGateRefusal(toolName: string): ReturnType<typeof dynamicProfileGate> {
+  if (RECONCILE_SKIP_TOOLS.has(toolName) || isScoutingOnlyTool(toolName)) return null;
+  const effective = effectiveProfileName(activeSettings);
+  return isDynamicProfileName(effective) ? dynamicProfileGate(effective, toolName, { settings: activeSettings }) : null;
+}
 async function runModelReconcile(): Promise<void> {
   await reconcileModelsBeforeWork({
     now: () => Date.now(),
@@ -4032,7 +4052,7 @@ async function dispatchCallToolInner(
         // update the failure requests found the lock held and started nothing
         // -- the command's own detector suppressed its own update.
         detectAfterDispatch = effective;
-        const gate = dynamicProfileGate(effective, name, { settings: activeSettings });
+        const gate = profileGateRefusal(name);
         if (gate) {
           // D2 (USER 2026-09-18, empty pool: "Refuse, retry later"): a pool
           // that is empty ONLY because it was never populated yet (and an

@@ -13181,6 +13181,9 @@ function validatedModelsForTool(toolName) {
 function setBenchmarkValidationExempt(v) {
   benchmarkValidationExempt = v;
 }
+function profileUpdateCanValidate(toolName) {
+  return (TOOL_DIFFICULTY_RANK[toolName] ?? 0) === 0;
+}
 function assertModelValidated(modelId, toolName, billable) {
   if (validationBypassForTests) return;
   if (benchmarkValidationExempt) return;
@@ -13193,10 +13196,10 @@ function assertModelValidated(modelId, toolName, billable) {
   const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
   const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
   throw new Error(
-    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
+    `${IRON_RULE_REFUSAL_PREFIX}${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
   );
 }
-var GENERAL_KEYWORD_LEDGER, TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, VALIDATED_MEMO_TTL_MS, validatedMemo, validationBypassForTests, benchmarkValidationExempt;
+var GENERAL_KEYWORD_LEDGER, TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, VALIDATED_MEMO_TTL_MS, validatedMemo, validationBypassForTests, benchmarkValidationExempt, IRON_RULE_REFUSAL_PREFIX;
 var init_validated = __esm({
   "src/benchmark/validated.ts"() {
     "use strict";
@@ -13229,6 +13232,7 @@ var init_validated = __esm({
     validatedMemo = /* @__PURE__ */ new Map();
     validationBypassForTests = false;
     benchmarkValidationExempt = false;
+    IRON_RULE_REFUSAL_PREFIX = "IRON RULE: model '";
   }
 });
 
@@ -268245,9 +268249,10 @@ async function chatCompletionWithRetry(messages, options, deps) {
       callProvider = clock.lastProvider;
       const payment = paymentErrorCertainty(errMsg);
       const isPriceCeilingRefusal = errMsg.startsWith(PRICE_CEILING_REFUSAL_PREFIX);
+      const isIronRuleRefusal = errMsg.startsWith(IRON_RULE_REFUSAL_PREFIX);
       const deterministic4xx = /\bAPI error (402|403|404|410)\b/.test(errMsg);
       const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
-      if (payment === null && !isPriceCeilingRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err3)?.final !== "stop")
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err3)?.final !== "stop")
         recordServiceFailure();
       genericAttempts++;
       const currentModelId = options.model || backend.model || "unknown";
@@ -268266,7 +268271,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
         markRunUnusable(currentModelId, unavailableKind);
       }
       const isAuth4xx = /\bAPI error 401\b/.test(errMsg);
-      const keepsOwnError = payment !== null || isAuth4xx || deterministic4xx || isPriceCeilingRefusal || unavailableKind === "gone" || unavailableKind === "daily-quota";
+      const keepsOwnError = payment !== null || isAuth4xx || deterministic4xx || isPriceCeilingRefusal || isIronRuleRefusal || // TRDD-VAORGKVF: keeps its own error (the "Validate it" remedy)
+      unavailableKind === "gone" || unavailableKind === "daily-quota";
       const closedWindowError = () => keepsOwnError ? err3 : retryDeadlineError(clock, err3, backend.type, {
         shared,
         refusedRetryAt: call.refusedRetryAt,
@@ -268283,7 +268289,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
         continue;
       }
       if (payment === null && genericAttempts <= MAX_TRUNCATION_RETRIES && // YG72CYY7: a verdict stamped at the first failure (TLS, spent ECONNREFUSED/504 budget) is read, never re-derived; retrying here is the multiplier it ends.
-      failureOf(err3)?.final === void 0 && !stopped() && !deterministic4xx && !isPriceCeilingRefusal && unavailableKind !== "daily-quota") {
+      failureOf(err3)?.final === void 0 && !stopped() && !deterministic4xx && callStatus !== 401 && !isPriceCeilingRefusal && !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
+      unavailableKind !== "daily-quota") {
         const retryModel = options.model || backend.model;
         process.stderr.write(
           `[model-retry] ${retryModel}: request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
@@ -268478,6 +268485,7 @@ var init_completion = __esm({
     init_http();
     init_lmstudio();
     init_connection();
+    init_validated();
     init_free_mode();
     init_config();
     init_free_rotation();
@@ -268627,13 +268635,15 @@ function* profileChain(profile, tool = "default") {
 function credentialKeyOf(route) {
   return `${route.url}::${route.keyRef}`;
 }
-var STATIC_PROFILE_EXHAUSTED_MESSAGE, BACKOFF_WINDOW_TEXT, ProfileExhaustedError;
+var STATIC_PROFILE_EXHAUSTED_MESSAGE, REFUSED_PROFILE_EXHAUSTED_MESSAGE, BACKOFF_WINDOW_TEXT, ProfileExhaustedError;
 var init_profile_fallback = __esm({
   "src/profile-fallback.ts"() {
     "use strict";
     init_config();
     init_default_profiles_state();
+    init_validated();
     STATIC_PROFILE_EXHAUSTED_MESSAGE = "the models in the selected profile are all failing; retry later or change the profile";
+    REFUSED_PROFILE_EXHAUSTED_MESSAGE = "the models in the selected profile are all failing; change the profile";
     BACKOFF_WINDOW_TEXT = "15 minutes to 24 hours";
     ProfileExhaustedError = class extends Error {
       code = "PROFILE_EXHAUSTED";
@@ -268647,7 +268657,7 @@ var init_profile_fallback = __esm({
       /** `detail` (static only) is appended to the message so message and stack agree; used for a breaker abort, which is a provider outage, not a model failure. */
       constructor(profileName, kind, causes = [], detail) {
         super(
-          (kind === "static" ? STATIC_PROFILE_EXHAUSTED_MESSAGE : dynamicProfileRetryLaterMessage(profileName)) + (detail === void 0 ? "" : ` \u2014 ${detail}`)
+          (kind === "static" ? causes.length > 0 && causes.every((c) => (c instanceof Error ? c.message : String(c)).startsWith(IRON_RULE_REFUSAL_PREFIX)) ? REFUSED_PROFILE_EXHAUSTED_MESSAGE : STATIC_PROFILE_EXHAUSTED_MESSAGE : dynamicProfileRetryLaterMessage(profileName)) + (detail === void 0 ? "" : ` \u2014 ${detail}`)
         );
         this.name = "ProfileExhaustedError";
         this.profileName = profileName;
@@ -270429,6 +270439,7 @@ __export(index_exports, {
   limitsBlock: () => limitsBlock,
   overrideActiveProfile: () => overrideActiveProfile,
   pickEnsembleAllFailedError: () => pickEnsembleAllFailedError,
+  profileGateRefusal: () => profileGateRefusal,
   resolveAutoFreePool: () => resolveAutoFreePool,
   resolveMassScoutFreeModelOverride: () => resolveMassScoutFreeModelOverride,
   resolveSubsystemFreeModel: () => resolveSubsystemFreeModel,
@@ -271028,6 +271039,10 @@ function failDynamicProfile(profileName, causes, actionable) {
       return actionable(causes);
     }
   }
+  if (texts.length > 0 && texts.every((m) => m.startsWith(IRON_RULE_REFUSAL_PREFIX))) {
+    const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
+    if (refusedTools.every((t) => t !== void 0 && !profileUpdateCanValidate(t))) return actionable(causes);
+  }
   const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
   if (update.state === "unavailable") {
     process.stderr.write(`[llm-externalizer] '${profileName}' profile update not started \u2014 ${update.reason}
@@ -271052,13 +271067,14 @@ function classifyError(error51) {
     if (causes.length === 0) return { unrecoverable: true, serviceLevel: true, reason: msg };
     const lastStatus = /API error (\d{3})\b/.exec(causes[causes.length - 1] ?? "")?.[1];
     const every = (test) => causes.every(test);
-    const isServiceLevelCause = (m) => SERVICE_LEVEL_STATUS_RE.test(m) || paymentErrorCertainty(m) === "certain";
+    const isServiceLevelCause = (m) => SERVICE_LEVEL_STATUS_RE.test(m) || paymentErrorCertainty(m) === "certain" || m.startsWith(IRON_RULE_REFUSAL_PREFIX);
     if (every(isServiceLevelCause)) {
       const payment = causes.find((m) => paymentErrorCertainty(m) === "certain");
+      const refusal = causes.find((m) => m.startsWith(IRON_RULE_REFUSAL_PREFIX));
       return {
         unrecoverable: true,
         serviceLevel: true,
-        reason: payment !== void 0 ? `${msg} \u2014 ${classifyError(new Error(payment)).reason}` : `${msg} (HTTP ${lastStatus})`
+        reason: payment !== void 0 ? `${msg} \u2014 ${classifyError(new Error(payment)).reason}` : refusal !== void 0 ? `${msg} \u2014 ${refusal}` : `${msg} (HTTP ${lastStatus})`
       };
     }
     const deadlines = error51.causes.filter((c) => c instanceof RetryDeadlineError);
@@ -271075,6 +271091,7 @@ function classifyError(error51) {
       return { unrecoverable: true, serviceLevel: false, reason: `${msg} (HTTP ${lastStatus})` };
     }
   }
+  if (msg.startsWith(IRON_RULE_REFUSAL_PREFIX)) return { unrecoverable: true, serviceLevel: true, reason: msg };
   if (/API error 401\b/.test(msg))
     return {
       unrecoverable: true,
@@ -271358,6 +271375,11 @@ function isScoutingOnlyTool(name) {
     buildTools("").filter((t) => t.acceptedProfileTypes.length === 1 && t.acceptedProfileTypes[0] === "scouting").map((t) => t.name)
   );
   return scoutingOnlyTools.has(name);
+}
+function profileGateRefusal(toolName) {
+  if (RECONCILE_SKIP_TOOLS.has(toolName) || isScoutingOnlyTool(toolName)) return null;
+  const effective = effectiveProfileName(activeSettings);
+  return isDynamicProfileName(effective) ? dynamicProfileGate(effective, toolName, { settings: activeSettings }) : null;
 }
 async function runModelReconcile() {
   await reconcileModelsBeforeWork({
@@ -271973,7 +271995,7 @@ Run the "discover" tool to see the current profile status.`
       const effective = effectiveProfileName(activeSettings);
       if (isDynamicProfileName(effective)) {
         detectAfterDispatch = effective;
-        const gate = dynamicProfileGate(effective, name, { settings: activeSettings });
+        const gate = profileGateRefusal(name);
         if (gate) {
           if (gate.reason === "empty-pool-refreshable") {
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
@@ -274699,6 +274721,7 @@ var init_index = __esm({
     init_prompt2();
     init_prompt3();
     init_free_mode();
+    init_validated();
     init_pick();
     init_scan();
     init_model_reconcile();
@@ -275366,7 +275389,7 @@ function resolveInvocation(argv, tools) {
 // src/cli/main.ts
 import { readFileSync as readFileSync44 } from "node:fs";
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.1.1";
+var VERSION = "14.1.2";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
@@ -275813,7 +275836,7 @@ async function main() {
   if (wantPreview) rest.splice(previewIdx, 1);
   const { args, quiet } = classifySpec ? { args: {}, quiet: false } : parseFlags2(rest, tool, groupedInvocation ?? toKebab(tool.name));
   engine ??= await loadEngine();
-  const { boot: boot2, buildEstimateDeps: buildEstimateDeps2, dispatchCallTool: dispatchCallTool2, getActiveSettings: getActiveSettings2, overrideActiveProfile: overrideActiveProfile2, isScoutingOnlyTool: isScoutingOnlyTool2, warmEstimatePricing: warmEstimatePricing2, writeBootBanner: writeBootBanner2 } = engine;
+  const { boot: boot2, buildEstimateDeps: buildEstimateDeps2, dispatchCallTool: dispatchCallTool2, getActiveSettings: getActiveSettings2, overrideActiveProfile: overrideActiveProfile2, isScoutingOnlyTool: isScoutingOnlyTool2, profileGateRefusal: profileGateRefusal2, warmEstimatePricing: warmEstimatePricing2, writeBootBanner: writeBootBanner2 } = engine;
   const settingsAsLoaded = getActiveSettings2();
   const scoutingOnly = isScoutingOnlyTool2(tool.name);
   const activeOverride = scoutingOnly || classifySpec ? void 0 : profileOverride;
@@ -275885,6 +275908,12 @@ included: ${resolved.files.length}   excluded: ${excluded.length}
     if (!wantEstimate) return;
   }
   if (wantEstimate) {
+    const gate = profileGateRefusal2(tool.name);
+    if (gate) {
+      process.stderr.write(`${gate.message}
+`);
+      process.exit(1);
+    }
     await warmEstimatePricing2();
     const estimate = estimateToolRun(tool.name, args, buildEstimateDeps2());
     process.stdout.write(`${renderEstimate(estimate)}

@@ -163,6 +163,36 @@ describe("review fixes", () => {
   });
 });
 
+// TRDD-CQSODQ78: the CLI --estimate branch asks the same gate the dispatch pre-flight uses.
+async function gateFor(yamlLines: string[], toolName: string) {
+  const prevCfg = process.env.LLM_EXT_CONFIG_DIR;
+  const cfg = mkdtempSync(join(tmpdir(), "llm-ext-cqsodq78-"));
+  process.env.LLM_EXT_CONFIG_DIR = cfg;
+  try {
+    writeFileSync(join(cfg, "settings.yaml"), yamlLines.join("\n"));
+    vi.resetModules();
+    const index = await import("./index.js");
+    return index.profileGateRefusal(toolName);
+  } finally {
+    if (prevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevCfg;
+    rmSync(cfg, { recursive: true, force: true });
+  }
+}
+
+describe("profileGateRefusal (TRDD-CQSODQ78)", () => {
+  it("refuses the paid profile while allow_paid_models is false", async () => {
+    const gate = await gateFor(["active: paid", "allow_paid_models: false", "profiles: {}", ""], "chat");
+    expect(gate?.message).toBe("paid profile needs allow_paid_models: true in settings.yaml");
+  });
+  it("returns null for a static profile the real run accepts", async () => {
+    const gate = await gateFor(
+      ["active: mine", "profiles:", "  mine:", "    profile-type: paid", "    mode: remote", "    api: openrouter-remote", "    api_key: sk-test-literal", "    model: vendor/paid-model", ""],
+      "chat",
+    );
+    expect(gate).toBeNull();
+  });
+});
 function refuse2(settings: { active: string; profiles: Record<string, Profile> }) {
   return profileSelectionRefusal({ command: "llm ask", accepted: accepted("chat"), viewsSettings: false, profileFlag: undefined, settings });
 }

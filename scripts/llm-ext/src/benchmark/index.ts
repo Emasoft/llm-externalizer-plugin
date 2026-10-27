@@ -1843,7 +1843,11 @@ async function runPopulateFreeDefaultProfile(
   // deleted in this slice.
   const pool = passing;
   const next: Profile = {
-    mode: "remote-ensemble",
+    // WHY: validateProfile (config.ts) rejects a free_only remote-ensemble with
+    // fewer than 2 members, and the generated section carries no reserved
+    // slots. A sweep where one model passes must therefore write "remote",
+    // else every command fails the settings check (TRDD-2GIA66AK).
+    mode: pool.length >= 2 ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
     free_only: true,
@@ -2084,7 +2088,12 @@ async function runPopulatePaidDefaultProfile(
   );
 
   const next: Profile = {
-    mode: "remote-ensemble",
+    // WHY: validateProfile (config.ts) rejects a non-free remote-ensemble
+    // without second_model, and rejects second_model/third_model outside
+    // remote-ensemble for dynamic profiles. second_model is set only when
+    // picks3[1] exists, so the mode must follow it, else a one-pick sweep
+    // writes a section the settings check rejects (TRDD-2GIA66AK).
+    mode: picks3[1] ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
     model: picks3[0].modelId,

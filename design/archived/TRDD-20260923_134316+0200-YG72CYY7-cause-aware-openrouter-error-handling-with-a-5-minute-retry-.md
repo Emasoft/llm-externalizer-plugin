@@ -1,9 +1,9 @@
 ---
 trdd-id: YG72CYY7
 title: Cause-aware OpenRouter error handling with a 5-minute retry window
-column: human_review
+column: complete
 created: 2026-09-23T13:43:16+0200
-updated: 2026-10-10T15:02:18+0200
+updated: 2026-10-23T07:05:35+0200
 current-owner: agent
 created-by: user
 task-type: feature
@@ -12,8 +12,8 @@ assignee: agent
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T04:50:40+0200
-status: tasked
-implementation-commits: [ebc45f5, 7f87b85, 3c4fb2b, c4069e3, 7d1d28b, 1434815, 6bd7c6b, 89d742c, e7759f2a, 241e00c2, 2269f469, 0be95d5f, 2a49592b, 3e6d8211, 6256d303]
+status: archived
+implementation-commits: [ebc45f5, 7f87b85, 3c4fb2b, c4069e3, 7d1d28b, 1434815, 6bd7c6b, 89d742c, e7759f2a, 241e00c2, 2269f469, 0be95d5f, 2a49592b, 3e6d8211, 6256d303, 34cf9867, 1e5adabe]
 ---
 
 # Cause-aware OpenRouter error handling with a 5-minute retry window
@@ -62,6 +62,8 @@ CLOSE-OUT (2026-10-09, verification-record fork KEEP + owed items, all settled):
 - 2026-10-09T21:48:07+0200 — column → todo. paused by USER priority 2026-10-09 (Jev plan first); nobody is working it
 - 2026-10-10T09:15:14+0200 — column → dev by main-agent@llm-externalizer-plugin. resumed: the Jev plan has no unblocked card left (every remaining card waits on an owner decision); next action per the pause note: fix M-B and M-A, then the increment 3 brief
 - 2026-10-10T12:07:46+0200 — column → human_review. plan items 1-4 done (3e6d8211, 6256d303), item 5 deferred; Q1 and Q3 await the owner
+- 2026-10-23 — USER answered the two owner questions (AskUserQuestion, option labels verbatim). Q1 401 handling: "Stop at once (Recommended)" (treat 401 like any other deterministic 4xx, no same-model retry, no breaker count, the batch-wide auth abort stays). Q3 degraded cut: "90% (current)". Implemented in 1e5adabe; the breaker half had already landed in 34cf9867.
+- 2026-10-23T07:05:35+0200 — COMPLETE by user. owner answered Q1 and Q3 on 2026-10-23; plan items 1-4 done, item 5 deferred.
 
 ## Revisions after review (2026-09-23)
 
@@ -88,10 +90,10 @@ CLOSE-OUT (2026-10-09, verification-record fork KEEP + owed items, all settled):
 2026-10-07 status after round A (7f87b85): N1 non-free path done, free path open (round B); N2 text and non-free slot done, concurrency open (round C); N4, N5a, N8 open.
 2026-10-07 status after round B (3c4fb2b): N1 done (non-free in 7f87b85, free path in 3c4fb2b); N8 done; N2 text and non-free slot done, concurrency open; N4 and N5a open.
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-10
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-23
 
 - Done: plan items 1 to 4. Increment 1 ebc45f5 (review reports in docs_dev/20261007-yg72-inc1-*.md); increments 2 and 3 as recorded in the dated lines and sections below; increment 4 in 3e6d8211 (round A) and 6256d303 (round B), suite 4968 passed at that commit. Item 5 (client-side provider.ignore) stays deferred.
-- NEXT ACTION: put two questions to the owner, then close the card. First, should a 401 stop retrying at once and stop feeding the shared breaker (called Q1 and M2 below). Second, degraded threshold 90 or 95 percent uptime (called Q3 below; 90 in use). A third point, recording a free-model endpoints fixture, was settled by coordinator default (Q6 below) and the owner may override it.
+- NEXT ACTION: none, card closed 2026-10-23. Q1 answered (401 stops same-model retries, no breaker count; 1e5adabe, breaker half in 34cf9867) and Q3 answered (90, unchanged). Accepted costs from the review: a single transient upstream 401 now aborts the batch at once; a 401 graded as an uncertain payment error keeps its one payment retry. The full suite after 1e5adabe showed only the TRDD-CBOTP0DY profile-chain-402 load flake. Item 5 stays deferred; follow-ups are the cards listed under Related.
 - Follow-ups are their own cards, listed under Related (filed 2026-10-10 in 92954e2e and ed276e72). Apart from the Gotchas line, the dated lines below in this block are history kept for the record and were NOT re-checked on 2026-10-10; any NEXT ACTION or still-open statement in them is superseded by the three bullets above.
 - Gotchas: scripts/llm-ext/dist is tracked and must be rebuilt and committed with every source change; run every check with HOME and LLM_EXT_CONFIG_DIR set to temp dirs and LLM_EXT_INSTALL_RULE=0; fastedit can hang on large files (stop it after 3 minutes and report).
 - Blocked on this card: VAORGKVF (npt YG72CYY7), then PN84WC1L and RPLLP8CF in that order.

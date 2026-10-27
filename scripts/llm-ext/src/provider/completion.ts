@@ -67,6 +67,7 @@ import {
 } from "./http.js";
 import { chatCompletionNative } from "./lmstudio.js";
 import { resolveConnection, PRICE_CEILING_REFUSAL_PREFIX } from "./connection.js";
+import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "../benchmark/free-mode.js";
 import { billableForRoute, type ResolvedRoute } from "../config.js";
 import {
@@ -1414,6 +1415,8 @@ export async function chatCompletionWithRetry(
       // deterministic 4xx: no breaker count, no same-model retry, immediate
       // throw so the caller's chain (walkProfileChainOnce) advances at once.
       const isPriceCeilingRefusal = errMsg.startsWith(PRICE_CEILING_REFUSAL_PREFIX);
+      // TRDD-VAORGKVF: the IRON RULE refusal (assertModelValidated) is thrown before anything is sent: $0, deterministic, and no wait or retry can change the ledger. It used to feed recordServiceFailure and get 3 same-model retries per entry (measure r1 item 2). Only that function produces the prefix; every HTTP error starts with "API error" (measure r2 item 6).
+      const isIronRuleRefusal = errMsg.startsWith(IRON_RULE_REFUSAL_PREFIX);
       // GitHub-15 finding 2 (D4): the breaker exists for OUTAGES (429, 5xx,
       // 408, transport). A deterministic 4xx (402/403/404/410 — the same gate
       // that stops the same-model retry below) cannot succeed by asking
@@ -1424,7 +1427,7 @@ export async function chatCompletionWithRetry(
       // YG72CYY7 D4: a stop verdict (TLS) cannot heal by waiting, so it is not breaker food; refused connections and DNS budgets still are.
       // Request/auth refusals are not outages; their existing retry policy stays separate.
       const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
-      if (payment === null && !isPriceCeilingRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err)?.final !== "stop")
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err)?.final !== "stop")
         recordServiceFailure();
       // Bumped unconditionally even for a deterministic4xx/price-ceiling
       // refusal that throws below without ever reading it again this call —
@@ -1488,13 +1491,14 @@ export async function chatCompletionWithRetry(
       // closed case is thrown after them. A guard placed BEFORE them let the
       // uncertain-payment and non-4xx "gone" `continue`s hand the call to the
       // loop-top check, which replaced their own error with RetryDeadlineError.
-      // Preserve raw 401 for caller auth classification without changing its same-model retries.
+      // Owner ruling 2026-10-23 (TRDD-YG72CYY7 Q1): a rejected key cannot succeed by asking the same model again, so the generic same-model retry is skipped on callStatus 401. isAuth4xx only keeps the raw error for the caller's auth classification.
       const isAuth4xx = /\bAPI error 401\b/.test(errMsg);
       const keepsOwnError =
         payment !== null ||
         isAuth4xx ||
         deterministic4xx ||
         isPriceCeilingRefusal ||
+        isIronRuleRefusal || // TRDD-VAORGKVF: keeps its own error (the "Validate it" remedy)
         unavailableKind === "gone" ||
         unavailableKind === "daily-quota";
       const closedWindowError = (): unknown =>
@@ -1535,7 +1539,9 @@ export async function chatCompletionWithRetry(
         failureOf(err)?.final === undefined &&
         !stopped() &&
         !deterministic4xx &&
+        callStatus !== 401 &&
         !isPriceCeilingRefusal &&
+        !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
         unavailableKind !== "daily-quota"
       ) {
         // Issue 2: tag the model/truncation retry layer + include the model id.

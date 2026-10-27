@@ -210,7 +210,7 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     // command's models failed, so the update the failure requests found the
     // lock held and started nothing (proven by empty-pool-wait.test.ts /
     // profile-chain-402.test.ts's "exactly one update-requested child").
-    ordered("detectAfterDispatch = effective;", "dynamicProfileGate(");
+    ordered("detectAfterDispatch = effective;", "profileGateRefusal(");
 
     // C2b-wire acceptance (spec's "spawns exactly one detector for a dynamic
     // profile and none for a static one or a RECONCILE_SKIP_TOOLS tool"):

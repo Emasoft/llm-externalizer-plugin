@@ -220775,10 +220775,10 @@ function assertModelValidated(modelId, toolName, billable) {
   const validateCmd = flag ? `llm-ext-benchmark ${flag} ${modelId} --allow-paid-models-tests` : `llm-ext-benchmark --allow-paid-models-tests   (any benchmark validates '${toolName}')`;
   const haveList = validated.length > 0 ? `Currently validated for ${toolName}: ${validated.join(", ")}.` : `No model is validated for ${toolName} yet.`;
   throw new Error(
-    `IRON RULE: model '${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
+    `${IRON_RULE_REFUSAL_PREFIX}${modelId}' is not validated for ${toolName}. No LLM call was made, no money was spent. Validate it: ${validateCmd} \u2014 or configure a model already validated for this tool. ${haveList}`
   );
 }
-var GENERAL_KEYWORD_LEDGER, TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, VALIDATED_MEMO_TTL_MS, validatedMemo, validationBypassForTests, benchmarkValidationExempt;
+var GENERAL_KEYWORD_LEDGER, TOOL_DIFFICULTY_RANK, LEDGERS, TOOL_BENCH_FLAG, VALIDATED_MEMO_TTL_MS, validatedMemo, validationBypassForTests, benchmarkValidationExempt, IRON_RULE_REFUSAL_PREFIX;
 var init_validated = __esm({
   "src/benchmark/validated.ts"() {
     "use strict";
@@ -220811,6 +220811,7 @@ var init_validated = __esm({
     validatedMemo = /* @__PURE__ */ new Map();
     validationBypassForTests = false;
     benchmarkValidationExempt = false;
+    IRON_RULE_REFUSAL_PREFIX = "IRON RULE: model '";
   }
 });
 
@@ -231070,6 +231071,7 @@ init_usage_history();
 init_http();
 
 // src/provider/completion.ts
+init_validated();
 init_free_mode();
 init_config();
 init_free_rotation();
@@ -237686,7 +237688,11 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
   }
   const pool = passing;
   const next = {
-    mode: "remote-ensemble",
+    // WHY: validateProfile (config.ts) rejects a free_only remote-ensemble with
+    // fewer than 2 members, and the generated section carries no reserved
+    // slots. A sweep where one model passes must therefore write "remote",
+    // else every command fails the settings check (TRDD-2GIA66AK).
+    mode: pool.length >= 2 ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
     free_only: true,
@@ -237801,7 +237807,12 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
     sweep.results.filter((r) => r.ok === false && paymentErrorCertainty(r.error ?? "") === "certain").map((r) => r.modelId)
   );
   const next = {
-    mode: "remote-ensemble",
+    // WHY: validateProfile (config.ts) rejects a non-free remote-ensemble
+    // without second_model, and rejects second_model/third_model outside
+    // remote-ensemble for dynamic profiles. second_model is set only when
+    // picks3[1] exists, so the mode must follow it, else a one-pick sweep
+    // writes a section the settings check rejects (TRDD-2GIA66AK).
+    mode: picks3[1] ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
     model: picks3[0].modelId,

@@ -162,11 +162,11 @@ describe("pins: verdicts that keep their own handling (the gate must not touch t
     expect(requestCount()).toBe(1);
   }, 60_000);
 
-  it("401 (owner question D10, unchanged): request count and breaker count on a real always-401 server", async () => {
+  it("401 (owner ruling 2026-10-23, TRDD-YG72CYY7 Q1): one request, no same-model retry, breaker untouched, on a real always-401 server", async () => {
     const { url, requestCount } = await startServer(reply(401, JSON.stringify({ error: { message: "User not found.", code: 401 } })));
     const err = await outer(url);
     expect(err?.message).toMatch(/^API error 401/);
-    expect(requestCount()).toBe(4);
+    expect(requestCount()).toBe(1);
     expect(serviceFailureCountForTests()).toBe(0);
     expect(failureOf(err)?.final).toBeUndefined();
   }, 120_000);

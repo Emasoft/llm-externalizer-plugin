@@ -81,7 +81,7 @@ describe("formatProviderState", () => {
     expect(line([{ provider_name: "A", status: -1, uptime_last_30m: 99.7 }])).toContain("99.7%");
   });
 
-  it("the degraded threshold is the exported constant (pending owner question Q3)", () => {
+  it("the degraded threshold is the exported constant (owner ruling Q3 = 90)", () => {
     expect(PROVIDER_DEGRADED_UPTIME_PCT).toBe(90);
     expect(line([{ provider_name: "A", uptime_last_30m: 89.9 }])).toBeDefined();
     expect(line([{ provider_name: "A", uptime_last_30m: 90 }])).toBeUndefined();

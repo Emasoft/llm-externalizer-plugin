@@ -33,6 +33,9 @@ import {
   runUnusableKind,
 } from "../free-rotation.js";
 import { getModelEventsPath } from "../model-events.js";
+import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
+import { withUsageContext } from "../usage-history.js";
+import { RetryDeadlineError } from "./http.js";
 
 let server: Server | undefined;
 
@@ -733,14 +736,29 @@ describe("payment errors — skip when certain, retry once when not, never a bre
     await expect(chatCompletionWithRetry(MESSAGES, { model: "chain/body-status", deadlineAt: Date.now() + 3000 }, deps)).rejects.toThrow(/API error 500/);
     expect(serviceFailureCountForTests()).toBeGreaterThan(0);
   }, 10_000);
-  it.each([400, 401])("HTTP %i retains retries and raw status without poisoning the breaker", async (status) => {
+  it("an IRON RULE refusal caught after the retry window closed is thrown as itself, not as RetryDeadlineError (TRDD-VAORGKVF)", async () => {
+    resetServiceHealthForTests();
+    // Real path, no mock: a tool usage-context + a billable backend + a non-:free model makes resolveConnection's assertModelValidated refuse before the wire. The deadline is already past, so the retry window is closed when the catch block runs; the mutation check (removing isIronRuleRefusal from keepsOwnError turns this test red) shows closedWindowError() is what decides it.
+    const deps = baseDeps(backendAt("http://127.0.0.1:1"), null);
+    const error = await withUsageContext({ tool: "scan_folder", params: "", project: "/p" }, () =>
+      chatCompletionWithRetry(MESSAGES, { model: "vendor/x", deadlineAt: Date.now() - 1000 }, deps),
+    ).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message.startsWith(IRON_RULE_REFUSAL_PREFIX)).toBe(true);
+    expect((error as Error).message).toContain("Validate it");
+    expect(error).not.toBeInstanceOf(RetryDeadlineError);
+  }, 10_000);
+  it.each([[400, 4, 2], [401, 1, 6]])("HTTP %i makes %i request(s) per call over %i calls, keeps the raw status, and does not poison the breaker", async (status, perCall, calls) => {
     const { url, requestCount } = await startErrorServer(status, status === 400 ? "malformed request" : "invalid credentials");
     const deps = baseDeps(backendAt(url), null);
-    // Two four-attempt calls exceed the breaker threshold if these refusals are counted.
-    for (let i = 1; i <= 2; i++) {
+    // Enough calls to exceed the breaker threshold of 5 if these refusals were counted (400 retries 4x, so 2 calls; 401 stops at once, so 6 calls). Owner ruling 2026-10-23 TRDD-YG72CYY7 Q1.
+    for (let i = 1; i <= calls; i++) {
       const model = `chain/refused-${status}-${i}`;
       await expect(chatCompletionWithRetry(MESSAGES, { model, deadlineAt: Date.now() + 5000 }, deps)).rejects.toThrow(`API error ${status}`);
-      expect(requestCount()).toBe(i * 4);
+      expect(requestCount()).toBe(i * perCall);
       expect(isRunUnusable(model)).toBe(false);
     }
     await new Promise<void>((resolve, reject) => server!.close((err) => err ? reject(err) : resolve()));

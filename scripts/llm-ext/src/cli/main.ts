@@ -47,7 +47,7 @@ import type { GlobalFetch } from "../classifiers/l0/transport.js";
  * longer existed, which aborts the release. This is now the only anchor, so it
  * is load-bearing: do not reformat, inline, or compute it.
  */
-const VERSION = "14.1.1";
+const VERSION = "14.1.2";
 
 // ── Catalog ──────────────────────────────────────────────────────────
 
@@ -766,7 +766,7 @@ async function main(): Promise<void> {
   // reader (validateSettings, settings show/status) agree.
   // WHY a snapshot here: overrideActiveProfile() below overwrites the live `active` with the selected name (index.ts applyNewSettings), so the PT-03 check must read the settings as loaded from disk.
   engine ??= await loadEngine();
-  const { boot, buildEstimateDeps, dispatchCallTool, getActiveSettings, overrideActiveProfile, isScoutingOnlyTool, warmEstimatePricing, writeBootBanner } = engine;
+  const { boot, buildEstimateDeps, dispatchCallTool, getActiveSettings, overrideActiveProfile, isScoutingOnlyTool, profileGateRefusal, warmEstimatePricing, writeBootBanner } = engine;
   const settingsAsLoaded = getActiveSettings();
   // WHY (PT-05 follow-up): --profile on a scouting-only command names the SCOUTING profile mass scouting resolves its model from; a scouting profile is not a valid `active:`, so the active text profile is left alone and the name travels as the tool argument `profile`.
   const scoutingOnly = isScoutingOnlyTool(tool.name);
@@ -858,6 +858,12 @@ async function main(): Promise<void> {
     // Warm pricing with one $0 GET /models; the estimator itself sends nothing
     // (estimateToolRun is pure). Estimation errors propagate to main().catch —
     // fail-fast beats printing a fabricated number.
+    // WHY (TRDD-CQSODQ78): an estimate must not price a run the real command refuses; the real run is gated in dispatchCallTool, which this branch never reaches.
+    const gate = profileGateRefusal(tool.name);
+    if (gate) {
+      process.stderr.write(`${gate.message}\n`);
+      process.exit(1);
+    }
     await warmEstimatePricing();
     const estimate = estimateToolRun(tool.name, args, buildEstimateDeps());
     process.stdout.write(`${renderEstimate(estimate)}\n`);

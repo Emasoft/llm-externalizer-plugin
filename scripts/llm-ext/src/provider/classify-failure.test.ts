@@ -210,7 +210,7 @@ describe("fetchWithRetry429 consumes the verdict at the first failure", () => {
     }
   });
 
-  it("synthetic: 401, 402, 403, 404 are one request with no verdict stamped (401 stays the owner question, D10)", async () => {
+  it("synthetic: 401, 402, 403, 404 are one request with no verdict stamped (the same-model stop for 401 lives in completion.ts)", async () => {
     for (const status of [401, 402, 403, 404]) {
       const { url, requestCount } = await startServer(reply(status, JSON.stringify({ error: { message: "synthetic", code: status } })));
       const err = await caught(chatCompletionSimple(MESSAGES, { model: "m" }, depsFor(url), {} as RetryClock));

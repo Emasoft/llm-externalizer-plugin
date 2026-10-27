@@ -694,8 +694,9 @@ const NAME_LOOKUP_TRIES = 2;
 
 /**
  * The first-failure verdict (TRDD-YG72CYY7 inc 3), pure and synchronous: it reads the
- * fields only. No verdict for 401 (owner question D10) nor 402/403/404/410 (their own
- * handlers decide); everything not listed here retries as before.
+ * fields only. No verdict stamp for 401, 402, 403, 404 or 410 (their own handlers decide;
+ * the same-model stop for them lives in the 4xx gate of completion.ts, owner ruling
+ * 2026-10-23); everything not listed here retries as before.
  */
 export function classifyFailure(f: FailureFields, host: string): FailureVerdict {
   if (f.status === 504) {

@@ -4,7 +4,7 @@ title: Child-process tests fail intermittently under machine load
 column: backburner
 status: tasked
 created: 2026-10-07T13:19:18+0200
-updated: 2026-10-07T13:20:28+0200
+updated: 2026-10-23T07:15:19+0200
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -30,3 +30,4 @@ Likely cause, not yet proven: tests that spawn the CLI and wait on detached chil
 Next step: record load (uptime) per run and repeat under controlled load to confirm; then raise the affected timeouts or replace fixed waits with readiness polling, per file.
 Caveat: the 7-vs-7 comparison is confounded (the earlier tree ran later, under /private/tmp, with a symlinked node_modules, load unrecorded); only "the symptom also occurs before b22bfae8" is established.
 Before raising any timeout: rerun both trees under identical conditions (both outside /tmp, each with its own node_modules, load logged per run, runs alternated).
+2026-10-23 recurrence: under load average 70-146 the background-update count symptom (expected 1, got 0) reappeared in profile-chain-402 (two full runs, a different test each time) and in empty-pool-wait D2 (one of four sequential runs). Both read the count after a fixed wait. Seen while verifying 1e5adabe (TRDD-YG72CYY7), whose change cannot reach these tests.

@@ -323,6 +323,14 @@ export function setBenchmarkValidationExempt(v: boolean): void {
   benchmarkValidationExempt = v;
 }
 
+/** TRDD-VAORGKVF: the one producer of this prefix is assertModelValidated below; completion.ts and index.ts match on it to treat the refusal as final (pre-wire, $0, deterministic). */
+export const IRON_RULE_REFUSAL_PREFIX = "IRON RULE: model '";
+
+/** TRDD-VAORGKVF: the paid/free populate writes only the rank-0 general keyword ledger, so a profile update can validate a model only for a tool ranked 0 or absent from TOOL_DIFFICULTY_RANK. */
+export function profileUpdateCanValidate(toolName: string): boolean {
+  return (TOOL_DIFFICULTY_RANK[toolName] ?? 0) === 0;
+}
+
 export function assertModelValidated(
   modelId: string,
   toolName: string,
@@ -347,7 +355,7 @@ export function assertModelValidated(
       ? `Currently validated for ${toolName}: ${validated.join(", ")}.`
       : `No model is validated for ${toolName} yet.`;
   throw new Error(
-    `IRON RULE: model '${modelId}' is not validated for ${toolName}. ` +
+    `${IRON_RULE_REFUSAL_PREFIX}${modelId}' is not validated for ${toolName}. ` +
       `No LLM call was made, no money was spent. ` +
       `Validate it: ${validateCmd} — or configure a model already validated for this tool. ` +
       `${haveList}`,
