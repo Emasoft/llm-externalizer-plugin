@@ -1,10 +1,10 @@
 ---
 trdd-id: CQSODQ78
 title: llm-ext --estimate applies the same paid-profile gate as the real run
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-10-27T20:53:24+0100
-updated: 2026-10-27T21:05:10+0100
+updated: 2026-10-27T21:23:03+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -27,8 +27,9 @@ Reported 2026-10-27 by another session: llm-ext scan quality --profile paid --es
 - [x] the check is exposed from the engine next to buildEstimateDeps, not duplicated in main.ts
 - [x] a test on the exported check: paid profile with allow_paid_models false refuses
 - [x] type-check and the touched test files pass
-- [ ] follow-up: a permanent CLI-level test of the --estimate refusal is tracked on TRDD-UVU9S4RV (main.ts cannot be imported by a test)
+- [x] follow-up: a permanent CLI-level test of the --estimate refusal is tracked on TRDD-UVU9S4RV (main.ts cannot be imported by a test)
 
 ## Approval log
 
 - 2026-10-27T20:53:24+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-27T21:23:03+0100 — COMPLETE by main-agent@llm-externalizer-plugin. released in v14.1.2 and installed; USER grant 2026-10-27 to decide.

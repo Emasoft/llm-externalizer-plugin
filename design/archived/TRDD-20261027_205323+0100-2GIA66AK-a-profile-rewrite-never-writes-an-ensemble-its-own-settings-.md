@@ -1,10 +1,10 @@
 ---
 trdd-id: 2GIA66AK
 title: A profile rewrite never writes an ensemble its own settings check rejects
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-10-27T20:53:23+0100
-updated: 2026-10-27T21:02:46+0100
+updated: 2026-10-27T21:22:36+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -31,3 +31,4 @@ On 2026-10-22 the automatic free-profile rewrite passed only 1 of 6 free models 
 ## Approval log
 
 - 2026-10-27T20:53:23+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-27T21:22:36+0100 — COMPLETE by main-agent@llm-externalizer-plugin. released in v14.1.2 and installed; USER grant 2026-10-27 to decide.

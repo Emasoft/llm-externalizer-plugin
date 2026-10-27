@@ -1,10 +1,10 @@
 ---
 trdd-id: VAORGKVF
 title: A refused IRON RULE call is final and never feeds the circuit breaker
-column: dev
+column: complete
 status: tasked
 created: 2026-10-07T17:26:12+0200
-updated: 2026-10-27T20:59:36+0100
+updated: 2026-10-27T21:23:31+0100
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -50,3 +50,6 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 ## Approval log
 
 - 2026-10-07T17:26:12+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-27T21:23:06+0100 — column → complete by main-agent@llm-externalizer-plugin. released in v14.1.2 and installed; USER grant 2026-10-27 to decide
+- 2026-10-27T21:23:18+0100 — column → complete by main-agent@llm-externalizer-plugin. released in v14.1.2 and installed; USER grant 2026-10-27 to decide
+- 2026-10-27T21:23:31+0100 — column → complete by main-agent@llm-externalizer-plugin. released in v14.1.2
