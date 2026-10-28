@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T20:03:25+0100
+updated: 2026-10-28T20:11:19+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -97,3 +97,4 @@ USER directive verbatim (2026-10-28, repeating the /goal with one addition): "si
 2026-10-28 increment 2a (server supervisor) planned after two review rounds; plan design/specs/TRDD-1OOAH3LD-increment-2a-plan.md; waiting for three user rulings (idle sleep or stop, test skip without llama-server, offline test). API key split to 2c, disk check to 2b.
 2026-10-28 the increment 2a plan is NOT approved yet: it waits for the three user rulings and for the review-born decisions in its "Not yet approved" list; until then the increment 2 section of the approved design stays in force.
 2026-10-28 increment 2a revision 4 written after review rounds on rev 3 and rev 4 (measure reports/llama-cpp-profile/20261028_193341+0100-2a-rev4-measure.md): 2a-core and 2e (2-hour kill) ship in the same release; supervisor failure is final-stop, marks its URL dead for one walk, remembered per port for the rest of the command; --stop_on_errors moves to its own TRDD; CI installs pinned llama.cpp b11968. WAITING FOR USER APPROVAL. Plan: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md
+2026-10-28 program plan revision 2 reviewed twice; P6a (calibration design review plus a 30-minute LFM3 dry run) added before the overnight run; P10 command table with thresholds is a gate before the goal is complete. Open user question: may calibration restart its own server with a new context (refuse-on-change kept for user runs)?
