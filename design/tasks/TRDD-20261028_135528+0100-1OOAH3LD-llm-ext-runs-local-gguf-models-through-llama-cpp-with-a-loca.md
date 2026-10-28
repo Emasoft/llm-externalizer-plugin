@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: design
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:29:09+0100
+updated: 2026-10-28T14:34:12+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -53,3 +53,5 @@ Consequence: the context budget per request is prompt + thinking + answer; the d
 USER directive verbatim (2026-10-28): "looks like the reasoning effort is simply determined by the amount of tokens and output tokens available. so we can just disable it for simple tasks, like text esiting, and enabling for bug search. always keeping the context usage under 30-40%"
 Consequence: no effort-level table; each llm-ext command gets thinking off (simple tasks such as text editing) or on (bug search), and the thinking room is whatever token budget remains; prompt plus thinking plus answer stays under 30-40 percent of the context window (exact value from the context-fill benchmark).
 Liquid AI docs pasted by the user (docs.liquid.ai LFM3-1.7B page): 1.73B params, 256K context input+output, 24 layers (13 short conv, 5 sliding-window attention, 6 global attention); general generation temperature 0.1, top_k 50, repetition_penalty 1.1; math and science temperature 1.0, top_p 0.95, top_k 20, repetition_penalty 1.0; reasoning on by default, enable_thinking False for direct answers; the page says it is NOT recommended for agentic coding or complex multi-step reasoning due to its size, so bug-search quality must be measured, not assumed.
+USER directive verbatim (2026-10-28): "Make the testing completely automated, so that when a new local model is added to the local_llama profile the tests will run automatically and find the right calibration values for context percentage, max input tokens, max output tokens, reasoning on or off, structured output, etc."
+Consequence: the context-fill benchmark becomes an automatic per-model calibration. When llm-ext finds a model in local_llama with no calibration record, it runs the calibration itself (no user command needed) and stores, per model, the safe context percentage, max input tokens, max output tokens, thinking on or off per task kind, and whether structured output (JSON schema) works; llm-ext then sizes requests from that record. Overlaps TRDD-UT7UC025 (self-healing: benchmark new models): one calibration framework, not two.
