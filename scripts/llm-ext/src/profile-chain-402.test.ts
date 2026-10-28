@@ -1008,14 +1008,15 @@ describe("D3c-1 fix-up (TRDD-FDI9NYAS) — a send-time price refusal on a DYNAMI
         expect(srv.postsFor("vendor/paid-head")).toBe(0);
         expect(srv.postsFor("vendor/paid-a")).toBe(0);
         expect(srv.postsFor("vendor/paid-b")).toBe(0);
-        expect(elapsedMs).toBeLessThan(1_000);
+        // TRDD-5Q79QZM7: the command now waits for the (marker) update to record an outcome -- bounded by the no-result grace, not instant.
+        expect(elapsedMs).toBeLessThan(8_000);
       } finally {
         validated.setValidationBypassForTests(false);
         fetchSpy.mockRestore();
         cleanup();
       }
     },
-    5_000,
+    20_000, // TRDD-5Q79QZM7: includes the foreground wait for the marker update (was 5 s)
   );
 });
 

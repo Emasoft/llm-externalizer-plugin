@@ -95,7 +95,8 @@ describe("inline repair of an invalid active generated profile (TRDD-5Q79QZM7)",
     // Honest outcome: the regenerated section is the unpopulated placeholder,
     // so the command is refused with the exact retry-later text while the
     // background update (a no-op script here) is started.
-    expect(textOf(r)).toBe(dynamicProfileRetryLaterMessage("free"));
+    // TRDD-5Q79QZM7: the no-op update script records no outcome, so the foreground repair reports that after the retry-later text.
+    expect(textOf(r)).toBe(`${dynamicProfileRetryLaterMessage("free")}\nForeground repair was tried and failed: the update ended without recording a result.`);
     expect(textOf(r)).not.toContain("NOT CONFIGURED");
     expect(idx.__getBootStateForTests().settingsValid).toBe(true);
     expect(backups()).toHaveLength(1);

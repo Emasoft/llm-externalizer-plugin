@@ -277,6 +277,9 @@ export async function runCli(
         // Never let the spawned test process install the usage rule into the
         // real ~/.claude/rules/ (the startup installer is opt-out via this var).
         LLM_EXT_INSTALL_RULE: "0",
+        // TRDD-5Q79QZM7: an exhausted generated profile now waits for its update; a test backend never repairs, so
+        // keep that wait short instead of the 10-minute default.
+        LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS: "1000",
       },
       timeout: timeoutMs,
       maxBuffer: 64 * 1024 * 1024,

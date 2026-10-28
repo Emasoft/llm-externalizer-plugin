@@ -61,6 +61,8 @@ vi.mock("./provider/completion.js", async (importOriginal) => {
 // index.ts's module-load boot IIFE runs on import; boot() would additionally
 // install the usage rule into the user's ~/.claude/rules. Off, before either.
 process.env.LLM_EXT_INSTALL_RULE = "0";
+// TRDD-5Q79QZM7: the foreground repair waits for the profile update; these fixtures never repair, keep the wait short.
+process.env.LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS = "1000";
 
 /** `free` as a fresh install leaves it: the section EXISTS (so the maintainer
  *  has something to merge onto) with an EMPTY pool, which is the unpopulated

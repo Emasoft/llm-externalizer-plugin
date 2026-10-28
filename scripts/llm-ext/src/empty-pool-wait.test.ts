@@ -1,10 +1,8 @@
-// D2 (USER 2026-09-18) on a never-yet-populated dynamic profile. The USER's
-// decision for the empty pool (the first command on a fresh install):
-// "Refuse, retry later" -- start the background update and exit with the
-// retry-later message; no foreground fill. This file used to prove the
-// opposite (P14.1, TRDD-OE27RD7I addendum 2: block, run the maintainer
-// in-process, re-judge the gate); that wait is gone with
-// runDynamicProfileUpdateAndWait.
+// D2 (USER 2026-09-18) on a never-yet-populated dynamic profile ("Refuse, retry later") is SUPERSEDED by the
+// USER's 2026-10-27 directive "a command must never remain blocked" (TRDD-5Q79QZM7): the gate starts the
+// update, waits (bounded) for its RECORDED outcome, reloads settings, re-judges the gate and runs the command.
+// Retry-later is now only the answer when the repair fails or times out, with one line saying why. The
+// in-process maintainer wait (P14.1) stays gone: the update runs in the detached child.
 //
 // These tests drive the REAL dispatch pre-flight (dispatchCallTool) and the
 // REAL requestProfileUpdate / spawnDetachedBench / lock. Only the detached
@@ -14,7 +12,7 @@
 // is a spy: D2 says it must never run in the command's own process.
 
 import { describe, it, expect, afterEach, vi } from "vitest";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const { maintainDynamicProfilesMock, marker } = vi.hoisted(() => ({
@@ -54,6 +52,12 @@ const FREE_EMPTY_POOL = [
   "",
 ].join("\n");
 
+/** The same `free` section once the update has populated it. */
+const FREE_POPULATED_POOL = FREE_EMPTY_POOL.replace("free_models: []", "free_models: [vendor/free-a:free]").replace(
+  "placeholder/unpopulated-default-profile",
+  "vendor/free-a:free",
+);
+
 const created: string[] = [];
 
 /** index.ts reads settings once at module import; re-import fresh against a
@@ -79,16 +83,25 @@ async function loadFreshIndex() {
 
 /** A marker child: records {argv, requested} under its own dir, then holds
  *  its lock (alive) for `holdMs`. */
-function installMarker(holdMs: number): { records: () => Array<{ argv: string[]; requested: string | null }> } {
+function installMarker(
+  holdMs: number,
+  mode: "none" | "populate" = "none",
+): { records: () => Array<{ argv: string[]; requested: string | null }> } {
   const dir = mkdtempSync(join("/tmp", "markempty-"));
   created.push(dir);
   marker.script = join(dir, "marker.js");
+  // "populate" = the update succeeded: it fills the free pool in settings.yaml and stamps the success clock the
+  // foreground wait reads (dynamic-profiles-state.json lastBenchmarkAt), as the real benchmark child does.
+  const populate = `
+const cfg = process.env.LLM_EXT_CONFIG_DIR;
+fs.writeFileSync(path.join(cfg, "settings.yaml"), ${JSON.stringify(FREE_POPULATED_POOL)});
+fs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: Date.now(), poolFingerprint: "x", modelIds: ["vendor/free-a:free"], failCount: 0 } } }));`;
   writeFileSync(
     marker.script,
     `const fs = require("node:fs");
 const path = require("node:path");
 fs.writeFileSync(path.join(${JSON.stringify(dir)}, process.pid + ".json"),
-  JSON.stringify({ argv: process.argv.slice(2), requested: process.env.LLM_EXT_PROFILE_UPDATE_REQUESTED ?? null }));
+  JSON.stringify({ argv: process.argv.slice(2), requested: process.env.LLM_EXT_PROFILE_UPDATE_REQUESTED ?? null }));${mode === "populate" ? populate : ""}
 setTimeout(() => process.exit(0), ${holdMs});
 `,
   );
@@ -138,54 +151,65 @@ afterEach(async () => {
 });
 
 describe("D2 empty pool: dispatch pre-flight on a never-yet-populated dynamic profile", () => {
+  // TRDD-5Q79QZM7 (USER 2026-10-27, "a command must never remain blocked") supersedes the 2026-09-18 "refuse, retry
+  // later" decision this file used to encode: the gate now waits (bounded) for the update's recorded outcome,
+  // reloads settings, re-judges the gate, and the command runs when the pool got populated.
   it(
-    "refreshable (a provider credential present): the retry-later message, isError, ONE background update started, returns in well under 10 s, no maintainer in-process",
+    "refreshable (a provider credential present): ONE requested update starts, the command WAITS for its recorded success and then RUNS (no retry-later)",
     async () => {
       await withKeys("test-openrouter-key-not-a-real-one", async () => {
-        const m = installMarker(400);
+        const m = installMarker(400, "populate");
         const { idx, cleanup } = await loadFreshIndex();
         try {
           const { dynamicProfileRetryLaterMessage } = await import("./profile-fallback.js");
-          const t0 = Date.now();
           const r = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
-          const elapsed = Date.now() - t0;
-          expect(r.isError).toBe(true);
-          expect(textOf(r)).toBe(dynamicProfileRetryLaterMessage("free"));
-          expect(elapsed, "the command must not wait for the update").toBeLessThan(10_000);
+          expect(textOf(r)).not.toContain(dynamicProfileRetryLaterMessage("free"));
+          expect(textOf(r)).not.toMatch(/no usable free model right now/);
           expect(maintainDynamicProfilesMock, "no update runs in the command's own process").not.toHaveBeenCalled();
           await settle();
-          const records = m.records();
-          expect(records, "exactly one background job").toHaveLength(1);
+          const records = m.records().filter((rec) => rec.requested === "1");
+          expect(records, "exactly one requested background job").toHaveLength(1);
           expect(records[0].argv).toEqual(["--detect-profile-changes", "free"]);
-          expect(records[0].requested).toBe("1");
         } finally {
           cleanup();
         }
       });
     },
-    30_000,
+    60_000,
   );
 
   it(
-    "a second command while that update still runs: the same retry-later message, NO second update, and the request is left for the lock's holder",
+    "an update that records no outcome within the limit: retry-later PLUS the foreground-repair line, bounded by the limit; two concurrent commands start ONE update",
     async () => {
-      await withKeys("test-openrouter-key-not-a-real-one", async () => {
-        const m = installMarker(3_000);
-        const { idx, cfgDir, cleanup } = await loadFreshIndex();
-        try {
-          const first = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
-          const second = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
-          expect(textOf(second)).toBe(textOf(first));
-          expect(second.isError).toBe(true);
-          await settle();
-          expect(m.records().filter((r) => r.requested === "1")).toHaveLength(1);
-          expect(existsSync(join(cfgDir, "background-update-free.requested"))).toBe(true);
-        } finally {
-          cleanup();
-        }
-      });
+      process.env.LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS = "600";
+      try {
+        await withKeys("test-openrouter-key-not-a-real-one", async () => {
+          const m = installMarker(3_000, "none");
+          const { idx, cleanup } = await loadFreshIndex();
+          try {
+            const { dynamicProfileRetryLaterMessage } = await import("./profile-fallback.js");
+            const t0 = Date.now();
+            const [first, second] = await Promise.all([
+              idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() }),
+              idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() }),
+            ]);
+            expect(Date.now() - t0, "bounded by the limit, not by the update").toBeLessThan(2_900);
+            for (const r of [first, second]) {
+              expect(r.isError).toBe(true);
+              expect(textOf(r)).toContain(dynamicProfileRetryLaterMessage("free"));
+              expect(textOf(r)).toMatch(/Foreground repair was tried and stopped: the update was still running/);
+            }
+            await new Promise((r) => setTimeout(r, 2_500)); // slow machines: let the marker child boot and record
+            expect(m.records().filter((rec) => rec.requested === "1")).toHaveLength(1);
+          } finally {
+            cleanup();
+          }
+        });
+      } finally {
+        delete process.env.LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS;
+      }
     },
-    30_000,
+    60_000,
   );
 
   it("NON-refreshable (no provider credentials at all): the gate's own refusal, NO update started", async () => {

@@ -235,6 +235,14 @@ import { dynamicProfileGate, regenerateInvalidMarkedSection } from "./dynamic-ma
 // a dynamic profile, never awaited) and the background update a command
 // requests when its profile has no working model (never awaited either).
 import { spawnDetachedDetector, requestProfileUpdate } from "./default-profiles-runner.js";
+import {
+  SINGLE_REQUEST_TOOLS,
+  dynamicExhaustionStore,
+  takeUpdateBaseline,
+  waitForProfileUpdate,
+  type DynamicExhaustion,
+  type UpdateBaseline,
+} from "./foreground-repair.js";
 // recordRequest moved with the completion layer (B1 Phase 5b) — the per-request
 // usage line is written where the request is actually made (provider/completion.ts
 // + provider/lmstudio.ts), so index.ts only sets up the usage CONTEXT here.
@@ -2094,10 +2102,23 @@ function failDynamicProfile(
     const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
     if (refusedTools.every((t) => t !== undefined && !profileUpdateCanValidate(t))) return actionable(causes);
   }
+  // WHY (TRDD-5Q79QZM7): the single same-run retry after the foreground repair must not start another update --
+  // one repair per run; its failure is reported by dispatchCallTool.
+  if (dynamicExhaustionStore.getStore()?.retry === true) return new ProfileExhaustedError(profileName, "dynamic", causes);
+  const baseline = takeUpdateBaseline(profileName);
   const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
   if (update.state === "unavailable") {
     process.stderr.write(`[llm-externalizer] '${profileName}' profile update not started — ${update.reason}\n`);
     return actionable(causes);
+  }
+  // WHY (TRDD-5Q79QZM7 scope 2): tell dispatchCallTool that every model of this generated profile failed and an
+  // update is underway, so it can wait for it (bounded) and retry the request once instead of only answering
+  // retry-later. Key/credit/request-specific verdicts returned above never reach this line.
+  const exhaustion = dynamicExhaustionStore.getStore();
+  if (exhaustion) {
+    exhaustion.profile = profileName;
+    exhaustion.update = update;
+    exhaustion.baseline = baseline;
   }
   return new ProfileExhaustedError(profileName, "dynamic", causes);
 }
@@ -4035,10 +4056,69 @@ export async function dispatchCallTool(
         "PAID models while allow_paid_models is false.",
     );
   }
-  return withUsageContext(
-    { tool: name, params: summarizeParams(rawArgs) },
-    () => dispatchCallToolInner(name, rawArgs, opts),
-  );
+  return withUsageContext({ tool: name, params: summarizeParams(rawArgs) }, async () => {
+    // WHY (TRDD-5Q79QZM7 scope 2; USER requirement: "a command must never stay blocked; when a profile's models
+    // fail, llm-ext repairs the profile and the command works"): failDynamicProfile records here that every model
+    // of a generated profile failed and an update is running. Instead of answering retry-later at once, wait
+    // (bounded) for that update, reload settings and retry the SAME request ONCE. The retry runs outside the
+    // store, so it can never loop. A second session finds the update already running and waits on its lock.
+    // (TRDD-5Q79QZM7 review) The retry happens only for single-request tools and only when the profile content
+    // actually changed. A fan-out tool (scan_folder, batch_check, ...) is never re-run whole: that would redo the
+    // files that already succeeded and double their cost; it gets one honest line telling the caller to re-run
+    // the failed files. Retrying only the failed items is a recorded follow-up.
+    const exhaustion: DynamicExhaustion = {};
+    const first = await dynamicExhaustionStore.run(exhaustion, () => dispatchCallToolInner(name, rawArgs, opts));
+    if (!first.isError || exhaustion.profile === undefined || exhaustion.update === undefined || exhaustion.baseline === undefined) return first;
+    const retryLater = dynamicProfileRetryLaterMessage(exhaustion.profile);
+    // includes, not ===: a per-file tool (scan_folder) wraps the sentence inside its report.
+    if (!first.content.some((c) => c.text.includes(retryLater))) return first;
+    process.stderr.write(`[llm-externalizer] every model of '${exhaustion.profile}' failed -- repairing the profile in the foreground\n`);
+    const repair = await repairProfileInForeground(exhaustion.profile, exhaustion.update, exhaustion.baseline);
+    if (!repair.ok) return withRepairLine(first, repair.line);
+    if (!repair.changed) {
+      return withRepairLine(first, "Foreground repair finished but the profile content did not change, so the request was not retried.");
+    }
+    if (!SINGLE_REQUEST_TOOLS.has(name)) {
+      return withRepairLine(
+        first,
+        `The '${exhaustion.profile}' profile was repaired in the foreground. '${name}' works on many items and is not re-run whole: re-run the failed files now.`,
+      );
+    }
+    const retried = await dynamicExhaustionStore.run({ retry: true }, () => dispatchCallToolInner(name, rawArgs, opts));
+    return retried.isError
+      ? withRepairLine(retried, "Foreground repair finished and the request was retried once; it failed again.")
+      : retried;
+  });
+}
+
+/**
+ * Wait (bounded) for the profile's update to record its outcome, then load the repaired settings. `changed` says
+ * whether the profile's section differs from the one this process was running (compared before vs after the reload).
+ * Shared by dispatchCallTool (every model failed) and the empty-pool gate.
+ */
+async function repairProfileInForeground(
+  profile: DynamicProfileName,
+  update: Parameters<typeof waitForProfileUpdate>[1],
+  baseline: UpdateBaseline,
+): Promise<{ ok: true; changed: boolean } | { ok: false; line: string }> {
+  const waited = await waitForProfileUpdate(profile, update, baseline);
+  if (!waited.ok) {
+    return { ok: false, line: waited.failed ? `Foreground repair was tried and failed: ${waited.why}.` : `Foreground repair was tried and stopped: ${waited.why}.` };
+  }
+  const snapshot = () => JSON.stringify(activeSettings.profiles?.[profile] ?? null);
+  const before = snapshot();
+  const reloaded = reloadSettingsFromDisk();
+  if (!reloaded.ok) return { ok: false, line: `Foreground repair finished but the repaired settings were not loaded: ${reloaded.error}.` };
+  return { ok: true, changed: snapshot() !== before };
+}
+
+/** The tool result with one extra line appended to its last text block. */
+function withRepairLine(result: ToolResult, line: string): ToolResult {
+  const content = result.content.map((c) => ({ ...c }));
+  const last = content[content.length - 1];
+  if (last) last.text = `${last.text}\n${line}`;
+  else content.push({ type: "text", text: line });
+  return { ...result, content };
 }
 
 async function dispatchCallToolInner(
@@ -4119,24 +4199,31 @@ async function dispatchCallToolInner(
         // update the failure requests found the lock held and started nothing
         // -- the command's own detector suppressed its own update.
         detectAfterDispatch = effective;
-        const gate = profileGateRefusal(name);
+        let gate = profileGateRefusal(name);
         if (gate) {
-          // D2 (USER 2026-09-18, empty pool: "Refuse, retry later"): a pool
-          // that is empty ONLY because it was never populated yet (and an
-          // update could plausibly fill it) is the degenerate case of "not a
-          // single model working": start the background update and answer
-          // retry-later at once -- no foreground fill, no wait, no regate.
-          // Every other refusal (malformed profile, forbidden tool, no
-          // credentials, maintenance disabled, catalog recently failed,
+          // D2 (USER 2026-09-18) said "refuse, retry later" for a pool that is empty only because it was never
+          // populated. SUPERSEDED by the USER's 2026-10-27 directive (TRDD-5Q79QZM7: "a command must never remain
+          // blocked"): start the update, wait for its recorded outcome (bounded, same limit as the all-models-failed
+          // path), reload and re-judge the gate; the command runs when the pool is now populated. Only when the
+          // repair fails or times out does it answer retry-later, plus one line saying why. Every other refusal
+          // (malformed profile, forbidden tool, no credentials, maintenance disabled, catalog recently failed,
           // unpopulated paid/local) keeps its own message, as before.
           if (gate.reason === "empty-pool-refreshable") {
+            const baseline = takeUpdateBaseline(effective);
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
             if (update.state !== "unavailable") {
-              return { content: [{ type: "text", text: dynamicProfileRetryLaterMessage(effective) }], isError: true };
+              const repair = await repairProfileInForeground(effective, update, baseline);
+              if (repair.ok && profileGateRefusal(name) === null) {
+                gate = null;
+              } else {
+                const line = repair.ok ? "Foreground repair finished but the pool is still empty." : repair.line;
+                return { content: [{ type: "text", text: `${dynamicProfileRetryLaterMessage(effective)}\n${line}` }], isError: true };
+              }
+            } else {
+              process.stderr.write(`[llm-externalizer] '${effective}' profile update not started — ${update.reason}\n`);
             }
-            process.stderr.write(`[llm-externalizer] '${effective}' profile update not started — ${update.reason}\n`);
           }
-          return { content: [{ type: "text", text: gate.message }], isError: true };
+          if (gate) return { content: [{ type: "text", text: gate.message }], isError: true };
         }
       } else {
         // A STATIC profile. runModelReconcile() only WARNS about dead ids
