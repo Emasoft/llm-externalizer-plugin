@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T20:50:47+0100
+updated: 2026-10-28T20:53:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -66,3 +66,4 @@ USER directive verbatim (2026-10-28, replaces the router-mode answer and the Loc
 USER directive verbatim (2026-10-28): "this rule is only for local models, since they are extremely heavy on the system, and very few can be run concurrently even with Locals. so design a smart router that will group and enqueue the different models and rotate the servers after a big enough batch. calibrate this rotation to get an optimal value, but make it smart enough to avoid engulfing the queue of commands causing huge timeouts." Consequence: the one-model-at-a-time batching applies to local engines only (remote profiles unchanged); the batch size before a rotation and the maximum wait of other models are calibrated, and queued requests never time out while waiting.
 USER answer verbatim (2026-10-28) to "the longest a single request may wait in the queue before its model gets the server": "no more than 5 minutes, but an optional --queue-timeout=99990 must be added to let the agent define the timeout by itself according to the job complexity and the number of files" Consequence: default maximum queue wait 300 s; optional --queue-timeout=<seconds> per command, carried with each job to the broker; a job waiting longer than its own queue timeout forces a rotation to its model; waiting is never an error.
 USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces a rotation, never an error, seconds): "yes, but of course there should be also the option to set a timeoutnfor the command if the agent wants to limit it" Consequence: an optional --command-timeout=<seconds> limits the whole command (default: no limit); on expiry the command cancels its queued jobs, writes the results already complete, lists the unfinished files and exits non-zero; it applies to every command that sends model requests.
+- Command timeout spellings (USER, verbatim): "simply each command of llm-ext must have the option of setting --timeout=99999 or --command-timeout 99999, etc"
