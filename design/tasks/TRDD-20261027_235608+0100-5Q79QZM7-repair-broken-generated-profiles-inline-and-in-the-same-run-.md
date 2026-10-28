@@ -4,7 +4,7 @@ title: Repair broken generated profiles inline and in the same run, detect provi
 column: todo
 status: tasked
 created: 2026-10-27T23:56:08+0100
-updated: 2026-10-27T23:56:08+0100
+updated: 2026-10-28T01:15:21+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -40,3 +40,7 @@ Parent: TRDD-UT7UC025 (USER directive, verbatim). First increment of the self-he
 ## Approval log
 
 - 2026-10-27T23:56:08+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Progress
+
+- 2026-10-28: scope item 1 done in f8451074 (inline repair, latched, only when the active profile itself is invalid; the exact 2026-10-22 file no longer reaches the gate). Scope item 2 done in 045a66fb (waits for the recorded update outcome, retries once only when the profile changed, empty-pool gate waits too). Follow-up: multi-file tools (scan_folder) do not retry; retrying only the failed files is still open. Next: item 3 (provider outage detection) and item 4 (key errors never trigger a download).
