@@ -4,7 +4,7 @@ title: Repair broken generated profiles inline and in the same run, detect provi
 column: todo
 status: tasked
 created: 2026-10-27T23:56:08+0100
-updated: 2026-10-28T01:17:08+0100
+updated: 2026-10-28T02:17:35+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-27T23:56:08+0100
+implementation-commits: [f8451074, 045a66fb, 20b983b0, c9f4e480]
 ---
 
 # Repair broken generated profiles inline and in the same run, detect provider outages
@@ -45,3 +46,4 @@ Parent: TRDD-UT7UC025 (USER directive, verbatim). First increment of the self-he
 
 - 2026-10-28: scope item 1 done in f8451074 (inline repair, latched, only when the active profile itself is invalid; the exact 2026-10-22 file no longer reaches the gate). Scope item 2 done in 045a66fb (waits for the recorded update outcome, retries once only when the profile changed, empty-pool gate waits too). Follow-up: multi-file tools (scan_folder) do not retry; retrying only the failed files is still open. Next: item 3 (provider outage detection) and item 4 (key errors never trigger a download).
 - 2026-10-28 review of 045a66fb, to fix next (after the outage worker releases index.ts): (1) take the update baseline BEFORE requestProfileUpdate spawns, in failDynamicProfile and the empty-pool gate; (2) retry single-file tools and multi-file runs where nothing succeeded, skip the re-run only when some items already succeeded; (3) key the outcome to this update (run id or start time), not to the shared failCount; (4) count success only on lastBenchmarkAt, or say pruned-not-rebenchmarked; (5) check the updater writes its record before releasing the lock, else wait on the record; (6) tests for the baseline race and a concurrent failCount bump.
+- 2026-10-28: items 1-3 done (f8451074, 045a66fb, 20b983b0, c9f4e480); item 4 (key errors never trigger a download) moves to TRDD-J7AIC7ZW, since no download exists yet. Still open before complete: a test that two parallel repairs never both write. Full suite 2026-10-28: 5019 passed, 3 failed (two in files then being edited by another worker, one load timeout that passes alone).
