@@ -25,7 +25,7 @@ approval-datetime: 2026-10-28T19:10:21+0100
 - Phase now: (1) smoke-check all six models on private ports; (2) one proposal round on the delta (three models per profile = three servers per profile, per-route managed target, a third GGUF id kind repo/file.gguf); (3) implement 1OOAH3LD 2a-core + CI step, then locals-mlx L1, L3, L2, then calibration of six models, then all commands incl. mass-scouting and ensemble scan on both profiles.
 - Plans: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md (rev 4), design/specs/TRDD-ZGSGGHQG-locals-mlx-design.md.
 - Not on the critical path: 2b, 2c, 2d, 2e, the --stop_on_errors TRDD.
-- NEXT ACTION: read the smoke-check report under reports/llama-cpp-profile/ or reports/locals-mlx/ (newest *-six-model-smoke.md).
+- NEXT ACTION: program plan design/specs/local-profiles-goal-program.md (revision 2) needs its round-2 review, then P0 measurement (default n_ctx and RSS per model, memory table), then P1. Six-model smoke passed (reports/locals-mlx/20261028_200451+0100-six-model-smoke.md).
 
 ## Approval log
 
