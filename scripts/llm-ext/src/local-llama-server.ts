@@ -88,6 +88,13 @@ export function parseManagedModel(model: string): { kind: ManagedModelKind; argv
   };
 }
 
+/**
+ * Parallel slots of the managed main llama-server. 2 until calibration (P6)
+ * measures a better value per engine and model; no profile field sets it yet
+ * (P6 adds one if calibration needs it).
+ */
+export const MAIN_SLOTS = 2;
+
 /** The full llama-server argv for a target (model args first). `--log-file` doubles as the stable marker the registry sweep finds an unrecorded llm-ext server by (spec point 8): it names THIS config dir, so a user-run llama-server never matches. */
 export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logFile: string): string[] {
   return [
@@ -95,7 +102,15 @@ export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logF
     "--alias", target.model,
     "--host", "127.0.0.1",
     "--port", String(target.port),
-    ...(target.ctx > 0 ? ["-c", String(target.ctx)] : []),
+    // An explicit slot count, and -c = context_window x slots. WHY: llama.cpp
+    // SPLITS -c across the slots (with -np given the KV cache is per slot,
+    // n_ctx_slot = c / np; under the auto -np the cache was one unified pool of
+    // c tokens). With `-c ctx` and 4 auto slots, concurrent long requests
+    // overflowed it: HTTP 500 "Context size has been exceeded" (P1' item 1).
+    // So every slot holds one full request of the profile's context_window.
+    // The broker dispatches at most /props total_slots (= MAIN_SLOTS) at once.
+    "-np", String(MAIN_SLOTS),
+    ...(target.ctx > 0 ? ["-c", String(target.ctx * MAIN_SLOTS)] : []),
     "--jinja",
     "--sleep-idle-seconds", String(SLEEP_IDLE_SECONDS),
     "--log-file", logFile,
@@ -107,7 +122,10 @@ export interface ArgvIdentity {
   /** The llm-ext model id the argv serves (reconstructed), or null. */
   model: string | null;
   port: number | null;
+  /** Context per slot (one request's room): -c divided by -np. */
   ctx: number;
+  /** -np, the parallel slots; 0 = not given (llama.cpp auto). */
+  slots: number;
   /** The --log-file value: the llm-ext marker (spec point 8), or null. */
   logFile: string | null;
 }
@@ -129,11 +147,15 @@ export function describeArgv(tokens: readonly string[]): ArgvIdentity {
   const model = path ?? (repo !== undefined && file !== undefined ? `${repo}/${file}` : repo) ?? null;
   const portTok = after("--port");
   const ctxTok = after("-c") ?? after("--ctx-size");
+  const npTok = after("-np") ?? after("--parallel");
+  const slots = npTok !== undefined && /^\d+$/.test(npTok) ? Number(npTok) : 0;
   return {
     isLlamaServer: exe === "llama-server" || exe.toLowerCase() === "llama-server.exe",
     model,
     port: portTok !== undefined && /^\d+$/.test(portTok) ? Number(portTok) : null,
-    ctx: ctxTok !== undefined && /^\d+$/.test(ctxTok) ? Number(ctxTok) : 0,
+    // Per-slot context: -c is the TOTAL llama.cpp splits across the -np slots (see buildServerArgv).
+    ctx: ctxTok !== undefined && /^\d+$/.test(ctxTok) ? Number(ctxTok) / (slots > 0 ? slots : 1) : 0,
+    slots,
     logFile: after("--log-file") ?? null,
   };
 }

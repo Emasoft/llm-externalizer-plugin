@@ -24,7 +24,7 @@ import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { CTX_HEADER, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { llamaServerEnv, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
 import { clockForCall, retryWindowClosed, startRetryClock, type RetryClock } from "../provider/http.js";
 
@@ -115,10 +115,16 @@ async function cleanup(dir: string): Promise<void> {
       /* gone */
     }
   }
-  for (const row of await processSnapshot()) {
+  const rows = await processSnapshot();
+  // NEVER signal this runner's own process group: a CLI child the test spawned
+  // (not detached) shares it, and `kill(-pgid)` on such a child killed vitest
+  // and the shell running it. Those children are killed by pid instead.
+  const ownPgid = rows.find((r) => r.pid === process.pid)?.pgid;
+  for (const row of rows) {
     if (row.argv.some((t) => t.startsWith(dir)) || readRegistry(dir, "llama").some((e) => e.pgid === row.pgid)) {
       try {
-        process.kill(-row.pgid, "SIGKILL");
+        if (row.pgid === ownPgid || row.pgid <= 1) process.kill(row.pid, "SIGKILL");
+        else process.kill(-row.pgid, "SIGKILL");
       } catch {
         /* gone */
       }
@@ -130,9 +136,10 @@ async function cleanup(dir: string): Promise<void> {
   expect(left.map((r) => r.argv.join(" "))).toEqual([]);
 }
 
+// 300 s: one cleanup per dir (2 process snapshots + a settle wait each), and the CLI-flag test makes 30 dirs; 60 s was borderline on a loaded machine.
 afterEach(async () => {
   while (dirs.length) await cleanup(dirs.pop()!);
-}, 60_000);
+}, 300_000);
 
 interface ClientResult {
   pid: number;
@@ -992,11 +999,11 @@ describe("client against a misbehaving broker (review m4, m1)", () => {
  * Fixture: the tiny-llamas GGUFs declare llama.context_length = 128, and
  * llama-server caps every slot at the training context, so the ~710-token
  * prompt a real command sends cannot fit. The tests run on copies whose
- * context_length is patched to 1024 (u32 metadata, same size, nothing else
- * changed). 1024 per slot also keeps 4 slots inside the server's unified
- * 4096-token KV cache: these models never emit EOS, so every reply runs to the
- * slot limit, and with a larger slot concurrent replies overflow the cache
- * ("Context size has been exceeded"). No request_options on the profiles:
+ * context_length is patched (u32 metadata, same size, nothing else changed)
+ * to 1024 / 2048, and each profile's context_window equals it. These models
+ * never emit EOS, so every reply runs to its slot limit: every request fills a
+ * whole context_window, which is what the slot-sizing test below relies on.
+ * No request_options on the profiles:
  * with them a finish_reason=length reply is a hard OutputLimitError.
  */
 describe("end to end through real llm-ext commands (P1' item 1)", () => {
@@ -1034,7 +1041,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
   });
 
   const writeSettings = (cfg: string): void => {
-    // context_window = 4 slots x the patched slot size, so 4 concurrent replies fit the unified KV cache.
+    // context_window = the patched training context: the broker gives each of its MAIN_SLOTS slots exactly this much.
     const profile = (model: string, ctx: number): string[] => [
       "    profile-type: local",
       "    mode: local",
@@ -1045,7 +1052,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
       `    context_window: ${ctx}`,
       "    server: managed",
     ];
-    writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), 4096), "  tinyb:", ...profile(modelB(), 8192), ""].join("\n"));
+    writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), 1024), "  tinyb:", ...profile(modelB(), 2048), ""].join("\n"));
   };
 
   /** One real CLI command, in its own process; resolves with its exit code and output. */
@@ -1110,6 +1117,24 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
   }, 600_000);
 
+  it("slot sizing: MAIN_SLOTS concurrent requests that each fill a whole context_window all succeed, never a 500 (llama.cpp splits -c across slots)", async () => {
+    const cfg = newDir();
+    writeSettings(cfg);
+    // 2 x MAIN_SLOTS files: the broker keeps every slot busy, each reply running to the slot limit.
+    const w = workDir(2 * MAIN_SLOTS);
+    const scan = await runCli(cfg, ["scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", join(w.dir, "scan")], w.dir);
+    expect(scan.code, scan.out).toBe(0);
+    expect(scan.out).not.toMatch(/API error 500|Context size has been exceeded/);
+    expect(reports(join(w.dir, "scan"))).toHaveLength(2 * MAIN_SLOTS);
+    const main = readRegistry(cfg, "llama").find((e) => e.role === "main")!;
+    const flag = (f: string): string => main.argv[main.argv.indexOf(f) + 1];
+    expect(flag("-np")).toBe(String(MAIN_SLOTS));
+    expect(flag("-c")).toBe(String(1024 * MAIN_SLOTS));
+    expect(brokerLog(cfg).join("\n")).toMatch(new RegExp(`slots ${MAIN_SLOTS}\\b`));
+    // Every reply filled its slot: the server log shows each task stopped at the full 1024-token context.
+    const full = readFileSync(join(cfg, "llama-server-main.log"), "utf8").split("\n").filter((l) => /stop processing: n_tokens = 102[0-4]\b/.test(l));
+    expect(full.length).toBeGreaterThanOrEqual(2 * MAIN_SLOTS);
+  }, 600_000);
   it("chatCompletionJSON goes through the broker (check imports, whose extract step is a JSON-schema call)", async () => {
     const cfg = newDir();
     writeSettings(cfg);
@@ -1134,8 +1159,9 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     process.kill(orphan.pid, "SIGSTOP");
     const seen = dispatches(cfg).length;
     const scanP = runCli(cfg, ["scan", "folder", w.src, "--instructions", "go on", "--answer_mode", "0", "-o", join(w.dir, "scan")], w.dir);
-    for (let i = 0; i < 300 && dispatches(cfg).length < seen + 3; i++) await new Promise((r) => setTimeout(r, 100));
-    expect(dispatches(cfg).length).toBeGreaterThanOrEqual(seen + 3);
+    // The broker dispatches at most MAIN_SLOTS at once; those are the jobs in flight when it dies.
+    for (let i = 0; i < 300 && dispatches(cfg).length < seen + MAIN_SLOTS; i++) await new Promise((r) => setTimeout(r, 100));
+    expect(dispatches(cfg).length).toBeGreaterThanOrEqual(seen + MAIN_SLOTS);
     process.kill(before, "SIGKILL");
     const scan = await scanP;
     expect(scan.code, scan.out).toBe(0);
