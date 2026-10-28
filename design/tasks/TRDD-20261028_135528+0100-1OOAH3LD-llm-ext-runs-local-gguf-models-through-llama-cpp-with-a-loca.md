@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T15:00:28+0100
+updated: 2026-10-28T15:07:15+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -69,3 +69,4 @@ Approved design (after two adversarial review rounds): design/specs/TRDD-1OOAH3L
 ## Progress
 
 2026-10-28 increment 1 (request_options) implemented by a worker, UNCOMMITTED in the working tree. Report reports/llama-cpp-profile/20261028_145937+0100-increment-1-impl.md. npm test 5067 passed, tsc and eslint clean. CHANGELOG hunk removed because git-cliff generates the changelog at publish. NEXT: adversarial REVIEW of the uncommitted diff, then commit by file name, then increment 2 (server supervisor).
+2026-10-28 increment 1 code review: 1 blocker. A real llama-server is detected through GET /props and routed to the native /api/v1/chat path, which returns before request_options apply, so a real server never received them (tests passed only because their fake server answered 404 on /props). A fix worker is forcing the OpenAI-compatible path when options apply, plus 7 smaller fixes, and verifying against a real llama-server. Review: reports/llama-cpp-profile/20261028_150558+0100-increment-1-review.md. Durable backup of the uncommitted work: reports/llama-cpp-profile/20261028_150122+0100-increment-1-wip.patch. Commit subject must carry the changelog line (cliff.toml renders only the first line).
