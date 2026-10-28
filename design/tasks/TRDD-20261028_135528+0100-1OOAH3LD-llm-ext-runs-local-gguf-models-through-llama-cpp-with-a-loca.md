@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T19:25:48+0100
+updated: 2026-10-28T19:28:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -75,6 +75,8 @@ USER directive verbatim (2026-10-28): "- llama.co server exists even on windows 
 USER directive verbatim (2026-10-28): "- always fail, but with the optional argument --no_stop_on_fail , if used it will continue using the alternative modules of the profile if defined as fallbacks"
 Consequence: the 2a plan needs a revision before code: (a) idle = --sleep-idle-seconds plus a kill after 2 hours without requests, which needs a watcher process because no llm-ext process lives that long; (b) the win32 refusal is withdrawn, the managed server must work on macOS, Linux and Windows (CUDA), with a cross-platform identity check, and llm-ext installs and configures llama.cpp when it is missing (its own increment); (c) a failure stops the command by default, and the optional flag --no_stop_on_fail lets it continue on the profile fallback models (reading: an llm-ext command flag used when the managed server cannot start, to be confirmed with the user). The four review-born decisions approved earlier (opt-in key, refuse on change, auto-restart, ship before the key) stand.
 Q: Where does --no_stop_on_fail belong? USER answer verbatim: "llm-ext commands" - an llm-ext command flag: when the profile model or managed server fails, the command continues on the profile fallback models instead of stopping (fallbacks behind the same failed server URL are skipped too).
+USER directive verbatim (2026-10-28, REPLACES the --no_stop_on_fail ruling): "no, maybe i'm wrong.. it should do by default the fallback in case of errors. instead the optional flag --stop_on_errors will make it fail and exit if a model is not responding or not found. But beware: not having enough memory is not a failure, it only put the requests in a queue, waiting fot the memory to be freed enough to run another request pending."
+Consequence: default = on a model error (not responding, not found, managed server failed) llm-ext continues on the profile fallback models, as today; the optional llm-ext command flag --stop_on_errors makes the command fail and exit instead. --no_stop_on_fail is withdrawn. Lack of memory is never an error: requests wait in a queue until enough memory is free for the next pending one.
 
 ## Progress
 
