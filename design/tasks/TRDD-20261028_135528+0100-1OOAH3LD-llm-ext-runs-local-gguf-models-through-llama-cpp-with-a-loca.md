@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: design
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:05:17+0100
+updated: 2026-10-28T14:08:05+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -48,3 +48,5 @@ Model tag: use AD-Q6_K (exact file LFM3-1.7B-Uncensored-AD-Q6_K.gguf, 1587969920
 USER directive verbatim (2026-10-28): "notice that the model LFM3-1.7B is reported as having a context memory of 256k tokens. so make sure to split the input files accordingly (if i remember the benchmarks reported errors above 35-40% of the context, so test it well)"
 Consequence: the design must (a) verify the 256k claim from the model config, (b) start llama-server with an explicit context size, and (c) measure answer quality at increasing context fill (for example 10, 20, 30, 35, 40, 50 percent of the window) and set the input-split size from the measured safe fill, not from the nominal 256k.
 Smoke test 2026-10-28: Homebrew HEAD build b11960-8642541b2 (22 commits after LFM3 merge 19cce69) loaded AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K via llama-cli -hf and answered at about 107 tokens/s; the model emits a thinking block before the answer, which llm-ext must strip.
+USER directive verbatim (2026-10-28): "notice that you can enable thinking for the model, and set the effort to various levels, each one increasing the model output and the context usage. so for complex tasks like finding bugs, you may want to limit the prompt to 30% but use effort=high, or effort=max, for example."
+Consequence: the context budget per request is prompt + thinking + answer; the design maps each llm-ext command to a thinking effort level and measures, per effort level, the largest prompt fill (percent of the window) that still answers correctly, so heavier commands such as bug-finding get a smaller prompt share and a higher effort. Note: the llama.cpp LFM3.jinja template (b11960) exposes enable_thinking and preserve_thinking but no effort parameter; how effort is set must be verified from the model card or the GGUF embedded template.
