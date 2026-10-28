@@ -1,6 +1,6 @@
 # TRDD-1OOAH3LD increment 2a plan: managed llama-server supervisor
 
-Status: after two adversarial review rounds (2026-10-28). NOT approved by the user yet: the user must rule on the three pending points AND on the review-born decisions listed under "Not yet approved". This plan supersedes the increment 2 section of design/specs/TRDD-1OOAH3LD-local-llama-design.md (the disk check moves to 2b, the idle stop is a pending ruling).
+Status: approved in part by the user 2026-10-28, REVISION PENDING. Approved: opt-in key, refuse on change, auto-restart, ship before the key, built-in sleep. Revised by the user the same day (see the card): idle kill after 2 hours without requests, every platform including Windows and Linux with CUDA plus installing llama.cpp when missing, and the --no_stop_on_fail flag. Until the revision is approved, no 2a code is written. This plan supersedes the increment 2 section of design/specs/TRDD-1OOAH3LD-local-llama-design.md.
 Evidence: reports/llama-cpp-profile/20261028_152005+0100-increment-2-facts.md, 20261028_152147+0100-sleep-idle-measure.md, 20261028_152615+0100-increment-2-measure.md, 20261028_152921+0100-increment-2a-measure.md.
 
 ## Rationale
@@ -21,18 +21,18 @@ For a local profile that explicitly opts in, llm-ext starts llama-server itself 
 
 ## Split out
 - 2b: Hugging Face size API (tree API `size` or x-linked-size header) and the free-space check.
-- 2c: API key via --api-key-file (not --api-key, visible in ps) plus authenticating every probe (/props, /v1/models, outage probe) and --no-webui; measured: a key makes /props, /v1/models and chat return 401, /health stays public. The endpoint-flavor cache (detectEndpointFlavor caches per baseUrl) must probe with the key.
+- 2c: API key via --api-key-file (not --api-key, visible in ps) plus authenticating every probe (/props, /v1/models, outage probe) and --no-webui; measured: a key makes /props, /v1/models and chat return 401, /health stays public. The endpoint-flavor cache (detectEndpointFlavor caches per baseUrl) must probe with the key. User ruling 2026-10-28: the key is configured symbolically by llm-ext and is the same for all local services.
 - Separate docs commit: spec line "CLI and MCP" becomes "CLI" (no MCP server exists in this source).
 
-## Not yet approved (review-born decisions the user has not seen)
-- The opt-in key itself and its name `server: managed` (review suggested a more specific name such as `managed_server` to avoid later collisions; not yet decided).
-- A context_window or model change refuses until `llm-ext models server-stop` instead of restarting (affects how increment 4 applies calibrated values).
-- A server stopped from another shell is restarted automatically by the next request.
-- win32 is refused (the supervisor is POSIX-only).
+## Review-born decisions (user rulings 2026-10-28)
+- The opt-in key itself and its name `server: managed` (review suggested a more specific name such as `managed_server` to avoid later collisions; not yet decided). (APPROVED)
+- A context_window or model change refuses until `llm-ext models server-stop` instead of restarting (affects how increment 4 applies calibrated values). (APPROVED)
+- A server stopped from another shell is restarted automatically by the next request. (APPROVED)
+- win32 is refused (the supervisor is POSIX-only). (WITHDRAWN by the user: the server must run on every platform)
 - The forced concurrent-start test is only as strong as the async lock (no fail-open in the new lock).
-- Shipping 2a before 2c, that is, a server with no API key, the web UI on and CORS open to all origins, until 2c lands.
+- Shipping 2a before 2c, that is, a server with no API key, the web UI on and CORS open to all origins, until 2c lands. (APPROVED)
 
 ## Pending user rulings
-1. Idle: --sleep-idle-seconds 1800 (measured 2.5 GB to 169 MB, 0.53 s wake) or a full stop through a watcher process.
-2. Integration test when llama-server is not on PATH: skip with printed reason, or not.
-3. Integration test offline on first run: fail (recommended) or skip.
+1. Idle: RULED 2026-10-28 "Built-in sleep (Recommended)", then revised the same day: sleep, and kill after 2 hours without requests.
+2. Integration test when llama-server is not on PATH: RULED 2026-10-28 "Always fail".
+3. Integration test offline on first run: RULED 2026-10-28 "Always fail".

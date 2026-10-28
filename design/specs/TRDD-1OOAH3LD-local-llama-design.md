@@ -25,7 +25,7 @@ llm-ext runs any llama.cpp model through a local_llama profile that downloads, c
    - Thinking off sends chat_template_kwargs.enable_thinking false; thinking on sends no budget cap, the room is what remains under max_output_tokens.
    - max_tokens is always explicit. Each task kind has a fixed output cap sized to its job plus a stop instruction in the prompt. A reply cut off by the length limit is an error on this path, empty or partial.
    - Precedence: values the user writes in the profile win over calibrated values, which win over built-in defaults.
-2. Server supervisor. (to be superseded by design/specs/TRDD-1OOAH3LD-increment-2a-plan.md once the user approves it; until then this section stays in force)
+2. Server supervisor. (superseded by design/specs/TRDD-1OOAH3LD-increment-2a-plan.md, approved in part 2026-10-28, revision pending)
    - Lazy start on the first model call (CLI; this source has no MCP server). Launch: llama-server -hf <model> --alias <model> --host 127.0.0.1 --port <port> -c <calibrated share x parallel slots> --jinja, detached (bench-spawn pattern), log in the config dir.
    - Identity: pid file plus a command-line check of that pid; a model change restarts our server; an unknown process on the port is a hard failure, never touched.
    - Start lock covers only the launch; every process then waits on /health with a download-aware limit.
