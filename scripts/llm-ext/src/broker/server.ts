@@ -21,12 +21,11 @@ import {
   freePort,
   pidState,
   spawnLlamaServer,
-  stopProcessGroup,
   totalSlots,
   waitReady,
   SPAWN_MARKER,
 } from "../local-llama-server.js";
-import { claimAndSpawn, releaseEntry, roleLogFile, SlotBusyError } from "./registry.js";
+import { claimAndSpawn, releaseEntry, roleLogFile, SlotBusyError, stopOwnServer, type RegistryEntry } from "./registry.js";
 import { queueKey, Scheduler, timingsFromEnv, type BrokerTimings, type Job } from "./scheduler.js";
 import { getConfigDir } from "../config.js";
 import {
@@ -68,6 +67,8 @@ interface RunningServer {
   pid: number;
   pgid: number;
   slots: number;
+  /** The recorded argv: the identity checked before the broker signals it (review M8). */
+  argv: string[];
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -122,6 +123,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let draining = false;
   let exiting = false;
   let lastRequestAt = Date.now();
+  /** Spec 10 "no server and no request": the idle exit also counts from the end of the last server stop. */
+  let lastServerStopAt = 0;
+  let stopping: Promise<void> | null = null;
   let busyLogged = false;
   const token = randomBytes(24).toString("hex");
   mkdirSync(o.dir, { recursive: true });
@@ -141,9 +145,21 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     const s = server;
     if (!s) return;
     server = null;
-    const how = await stopProcessGroup(s.pgid);
-    await releaseEntry(o.dir, o.engine, s.pid);
-    o.log(`stopped main llama-server pid ${s.pid} model '${s.model}' (${why}): ${how}`);
+    // Review C2: current never outlives the server it names.
+    sched.current = null;
+    // Review M8: identity-checked stop (dead pid = release only). Review M4:
+    // the stop is tracked, so pump and shutdown wait for it; an idle exit 1 s
+    // after an idle stop used to exit mid-stop and leave the server running.
+    const p = stopOwnServer(o.dir, o.engine, s, o.log).then((how) => {
+      o.log(`stopped main llama-server pid ${s.pid} model '${s.model}' (${why}): ${how}`);
+    });
+    stopping = p;
+    try {
+      await p;
+    } finally {
+      if (stopping === p) stopping = null;
+      lastServerStopAt = Date.now();
+    }
   };
 
   /** Fail every queued job of `key` (a model-scoped failure: other models are still served, spec 5). */
@@ -156,7 +172,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
 
   const swapTo = async (key: string): Promise<void> => {
     swapping = true;
-    let spawnedPgid: number | null = null;
+    let spawned: RegistryEntry | null = null;
     try {
       if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
       const first = sched.allQueued(key)[0];
@@ -183,10 +199,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model: first.model, ctx: first.ctx };
         },
       });
-      spawnedPgid = entry.pgid;
+      spawned = entry;
       busyLogged = false;
       await waitReady(target, entry.pid, () => exited, logFile);
-      server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, slots: await totalSlots(port) };
+      server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, slots: await totalSlots(port) };
       sched.startRun(key, Date.now());
       o.log(`main llama-server ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}`);
     } catch (err) {
@@ -198,9 +214,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         busyLogged = true;
         return;
       }
-      if (spawnedPgid !== null) {
-        await stopProcessGroup(spawnedPgid).catch(() => undefined);
-        await releaseEntry(o.dir, o.engine, spawnedPgid).catch(() => undefined);
+      if (spawned !== null) {
+        await stopOwnServer(o.dir, o.engine, spawned, o.log).catch((e: Error) => o.log(`stop failed: ${e.message}`));
       }
       const msg = (err as Error).message;
       o.log(`model '${key.split("\u0000")[0]}' failed to start: ${msg}`);
@@ -238,9 +253,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           finish(job, "failed", `llama-server did not answer within ${job.timeoutMs} ms of dispatch (model '${job.model}')`);
           return;
         }
-        // The server died under the request: forget it so the next pump restarts it.
+        // The server died under the request: forget it AND clear current
+        // (review C2: with current still naming the dead model, its queued
+        // jobs were skipped by every rotation rule and hung for ever), so the
+        // next pump starts it again for the remaining work.
         if (server === s && pidState(s.pid) !== "alive") {
           server = null;
+          sched.current = null;
           void releaseEntry(o.dir, o.engine, s.pid).catch(() => undefined);
         }
         finish(job, "failed", `llama-server request failed (model '${job.model}'): ${err.message}`);
@@ -258,6 +277,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     o.log(`broker exiting: ${why}`);
     for (const ac of running.values()) ac.abort();
     for (const j of sched.allQueued()) finish(j, "failed", `broker exiting: ${why}`);
+    if (stopping) await stopping.catch(() => undefined);
     await stopServer(`broker exit: ${why}`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
     removeBrokerStateIfOwn(o.dir, o.engine, process.pid);
     http.close();
@@ -265,7 +285,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   };
 
   function pump(): void {
-    if (exiting || swapping) return;
+    // A server stop in progress (review M4): nothing may start a new server or
+    // decide to exit until it has finished and released its registry entry.
+    if (exiting || swapping || stopping) return;
     const now = Date.now();
     for (const j of sched.dropAbandoned(now, t.abandonMs)) {
       finish(j, "cancelled", "abandoned: not polled");
@@ -278,6 +300,16 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     for (const [id, j] of jobs) {
       const end = Math.max(j.lastPolledAt, j.finishedAt ?? 0);
       if ((j.state === "done" || j.state === "failed" || j.state === "cancelled") && j.pollers === 0 && now - end > FINISHED_KEEP_MS) jobs.delete(id);
+    }
+    // Review C2: a server that died while idle (no request in flight saw it)
+    // is forgotten HERE, before a job goes to its dead port; current is
+    // cleared with it, so its queued work makes wantRotation start it again.
+    if (server && pidState(server.pid) === "dead") {
+      const dead = server;
+      server = null;
+      sched.current = null;
+      o.log(`main llama-server pid ${dead.pid} (model '${dead.model}') exited on its own; it is restarted when work arrives`);
+      void releaseEntry(o.dir, o.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
     }
     if (server && server.key !== sched.current) sched.current = server.key;
     const next = sched.wantRotation(now, running.size, t);
@@ -300,7 +332,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (idle && server && now - lastRequestAt > t.idleServerMs) {
       void stopServer(`no request for ${t.idleServerMs} ms`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
       sched.current = null;
-    } else if (idle && !server && now - lastRequestAt > t.idleExitMs) {
+    } else if (idle && !server && now - Math.max(lastRequestAt, lastServerStopAt) > t.idleExitMs) {
       void shutdown(`no server and no request for ${t.idleExitMs} ms`);
     }
   }

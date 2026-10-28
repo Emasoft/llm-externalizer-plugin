@@ -16,7 +16,7 @@
 
 import { execFile, type ChildProcess } from "node:child_process";
 import { spawnDetachedChild } from "./bench-spawn.js";
-import { existsSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, renameSync, rmdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createConnection, createServer } from "node:net";
 import { homedir } from "node:os";
@@ -170,38 +170,52 @@ export function tokenizeWindowsCommandLine(line: string): string[] {
   return out;
 }
 
-function execText(cmd: string, args: string[]): Promise<string | null> {
-  return new Promise((resolve) => {
-    execFile(cmd, args, { windowsHide: true, timeout: 10_000 }, (err, stdout) => resolve(err ? null : String(stdout)));
+/**
+ * Run a command and return its stdout. A failure THROWS (review M6): every
+ * caller uses the output to decide whether a process exists, and "ps failed"
+ * read as "no process" made a live server look dead (a second main) and a stop
+ * look done. maxBuffer is raised from execFile's 1 MB default: `ps -axww` on a
+ * machine with long Chrome/Electron argv goes past it.
+ */
+function execText(cmd: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, { windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) =>
+      err ? reject(new ManagedServerError(`${cmd} ${args.join(" ")} failed: ${err.message}`)) : resolve(String(stdout)),
+    );
   });
 }
 
-/** The live argv of `pid`, per platform (Revision 4), or null when unreadable. */
+/**
+ * The live argv of `pid`, per platform (Revision 4), or null when the process
+ * is gone. A read that fails while the pid is still alive THROWS (review M6):
+ * "unreadable" must never count as "not our server".
+ */
 export async function readCommandLine(pid: number): Promise<string[] | null> {
-  if (process.platform === "linux") {
-    try {
-      const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
-      const parts = raw.split("\0");
+  if (pidState(pid) === "dead") return null;
+  try {
+    if (process.platform === "linux") {
+      const parts = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0");
       if (parts[parts.length - 1] === "") parts.pop();
       return parts.length > 0 ? parts : null;
-    } catch {
-      return null;
     }
+    if (process.platform === "win32") {
+      const out = await execText("powershell.exe", [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
+      ]);
+      const line = out.trim();
+      return line ? tokenizeWindowsCommandLine(line) : null;
+    }
+    // darwin and other POSIX: -ww so a long argv is never truncated (the model token is near the end).
+    const line = (await execText("ps", ["-ww", "-o", "command=", "-p", String(pid)])).trim();
+    return line ? line.split(/\s+/) : null;
+  } catch (err) {
+    // `ps -p` exits 1 for a pid that exited meanwhile: only that case is "gone".
+    if (pidState(pid) === "dead") return null;
+    throw err instanceof ManagedServerError ? err : new ManagedServerError(`cannot read the command line of pid ${pid}: ${(err as Error).message}`);
   }
-  if (process.platform === "win32") {
-    const out = await execText("powershell.exe", [
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`,
-    ]);
-    const line = out?.trim();
-    return line ? tokenizeWindowsCommandLine(line) : null;
-  }
-  // darwin and other POSIX: -ww so a long argv is never truncated (the model token is near the end).
-  const out = await execText("ps", ["-ww", "-o", "command=", "-p", String(pid)]);
-  const line = out?.trim();
-  return line ? line.split(/\s+/) : null;
 }
 
 /** kill(pid, 0): "alive", "dead", or "eperm" (alive but owned by someone else: never ours). */
@@ -221,7 +235,7 @@ export function pidState(pid: number): "alive" | "dead" | "eperm" {
  * ManagedServerError, never an unlocked run. Same stale rule as mkdir-lock.ts
  * (a lock dir older than STALE_MS is taken over).
  */
-export async function withAsyncLock<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+export async function withAsyncLock<T>(dir: string, fn: () => Promise<T>, refreshMs = Math.floor(STALE_MS / 3)): Promise<T> {
   const deadline = Date.now() + LOCK_WAIT_MS;
   for (;;) {
     try {
@@ -246,9 +260,24 @@ export async function withAsyncLock<T>(dir: string, fn: () => Promise<T>): Promi
       await sleep(20 + Math.floor(Math.random() * 30));
     }
   }
+  // Review M12: a holder can legitimately keep the lock past STALE_MS (two
+  // group stops under the registry lock take 10 s grace + verification each),
+  // and a waiter would then take it over as stale and spawn a second server.
+  // Touching the lock dir while held keeps its mtime fresh; unref'd so it
+  // never keeps a process alive.
+  const refresh = setInterval(() => {
+    try {
+      const now = new Date();
+      utimesSync(dir, now, now);
+    } catch {
+      /* taken over or removed: the holder finds out at release */
+    }
+  }, refreshMs);
+  refresh.unref();
   try {
     return await fn();
   } finally {
+    clearInterval(refresh);
     try {
       rmdirSync(dir);
     } catch {
@@ -455,12 +484,13 @@ export interface ProcessRow {
 export async function processSnapshot(): Promise<ProcessRow[]> {
   if (process.platform === "win32") return [];
   const out = await execText("ps", ["-axww", "-o", "pid=,pgid=,command="]);
-  if (!out) return [];
   const rows: ProcessRow[] = [];
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
     if (m) rows.push({ pid: Number(m[1]), pgid: Number(m[2]), argv: m[3].trim().split(/\s+/) });
   }
+  // A snapshot always lists at least this process: an empty one is a failed read, never "no process" (review M6).
+  if (rows.length === 0) throw new ManagedServerError("ps returned no process rows");
   return rows;
 }
 
@@ -469,21 +499,40 @@ export async function groupMembers(pgid: number): Promise<number[]> {
   return (await processSnapshot()).filter((r) => r.pgid === pgid).map((r) => r.pid);
 }
 
+/** true when an argv[0] names a llama-server executable (any directory). */
+export function isLlamaServerArgv0(token: string | undefined): boolean {
+  const b = token ? basename(token.replace(/\\/g, "/")) : "";
+  return b === "llama-server" || b.toLowerCase() === "llama-server.exe";
+}
+
 /**
  * Stop a whole process group: SIGTERM to -pgid, SIGKILL after STOP_GRACE_MS,
  * then a process snapshot must show no member left (spec point 7), else a
  * ManagedServerError: a server we could not stop must never be counted as
  * gone, or the next spawn would make two. Windows has no groups: the pid is
  * ended at once.
+ *
+ * Kill safety (review M7), checked HERE so every caller inherits it: the
+ * group must be > 1 (kill(-0) is our own group, kill(-1) every process the
+ * user owns), and its leader (pid === pgid) must be a llama-server. Anything
+ * else is refused: llm-ext never signals a process it did not start.
  */
 export async function stopProcessGroup(pgid: number, graceMs = STOP_GRACE_MS): Promise<string> {
+  if (!Number.isInteger(pgid) || pgid <= 1) throw new ManagedServerError(`refusing to stop process group ${pgid}: not a valid llama-server group`);
   if (process.platform === "win32") {
-    try {
-      process.kill(pgid);
-    } catch {
-      /* already gone */
-    }
+    const argv = await readCommandLine(pgid);
+    if (argv === null) return "already gone";
+    if (!isLlamaServerArgv0(argv[0])) throw new ManagedServerError(`refusing to stop pid ${pgid}: it is not a llama-server (${argv[0]})`);
+    process.kill(pgid);
     return "ended at once (Windows)";
+  }
+  const members = (await processSnapshot()).filter((r) => r.pgid === pgid);
+  if (members.length === 0) return "already gone";
+  const leader = members.find((r) => r.pid === pgid);
+  if (!leader || !isLlamaServerArgv0(leader.argv[0])) {
+    throw new ManagedServerError(
+      `refusing to signal process group ${pgid}: its leader is not a llama-server (${leader ? leader.argv[0] : "no leader"}); llm-ext never touches a process it did not start`,
+    );
   }
   const signal = (sig: NodeJS.Signals): void => {
     try {

@@ -12,7 +12,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,8 +22,8 @@ import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { readBrokerState, TOKEN_HEADER } from "./protocol.js";
-import { readRegistry, roleLogFile } from "./registry.js";
-import { processSnapshot, SPAWN_MARKER } from "../local-llama-server.js";
+import { claimAndSpawn, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
+import { processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LLAMA_CACHE = "/tmp/llm-ext-llama-cache";
@@ -441,4 +441,146 @@ describe("global timeout flags through the real CLI entry", () => {
     expect(r.code).toBe(1);
     expect(r.out).toMatch(/--timeout expects a whole number of seconds/);
   }, 60_000);
+});
+
+// ── Review group 1: kill safety (M6, M7, M8, M12) and the dead-server hang (C2) ──
+
+/** A detached child that is NOT a llama-server; killed by the caller. */
+function foreignProcess(extraArgs: string[] = []): number {
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)", "--", ...extraArgs], { detached: true, stdio: "ignore" });
+  child.unref();
+  return child.pid!;
+}
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function killQuietly(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    /* gone */
+  }
+}
+
+describe("kill safety (review M6, M7, M8, M12)", () => {
+  it("stopProcessGroup refuses pgid 0, 1 and negative values", async () => {
+    for (const g of [0, 1, -5]) await expect(stopProcessGroup(g, 100)).rejects.toThrow(/not a valid llama-server group/);
+  });
+
+  it("stopProcessGroup refuses a group whose leader is not a llama-server, and the process survives", async () => {
+    const pid = foreignProcess();
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      await expect(stopProcessGroup(pid, 100)).rejects.toThrow(/leader is not a llama-server/);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      killQuietly(pid);
+    }
+  });
+
+  it("invariant: a non-llama-server process whose argv carries the marker survives the sweep", async () => {
+    const dir = newDir();
+    const marker = roleLogFile(dir, "main");
+    const pid = foreignProcess(["--log-file", marker]);
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      const row = (await processSnapshot()).find((r) => r.pid === pid)!;
+      expect(row.argv[row.argv.indexOf("--log-file") + 1]).toBe(marker);
+      await expect(
+        claimAndSpawn({ dir, engine: "llama", role: "main", ownerPid: process.pid, spawn: () => Promise.reject(new Error("no spawn in this test")) }),
+      ).rejects.toThrow(/no spawn in this test/);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      killQuietly(pid);
+    }
+  });
+
+  it("stopOwnServer: a dead pid is only released; a live pid with another argv is released, never signalled", async () => {
+    const dir = newDir();
+    const log: string[] = [];
+    const dead = spawn(process.execPath, ["-e", ""], { stdio: "ignore" });
+    await new Promise((r) => dead.once("exit", r));
+    expect(await stopOwnServer(dir, "llama", { pid: dead.pid!, pgid: dead.pid!, argv: ["llama-server", "--port", "1"] }, (m) => log.push(m))).toBe("already exited");
+    const pid = foreignProcess();
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      const how = await stopOwnServer(dir, "llama", { pid, pgid: pid, argv: ["llama-server", "--port", "1"] }, (m) => log.push(m));
+      expect(how).toMatch(/nothing was signalled/);
+      expect(alive(pid)).toBe(true);
+    } finally {
+      killQuietly(pid);
+    }
+  });
+
+  it("a failed ps is an error, never 'no process'", async () => {
+    const saved = process.env.PATH;
+    process.env.PATH = "/llm-ext-no-such-dir";
+    try {
+      await expect(processSnapshot()).rejects.toThrow(/ps .* failed/);
+      // This process is alive: an unreadable argv must throw, not read as "gone".
+      await expect(readCommandLine(process.pid)).rejects.toThrow(/failed/);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  it("the registry drops corrupt entries (pgid 0/1, pgid != pid, not a llama-server)", () => {
+    const dir = newDir();
+    const ok = { role: "main", pid: 4242, pgid: 4242, port: 1, argv: ["/x/llama-server", "-m", "a"], model: "a", ctx: 0, ownerPid: 4243, startedAt: "" };
+    const entries = [ok, { ...ok, pid: 1, pgid: 1 }, { ...ok, pgid: 0 }, { ...ok, pgid: 4241 }, { ...ok, argv: ["bash"] }];
+    writeFileSync(registryPath(dir, "llama"), JSON.stringify({ entries }));
+    expect(readRegistry(dir, "llama")).toEqual([ok]);
+  });
+
+  it("a held lock keeps a fresh mtime, so a waiter never takes it over as stale", async () => {
+    const dir = newDir();
+    const lock = join(dir, "x.lock");
+    await withAsyncLock(
+      lock,
+      async () => {
+        const old = new Date(Date.now() - 3_600_000);
+        utimesSync(lock, old, old);
+        await new Promise((r) => setTimeout(r, 700));
+        expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(1000);
+      },
+      200,
+    );
+  });
+});
+
+describe("a dead server never hangs its model's jobs (review C2)", () => {
+  const mainPid = async (dir: string): Promise<number> => {
+    const e = readRegistry(dir, "llama").find((x) => x.role === "main")!;
+    const row = (await processSnapshot()).find((r) => r.pid === e.pid)!;
+    expect(row.argv[0]).toMatch(/llama-server$/);
+    return e.pid;
+  };
+
+  it("a server that died while idle is restarted by the next request", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    process.kill(await mainPid(dir), "SIGKILL");
+    await new Promise((r) => setTimeout(r, 300));
+    const r = await runClient(dir, jobsOf(A, 2));
+    expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
+    expect(spawnLines(dir)).toHaveLength(2);
+  }, 300_000);
+
+  it("a server that dies under a batch: the batch ends (no hang) and the rest is served by a restarted server", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    const pid = await mainPid(dir);
+    const batch = runClient(dir, jobsOf(A, 60, { maxTokens: 120 }));
+    await new Promise((r) => setTimeout(r, 1200));
+    process.kill(pid, "SIGKILL");
+    const r = await batch;
+    expect(r.results.filter((x) => x.status === 200).length).toBeGreaterThan(0);
+    expect(r.results.every((x) => x.status === 200 || /BrokerJobError|llama-server request failed/.test(x.error ?? ""))).toBe(true);
+    expect(spawnLines(dir)).toHaveLength(2);
+  }, 300_000);
 });

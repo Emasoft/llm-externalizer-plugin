@@ -12,7 +12,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { isLlamaServerArgv0, ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 
 export type ServerRole = "main" | "cal";
 
@@ -52,10 +52,27 @@ export function roleLogFile(dir: string, role: ServerRole): string {
   return join(dir, `llama-server-${role}.log`);
 }
 
+/**
+ * The registry entries, validated: the file is plain JSON a crash or a hand
+ * edit can corrupt, and a pgid of 0 or 1 reaching a kill would signal our own
+ * group or every process the user owns (review M7). An entry that is not a
+ * well-formed llama-server group leader record is dropped.
+ */
 export function readRegistry(dir: string, engine: string): RegistryEntry[] {
   try {
     const raw = JSON.parse(readFileSync(registryPath(dir, engine), "utf8")) as { entries?: unknown };
-    return Array.isArray(raw.entries) ? (raw.entries as RegistryEntry[]) : [];
+    if (!Array.isArray(raw.entries)) return [];
+    return (raw.entries as Array<Partial<RegistryEntry>>).filter(
+      (e): e is RegistryEntry =>
+        (e.role === "main" || e.role === "cal") &&
+        Number.isInteger(e.pid) &&
+        (e.pid as number) > 1 &&
+        e.pgid === e.pid &&
+        Number.isInteger(e.ownerPid) &&
+        Array.isArray(e.argv) &&
+        e.argv.every((t) => typeof t === "string") &&
+        isLlamaServerArgv0(e.argv[0]),
+    );
   } catch {
     return [];
   }
@@ -74,7 +91,7 @@ function sameArgv(a: readonly string[], b: readonly string[]): boolean {
 }
 
 /** An entry counts only when its pid is alive AND its live argv still matches the recorded one (a reused pid is not our server). */
-async function entryLive(e: RegistryEntry): Promise<boolean> {
+async function entryLive(e: Pick<RegistryEntry, "pid" | "argv">): Promise<boolean> {
   if (pidState(e.pid) !== "alive") return false;
   const live = await readCommandLine(e.pid);
   // darwin `ps` splits on whitespace: compare token lists built the same way (paths with whitespace are refused by parseManagedModel).
@@ -116,6 +133,11 @@ export async function claimAndSpawn(o: ClaimOptions): Promise<RegistryEntry> {
     for (const row of await processSnapshot()) {
       const i = row.argv.indexOf("--log-file");
       if (i < 0 || row.argv[i + 1] !== marker || kept.some((e) => e.pid === row.pid)) continue;
+      // Review M7: the marker alone is not identity. `grep -- --log-file <marker>`
+      // or an agent's diagnostic carries it too, and may share a foreign group
+      // (a terminal job, a Claude Code session). Only a llama-server that leads
+      // its own group is ours to stop (stopProcessGroup re-asserts this).
+      if (row.pid !== row.pgid || row.pgid <= 1 || !isLlamaServerArgv0(row.argv[0])) continue;
       const how = await stopProcessGroup(row.pgid);
       o.log?.(`stopped unrecorded ${o.role} llama-server pid ${row.pid} (pgid ${row.pgid}, found by its --log-file marker): ${how}`);
     }
@@ -140,4 +162,29 @@ export async function releaseEntry(dir: string, engine: string, pid: number): Pr
   await withAsyncLock(registryLockPath(dir, engine), async () => {
     writeRegistry(dir, engine, readRegistry(dir, engine).filter((e) => e.pid !== pid));
   });
+}
+
+
+/**
+ * The broker stopping its OWN recorded server (review M8). A server that died
+ * while idle can sit in the broker's memory for hours; by then its pid (and,
+ * on macOS, a shell job's equal pgid) may belong to someone else. So: a dead
+ * pid only releases the entry; a live pid is stopped only while its argv
+ * still equals the recorded argv; anything else is released, never signalled.
+ */
+export async function stopOwnServer(
+  dir: string,
+  engine: string,
+  e: Pick<RegistryEntry, "pid" | "pgid" | "argv">,
+  log: (msg: string) => void,
+): Promise<string> {
+  let how: string;
+  if (pidState(e.pid) === "dead") how = "already exited";
+  else if (await entryLive(e)) how = await stopProcessGroup(e.pgid);
+  else {
+    how = "pid now runs another program; nothing was signalled";
+    log(`server pid ${e.pid} no longer matches its recorded argv: released without a signal`);
+  }
+  await releaseEntry(dir, engine, e.pid);
+  return how;
 }
