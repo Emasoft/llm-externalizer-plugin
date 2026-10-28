@@ -14,7 +14,7 @@ llm-ext runs any llama.cpp model through a local_llama profile that downloads, c
 - New local models are calibrated automatically (context %, max input tokens, max output tokens, thinking on/off, structured output).
 - During calibration: "No, wait" (commands on that model refuse with a calibrating, N minutes left message).
 - Sharing the server: "Calibrate when idle (Recommended)" (calibration pauses when a user request arrives on the same server).
-- After a llama.cpp upgrade: "Quick check only (Recommended)" (a few-minute spot check of saved values; full recalibration only if it fails or on request).
+- After a llama.cpp (or any inference engine) upgrade: "Quick check only (Recommended)", clarified by the user: only a quick smoke check that the model still loads and answers without errors on the new engine; never a recalibration. The full calibration benchmark runs only when a model is added or updated in a profile, for every profile.
 - Idle server: "Smaller context + idle stop" (context capped at calibrated usable share times parallel slots; the server stops after 30 minutes without requests).
 
 ## Increments (each gets its own proposal, review and commit)
@@ -34,7 +34,7 @@ llm-ext runs any llama.cpp model through a local_llama profile that downloads, c
    - Idle stop after 30 minutes without requests. Commands: llm-ext models server-status (memory, calibration progress) and server-stop.
 3. Input sizing: the input budget is context window x input share minus output cap minus prompt overhead, tokens counted through /tokenize. Precedence: explicit per-call max_payload_kb, then profile/calibrated share, then the 400 KB default.
 4. Automatic calibration.
-   - Triggered when local_llama holds a model with no calibration record; runs as a detached background job with a per-model lock (no fixed time limit, pid liveness), a progress record so it resumes after a crash or sleep, and pauses while a user request is in flight.
+   - Triggered only when a profile gains a new or updated model (settings.yaml), once per model, for every profile; runs as a detached background job with a per-model lock (no fixed time limit, pid liveness), a progress record so it resumes after a crash or sleep, and pauses while a user request is in flight.
    - First step reads /props (chat_template_caps) and skips dimensions the model lacks (thinking, structured output), recording them as unsupported.
    - Safe fill: fixed grid 10/20/30/35/40 percent, at least 5 repeats per step, planted item at several positions; highest step passing at least 80 percent, hard-capped at 40 percent.
    - Tasks scored without another model: a planted fact (exact string in the answer) and a planted bug in real code (answer must name the exact line or the changed identifier).
