@@ -63,6 +63,33 @@ jobs:
         working-directory: scripts/llm-ext
         run: npm run build
 
+      # broker.test.ts drives a real llama-server (no mocks; a missing binary or
+      # network must FAIL the test, never skip it). Pinned release + SHA-256 of the
+      # asset (the release publishes it as the asset digest; verified locally by
+      # downloading b11969 and hashing). A mismatch fails the step.
+      - name: Install llama-server
+        env:
+          LLAMA_TAG: b11969
+          LLAMA_SHA256: ad8b3af2ec3201cd21287e4d457356ccd486ea23410fb7f7d8238b3dd82464d6
+        run: |
+          set -euo pipefail
+          asset="llama-${LLAMA_TAG}-bin-ubuntu-x64.tar.gz"
+          dest="${RUNNER_TEMP}/llama-cpp"
+          mkdir -p "$dest"
+          curl -fsSL --retry 3 -o "${dest}/${asset}" \
+            "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/${asset}"
+          echo "${LLAMA_SHA256}  ${dest}/${asset}" | sha256sum -c -
+          tar -xzf "${dest}/${asset}" -C "$dest"
+          echo "${dest}/llama-${LLAMA_TAG}" >> "$GITHUB_PATH"
+          "${dest}/llama-${LLAMA_TAG}/llama-server" --version
+
+      # The two tiny GGUF models broker.test.ts pulls through `-hf` into
+      # LLAMA_CACHE; the key is the model list so a changed list refetches.
+      - name: Cache llama models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: /tmp/llm-ext-llama-cache
+          key: llama-models-ggml-org-tiny-llamas-stories15M-q4_0-stories260K-v1
       - name: Test
         working-directory: scripts/llm-ext
         run: npm test
