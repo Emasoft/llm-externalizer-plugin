@@ -15,6 +15,8 @@
 
 export const QUEUE_TIMEOUT_FLAGS: readonly string[] = ["--queue_timeout", "--queue-timeout"];
 export const COMMAND_TIMEOUT_FLAGS: readonly string[] = ["--command_timeout", "--command-timeout", "--timeout"];
+/** The largest value a Node timer accepts, in whole seconds: floor((2^31 - 1) / 1000). */
+export const MAX_TIMEOUT_S = 2_147_483;
 
 export interface TimeoutFlags {
   argv: string[];
@@ -26,6 +28,9 @@ function seconds(flag: string, raw: string | undefined): number {
   if (raw === undefined || !/^\d+$/.test(raw) || Number(raw) < 1) {
     throw new Error(`${flag} expects a whole number of seconds (1 or more), got ${raw === undefined ? "nothing" : `'${raw}'`}`);
   }
+  // Review m2: Node turns a timer delay above 2^31-1 ms (or Infinity) into 1 ms,
+  // so a huge --command_timeout would fire at once. Refused, never clamped.
+  if (Number(raw) > MAX_TIMEOUT_S) throw new Error(`${flag} is at most ${MAX_TIMEOUT_S} seconds (about 24.8 days), got '${raw}'`);
   return Number(raw);
 }
 

@@ -69,6 +69,8 @@ interface RunningServer {
   slots: number;
   /** The recorded argv: the identity checked before the broker signals it (review M8). */
   argv: string[];
+  /** Review M13: the per-spawn key the server requires (LLAMA_API_KEY). */
+  apiKey: string;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -94,10 +96,17 @@ function readBody(req: IncomingMessage): Promise<string> {
  * importable) would cut any generation longer than that. node:http has no
  * such timeout; the job's own execution timeout bounds it instead.
  */
-function postJson(port: number, body: string, signal: AbortSignal): Promise<{ status: number; body: string; contentType: string }> {
+function postJson(port: number, apiKey: string, body: string, signal: AbortSignal): Promise<{ status: number; body: string; contentType: string }> {
   return new Promise((resolve, reject) => {
     const req = httpRequest(
-      { host: "127.0.0.1", port, path: "/v1/chat/completions", method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }, signal },
+      {
+        host: "127.0.0.1",
+        port,
+        path: "/v1/chat/completions",
+        method: "POST",
+        headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body), authorization: `Bearer ${apiKey}` },
+        signal,
+      },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
@@ -141,6 +150,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     job.state = state;
     job.finishedAt = Date.now();
     if (error !== undefined) job.error = error;
+    job.body = ""; // review m5: a finished job never needs its request body again
     notify(job);
   };
 
@@ -188,6 +198,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const logFile = roleLogFile(o.dir, "main");
       let exited = false;
       const loadStartedAt = Date.now();
+      // Review M13 (hardening): a fresh key per spawn, so no other local process can use the server behind the broker's back.
+      const apiKey = randomBytes(24).toString("hex");
       const loadingNow = claimAndSpawn({
         dir: o.dir,
         engine: o.engine,
@@ -195,7 +207,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         ownerPid: process.pid,
         log: o.log,
         spawn: async () => {
-          const s = await spawnLlamaServer(target, parsed.argv, logFile);
+          const s = await spawnLlamaServer(target, parsed.argv, logFile, apiKey);
           s.child.once("exit", () => {
             exited = true;
           });
@@ -212,8 +224,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (busyLogged) o.log(`main slot free after ${busyTries} busy attempts`);
       busyLogged = false;
       busyTries = 0;
-      await waitReady(target, entry.pid, () => exited, logFile);
-      server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, slots: await totalSlots(port) };
+      await waitReady(target, entry.pid, () => exited, logFile, apiKey);
+      server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: await totalSlots(port, apiKey) };
       // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
       sched.recordLoad(key, Date.now() - loadStartedAt);
       sched.startRun(key, Date.now());
@@ -261,8 +273,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     } catch {
       body = job.body;
     }
+    // Review m5: the request body is no longer needed once the outgoing copy exists.
+    job.body = "";
     const timeout = AbortSignal.timeout(job.timeoutMs);
-    postJson(s.port, body, AbortSignal.any([ac.signal, timeout]))
+    postJson(s.port, s.apiKey, body, AbortSignal.any([ac.signal, timeout]))
       .then((r) => {
         job.result = r;
         finish(job, "done");
@@ -467,6 +481,11 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         if (job.dispatchedAt !== undefined) h[DISPATCHED_HEADER] = String(job.dispatchedAt);
         return reply(res, 204, undefined, h);
       }
+      // Review m5: once the result reached its caller, forget the job and its bodies
+      // (up to 64 MB each) at once instead of FINISHED_KEEP_MS later. Only after
+      // the reply was fully flushed: a reply lost in transit leaves the job
+      // readable for a re-poll. A later poll of a delivered job gets 404.
+      res.once("finish", () => jobs.delete(job.id));
       return reply(res, 200, finishedReply(job));
     }
     if (m && req.method === "DELETE") {

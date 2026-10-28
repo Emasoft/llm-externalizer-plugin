@@ -252,6 +252,10 @@ const pendingByScope = new WeakMap<object, Map<string, string>>();
 const active = new Map<string, BrokerEndpoint>();
 /** Set once the command is being stopped: no further job is submitted. */
 let stopped: string | null = null;
+/** Job submissions (POST /v1/jobs) still in flight (review m1). */
+const submitting = new Set<Promise<string>>();
+/** How long a --command_timeout waits for in-flight submissions before it cancels what it has. */
+const SUBMIT_DRAIN_MS = 5000;
 
 /**
  * --command_timeout expiry (USER ruling 2026-10-28): stop submitting and
@@ -260,6 +264,8 @@ let stopped: string | null = null;
  */
 export async function cancelAllBrokerJobs(reason: string): Promise<number> {
   stopped = reason;
+  // Review m1: wait (bounded) for submissions still in flight, so their jobs are in `active` before the snapshot.
+  await Promise.race([Promise.allSettled([...submitting]), new Promise((r) => setTimeout(r, SUBMIT_DRAIN_MS).unref())]);
   const jobs = [...active.entries()];
   active.clear();
   await Promise.all(jobs.map(([id, ep]) => cancel(ep, id)));
@@ -305,15 +311,28 @@ export async function brokerExchange(
           [TIMEOUT_HEADER]: String(req.timeoutMs),
         };
         if (req.queueTimeoutMs !== undefined) h[QUEUE_TIMEOUT_HEADER] = String(req.queueTimeoutMs);
-        const res = await fetch(`${ep.url}/v1/jobs`, { method: "POST", headers: h, body: req.body, signal: opts.signal }).catch((e: unknown) => {
-          networkFailure = true;
-          throw e;
-        });
-        const text = await res.text();
-        if (res.status !== 202) throw new BrokerUnavailableError(`broker refused the job: HTTP ${res.status} ${text.slice(0, 200)}`);
-        id = (JSON.parse(text) as { job: string }).job;
+        // Review m1: the job is tracked from the START of its POST. The submission
+        // promise is in `submitting` until the id is in `active`, so a
+        // --command_timeout firing mid-POST waits for it and cancels the job,
+        // instead of leaving it queued until the abandon rule drops it.
+        const post = (async (): Promise<string> => {
+          const res = await fetch(`${ep.url}/v1/jobs`, { method: "POST", headers: h, body: req.body, signal: opts.signal }).catch((e: unknown) => {
+            networkFailure = true;
+            throw e;
+          });
+          const text = await res.text();
+          if (res.status !== 202) throw new BrokerUnavailableError(`broker refused the job: HTTP ${res.status} ${text.slice(0, 200)}`);
+          const jobId = (JSON.parse(text) as { job: string }).job;
+          active.set(jobId, ep);
+          return jobId;
+        })();
+        submitting.add(post);
+        try {
+          id = await post;
+        } finally {
+          submitting.delete(post);
+        }
         pending.set(reuseKey, id);
-        active.set(id, ep);
       }
       const res = await fetch(`${ep.url}/v1/jobs/${id}?wait=${POLL_WAIT_S}`, { headers, signal: opts.signal }).catch((e: unknown) => {
         networkFailure = !opts.signal?.aborted;
@@ -332,7 +351,20 @@ export async function brokerExchange(
         if (++resubmits > 1) throw new BrokerUnavailableError("the broker lost the job twice");
         continue;
       }
-      const reply = (await res.json()) as JobReply;
+      // Review m4: only 200 carries a job result. Any other status (401, 500, …) or
+      // a body that is not a JobReply is the BROKER failing (endpoint), never a
+      // model-scoped BrokerJobError ("… undefined: …") nor a bare SyntaxError.
+      if (res.status !== 200) throw new BrokerUnavailableError(`broker poll failed: HTTP ${res.status} ${(await res.text()).slice(0, 200)}`);
+      const replyText = await res.text();
+      let reply: JobReply;
+      try {
+        reply = JSON.parse(replyText) as JobReply;
+      } catch {
+        throw new BrokerUnavailableError(`broker poll reply is not JSON: ${replyText.slice(0, 200)}`);
+      }
+      if (typeof reply?.state !== "string" || typeof reply.submittedAt !== "number") {
+        throw new BrokerUnavailableError(`broker poll reply is not a job result: ${replyText.slice(0, 200)}`);
+      }
       pending.delete(reuseKey);
       active.delete(id);
       id = undefined;

@@ -13,18 +13,19 @@
 
 import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
-import { extractTimeoutFlags } from "../cli/timeout-flags.js";
+import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { readBrokerState, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
-import { claimAndSpawn, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
-import { BrokerJobError, BrokerUnavailableError, endpointFailureKind } from "./client.js";
+import { CTX_HEADER, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
+import { llamaServerEnv, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
 import { clockForCall, retryWindowClosed, startRetryClock, type RetryClock } from "../provider/http.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -668,8 +669,12 @@ describe("a dead server never hangs its model's jobs (review C2)", () => {
     const dir = newDir();
     await runClient(dir, jobsOf(A, 1));
     const pid = await mainPid(dir);
+    // Frozen first, so the batch is surely dispatched to it and still running
+    // when it dies: on an idle machine 60 short jobs finished inside any fixed
+    // delay, and the kill then hit an idle server (no restart, flaky).
+    process.kill(pid, "SIGSTOP");
     const batch = runClient(dir, jobsOf(A, 60, { maxTokens: 120 }));
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 1500));
     process.kill(pid, "SIGKILL");
     const r = await batch;
     expect(r.results.filter((x) => x.status === 200).length).toBeGreaterThan(0);
@@ -714,6 +719,7 @@ describe("retry clock and walker classification (review M10, M11)", () => {
 });
 
 describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
+  const mainEntryOf = (dir: string) => readRegistry(dir, "llama").find((e) => e.role === "main")!;
   const waitGone = async (pid: number, ms: number): Promise<void> => {
     for (let i = 0; i < ms / 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
   };
@@ -751,11 +757,11 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
   it("M3: while the old broker drains, the new one retries the busy main slot about once per second, not in a loop", async () => {
     const dir = newDir();
     await runClient(dir, jobsOf(A, 1), {}, "t1");
-    // A long batch keeps the old broker (and its main slot) busy through the handover.
-    const old = runClient(dir, jobsOf(A, 40, { maxTokens: 120 }), {}, "t1");
-    await new Promise((r) => setTimeout(r, 1500));
+    // Frozen, the old main ignores the drain's SIGTERM until the SIGKILL
+    // escalation (STOP_GRACE_MS, 10 s), so the new broker surely waits for the
+    // slot that long (a timed batch finished too fast on an idle machine).
+    process.kill(mainEntryOf(dir).pid, "SIGSTOP");
     const next = await runClient(dir, jobsOf(B, 1), {}, "t2");
-    await old;
     expect(next.results[0].status).toBe(200);
     const lines = readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n");
     const waitLine = lines.find((l) => l.includes("waiting for the main slot"));
@@ -801,4 +807,155 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
     await client;
     expect((await processSnapshot()).filter((p) => p.pgid === pid)).toEqual([]);
   }, 300_000);
+});
+
+/** The environment of a live process of this user, as KEY=VALUE text (macOS `ps -E`, Linux /proc). */
+function processEnvText(pid: number): string {
+  if (process.platform === "linux") return readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").join("\n");
+  return execFileSync("ps", ["-E", "-ww", "-p", String(pid), "-o", "command="], { encoding: "utf8" });
+}
+
+describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
+  const mainEntry = (dir: string) => readRegistry(dir, "llama").find((e) => e.role === "main")!;
+
+  it("M13 + m7: the main server refuses a request without its per-spawn key, the key is not in its argv, and no client API key reaches it", async () => {
+    const dir = newDir();
+    const r = await runClient(dir, jobsOf(A, 1), { OPENROUTER_API_KEY: "sentinel-or-key-4711", LLAMA_API_KEY: "client-chosen-key" });
+    expect(r.results[0].status).toBe(200);
+    const e = mainEntry(dir);
+    const res = await fetch(`http://127.0.0.1:${e.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: A, messages: [{ role: "user", content: "hi" }], max_tokens: 1 }),
+    });
+    await res.text();
+    expect(res.status).toBe(401);
+    const live = (await readCommandLine(e.pid))!;
+    expect(live.join(" ")).not.toMatch(/api-key/);
+    const env = processEnvText(e.pid);
+    expect(env).not.toMatch(/sentinel-or-key-4711/);
+    expect(env).not.toMatch(/client-chosen-key/);
+    expect(env).toMatch(/LLAMA_API_KEY=[0-9a-f]{48}/);
+  }, 300_000);
+
+  it("m7: the llama-server environment is an allow-list with a fresh key", () => {
+    const env = llamaServerEnv(
+      { PATH: "/bin", HOME: "/h", LLAMA_CACHE: "/c", GGML_METAL: "1", LC_ALL: "C", OPENROUTER_API_KEY: "x", AWS_SECRET_ACCESS_KEY: "y", LLAMA_API_KEY: "old", LLAMA_ARG_API_KEY_FILE: "/k" },
+      "k1",
+    );
+    expect(env).toEqual({ PATH: "/bin", HOME: "/h", LLAMA_CACHE: "/c", GGML_METAL: "1", LC_ALL: "C", LLAMA_API_KEY: "k1" });
+  });
+
+  it("m2: a timeout above the Node timer limit is refused, never fired at once", () => {
+    expect(extractTimeoutFlags([`--timeout=${MAX_TIMEOUT_S}`]).commandTimeoutS).toBe(2_147_483);
+    expect(() => extractTimeoutFlags(["--timeout=2147484"])).toThrow(/at most 2147483 seconds/);
+    expect(() => extractTimeoutFlags(["--command_timeout", "9".repeat(400)])).toThrow(/at most/);
+    expect(() => extractTimeoutFlags(["--queue_timeout=99999999"])).toThrow(/at most/);
+  });
+
+  it("m5: a delivered job is forgotten at once (a second poll gets 404)", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    const st = readBrokerState(dir, "llama")!;
+    const base = `http://127.0.0.1:${st.port}`;
+    const sub = await fetch(`${base}/v1/jobs`, {
+      method: "POST",
+      headers: { [TOKEN_HEADER]: st.token, [CTX_HEADER]: "1024", "content-type": "application/json" },
+      body: JSON.stringify({ model: A, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: 4 }),
+    });
+    expect(sub.status).toBe(202);
+    const { job } = (await sub.json()) as { job: string };
+    let res: Response;
+    do res = await fetch(`${base}/v1/jobs/${job}?wait=30`, { headers: { [TOKEN_HEADER]: st.token } });
+    while (res.status === 204);
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { state: string }).state).toBe("done");
+    await new Promise((r) => setTimeout(r, 100));
+    const again = await fetch(`${base}/v1/jobs/${job}?wait=1`, { headers: { [TOKEN_HEADER]: st.token } });
+    await again.text();
+    expect(again.status).toBe(404);
+  }, 300_000);
+
+  it("m6: with a space in the config dir, the sweep still finds and stops an unrecorded main server", async () => {
+    const parent = newDir();
+    const dir = join(parent, "with space");
+    dirs.push(dir);
+    await runClient(dir, jobsOf(A, 1));
+    const st = readBrokerState(dir, "llama")!;
+    const orphan = mainEntry(dir);
+    process.kill(st.pid, "SIGKILL");
+    // Unrecorded: only the --log-file marker can find it now.
+    rmSync(registryPath(dir, "llama"));
+    await new Promise((r) => setTimeout(r, 300));
+    const r = await runClient(dir, jobsOf(A, 1));
+    expect(r.results[0].status).toBe(200);
+    expect(readFileSync(join(dir, "broker-llama.log"), "utf8")).toMatch(new RegExp(`stopped unrecorded main llama-server pid ${orphan.pid} `));
+    expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
+  }, 300_000);
+
+  it("m6: the marker matches the unsplit command line, never a longer name", () => {
+    const m = "/a b/llama-server-main.log";
+    expect(hasLogFileMarker(`llama-server -m x --log-file ${m}`, m)).toBe(true);
+    expect(hasLogFileMarker(`llama-server --log-file ${m} --port 1`, m)).toBe(true);
+    expect(hasLogFileMarker(`llama-server --log-file ${m}.1`, m)).toBe(false);
+    expect(hasLogFileMarker(`llama-server --log-file /a`, m)).toBe(false);
+  });
+});
+
+/**
+ * A stand-in broker on loopback for the two client paths the real broker
+ * cannot be made to take (a 500 or non-JSON poll reply, a slow 202): a real
+ * HTTP server, the real client code. Runs LAST in the file: m1 calls
+ * cancelAllBrokerJobs, which stops this process's client for good.
+ */
+describe("client against a misbehaving broker (review m4, m1)", () => {
+  const serve = async (handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ ep: BrokerEndpoint; close: () => Promise<void> }> => {
+    const srv = createServer(handler);
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    return {
+      ep: { url: `http://127.0.0.1:${port}`, token: "t", pid: process.pid },
+      close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
+    };
+  };
+  const req = { body: JSON.stringify({ model: "m" }), model: "m", ctx: 0, timeoutMs: 5000 };
+
+  it("m4: a poll reply other than 200/204/404, or one that is not a job result, is BrokerUnavailableError (endpoint)", async () => {
+    for (const [status, body] of [[500, "boom"], [401, "{}"], [200, "not json"], [200, "{}"]] as const) {
+      const s = await serve((rq, rs) => {
+        if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "j" })); return; }
+        if (rq.method === "DELETE") { rs.writeHead(204); rs.end(); return; }
+        rs.writeHead(status); rs.end(body);
+      });
+      try {
+        const err = await brokerExchange(s.ep, req).then(() => null, (e: unknown) => e);
+        expect(err, `${status} ${body}`).toBeInstanceOf(BrokerUnavailableError);
+        expect(endpointFailureKind(err, (err as Error).message)).toBe("endpoint");
+      } finally {
+        await s.close();
+      }
+    }
+  });
+
+  it("m1: --command_timeout cancels a job whose POST was still in flight", async () => {
+    const deleted: string[] = [];
+    const s = await serve((rq, rs) => {
+      if (rq.method === "POST") {
+        setTimeout(() => { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "slow-job" })); }, 600);
+        return;
+      }
+      if (rq.method === "DELETE") { deleted.push(rq.url ?? ""); rs.writeHead(204); rs.end(); return; }
+      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
+    });
+    try {
+      const call = brokerExchange(s.ep, req).catch((e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 100));
+      const n = await cancelAllBrokerJobs("test stop");
+      expect(n).toBe(1);
+      expect(deleted).toContain("/v1/jobs/slow-job");
+      expect(await call).toBeInstanceOf(Error);
+    } finally {
+      await s.close();
+    }
+  });
 });

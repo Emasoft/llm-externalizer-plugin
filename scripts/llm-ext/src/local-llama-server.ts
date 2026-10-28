@@ -371,9 +371,9 @@ export function failureHints(log: string): string {
   return `${hints.length ? `${hints.join("; ")}. ` : ""}Last log lines (${log}):\n${tail.join("\n")}`;
 }
 
-async function httpStatus(url: string): Promise<{ status: number; body: string } | null> {
+async function httpStatus(url: string, apiKey: string): Promise<{ status: number; body: string } | null> {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(url, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(3000) });
     return { status: res.status, body: await res.text() };
   } catch {
     return null; // refused or not answering yet
@@ -385,7 +385,7 @@ async function httpStatus(url: string): Promise<{ status: number; body: string }
  * by the request timeout (a first-run download can take many minutes); the
  * only limit is the progress stall rule.
  */
-export async function waitReady(target: ManagedTarget, pid: number, isDead: () => boolean, log: string): Promise<void> {
+export async function waitReady(target: ManagedTarget, pid: number, isDead: () => boolean, log: string, apiKey: string): Promise<void> {
   const base = `http://127.0.0.1:${target.port}`;
   let sig = progressSignature(target, log);
   let lastProgress = Date.now();
@@ -395,9 +395,9 @@ export async function waitReady(target: ManagedTarget, pid: number, isDead: () =
         `llama-server for '${target.model}' on port ${target.port} (pid ${pid}) exited before it was ready. ${failureHints(log)}`,
       );
     }
-    const health = await httpStatus(`${base}/health`);
+    const health = await httpStatus(`${base}/health`, apiKey);
     if (health?.status === 200) {
-      const models = await httpStatus(`${base}/v1/models`);
+      const models = await httpStatus(`${base}/v1/models`, apiKey);
       let served: unknown;
       try {
         served = (JSON.parse(models?.body ?? "") as { data?: Array<{ id?: unknown }> }).data?.[0]?.id;
@@ -449,6 +449,8 @@ export async function spawnLlamaServer(
   target: ManagedTarget,
   modelArgv: string[],
   logFile: string,
+  /** Review M13: the per-spawn key the server requires on its API (passed by env, never argv: `ps` shows argv to every user). */
+  apiKey: string,
 ): Promise<{ pid: number; argv: string[]; child: ChildProcess }> {
   if (existsSync(logFile)) renameSync(logFile, `${logFile}.1`);
   const argv = buildServerArgv(target, modelArgv, logFile);
@@ -459,7 +461,7 @@ export async function spawnLlamaServer(
     command: exe,
     args: argv,
     logPath: null,
-    env: process.env,
+    env: llamaServerEnv(process.env, apiKey),
     onError: (err) =>
       rejectSpawn(
         new ManagedServerError(
@@ -476,10 +478,38 @@ export async function spawnLlamaServer(
   return { pid, argv: [exe, ...argv], child };
 }
 
+
+/**
+ * Review M13 + m7: the environment a managed llama-server gets. An ALLOW-list,
+ * not the client's whole environment: the client carries every provider key
+ * (OPENROUTER_API_KEY, …) and none of it is llama-server's business. Kept:
+ * what a process needs to run (PATH, HOME, locale, temp dirs), llama.cpp's
+ * own LLAMA_* / GGML_* settings (LLAMA_CACHE above all) and the Hugging Face
+ * cache/endpoint settings `-hf` downloads read. HF_TOKEN is kept on purpose:
+ * it is the one credential llama-server itself uses, for a gated `-hf` repo.
+ * LLAMA_API_KEY / LLAMA_ARG_API_KEY* are replaced by THIS spawn's key.
+ */
+export function llamaServerEnv(env: NodeJS.ProcessEnv, apiKey: string): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(env)) {
+    if (v === undefined || /^LLAMA_(ARG_)?API_KEY/.test(k)) continue;
+    if (ENV_KEEP.has(k) || /^(LC_|LLAMA_|GGML_|CUDA_|HIP_|ROCR_|VK_|METAL_)/.test(k)) out[k] = v;
+  }
+  out.LLAMA_API_KEY = apiKey;
+  return out;
+}
+const ENV_KEEP = new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TMP", "TEMP", "XDG_CACHE_HOME",
+  "HF_HOME", "HF_HUB_CACHE", "HF_ENDPOINT", "HF_HUB_OFFLINE", "HF_TOKEN",
+  "SystemRoot", "SYSTEMROOT", "windir", "USERPROFILE", "LOCALAPPDATA", "APPDATA",
+]);
+
 export interface ProcessRow {
   pid: number;
   pgid: number;
   argv: string[];
+  /** The unsplit command line as `ps` printed it (argv joined by spaces; a token containing a space is ambiguous in `argv`). */
+  command: string;
 }
 
 /**
@@ -495,7 +525,7 @@ export async function processSnapshot(): Promise<ProcessRow[]> {
   const rows: ProcessRow[] = [];
   for (const line of out.split("\n")) {
     const m = /^\s*(\d+)\s+(\d+)\s+(.*)$/.exec(line);
-    if (m) rows.push({ pid: Number(m[1]), pgid: Number(m[2]), argv: m[3].trim().split(/\s+/) });
+    if (m) rows.push({ pid: Number(m[1]), pgid: Number(m[2]), argv: m[3].trim().split(/\s+/), command: m[3].trim() });
   }
   // A snapshot always lists at least this process: an empty one is a failed read, never "no process" (review M6).
   if (rows.length === 0) throw new ManagedServerError("ps returned no process rows");
@@ -567,8 +597,8 @@ export async function stopProcessGroup(pgid: number, graceMs = STOP_GRACE_MS): P
 }
 
 /** GET /props total_slots (llama-server's parallel slots; -np defaults to auto, 4 measured), or 1 when unreadable. */
-export async function totalSlots(port: number): Promise<number> {
-  const r = await httpStatus(`http://127.0.0.1:${port}/props`);
+export async function totalSlots(port: number, apiKey: string): Promise<number> {
+  const r = await httpStatus(`http://127.0.0.1:${port}/props`, apiKey);
   try {
     const n = (JSON.parse(r?.body ?? "") as { total_slots?: unknown }).total_slots;
     return typeof n === "number" && n >= 1 ? n : 1;

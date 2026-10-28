@@ -227,6 +227,8 @@ export default defineConfig({
       'src/bench-spawn.test.ts',
       // TRDD-1OOAH3LD broker (spec point 14, llama): pure scheduler/flag rules plus real
       // multi-process runs against llama-server with two tiny GGUF models.
+      // `npm test` runs it in a SECOND vitest run, alone: its real llama-server load made
+      // timing-sensitive files flaky when they ran alongside it (completion D1, pick-lock, regex-worker).
       'src/broker/broker.test.ts',
       // --until-done backoff policy. The loop it drives is unbounded, so a zero
       // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight

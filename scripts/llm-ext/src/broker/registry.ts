@@ -45,6 +45,24 @@ export interface RegistryEntry {
 export function registryPath(dir: string, engine: string): string {
   return join(dir, `servers-${engine}.json`);
 }
+
+
+/**
+ * Does a raw `ps` command line carry `--log-file <marker>`? Matched on the
+ * unsplit text (review m6): `ps` prints argv joined by spaces, so a config dir
+ * containing a space (iCloud or Google Drive paths on macOS) split the marker
+ * across tokens and the sweep silently found nothing. The marker must end the
+ * line or be followed by a space, so `<marker>.1` or a longer name never match.
+ */
+export function hasLogFileMarker(command: string, marker: string): boolean {
+  const needle = ` --log-file ${marker}`;
+  for (let i = command.indexOf(needle); i >= 0; i = command.indexOf(needle, i + 1)) {
+    const after = command[i + needle.length];
+    if (after === undefined || after === " ") return true;
+  }
+  return false;
+}
+
 function registryLockPath(dir: string, engine: string): string {
   return join(dir, `servers-${engine}.lock`);
 }
@@ -133,8 +151,7 @@ export async function claimAndSpawn(o: ClaimOptions): Promise<RegistryEntry> {
     }
     const marker = roleLogFile(o.dir, o.role);
     for (const row of await processSnapshot()) {
-      const i = row.argv.indexOf("--log-file");
-      if (i < 0 || row.argv[i + 1] !== marker || kept.some((e) => e.pid === row.pid)) continue;
+      if (!hasLogFileMarker(row.command, marker) || kept.some((e) => e.pid === row.pid)) continue;
       // Review M7: the marker alone is not identity. `grep -- --log-file <marker>`
       // or an agent's diagnostic carries it too, and may share a foreign group
       // (a terminal job, a Claude Code session). Only a llama-server that leads

@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs",
-    "test": "vitest run --exclude 'src/live*.test.ts'",
+    "test": "vitest run --exclude 'src/live*.test.ts' --exclude src/broker/broker.test.ts && vitest run src/broker/broker.test.ts",
     "test:live": "vitest run src/live.test.ts src/live-extended.test.ts src/live-websearch.test.ts",
     "test:all": "vitest run",
     "test:watch": "vitest",
