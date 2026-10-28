@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T20:53:04+0100
+updated: 2026-10-28T21:25:49+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -106,3 +106,7 @@ USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces
 2026-10-28 the increment 2a plan is NOT approved yet: it waits for the three user rulings and for the review-born decisions in its "Not yet approved" list; until then the increment 2 section of the approved design stays in force.
 2026-10-28 increment 2a revision 4 written after review rounds on rev 3 and rev 4 (measure reports/llama-cpp-profile/20261028_193341+0100-2a-rev4-measure.md): 2a-core and 2e (2-hour kill) ship in the same release; supervisor failure is final-stop, marks its URL dead for one walk, remembered per port for the rest of the command; --stop_on_errors moves to its own TRDD; CI installs pinned llama.cpp b11968. WAITING FOR USER APPROVAL. Plan: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md
 2026-10-28 program plan revision 2 reviewed twice; P6a (calibration design review plus a 30-minute LFM3 dry run) added before the overnight run; P10 command table with thresholds is a gate before the goal is complete. Open user question: may calibration restart its own server with a new context (refuse-on-change kept for user runs)?
+
+## Progress 2026-10-28
+
+- 21:30 resume point: broker checkpoint c77d9453 (not pushable: 2 criticals), CI llama step 69995234+8d02a055, flag docs 3accda00. Review reports/llama-cpp-profile/20261028_212123+0100-broker-code-review.md (2 critical, 12 major, 7 minor). Smart-worker ad7febbf6cb1ff07c is fixing it in 4 groups (kill safety+C2; rotation rule reverted to the spec: B/D minimum, deadline-driven, min slice after a swap, 1 s linger, worst case T+D; M10/M9/M11/M3/M4/M5; minors+M13 api-key), stopping after each group for a commit. Open after that: e2e managed-profile test, --command_timeout partial results (spec 15, m3), dist rebuild, Locals engine (P2).
