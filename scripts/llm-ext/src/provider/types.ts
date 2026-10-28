@@ -18,6 +18,17 @@
 import type { ResolvedRoute } from "../config.js";
 import type { ResolvedRequestOptions } from "./request-options.js";
 
+/** Where a managed profile's requests go (TRDD-1OOAH3LD broker): the broker endpoint plus what the job needs that the body does not carry. */
+export interface BrokerConnection {
+  url: string;
+  token: string;
+  pid: number;
+  /** Server context for the model (-c); 0 = llama-server's default. */
+  ctx: number;
+  /** --queue_timeout in ms, or undefined for the broker default. */
+  queueTimeoutMs?: number;
+}
+
 /** Immutable backend snapshot (see index.ts's T2.7 snapshot-and-swap note). */
 export interface BackendConfig {
   readonly type: "local" | "openrouter";
@@ -57,6 +68,8 @@ export interface ConnectionSetup {
   timeout: number; // SOFT_TIMEOUT_MS
   /** true = a non-primary providers[] route (request_options never apply to it). */
   routed?: true;
+  /** TRDD-1OOAH3LD: set when the request goes through the per-engine broker (submit and long-poll) instead of a direct fetch to `url`. */
+  broker?: BrokerConnection;
 }
 
 export interface ChatMessage {
@@ -138,6 +151,17 @@ export interface ProviderDeps {
    * reserved/manual id inside a DYNAMIC profile is exempt too (D5).
    */
   isManualModel(model: string): boolean;
+
+  /**
+   * TRDD-1OOAH3LD: the per-engine broker this request must go through, or
+   * null to send directly. Non-null only when the active profile sets
+   * `server: managed` and the request goes to the profile's own (primary)
+   * group; the hook makes sure the broker runs. `route` is null for the
+   * primary group when no route was resolved. Throws BrokerUnavailableError
+   * (marked final "stop") when the broker cannot be started. Optional so
+   * callers without a broker are unchanged.
+   */
+  localBroker?(target: { model: string; route: ResolvedRoute | null }): Promise<BrokerConnection | null>;
   /**
    * ONE model's recorded price (USD / million tokens, input + output), or
    * null when there is no recorded price data (cold/absent cache) —

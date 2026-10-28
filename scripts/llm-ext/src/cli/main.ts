@@ -35,6 +35,9 @@ import { buildTools } from "../tools/definitions.js";
 import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, isGroupName, resolveInvocation, runClassifyCommand, suggestCommand } from "./launcher.js";
 import { readFileSync } from "node:fs";
 import type { GlobalFetch } from "../classifiers/l0/transport.js";
+import { BROKER_ARGV } from "../broker/protocol.js";
+import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
+import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
 
 /**
  * The published version, and the anchor `scripts/publish.py` rewrites on every
@@ -138,6 +141,28 @@ const BOOLEAN_LITERALS = new Set([
 function die(msg: string): never {
   process.stderr.write(`llm-ext: ${msg}\n`);
   process.exit(1);
+}
+
+
+/** Exit code of a command stopped by --command_timeout (the timeout(1) convention). */
+const COMMAND_TIMEOUT_EXIT = 124;
+
+/**
+ * --command_timeout (USER ruling 2026-10-28): when it expires the command
+ * stops: no further job is submitted, every job it still has at the local
+ * broker is cancelled (DELETE), and it exits non-zero. Results the command
+ * already wrote stay on disk; listing the unfinished files per tool is not
+ * done yet (P1b report). The timer is unref'd: a command that finishes first
+ * exits at once (no lingering handle, launcher-boot.test.ts).
+ */
+function armCommandTimeout(seconds: number): void {
+  setTimeout(() => {
+    const reason = `--command_timeout: the command ran longer than ${seconds} s and was stopped`;
+    void cancelAllBrokerJobs(reason).then((n) => {
+      process.stderr.write(`llm-ext: ${reason}; ${n} unfinished local job(s) cancelled; files without a result were not finished\n`);
+      process.exit(COMMAND_TIMEOUT_EXIT);
+    });
+  }, seconds * 1000).unref();
 }
 
 function schemaTypeOf(prop: JsonSchemaProp | undefined): string {
@@ -378,7 +403,11 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "  llm-ext --version             print the version\n\n" +
       "Global flags:\n" +
       "  --quiet                       suppress the banner and progress lines\n" +
-      "  --profile <name>              use this settings.yaml profile for this call only\n\n" +
+      "  --profile <name>              use this settings.yaml profile for this call only\n" +
+      "  --queue_timeout <s>           local broker: longest a queued job waits before its model is\n" +
+      "                                forced onto the server (default 300; waiting is never an error)\n" +
+      "  --command_timeout <s>         stop the whole command after <s> seconds, cancel its queued\n" +
+      "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n\n" +
       "Groups:\n",
   );
   const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
@@ -638,10 +667,29 @@ const isClassifyWord = (word: string | undefined): boolean =>
   word === "classify" || (word !== undefined && classifySpecFor(word.replaceAll("-", "_")) !== undefined);
 
 async function main(): Promise<void> {
+  // TRDD-1OOAH3LD: `llm-ext __broker <engine>` turns this process into the
+  // per-engine request broker (broker/server.ts). Checked before loadEngine so
+  // a broker never reads, creates or migrates settings; the broker module is
+  // imported lazily so ordinary commands never load it.
+  if (process.argv[2] === BROKER_ARGV) {
+    const { runBrokerMain } = await import("../broker/server.js");
+    await runBrokerMain(process.argv[3], VERSION);
+  }
+  setBrokerClientVersion(VERSION);
   // WHY the engine is loaded HERE for every non-classify command: the static import it replaces loaded it before main() ran, so settings were read/created/migrated before any usage error (`--profile` with no value) or help. Only a classify command defers it (see loadEngine).
   // WHY "" for a classify command's tool list: its descriptions carry no limits text, and limitsBlock() needs the engine.
-  let engine = isClassifyWord(leadingToken(process.argv.slice(2))) ? undefined : await loadEngine();
-  const { argv, profile: profileOverride } = extractProfileFlag(process.argv.slice(2));
+  // Global timeout flags (USER rulings 2026-10-28): stripped FIRST, so the
+  // command word, --profile and the classify parser never see them.
+  let timeouts: TimeoutFlags;
+  try {
+    timeouts = extractTimeoutFlags(process.argv.slice(2));
+  } catch (err) {
+    die((err as Error).message);
+  }
+  if (timeouts.queueTimeoutS !== undefined) setBrokerQueueTimeoutMs(timeouts.queueTimeoutS * 1000);
+  if (timeouts.commandTimeoutS !== undefined) armCommandTimeout(timeouts.commandTimeoutS);
+  let engine = isClassifyWord(leadingToken(timeouts.argv)) ? undefined : await loadEngine();
+  const { argv, profile: profileOverride } = extractProfileFlag(timeouts.argv);
   // The catalog's descriptions are backend-dependent, so build it per run.
   const tools = buildTools(engine ? engine.limitsBlock() : "") as ToolDef[];
 

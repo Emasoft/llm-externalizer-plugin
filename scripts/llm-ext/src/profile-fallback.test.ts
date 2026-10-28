@@ -37,6 +37,7 @@ function fakeProfile(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile 
     timeout: 30_000,
     contextWindow: 128_000,
     requestOptions: null,
+    server: null,
     appName: "llm-ext",
     httpReferer: "https://example.invalid",
     highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,

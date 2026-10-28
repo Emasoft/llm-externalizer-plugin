@@ -54,7 +54,8 @@ export interface ChainEntry {
  * request. Anything else (`"model"`, or no feedback at all) just advances to
  * the next entry without marking anything dead.
  */
-export type ChainFailureKind = "model" | "endpoint" | "credit";
+// "endpoint-model" (TRDD-1OOAH3LD broker, spec 5): the broker reported a failure for ONE model, so (base URL, model) is dead for the walk, never the URL alone.
+export type ChainFailureKind = "model" | "endpoint" | "credit" | "endpoint-model";
 export interface ChainFailure {
   kind: ChainFailureKind;
   /** The error that failed this entry. Collected into the thrown
@@ -203,6 +204,8 @@ export function* profileChain(
       : dedupe([head, profile.secondModel, profile.thirdModel]);
 
   const deadBaseUrls = new Set<string>();
+  // TRDD-1OOAH3LD spec 5: `${baseUrl}\u0000${modelId}` pairs a broker failed for this walk.
+  const deadUrlModels = new Set<string>();
   // D4: per-CREDENTIAL dead-marking — `url + keyRef` (the route's own id for
   // the credential; a `sha256:` literal ref or an env-var name, never the
   // secret itself). A 402 means THIS key has no credit, so every other id
@@ -239,6 +242,7 @@ export function* profileChain(
       // Endpoint already proven dead earlier in THIS walk — skip without a
       // request (addendum 2's "the second is skipped without a request").
       if (deadBaseUrls.has(entry.baseUrl)) continue;
+      if (deadUrlModels.has(`${entry.baseUrl}\u0000${entry.modelId}`)) continue;
       // D4: the credential (url + keyRef) already proven credit-dead —
       // skip without a request; the SAME id's next group has a different
       // credential, so it survives this skip.
@@ -252,6 +256,7 @@ export function* profileChain(
       }
       const failure = yield entry;
       if (failure?.kind === "endpoint") deadBaseUrls.add(entry.baseUrl);
+      if (failure?.kind === "endpoint-model") deadUrlModels.add(`${entry.baseUrl}\u0000${entry.modelId}`);
       if (failure?.kind === "credit" && entry.route)
         deadCredentials.add(credentialKeyOf(entry.route));
       if (failure?.error !== undefined) {

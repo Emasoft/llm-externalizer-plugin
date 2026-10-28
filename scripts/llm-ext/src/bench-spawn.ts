@@ -31,7 +31,7 @@
 
 import { closeSync, existsSync, mkdirSync, openSync, writeSync } from "node:fs";
 import { dirname, resolve as pathResolve } from "node:path";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import {
   BENCH_LOCK_PATH_ENV,
@@ -246,4 +246,39 @@ export function spawnDetachedBench(opts: SpawnDetachedBenchOpts): SpawnDetachedB
   }
 
   return { ok: true, pid: child.pid ?? null };
+}
+
+
+/**
+ * TRDD-1OOAH3LD: the detached children of the local-engine broker (the broker
+ * process itself, and the llama-server it owns) need the same mechanics minus
+ * the bench lock: the broker spawn lock and the server registry guard those
+ * instead. Kept in this file so detached spawning still lives in ONE place
+ * (eslint no-restricted-imports). Mechanics as above: the log fd is opened
+ * before the spawn and OUR copy closed after it (or stdio is ignored), the
+ * caller's error listener is attached before any tick can emit, and the child
+ * is unref'd so it outlives this process.
+ */
+export function spawnDetachedChild(o: {
+  command: string;
+  args: readonly string[];
+  /** Append stdout+stderr here; null = ignore stdio (llama-server writes its own --log-file). */
+  logPath: string | null;
+  env: NodeJS.ProcessEnv;
+  onError: (err: NodeJS.ErrnoException) => void;
+}): ChildProcess {
+  const fd = o.logPath === null ? null : openSync(o.logPath, "a");
+  try {
+    const child = spawn(o.command, [...o.args], {
+      detached: true,
+      stdio: fd === null ? "ignore" : ["ignore", fd, fd],
+      env: o.env,
+      windowsHide: true,
+    });
+    child.on("error", o.onError);
+    child.unref();
+    return child;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
 }

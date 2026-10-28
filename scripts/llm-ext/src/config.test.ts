@@ -67,6 +67,7 @@ function mkResolved(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile {
     timeout: 600,
     contextWindow: 0,
     requestOptions: null,
+    server: null,
     appName: "",
     httpReferer: "",
     highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,

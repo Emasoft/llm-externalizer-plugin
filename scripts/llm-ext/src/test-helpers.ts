@@ -117,6 +117,7 @@ function localTestResolvedProfile(timeoutSec: number): ResolvedProfile {
     timeout: timeoutSec,
     contextWindow: 0,
     requestOptions: null,
+    server: null,
     appName: "",
     httpReferer: "",
     highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,

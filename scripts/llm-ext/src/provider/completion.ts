@@ -75,6 +75,7 @@ import {
   type ResolvedRequestOptions,
 } from "./request-options.js";
 import { resolveConnection, PRICE_CEILING_REFUSAL_PREFIX } from "./connection.js";
+import { brokerExchange } from "../broker/client.js";
 import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "../benchmark/free-mode.js";
 import { billableForRoute, type ResolvedRoute } from "../config.js";
@@ -487,6 +488,34 @@ function requestOptionsConnection(
     ro,
   };
 }
+
+
+/**
+ * One send of a finished body. TRDD-1OOAH3LD: a managed profile's request goes
+ * through the per-engine broker (submit and long-poll; the broker owns the
+ * queue, the server and the execution timeout, so the 429/5xx retry loop of
+ * fetchWithRetry429 does not apply). Every other request is the direct
+ * retrying fetch, unchanged.
+ */
+function sendChat(
+  conn: ConnectionSetup,
+  body: Record<string, unknown>,
+  startTime: number,
+  rl429: { saw429: boolean; refusedRetryAt?: number },
+  clock: RetryClock | undefined,
+  // The logical call (chatCompletionWithRetry's call object): a retry of it reuses its pending broker job; undefined = no reuse.
+  scope?: object,
+): Promise<Response> {
+  if (conn.broker) {
+    return brokerExchange(
+      conn.broker,
+      { body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
+      { clock, scope },
+    );
+  }
+  return fetchWithRetry429(conn.url, { method: "POST", headers: conn.headers, body: JSON.stringify(body) }, conn.timeout, startTime, rl429, clock);
+}
+
 // ── Non-streaming text completion ────────────────────────────────────
 // All LLM requests use this. stream=false, single JSON response.
 // Batch-level heartbeat in rateLimitedParallel keeps MCP connection alive.
@@ -591,18 +620,7 @@ export async function chatCompletionSimple(
       dumpRequestBody(body, conn.model);
 
       const rl429: { saw429: boolean; refusedRetryAt?: number } = { saw429: false };
-      const res = await fetchWithRetry429(
-        conn.url,
-        {
-          method: "POST",
-          headers: conn.headers,
-          body: JSON.stringify(body),
-        },
-        conn.timeout,
-        startTime,
-        rl429,
-        clock,
-      );
+      const res = await sendChat(conn, body, startTime, rl429, clock, call);
       if (call && rl429.refusedRetryAt !== undefined) call.refusedRetryAt = rl429.refusedRetryAt;
 
       // A1/A7: one durable rate_limit_429 per call that hit ≥1 429 (the retry
@@ -881,18 +899,7 @@ export async function chatCompletionJSON(
       dumpRequestBody(body, conn.model);
 
       const rl429: { saw429: boolean; refusedRetryAt?: number } = { saw429: false };
-      const res = await fetchWithRetry429(
-        conn.url,
-        {
-          method: "POST",
-          headers: conn.headers,
-          body: JSON.stringify(body),
-        },
-        conn.timeout,
-        jsonStartTime,
-        rl429,
-        options.retryClock,
-      );
+      const res = await sendChat(conn, body, jsonStartTime, rl429, options.retryClock);
 
       // A1/A7: one durable rate_limit_429 per call that hit ≥1 429. Logging-only.
       if ((rl429.saw429 || res.status === 429) && !emitted429) {

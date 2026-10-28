@@ -225,6 +225,9 @@ export default defineConfig({
       // benchmark child gives the lock back on exit — the P6d dogfood defect,
       // where a child exited 0 and left its lock in the config dir.
       'src/bench-spawn.test.ts',
+      // TRDD-1OOAH3LD broker (spec point 14, llama): pure scheduler/flag rules plus real
+      // multi-process runs against llama-server with two tiny GGUF models.
+      'src/broker/broker.test.ts',
       // --until-done backoff policy. The loop it drives is unbounded, so a zero
       // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight
       // calculation either stalls a day or never waits.

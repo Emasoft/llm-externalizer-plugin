@@ -150,6 +150,9 @@ import {
 } from "./text-tools/core.js";
 
 import type { RetryClock } from "./provider/http.js";
+import { BrokerJobError, brokerClientVersion, brokerQueueTimeoutMs, ensureBroker } from "./broker/client.js";
+import { ManagedServerError } from "./local-llama-server.js";
+import { timingsFromEnv } from "./broker/scheduler.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -1113,6 +1116,15 @@ function parseIntervalMs(interval?: string): number {
 }
 
 async function getRateLimitConfig(): Promise<RateLimitConfig> {
+  // TRDD-1OOAH3LD broker (spec 3): a managed profile hands batches to the
+  // broker, which serializes per model across every command; the pool here is
+  // only the submission window W = 2 x B, so the broker has a full batch of
+  // this command's files to group. rps = W too: rps 1 would spread W submits
+  // over W seconds. Checked before the generic local rule below.
+  if (activeResolved?.server === "managed") {
+    const w = 2 * timingsFromEnv(process.env).batch;
+    return { rps: w, maxInFlight: w };
+  }
   // Local mode: sequential, no rate limiting needed
   if (!activeResolved || activeResolved.mode === "local") {
     return { rps: 1, maxInFlight: 1 };
@@ -1791,6 +1803,16 @@ const providerDeps: CompletionDeps = {
   // TRDD-1OOAH3LD: read through activeResolved on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
   getRequestOptions: (tool) => resolveRequestOptions(activeResolved?.requestOptions ?? null, tool),
   getActiveProtocol: () => activeResolved?.protocol ?? "openai_api",
+  // TRDD-1OOAH3LD broker: read through activeResolved on EVERY call
+  // (reload-safe, like routeForModel above). Only the profile's own primary
+  // group is managed (the validator requires its api to be llamacpp-local);
+  // a providers[] route is sent directly, as before.
+  localBroker: async ({ route }) => {
+    const r = activeResolved;
+    if (!r || r.server !== "managed" || (route && !route.primary)) return null;
+    const ep = await ensureBroker({ engine: "llama", dir: getConfigDir(), version: brokerClientVersion() });
+    return { ...ep, ctx: r.contextWindow > 0 ? r.contextWindow : 0, queueTimeoutMs: brokerQueueTimeoutMs() };
+  },
 };
 
 // The completion layer — chatCompletionSimple / chatCompletionJSON /
@@ -3242,7 +3264,21 @@ async function walkProfileChainOnce(
       // marking dead, for a local runner restarting under load" ceiling is
       // a follow-up (0b), not this phase's job -- a bare substring match on
       // the common connection-failure codes is the whole classifier here.
-      const isEndpointDead = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(msg);
+      // TRDD-1OOAH3LD broker (spec 5): a broker that could not be reached or
+      // started is an ENDPOINT failure (its message carries no network code),
+      // so its base URL is dead for this walk. A failure the broker REPORTED
+      // for one model (the model could not start, its request failed) marks
+      // only (URL, model) dead: other models behind the same broker are still
+      // tried.
+      const unwrapped = err instanceof RetryDeadlineError ? err.cause : err;
+      // ManagedServerError (BrokerUnavailableError is one), not only the
+      // broker-unavailable case: the broker spawn lock throws a plain
+      // ManagedServerError on its 60 s timeout, and as a "model" failure every
+      // next model would wait out the same lock again before the walk reached
+      // another URL. BrokerJobError is NOT a ManagedServerError (endpoint-model).
+      const isEndpointDead =
+        /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(msg) || unwrapped instanceof ManagedServerError;
+      const isEndpointModelDead = !isEndpointDead && unwrapped instanceof BrokerJobError;
       // D4 (design section 6): a CERTAIN payment error is the KEY's credit,
       // not the model — the walk marks `url + keyRef` dead and continues
       // with the SAME id's next group (a different key). keyRef is
@@ -3270,7 +3306,7 @@ async function walkProfileChainOnce(
         : err;
       collected.push(causeError);
       next = gen.next({
-        kind: isEndpointDead ? "endpoint" : isCreditDead ? "credit" : "model",
+        kind: isEndpointDead ? "endpoint" : isEndpointModelDead ? "endpoint-model" : isCreditDead ? "credit" : "model",
         error: causeError,
       }); // throws ProfileExhaustedError once exhausted
     }

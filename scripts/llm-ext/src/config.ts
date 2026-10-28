@@ -325,6 +325,12 @@ export interface Profile {
    * tool. Absent = the request path is unchanged. Local profiles only.
    */
   request_options?: RequestOptionsConfig;
+  /**
+   * TRDD-1OOAH3LD: `managed` = requests to the profile's own llamacpp-local
+   * group go through the per-engine broker, which starts llama-server on first
+   * use and swaps models in it. Absent = llm-ext never starts a server. Local profiles only.
+   */
+  server?: "managed";
   /** App name for OpenRouter dashboard */
   app_name?: string;
   /** HTTP Referer for OpenRouter analytics */
@@ -448,6 +454,8 @@ export interface ResolvedProfile {
   contextWindow: number;
   /** TRDD-1OOAH3LD: the profile request_options block, null when the profile sets none. */
   requestOptions: RequestOptionsConfig | null;
+  /** TRDD-1OOAH3LD: "managed" when the profile opts in to the per-engine broker, else null. */
+  server: "managed" | null;
   appName: string;
   httpReferer: string;
   /** Resolved high-quality-scan model config (TRDD-DBUSM55E; defaults filled). */
@@ -1155,7 +1163,8 @@ export const DYNAMIC_USER_OWNED_KEYS: Readonly<Record<MarkedProfileName, readonl
   free: ["selection", "high_quality_model", "providers", "ensemble", "profile-type"],
   paid: ["selection", "high_quality_model", "providers", "ensemble", "profile-type"],
   // TRDD-1OOAH3LD: request_options is user-written; without this the dynamic-section regeneration would delete it from the built-in `local` profile.
-  local: ["selection", "high_quality_model", "providers", "ensemble", "profile-type", "request_options"],
+  // TRDD-1OOAH3LD 2a-core: server is user-written too; same deletion risk as request_options.
+  local: ["selection", "high_quality_model", "providers", "ensemble", "profile-type", "request_options", "server"],
   scouting: ["profile-type"],
   "or-jev": ["profile-type"],
 };
@@ -1209,7 +1218,8 @@ export const PROFILE_TYPE_FIELDS: Readonly<Record<ProfileType, ProfileTypeFields
     template: "local",
     own: ["api_token", "detected_providers"],
     // TRDD-1OOAH3LD: request_options is local-only (never on free/paid/scouting); without being listed here the strict unknown-field check rejects it.
-    shared: ["profile-type", "mode", "api", "url", "model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer", "request_options"],
+    // TRDD-1OOAH3LD 2a-core: server (the managed llama-server opt-in) is local-only for the same reason.
+    shared: ["profile-type", "mode", "api", "url", "model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer", "request_options", "server"],
     spend: "never-bills",
   },
   free: {
@@ -3023,6 +3033,23 @@ export function validateProfile(
       }
     }
   }
+  // ── server: managed (TRDD-1OOAH3LD, per-engine broker) ─────────────
+  // Untrusted YAML. Under the broker design (local-engine-broker-design.md)
+  // only the PROFILE's own group is managed: the broker runs at most one main
+  // llama-server per engine, on a free port it picks itself, and swaps models
+  // in it. So providers[] routes are never managed (the per-route target was
+  // dropped) and the url's port binds nothing; the url is only the key the
+  // fallback walker marks dead.
+  const rawServer: unknown = (profile as unknown as Record<string, unknown>).server;
+  if (rawServer !== undefined) {
+    if (rawServer !== "managed") {
+      errors.push(`Profile '${name}': server must be 'managed' (the only accepted value); remove the key to start no server`);
+    } else if (profile.api !== "llamacpp-local") {
+      errors.push(
+        `Profile '${name}': server: managed needs the profile's own api to be llamacpp-local (only the profile's primary group is managed), got ${typeof profile.api === "string" ? `'${profile.api}'` : "none"}`,
+      );
+    }
+  }
   // ── ensemble (E-D2, E-E1..E-E6 — D5, TRDD-90DM5YHO) ───────────────
   // `ensemble_pins` was REMOVED in 14.1.0: it never had a runtime reader, so
   // it never did anything. E-D2 refuses it on ANY profile (static ones are
@@ -3872,6 +3899,7 @@ export function resolveProfile(
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     requestOptions: coerceRequestOptions(profile.request_options),
+    server: profile.server === "managed" ? "managed" : null,
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
     // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),

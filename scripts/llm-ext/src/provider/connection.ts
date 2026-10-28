@@ -137,7 +137,13 @@ export async function resolveConnection(
   // (TRDD-0H5N1V9W); before that it bounded time-to-first-byte and a stalled
   // generation ignored it entirely.
   const timeout = options?.timeoutMs ?? deps.getSoftTimeoutMs();
-
+  // TRDD-1OOAH3LD broker: a managed profile's primary group is served by the
+  // per-engine broker. Returned BEFORE the flavor probe below: nothing listens
+  // on the profile url (the broker picks the server port), so a probe there
+  // would cache a wrong flavor for that host. Always OpenAI-compatible: the
+  // broker forwards to llama-server's /v1/chat/completions.
+  const broker = deps.localBroker ? await deps.localBroker({ model, route: route ?? null }) : null;
+  if (broker) return { url: `${broker.url}/v1/jobs`, headers, model, isNative: false, timeout, broker };
   // D6a: a NON-primary group (a providers[]/detected_providers[] binding)
   // takes the routed path — the group's own URL, straight OpenAI-compat. D6b
   // KEEPS this: a routed group never reaches the flavor probe below, because
