@@ -64,7 +64,7 @@ import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
-import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf } from "./provider/http.js";
+import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost } from "./provider/http.js";
 import {
   detectLMStudio,
   clearLMStudioProbeCache,
@@ -2009,6 +2009,99 @@ function causeText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/** Network error codes that mean "the provider could not be reached or did not answer in time" (http.ts networkCodeOf). */
+const OUTAGE_NETWORK_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ETIMEDOUT-LOCAL",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+
+/** One short observation per cause ("503", "ECONNREFUSED") when EVERY cause is a provider-side failure, else undefined. */
+/** One short observation ("503", "ECONNREFUSED") plus the chain entry of a cause that is a provider-side failure; undefined for anything else. */
+function providerSideFailure(cause: unknown): { observed: string; modelId?: string; baseUrl?: string } | undefined {
+  let source = cause;
+  while (source instanceof RetryDeadlineError) source = source.cause; // the real failure rides on the wrapped cause
+  // Typed fields only (attached by the HTTP layer): an untyped cause is not evidence of an outage.
+  const f = failureOf(source);
+  if (f === undefined) return undefined;
+  if (f.status !== undefined) {
+    return f.status >= 500 || f.status === 408 ? { observed: String(f.status), modelId: f.modelId, baseUrl: f.baseUrl } : undefined;
+  }
+  if (f.networkCode !== undefined && OUTAGE_NETWORK_CODES.has(f.networkCode)) {
+    return { observed: f.networkCode, modelId: f.modelId, baseUrl: f.baseUrl };
+  }
+  return undefined;
+}
+
+/**
+ * TRDD-5Q79QZM7 scope 3 -- do the causes SUGGEST a PROVIDER-WIDE outage rather than dead models? Evidence needs at
+ * least 2 DISTINCT models, all on the SAME provider (base URL), and EVERY cause a 5xx, a timeout (408
+ * or a local/connect timeout) or a network error (refused, reset, DNS); a single 404/400/402/401 means a model or key
+ * problem that a profile update can fix, so the normal repair path applies. Causes without a recorded model and base URL
+ * (profileChain records them) give no evidence. Returns the provider base URL and the observed statuses/codes, or undefined.
+ */
+export function detectProviderOutage(causes: readonly unknown[]): { baseUrl: string; observed: string[] } | undefined {
+  const sides = causes.map(providerSideFailure);
+  if (sides.some((s) => s === undefined || s.modelId === undefined || s.baseUrl === undefined)) return undefined;
+  const entries = sides as Array<{ observed: string; modelId: string; baseUrl: string }>;
+  // Causes of different providers are never merged (the free profile can hold a reserved slot on another vendor), and the
+  // same model failing twice is one model's evidence, not two.
+  if (new Set(entries.map((e) => e.baseUrl)).size !== 1) return undefined;
+  if (new Set(entries.map((e) => e.modelId)).size < 2) return undefined;
+  return { baseUrl: entries[0].baseUrl, observed: [...new Set(entries.map((e) => e.observed))] };
+}
+
+/** Timeout of the reachability probe that confirms a suspected provider outage. */
+export const OUTAGE_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * CONTROL CHECK (TRDD-5Q79QZM7 scope 3): is the provider itself reachable? GET `<base>/v1/models` (the endpoint
+ * the rest of the code already uses for it; public on OpenRouter, no key). Any HTTP answer below 500 means the provider is
+ * up; a 5xx answer, a timeout or a network error means it is down.
+ */
+export async function providerReachable(baseUrl: string): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/v1/models`, { method: "GET" }, OUTAGE_PROBE_TIMEOUT_MS);
+    await res.body?.cancel();
+    return res.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The outage verdict: the cause pattern (detectProviderOutage) AND a failing control probe. WHY the probe: a model
+ * whose upstream is broken returns 5xx for days while the provider works; the pattern alone would call that an outage
+ * forever and never repair the profile. Reachable provider = the models are broken = normal repair path.
+ */
+export async function providerOutageError(profileName: DynamicProfileName, causes: readonly unknown[]): Promise<Error | undefined> {
+  const suspected = detectProviderOutage(causes);
+  if (suspected === undefined || (await providerReachable(suspected.baseUrl))) return undefined;
+  return new ProviderOutageError(profileName, causes, suspected.baseUrl, suspected.observed);
+}
+
+/** Thrown for a detected provider outage: static (no update, no wait), final for the whole batch. */
+class ProviderOutageError extends ProfileExhaustedError {
+  constructor(profileName: DynamicProfileName, causes: readonly unknown[], baseUrl: string, observed: readonly string[]) {
+    const host = hostOf(baseUrl);
+    const provider = isOpenRouterHost(host) ? "OpenRouter" : host || baseUrl;
+    // The message is fully custom: the static exhaustion text says "change the profile", which would be wrong advice here.
+    super(
+      profileName,
+      "static",
+      causes,
+      undefined,
+      `${provider} appears to be down or unreachable (observed: ${observed.join(", ")}); the models are probably fine, so no profile update was started — retry in a few minutes`,
+    );
+  }
+}
+
 /** The provider-state line a failure carries, read from the error itself or from its wrapped cause (a profile cause is often a RetryDeadlineError, which failureOf already unwraps). */
 function stateOf(e: unknown): string | undefined {
   // failureOf unwraps only ONE RetryDeadlineError; free-rotation can wrap one inside another.
@@ -2179,6 +2272,8 @@ function classifyError(error: unknown): ErrorClassification {
     // its background update. No file can succeed on it now: abort the batch
     // with that one message, never a per-file retry.
     if (error.kind === "dynamic") return { unrecoverable: true, serviceLevel: true, reason: msg };
+    // TRDD-5Q79QZM7 scope 3: a detected provider outage is final for the whole batch (every file would hit the same dead provider).
+    if (error instanceof ProviderOutageError) return { unrecoverable: true, serviceLevel: true, reason: msg };
     const causes = error.causes.map(causeText);
     if (causes.length === 0) return { unrecoverable: true, serviceLevel: true, reason: msg };
     const lastStatus = /API error (\d{3})\b/.exec(causes[causes.length - 1] ?? "")?.[1];
@@ -3218,6 +3313,16 @@ async function chatCompletionWithProfileFallback(
     if (!(err instanceof ProfileExhaustedError) || err.kind !== "dynamic" || !isDynamicProfileName(profileName)) {
       throw err;
     }
+    // WHY (TRDD-5Q79QZM7 scope 3): when two or more models of ONE provider failed with a 5xx, a timeout or a network error AND
+    // a reachability probe of that provider fails too, the PROVIDER is down, not the models. Falling through would start a
+    // paid benchmark sweep and make the caller wait up to 10 minutes (scope 2) for an update that cannot succeed against a
+    // dead provider; answer honestly and at once instead. Done here, not in failDynamicProfile, because the probe is async.
+    // Safe to run before it: every verdict failDynamicProfile gives ahead of the update branch (401/402/4xx/refusal) needs a
+    // cause that is not a 5xx/timeout/network error, so none can apply when this detects an outage.
+    // WHY serviceLevel + unrecoverable for the batch (classifyError): with the probe confirming the provider is down, every
+    // remaining file would hit the same dead provider, so aborting the batch is correct. Without the probe it would not be.
+    const outage = await providerOutageError(profileName, err.causes);
+    if (outage !== undefined) throw outage;
     // D2: ONE walk, then the verdict. The actionable form is the static
     // exhaustion carrying the causes classifyError keys on (credit verdict,
     // key error, or this file only) -- the text the pre-D2 "exhausted again

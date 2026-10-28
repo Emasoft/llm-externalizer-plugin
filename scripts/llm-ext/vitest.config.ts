@@ -206,6 +206,7 @@ export default defineConfig({
       'src/empty-pool-wait.test.ts',
       'src/foreground-repair.test.ts',
       'src/inline-active-repair.test.ts',
+      'src/outage-detection.test.ts',
       // FREE_FORBIDDEN_TOOLS vs the FREE-FORBIDDEN markers in the mass-scout
       // dispatch (P6b-fix2 B-2): the list claims "this handler sends LLM
       // completions on the profile's head", and this is what keeps the claim

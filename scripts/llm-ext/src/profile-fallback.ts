@@ -22,6 +22,7 @@
 import { DYNAMIC_PROFILE_NAMES, type DynamicProfileName, type ResolvedProfile, type ResolvedRoute } from "./config.js";
 import { getProfileRecord } from "./default-profiles-state.js";
 import { IRON_RULE_REFUSAL_PREFIX } from "./benchmark/validated.js";
+import { attachFailure, failureOf, RetryDeadlineError } from "./provider/http.js";
 
 function isDynamicProfileName(name: string): name is DynamicProfileName {
   return (DYNAMIC_PROFILE_NAMES as readonly string[]).includes(name);
@@ -126,8 +127,9 @@ export class ProfileExhaustedError extends Error {
   readonly causes: readonly unknown[];
 
   /** `detail` (static only) is appended to the message so message and stack agree; used for a breaker abort, which is a provider outage, not a model failure. */
-  constructor(profileName: string, kind: "static" | "dynamic", causes: readonly unknown[] = [], detail?: string) {
-    super(
+  /** `messageOverride` replaces the whole message (a provider-outage verdict, whose advice differs from the static texts). */
+  constructor(profileName: string, kind: "static" | "dynamic", causes: readonly unknown[] = [], detail?: string, messageOverride?: string) {
+    super(messageOverride ??
       (kind === "static"
         ? causes.length > 0 &&
           causes.every((c) => (c instanceof Error ? c.message : String(c)).startsWith(IRON_RULE_REFUSAL_PREFIX))
@@ -252,7 +254,14 @@ export function* profileChain(
       if (failure?.kind === "endpoint") deadBaseUrls.add(entry.baseUrl);
       if (failure?.kind === "credit" && entry.route)
         deadCredentials.add(credentialKeyOf(entry.route));
-      if (failure?.error !== undefined) causes.push(failure.error);
+      if (failure?.error !== undefined) {
+        causes.push(failure.error);
+        // WHY (TRDD-5Q79QZM7 scope 3): record WHICH model and provider (base URL) this failure belongs to, on the real
+        // error (a retry-window wrapper is unwrapped, as failureOf does), so an outage verdict counts distinct models on
+        // one provider instead of merging every cause. Merged with the fields the HTTP layer already attached.
+        const source = failure.error instanceof RetryDeadlineError ? failure.error.cause : failure.error;
+        if (source instanceof Error) attachFailure(source, { ...failureOf(source), modelId: entry.modelId, baseUrl: entry.baseUrl });
+      }
       // A model-level failure (wrong shape, 4xx on the request, 5xx) would
       // repeat on every other group serving the SAME id — skip those too,
       // and advance to the next id. A "credit" failure is NOT model-level:

@@ -545,6 +545,9 @@ export interface FailureFields {
   hint?: string;
   /** One-line OpenRouter provider-state text (inc 4), set only for a provider-side status on the primary OpenRouter host; read by the classifier, never by message/trail. */
   providerState?: string;
+  /** The chain entry that produced this failure (profileChain, TRDD-5Q79QZM7 scope 3): lets a verdict group causes by model and provider (base URL) instead of merging them. */
+  modelId?: string;
+  baseUrl?: string;
 }
 
 export function attachFailure(err: Error, fields: FailureFields): void {
