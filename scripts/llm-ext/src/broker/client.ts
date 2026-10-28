@@ -105,6 +105,22 @@ export class BrokerUnavailableError extends ManagedServerError {
 
 
 /**
+ * The command is being stopped by --command_timeout (spec 15): its broker
+ * jobs were cancelled and no new one is submitted. Final "stop": never
+ * retried, never a breaker failure, and the walker rethrows it at once (no
+ * other model is tried), so the command ends quickly, every unfinished file
+ * failing with this reason, and writes what it already has.
+ */
+export class CommandStoppedError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "CommandStoppedError";
+    attachFailure(this, { final: "stop" });
+  }
+}
+
+
+/**
  * The walker's endpoint verdict for a failed chain entry (spec 5):
  * "endpoint-model" = the broker reported a failure for ONE model, so only
  * (URL, model) is dead; "endpoint" = the endpoint itself failed (a connection
@@ -301,7 +317,7 @@ export async function brokerExchange(
   try {
     for (let resubmits = 0; ; ) {
       opts.signal?.throwIfAborted();
-      if (stopped !== null) throw new Error(stopped);
+      if (stopped !== null) throw new CommandStoppedError(stopped);
       if (id === undefined) {
         const h: Record<string, string> = {
           ...headers,
@@ -370,6 +386,8 @@ export async function brokerExchange(
       id = undefined;
       // Queue time (dispatch - submit, broker clock) goes to the caller's CALL, never to a shared clock (review M10).
       opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt);
+      // A job cancelled by --command_timeout ends this call as a command stop, not as a model failure.
+      if (stopped !== null && reply.state === "cancelled") throw new CommandStoppedError(stopped);
       if (reply.state === "done") {
         return new Response(reply.body ?? "", { status: reply.status ?? 502, headers: { "content-type": reply.contentType ?? "application/json" } });
       }

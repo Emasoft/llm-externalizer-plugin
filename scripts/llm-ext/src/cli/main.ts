@@ -147,21 +147,35 @@ function die(msg: string): never {
 /** Exit code of a command stopped by --command_timeout (the timeout(1) convention). */
 const COMMAND_TIMEOUT_EXIT = 124;
 
+/** Set once --command_timeout expired: the command is stopping and must exit COMMAND_TIMEOUT_EXIT. */
+let commandTimedOut = false;
+/** How long a stopping command may take to write its partial results before it is ended anyway. */
+const STOP_FLUSH_GRACE_MS = 30_000;
+
 /**
- * --command_timeout (USER ruling 2026-10-28): when it expires the command
- * stops: no further job is submitted, every job it still has at the local
- * broker is cancelled (DELETE), and it exits non-zero. Results the command
- * already wrote stay on disk; listing the unfinished files per tool is not
- * done yet (P1b report). The timer is unref'd: a command that finishes first
- * exits at once (no lingering handle, launcher-boot.test.ts).
+ * --command_timeout (USER ruling 2026-10-28, spec 15): when it expires the
+ * command STOPS, it is not killed. No further broker job is submitted, every
+ * job it still has at the local broker is cancelled (DELETE), and each call
+ * waiting on one ends with a CommandStoppedError. So every unfinished file
+ * fails with the timeout as its reason, and the command returns normally:
+ * it writes the per-file results already complete and its summary lists the
+ * unfinished files (review m3: a process.exit straight from this timer could
+ * cut off a report being written). main() then exits COMMAND_TIMEOUT_EXIT.
+ * A command that cannot stop in STOP_FLUSH_GRACE_MS (a remote request has no
+ * broker job to cancel) is ended anyway. Both timers are unref'd: a command
+ * that finishes first exits at once (no lingering handle, launcher-boot.test.ts).
  */
 function armCommandTimeout(seconds: number): void {
   setTimeout(() => {
+    commandTimedOut = true;
     const reason = `--command_timeout: the command ran longer than ${seconds} s and was stopped`;
     void cancelAllBrokerJobs(reason).then((n) => {
-      process.stderr.write(`llm-ext: ${reason}; ${n} unfinished local job(s) cancelled; files without a result were not finished\n`);
-      process.exit(COMMAND_TIMEOUT_EXIT);
+      process.stderr.write(`llm-ext: ${reason}; ${n} unfinished local job(s) cancelled; writing the results already complete\n`);
     });
+    setTimeout(() => {
+      process.stderr.write(`llm-ext: the stopped command did not finish writing within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
+      process.exit(COMMAND_TIMEOUT_EXIT);
+    }, STOP_FLUSH_GRACE_MS).unref();
   }, seconds * 1000).unref();
 }
 
@@ -925,6 +939,14 @@ async function main(): Promise<void> {
   const result = await dispatchCallTool(tool.name, args, { progress: verbose });
 
   const text = result.content.map((c) => c.text).join("\n");
+  if (commandTimedOut) {
+    // Spec 15: the stopped command's own result IS the partial report (the
+    // per-file results already written, and the unfinished files listed as
+    // failed with the timeout reason). exitCode, not exit: stdout is flushed.
+    process.stdout.write(`${text}\n`);
+    process.exitCode = COMMAND_TIMEOUT_EXIT;
+    return;
+  }
   if (result.isError) {
     process.stderr.write(`${text}\n`);
     process.exit(1);
@@ -936,5 +958,6 @@ main().catch((error) => {
   process.stderr.write(
     `llm-ext: ${error instanceof Error ? error.message : String(error)}\n`,
   );
-  process.exit(1);
+  // A command that failed while stopping (the timeout ended it) still exits as a timeout.
+  process.exit(commandTimedOut ? COMMAND_TIMEOUT_EXIT : 1);
 });

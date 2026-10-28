@@ -150,7 +150,7 @@ import {
 } from "./text-tools/core.js";
 
 import type { RetryClock } from "./provider/http.js";
-import { brokerClientVersion, brokerQueueTimeoutMs, endpointFailureKind, ensureBroker } from "./broker/client.js";
+import { brokerClientVersion, brokerQueueTimeoutMs, CommandStoppedError, endpointFailureKind, ensureBroker } from "./broker/client.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 
 /**
@@ -3251,6 +3251,8 @@ async function walkProfileChainOnce(
       // always runs under the dispatcher's shared clock, and "shared" is now a
       // property of the error — only a genuinely closed SHARED window has
       // dispatchClosed true.
+      // --command_timeout (spec 15): the command is stopping; trying the next model would only fail the same way, later.
+      if (err instanceof CommandStoppedError) throw err;
       if (err instanceof RetryDeadlineError && err.dispatchClosed) {
         throw new ProfileExhaustedError(profile.name, "static", [...collected, err]);
       }

@@ -15,7 +15,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -1134,6 +1134,35 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     // Every reply filled its slot: the server log shows each task stopped at the full 1024-token context.
     const full = readFileSync(join(cfg, "llama-server-main.log"), "utf8").split("\n").filter((l) => /stop processing: n_tokens = 102[0-4]\b/.test(l));
     expect(full.length).toBeGreaterThanOrEqual(2 * MAIN_SLOTS);
+  }, 600_000);
+
+  it("--command_timeout on a multi-file command (spec 15, review m3): finished reports are written, unfinished files are listed, exit 124, nothing left queued", async () => {
+    const cfg = newDir();
+    writeSettings(cfg);
+    const w = workDir(6);
+    const out = join(w.dir, "scan");
+    const scanP = runCli(cfg, ["--command_timeout=20", "scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", out], w.dir);
+    // Freeze the server once the first report is on disk: the rest can then never finish before the timeout.
+    for (let i = 0; i < 300 && reports(out).length < 1; i++) await new Promise((r) => setTimeout(r, 50));
+    expect(reports(out).length).toBeGreaterThanOrEqual(1);
+    const main = readRegistry(cfg, "llama").find((e) => e.role === "main")!.pid;
+    process.kill(main, "SIGSTOP");
+    let scan: { code: number | null; out: string };
+    try {
+      scan = await scanP;
+    } finally {
+      process.kill(main, "SIGCONT");
+    }
+    expect(scan.code, scan.out).toBe(124);
+    const done = reports(out);
+    expect(done.length).toBeGreaterThanOrEqual(1);
+    expect(done.length).toBeLessThan(6);
+    // Every file is either finished (a report) or listed as unfinished, with the timeout as its reason.
+    const unfinished = w.files.filter((f) => !done.some((r) => r.includes(`-${basename(f)}-`)));
+    expect(unfinished.length).toBe(6 - done.length);
+    for (const f of unfinished) expect(scan.out).toMatch(new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: --command_timeout`));
+    expect(scan.out).toMatch(/--command_timeout: the command ran longer than 20 s and was stopped/);
+    expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
   }, 600_000);
   it("chatCompletionJSON goes through the broker (check imports, whose extract step is a JSON-schema call)", async () => {
     const cfg = newDir();
