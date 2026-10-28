@@ -8,6 +8,8 @@ import { createServer, type Server } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dynamicProfileRetryLaterMessage } from "./profile-fallback.js";
+import { claimBenchLock, releaseBenchLock } from "./bench-lock.js";
+import { backgroundUpdateLockPathFor } from "./default-profiles-runner.js";
 import {
   DEFAULT_FOREGROUND_REPAIR_TIMEOUT_MS,
   parseForegroundRepairTimeoutMs,
@@ -54,8 +56,10 @@ const FREE_YAML_REPAIRED = FREE_YAML.replace("[vendor/free-a:free]", "[vendor/fr
 
 type UpdaterMode =
   | "success" // changes the profile + stamps lastBenchmarkAt
+  | "success-foreign-fail" // as success, but another update's failure (failCount 7, old lastFailureAt) is also on record
+  | "prune" // changes the profile + stamps only lastMaintainedAt (a $0 pruning pass, no re-benchmark)
   | "stamp-only" // stamps success but leaves the profile unchanged
-  | "fail" // books a failure (failCount 1 + backoff), like recordBenchmarkFailure
+  | "fail" // books a failure (failCount 1 + backoff + lastFailureAt), like recordBenchmarkFailure
   | "silent"; // records nothing
 
 /** A marker child playing the updater: writes `flag` on start, applies `mode`, holds its lock for holdMs. */
@@ -63,15 +67,25 @@ function installMarker(flag: string, holdMs: number, mode: UpdaterMode): void {
   const dir = tempDir("marker");
   marker.script = join(dir, "marker.js");
   const dyn = `{ version: 1, profiles: { free: { lastBenchmarkAt: Date.now(), poolFingerprint: "x", modelIds: [], failCount: 0 } } }`;
-  const failed = `{ version: 1, profiles: { free: { lastBenchmarkAt: 0, poolFingerprint: "", modelIds: [], failCount: 1, cooldownUntil: Date.now() + 900000 } } }`;
+  const pruned = `{ version: 1, profiles: { free: { lastBenchmarkAt: 0, lastMaintainedAt: Date.now(), poolFingerprint: "x", modelIds: [], failCount: 0 } } }`;
+  const failed = `{ version: 1, profiles: { free: { lastBenchmarkAt: 0, poolFingerprint: "", modelIds: [], failCount: 1, cooldownUntil: Date.now() + 900000, lastFailureAt: Date.now() } } }`;
+  // Another session's failure of an unrelated update: failCount grows but this update's request never booked it.
+  const foreign = `{ version: 1, profiles: { free: { lastBenchmarkAt: 0, poolFingerprint: "", modelIds: [], failCount: 7, cooldownUntil: 0, lastFailureAt: 1 } } }`;
+  const settings = `fs.writeFileSync(path.join(cfg, "settings.yaml"), ${JSON.stringify(FREE_YAML_REPAIRED)});\n`;
+  const dynWrite = (v: string) => `fs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json"), JSON.stringify(${v}));`;
+  const legacyWrite = (v: string) => `fs.writeFileSync(path.join(cfg, "default-profiles-state.json"), JSON.stringify(${v}));`;
   const body =
     mode === "success"
-      ? `fs.writeFileSync(path.join(cfg, "settings.yaml"), ${JSON.stringify(FREE_YAML_REPAIRED)});\nfs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json"), JSON.stringify(${dyn}));`
-      : mode === "stamp-only"
-        ? `fs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json"), JSON.stringify(${dyn}));`
-        : mode === "fail"
-          ? `fs.writeFileSync(path.join(cfg, "default-profiles-state.json"), JSON.stringify(${failed}));`
-          : "";
+      ? settings + dynWrite(dyn)
+      : mode === "success-foreign-fail"
+        ? settings + legacyWrite(foreign) + dynWrite(dyn)
+        : mode === "prune"
+          ? settings + dynWrite(pruned)
+          : mode === "stamp-only"
+            ? dynWrite(dyn)
+            : mode === "fail"
+              ? legacyWrite(failed)
+              : "";
   writeFileSync(
     marker.script,
     `const fs = require("node:fs");
@@ -85,7 +99,7 @@ setTimeout(() => process.exit(0), ${holdMs});
 }
 
 /** `respond` decides each POST; it sees whether the updater child has run. */
-async function startServer(respond: () => [number, string] | "ok") {
+async function startServer(respond: (body: string) => [number, string] | "ok") {
   let posts = 0;
   server = createServer((req, res) => {
     if (req.method === "GET") {
@@ -93,10 +107,11 @@ async function startServer(respond: () => [number, string] | "ok") {
       res.end("{}");
       return;
     }
-    req.on("data", () => {});
+    let body = "";
+    req.on("data", (c: Buffer) => (body += c.toString()));
     req.on("end", () => {
       posts++;
-      const a = respond();
+      const a = respond(body);
       if (a === "ok") {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
@@ -212,20 +227,80 @@ describe("foreground repair of a generated profile whose every model failed (TRD
     }
   }, 60_000);
 
-  it("a multi-item tool (scan_folder) is NOT re-run whole: one line says the profile was repaired and to re-run the failed files", async () => {
+  it("a multi-item tool (scan_folder) where NO item succeeded is retried once, like a single request", async () => {
     const flag = join(tempDir("flag"), "updated");
     installMarker(flag, 300, "success");
     const srv = await startServer(() => (existsSync(flag) ? "ok" : [404, "No endpoints found"]));
     const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
     try {
       const r = await idx.dispatchCallTool("scan_folder", scanArgs());
-      expect(r.isError).toBe(true);
-      expect(textOf(r)).toContain(dynamicProfileRetryLaterMessage("free"));
-      expect(textOf(r)).toContain("was repaired in the foreground");
-      expect(textOf(r)).toContain("re-run the failed files");
-      expect(srv.posts(), "the tool was not run a second time").toBe(1);
+      expect(r.isError, textOf(r)).not.toBe(true);
+      expect(textOf(r)).not.toContain(dynamicProfileRetryLaterMessage("free"));
+      expect(srv.posts(), "one failing walk, then the retried run").toBeGreaterThanOrEqual(2);
     } finally {
       cleanup();
+    }
+  }, 60_000);
+
+  it("a multi-item tool (scan_folder) where some items already succeeded is NOT re-run: one line says to re-run the failed files", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 300, "success");
+    // The request for b.txt succeeds, every other one fails (also after the repair), so exactly one file succeeds.
+    const srv = await startServer((body) => (body.includes("second file") ? "ok" : [404, "No endpoints found"]));
+    const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
+    try {
+      const args = scanArgs();
+      writeFileSync(join(args.folder_path, "b.txt"), "second file\n", "utf-8");
+      const r = await idx.dispatchCallTool("scan_folder", args);
+      expect(textOf(r)).toContain("already succeeded and are not re-run");
+      expect(textOf(r)).toContain("re-run the failed files");
+      const postsAtReturn = srv.posts();
+      await new Promise((res) => setTimeout(res, 300));
+      expect(srv.posts(), "no retried run started in the background").toBe(postsAtReturn);
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("baseline race: an updater that records its outcome and exits at once is still counted (baseline taken before the spawn)", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 0, "success");
+    const srv = await startServer(() => (existsSync(flag) ? "ok" : [404, "No endpoints found"]));
+    const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
+    try {
+      const r = await idx.dispatchCallTool("chat", chatArgs());
+      expect(r.isError, textOf(r)).not.toBe(true);
+      expect(srv.posts()).toBe(2);
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("another update's failure on record (failCount grown, old lastFailureAt) is not reported as this command's failure", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 300, "success-foreign-fail");
+    const srv = await startServer(() => (existsSync(flag) ? "ok" : [404, "No endpoints found"]));
+    const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
+    try {
+      const r = await idx.dispatchCallTool("chat", chatArgs());
+      expect(r.isError, textOf(r)).not.toBe(true);
+      expect(srv.posts()).toBe(2);
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+
+  it("a $0 pruning pass (lastMaintainedAt only) that changed the profile counts as a repair: the request is retried", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 300, "prune");
+    const srv = await startServer(() => (existsSync(flag) ? "ok" : [404, "No endpoints found"]));
+    const a = await loadFreshIndex(FREE_YAML);
+    try {
+      const r = await a.idx.dispatchCallTool("chat", chatArgs());
+      expect(r.isError, textOf(r)).not.toBe(true);
+      expect(srv.posts()).toBe(2);
+    } finally {
+      a.cleanup();
     }
   }, 60_000);
 
@@ -301,34 +376,80 @@ describe("waitForProfileUpdate waits on the recorded OUTCOME, not on the lock (s
     }
   }
 
-  it("lock not held (child has not taken it / already gone) and no outcome: NOT ok -- 'ended without recording a result'", async () => {
+  const writeDyn = (cfgDir: string, rec: Record<string, number>) =>
+    writeFileSync(
+      join(cfgDir, "dynamic-profiles-state.json"),
+      JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: 0, poolFingerprint: "x", modelIds: [], failCount: 0, ...rec } } }),
+    );
+  const writeLegacy = (cfgDir: string, rec: Record<string, number>) =>
+    writeFileSync(
+      join(cfgDir, "default-profiles-state.json"),
+      JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: 0, poolFingerprint: "", modelIds: [], failCount: 0, cooldownUntil: 0, ...rec } } }),
+    );
+
+  it("lock not held and no outcome: NOT ok -- 'ended without recording a result', at once (no grace period)", async () => {
     await inFreshConfigDir(async () => {
-      const base = takeUpdateBaseline("free");
-      base.sinceMs -= 10_000; // past the no-result grace
+      const t0 = Date.now();
+      const r = await waitForProfileUpdate("free", { state: "started" }, takeUpdateBaseline());
+      expect(r).toEqual({ ok: false, failed: true, why: "the update ended without recording a result" });
+      expect(Date.now() - t0).toBeLessThan(400);
+    });
+  });
+
+  it("baseline race: an outcome recorded in the same millisecond window right after the baseline counts; one recorded BEFORE it does not", async () => {
+    await inFreshConfigDir(async (cfgDir) => {
+      // Baseline first (new order), then a fast updater records at once: counted.
+      const base = takeUpdateBaseline();
+      writeDyn(cfgDir, { lastBenchmarkAt: base.sinceMs });
+      expect(await waitForProfileUpdate("free", { state: "started" }, base)).toEqual({ ok: true, rebenchmarked: true });
+      // Old order (baseline taken AFTER the spawn): the same outcome predates the baseline and is misread as "no result".
+      const late = { sinceMs: base.sinceMs + 5 };
+      expect(await waitForProfileUpdate("free", { state: "started" }, late)).toMatchObject({ ok: false, failed: true });
+    });
+  });
+
+  it("a record that lands while the lock is held is waited for, then reported as a re-benchmark", async () => {
+    await inFreshConfigDir(async (cfgDir) => {
+      const lockPath = backgroundUpdateLockPathFor("free");
+      expect(claimBenchLock(lockPath).ok).toBe(true);
+      try {
+        const base = takeUpdateBaseline();
+        setTimeout(() => writeDyn(cfgDir, { lastBenchmarkAt: Date.now() }), 200);
+        expect(await waitForProfileUpdate("free", { state: "running" }, base)).toEqual({ ok: true, rebenchmarked: true });
+      } finally {
+        releaseBenchLock(lockPath);
+      }
+    });
+  });
+
+  it("a failCount bump from an UNRELATED update (no failure stamped after this baseline) is not this command's failure", async () => {
+    await inFreshConfigDir(async (cfgDir) => {
+      const base = takeUpdateBaseline();
+      writeLegacy(cfgDir, { failCount: 9, cooldownUntil: Date.now() + 1000, lastFailureAt: base.sinceMs - 60_000 });
       const r = await waitForProfileUpdate("free", { state: "started" }, base);
       expect(r).toEqual({ ok: false, failed: true, why: "the update ended without recording a result" });
+      // A failure stamped after the baseline IS this update's.
+      writeLegacy(cfgDir, { failCount: 10, cooldownUntil: Date.now() + 1000, lastFailureAt: Date.now() });
+      expect(await waitForProfileUpdate("free", { state: "started" }, base)).toMatchObject({ ok: false, failed: true, why: expect.stringContaining("the update failed") });
     });
   });
 
-  it("an outcome stamped AFTER the baseline, with the lock free, is a success; one stamped BEFORE it is not", async () => {
+  it("a maintenance pass that only pruned (lastMaintainedAt, no lastBenchmarkAt) is ok but NOT re-benchmarked; while the lock is held it is still pending", async () => {
     await inFreshConfigDir(async (cfgDir) => {
-      const stamp = (at: number) =>
-        writeFileSync(
-          join(cfgDir, "dynamic-profiles-state.json"),
-          JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: at, poolFingerprint: "x", modelIds: [], failCount: 0 } } }),
-        );
-      const base = takeUpdateBaseline("free");
-      stamp(base.sinceMs - 5_000);
-      const old = { ...base, sinceMs: base.sinceMs - 10_000 };
-      expect(await waitForProfileUpdate("free", { state: "started" }, old)).toMatchObject({ ok: true });
-      stamp(base.sinceMs - 60_000);
-      const stale = await waitForProfileUpdate("free", { state: "started" }, { ...base, sinceMs: base.sinceMs - 10_000 });
-      expect(stale).toMatchObject({ ok: false, failed: true });
-      setTimeout(() => stamp(Date.now()), 200);
-      expect(await waitForProfileUpdate("free", { state: "running" }, takeUpdateBaseline("free"))).toEqual({ ok: true });
+      const base = takeUpdateBaseline();
+      writeDyn(cfgDir, { lastMaintainedAt: base.sinceMs });
+      expect(await waitForProfileUpdate("free", { state: "started" }, base)).toEqual({ ok: true, rebenchmarked: false });
+      const lockPath = backgroundUpdateLockPathFor("free");
+      expect(claimBenchLock(lockPath).ok).toBe(true);
+      try {
+        // Lock held: the benchmark child may still be coming, so the maintainer stamp alone must not end the wait.
+        const r = await waitForProfileUpdate("free", { state: "running" }, base, {}, 700);
+        expect(r).toMatchObject({ ok: false, failed: false });
+      } finally {
+        releaseBenchLock(lockPath);
+      }
     });
   });
-
   it("the limit env var: default 10 minutes, a positive number overrides, junk falls back to the default", () => {
     expect(DEFAULT_FOREGROUND_REPAIR_TIMEOUT_MS).toBe(600_000);
     expect(parseForegroundRepairTimeoutMs(undefined)).toBe(600_000);

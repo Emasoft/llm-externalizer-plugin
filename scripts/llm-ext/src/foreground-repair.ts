@@ -7,10 +7,17 @@
 //
 // The wait is on the update's recorded OUTCOME, never on the lock alone: polling only "is the lock held" returned
 // ok at once when the child had not taken the lock yet, and equally ok when the update FAILED and released it.
-// The outcome is read from the stamps the updater already writes (default-profiles-state.ts):
-//   success: dynamic record lastBenchmarkAt (the benchmark child, on a completed run), or lastMaintainedAt once
-//            the lock is free (a requested maintainer pass that needed no benchmark);
-//   failure: the legacy record's failCount grew (recordBenchmarkFailure, which also sets the backoff).
+// The outcome is read from the stamps the updater already writes (default-profiles-state.ts), each compared with
+// the baseline taken BEFORE the update was requested:
+//   re-benchmarked: dynamic record lastBenchmarkAt (stamped only by a completed benchmark child);
+//   pruned only:    lastMaintainedAt once the lock is free (a $0 maintainer pass; no re-benchmark happened);
+//   failure:        the legacy record's lastFailureAt (recordBenchmarkFailure, which also sets the backoff) -- a
+//                   timestamp, not the shared failCount, so another session's earlier failure is never ours.
+// Ordering (verified): every one of those records is written by the child while it still holds the lock (the
+// benchmark child writes before it exits; the detector hands its lock to the benchmark child instead of releasing
+// it), and a lock is released only by the holder's exit. So a free lock with no new record means the updater died
+// without booking anything, and that is reported at once -- no grace period is needed. `held` is read BEFORE the
+// records so a record written between the two reads is still seen.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { benchLockIsHeld } from "./bench-lock.js";
 import { backgroundUpdateLockPathFor, type ProfileUpdateRequest } from "./default-profiles-runner.js";
@@ -20,11 +27,6 @@ import type { DynamicProfileName } from "./config.js";
 export const FOREGROUND_REPAIR_TIMEOUT_ENV = "LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS";
 export const DEFAULT_FOREGROUND_REPAIR_TIMEOUT_MS = 10 * 60_000;
 const FOREGROUND_REPAIR_POLL_MS = 500;
-/** The lock is free, no outcome is recorded, and this long has passed since the request: the child died unbooked. */
-const NO_RESULT_GRACE_MS = 3_000;
-
-/** Tools whose single call is ONE request; every other LLM tool fans out over files/items and is never re-run whole. */
-export const SINGLE_REQUEST_TOOLS: ReadonlySet<string> = new Set(["chat", "code_task"]);
 
 /** Missing/blank/non-positive/non-finite -> the default (same fail-safe as parseCatalogTtlMs). */
 export function parseForegroundRepairTimeoutMs(raw: string | undefined): number {
@@ -33,13 +35,13 @@ export function parseForegroundRepairTimeoutMs(raw: string | undefined): number 
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_FOREGROUND_REPAIR_TIMEOUT_MS;
 }
 
-/** State taken BEFORE the update is requested; an outcome counts only if it is newer than this. */
+/** Taken BEFORE the update is requested (the spawn may finish and record within milliseconds); an outcome counts
+ *  only if it is stamped at or after this time. */
 export interface UpdateBaseline {
   sinceMs: number;
-  failCount: number;
 }
-export function takeUpdateBaseline(profile: DynamicProfileName): UpdateBaseline {
-  return { sinceMs: Date.now(), failCount: getProfileRecord(profile)?.failCount ?? 0 };
+export function takeUpdateBaseline(): UpdateBaseline {
+  return { sinceMs: Date.now() };
 }
 
 /** What failDynamicProfile recorded for the running invocation: the profile whose models all failed and the
@@ -50,23 +52,28 @@ export interface DynamicExhaustion {
   profile?: DynamicProfileName;
   update?: Exclude<ProfileUpdateRequest, { state: "unavailable" }>;
   baseline?: UpdateBaseline;
+  /** Items of a multi-item tool that already succeeded in this run (processFileCheck adds them). Zero for a
+   *  single-request tool, so the whole call can be retried; above zero the call is never re-run whole. */
+  itemsSucceeded?: number;
 }
 export const dynamicExhaustionStore = new AsyncLocalStorage<DynamicExhaustion>();
 
-export type ForegroundWaitOutcome = { ok: true } | { ok: false; why: string; failed: boolean };
+/** `rebenchmarked: false` is a $0 maintainer pass that only pruned/reordered models. */
+export type ForegroundWaitOutcome = { ok: true; rebenchmarked: boolean } | { ok: false; why: string; failed: boolean };
 
-type Outcome = { kind: "pending" } | { kind: "success" } | { kind: "failed"; why: string };
+type Outcome = { kind: "pending" } | { kind: "rebenchmarked" } | { kind: "pruned" } | { kind: "failed"; why: string } | { kind: "ended" };
 
 function readOutcome(profile: DynamicProfileName, base: UpdateBaseline, lockHeld: boolean): Outcome {
   const legacy = getProfileRecord(profile);
-  if ((legacy?.failCount ?? 0) > base.failCount) {
+  if ((legacy?.lastFailureAt ?? 0) >= base.sinceMs) {
     const until = legacy?.cooldownUntil ? ` (next automatic attempt after ${new Date(legacy.cooldownUntil).toISOString()})` : "";
     return { kind: "failed", why: `the update failed (benchmark attempt ${legacy?.failCount ?? "?"} did not succeed)${until}` };
   }
   const dyn = getDynamicProfileRecord(profile);
-  if ((dyn?.lastBenchmarkAt ?? 0) >= base.sinceMs) return { kind: "success" };
-  if (!lockHeld && (dyn?.lastMaintainedAt ?? 0) >= base.sinceMs) return { kind: "success" };
-  return { kind: "pending" };
+  if ((dyn?.lastBenchmarkAt ?? 0) >= base.sinceMs) return { kind: "rebenchmarked" };
+  if (lockHeld) return { kind: "pending" };
+  if ((dyn?.lastMaintainedAt ?? 0) >= base.sinceMs) return { kind: "pruned" };
+  return { kind: "ended" };
 }
 
 /** Wait (bounded) for the profile's update to record an outcome newer than `base`. */
@@ -89,11 +96,10 @@ export async function waitForProfileUpdate(
   for (;;) {
     const held = benchLockIsHeld(lockPath);
     const outcome = readOutcome(profile, base, held);
-    if (outcome.kind === "success") return { ok: true };
+    if (outcome.kind === "rebenchmarked") return { ok: true, rebenchmarked: true };
+    if (outcome.kind === "pruned") return { ok: true, rebenchmarked: false };
     if (outcome.kind === "failed") return { ok: false, failed: true, why: outcome.why };
-    if (!held && Date.now() - base.sinceMs > NO_RESULT_GRACE_MS) {
-      return { ok: false, failed: true, why: "the update ended without recording a result" };
-    }
+    if (outcome.kind === "ended") return { ok: false, failed: true, why: "the update ended without recording a result" };
     if (Date.now() >= deadline) {
       return {
         ok: false,

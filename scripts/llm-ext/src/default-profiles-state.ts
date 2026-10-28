@@ -33,6 +33,8 @@ export interface DefaultProfileRecord {
   failCount: number;
   /** Epoch ms before which no further attempt should be made. */
   cooldownUntil: number;
+  /** Epoch ms of the last booked failure (recordBenchmarkFailure); lets a waiting command key a failure to its own update. */
+  lastFailureAt?: number;
   /**
    * Per-model spec fingerprint at last benchmark time (default-profiles.ts
    * modelSpecFingerprint, addendum I) — undefined for a model with no
@@ -153,6 +155,10 @@ export function recordBenchmarkFailure(name: DynamicProfileName, nowMs: number):
     modelIds: prev?.modelIds ?? [],
     failCount,
     cooldownUntil: nowMs + backoff,
+    // WHY (TRDD-5Q79QZM7 review 3): failCount is shared by every update of the profile, so a command waiting on ITS
+    // update cannot tell its failure from another session's by the counter. The timestamp lets it ask "did a
+    // failure land after I requested my update".
+    lastFailureAt: nowMs,
   });
 }
 

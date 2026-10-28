@@ -236,7 +236,6 @@ import { dynamicProfileGate, regenerateInvalidMarkedSection } from "./dynamic-ma
 // requests when its profile has no working model (never awaited either).
 import { spawnDetachedDetector, requestProfileUpdate } from "./default-profiles-runner.js";
 import {
-  SINGLE_REQUEST_TOOLS,
   dynamicExhaustionStore,
   takeUpdateBaseline,
   waitForProfileUpdate,
@@ -2198,7 +2197,8 @@ function failDynamicProfile(
   // WHY (TRDD-5Q79QZM7): the single same-run retry after the foreground repair must not start another update --
   // one repair per run; its failure is reported by dispatchCallTool.
   if (dynamicExhaustionStore.getStore()?.retry === true) return new ProfileExhaustedError(profileName, "dynamic", causes);
-  const baseline = takeUpdateBaseline(profileName);
+  // Taken BEFORE requestProfileUpdate spawns the updater: a fast child can record its outcome within milliseconds.
+  const baseline = takeUpdateBaseline();
   const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
   if (update.state === "unavailable") {
     process.stderr.write(`[llm-externalizer] '${profileName}' profile update not started — ${update.reason}\n`);
@@ -3731,6 +3731,10 @@ async function processFileCheck(
     options.outputDir,
   );
 
+  // Counted per item so dispatchCallTool can tell a multi-item run that partly succeeded (never re-run whole after
+  // a foreground repair) from one that got nowhere (retried once). Every multi-file tool funnels through here.
+  const exhaustionStore = dynamicExhaustionStore.getStore();
+  if (exhaustionStore) exhaustionStore.itemsSucceeded = (exhaustionStore.itemsSucceeded ?? 0) + 1;
   return { filePath, success: true, reportPath };
 }
 
@@ -4167,10 +4171,11 @@ export async function dispatchCallTool(
     // of a generated profile failed and an update is running. Instead of answering retry-later at once, wait
     // (bounded) for that update, reload settings and retry the SAME request ONCE. The retry runs outside the
     // store, so it can never loop. A second session finds the update already running and waits on its lock.
-    // (TRDD-5Q79QZM7 review) The retry happens only for single-request tools and only when the profile content
-    // actually changed. A fan-out tool (scan_folder, batch_check, ...) is never re-run whole: that would redo the
-    // files that already succeeded and double their cost; it gets one honest line telling the caller to re-run
-    // the failed files. Retrying only the failed items is a recorded follow-up.
+    // (TRDD-5Q79QZM7 review) The retry happens only when the profile content actually changed, and the whole call
+    // is re-run only when no item of it succeeded (a single-request tool, or a multi-item run that got nowhere):
+    // re-running a run that partly succeeded would redo its successful files and double their cost, so it gets
+    // one honest line telling the caller to re-run the failed files. Retrying only the failed items stays a
+    // recorded follow-up. Items are counted by processFileCheck into `itemsSucceeded`.
     const exhaustion: DynamicExhaustion = {};
     const first = await dynamicExhaustionStore.run(exhaustion, () => dispatchCallToolInner(name, rawArgs, opts));
     if (!first.isError || exhaustion.profile === undefined || exhaustion.update === undefined || exhaustion.baseline === undefined) return first;
@@ -4181,12 +4186,17 @@ export async function dispatchCallTool(
     const repair = await repairProfileInForeground(exhaustion.profile, exhaustion.update, exhaustion.baseline);
     if (!repair.ok) return withRepairLine(first, repair.line);
     if (!repair.changed) {
-      return withRepairLine(first, "Foreground repair finished but the profile content did not change, so the request was not retried.");
-    }
-    if (!SINGLE_REQUEST_TOOLS.has(name)) {
       return withRepairLine(
         first,
-        `The '${exhaustion.profile}' profile was repaired in the foreground. '${name}' works on many items and is not re-run whole: re-run the failed files now.`,
+        repair.rebenchmarked
+          ? "Foreground repair finished but the profile content did not change, so the request was not retried."
+          : "Foreground update only pruned models (a $0 maintenance pass, not re-benchmarked) and the profile content did not change, so the request was not retried.",
+      );
+    }
+    if ((exhaustion.itemsSucceeded ?? 0) > 0) {
+      return withRepairLine(
+        first,
+        `The '${exhaustion.profile}' profile was repaired in the foreground. ${exhaustion.itemsSucceeded} item(s) of '${name}' already succeeded and are not re-run: re-run the failed files now.`,
       );
     }
     const retried = await dynamicExhaustionStore.run({ retry: true }, () => dispatchCallToolInner(name, rawArgs, opts));
@@ -4205,7 +4215,7 @@ async function repairProfileInForeground(
   profile: DynamicProfileName,
   update: Parameters<typeof waitForProfileUpdate>[1],
   baseline: UpdateBaseline,
-): Promise<{ ok: true; changed: boolean } | { ok: false; line: string }> {
+): Promise<{ ok: true; changed: boolean; rebenchmarked: boolean } | { ok: false; line: string }> {
   const waited = await waitForProfileUpdate(profile, update, baseline);
   if (!waited.ok) {
     return { ok: false, line: waited.failed ? `Foreground repair was tried and failed: ${waited.why}.` : `Foreground repair was tried and stopped: ${waited.why}.` };
@@ -4214,7 +4224,7 @@ async function repairProfileInForeground(
   const before = snapshot();
   const reloaded = reloadSettingsFromDisk();
   if (!reloaded.ok) return { ok: false, line: `Foreground repair finished but the repaired settings were not loaded: ${reloaded.error}.` };
-  return { ok: true, changed: snapshot() !== before };
+  return { ok: true, changed: snapshot() !== before, rebenchmarked: waited.rebenchmarked };
 }
 
 /** The tool result with one extra line appended to its last text block. */
@@ -4314,14 +4324,19 @@ async function dispatchCallToolInner(
           // (malformed profile, forbidden tool, no credentials, maintenance disabled, catalog recently failed,
           // unpopulated paid/local) keeps its own message, as before.
           if (gate.reason === "empty-pool-refreshable") {
-            const baseline = takeUpdateBaseline(effective);
+            // Before the spawn, for the same reason as in failDynamicProfile.
+            const baseline = takeUpdateBaseline();
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
             if (update.state !== "unavailable") {
               const repair = await repairProfileInForeground(effective, update, baseline);
               if (repair.ok && profileGateRefusal(name) === null) {
                 gate = null;
               } else {
-                const line = repair.ok ? "Foreground repair finished but the pool is still empty." : repair.line;
+                const line = repair.ok
+                  ? repair.rebenchmarked
+                    ? "Foreground repair finished but the pool is still empty."
+                    : "Foreground update only pruned models (not re-benchmarked) and the pool is still empty."
+                  : repair.line;
                 return { content: [{ type: "text", text: `${dynamicProfileRetryLaterMessage(effective)}\n${line}` }], isError: true };
               }
             } else {
