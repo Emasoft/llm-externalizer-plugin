@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: design
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:08:05+0100
+updated: 2026-10-28T14:29:09+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -50,3 +50,6 @@ Consequence: the design must (a) verify the 256k claim from the model config, (b
 Smoke test 2026-10-28: Homebrew HEAD build b11960-8642541b2 (22 commits after LFM3 merge 19cce69) loaded AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K via llama-cli -hf and answered at about 107 tokens/s; the model emits a thinking block before the answer, which llm-ext must strip.
 USER directive verbatim (2026-10-28): "notice that you can enable thinking for the model, and set the effort to various levels, each one increasing the model output and the context usage. so for complex tasks like finding bugs, you may want to limit the prompt to 30% but use effort=high, or effort=max, for example."
 Consequence: the context budget per request is prompt + thinking + answer; the design maps each llm-ext command to a thinking effort level and measures, per effort level, the largest prompt fill (percent of the window) that still answers correctly, so heavier commands such as bug-finding get a smaller prompt share and a higher effort. Note: the llama.cpp LFM3.jinja template (b11960) exposes enable_thinking and preserve_thinking but no effort parameter; how effort is set must be verified from the model card or the GGUF embedded template.
+USER directive verbatim (2026-10-28): "looks like the reasoning effort is simply determined by the amount of tokens and output tokens available. so we can just disable it for simple tasks, like text esiting, and enabling for bug search. always keeping the context usage under 30-40%"
+Consequence: no effort-level table; each llm-ext command gets thinking off (simple tasks such as text editing) or on (bug search), and the thinking room is whatever token budget remains; prompt plus thinking plus answer stays under 30-40 percent of the context window (exact value from the context-fill benchmark).
+Liquid AI docs pasted by the user (docs.liquid.ai LFM3-1.7B page): 1.73B params, 256K context input+output, 24 layers (13 short conv, 5 sliding-window attention, 6 global attention); general generation temperature 0.1, top_k 50, repetition_penalty 1.1; math and science temperature 1.0, top_p 0.95, top_k 20, repetition_penalty 1.0; reasoning on by default, enable_thinking False for direct answers; the page says it is NOT recommended for agentic coding or complex multi-step reasoning due to its size, so bug-search quality must be measured, not assumed.
