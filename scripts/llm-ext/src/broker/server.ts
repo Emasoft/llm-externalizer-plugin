@@ -261,6 +261,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const dispatch = (job: Job, s: RunningServer): void => {
     job.state = "running";
     job.dispatchedAt = Date.now();
+    // One line per job: the broker log is where a user (and the end-to-end tests) see which command's work ran, and how long it queued.
+    o.log(`dispatch job ${job.id} model '${job.model}' command ${job.commandId} queued ${job.dispatchedAt - job.submittedAt} ms`);
     sched.servedInRun++;
     sched.touch(job.dispatchedAt);
     const ac = new AbortController();
@@ -405,7 +407,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (req.headers[TOKEN_HEADER] !== token) return reply(res, 401, { error: "bad or missing broker token" });
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const m = /^\/v1\/jobs\/([A-Za-z0-9-]+)$/.exec(url.pathname);
-    if (req.method === "GET" && url.pathname === "/v1/health") return reply(res, 200, { pid: process.pid, version: o.version, draining });
+    // queued/running: what this broker still holds (tests and --command_timeout checks read "no job left queued" here).
+    if (req.method === "GET" && url.pathname === "/v1/health") {
+      return reply(res, 200, { pid: process.pid, version: o.version, draining, queued: sched.allQueued().length, running: running.size });
+    }
     if (req.method === "POST" && url.pathname === "/v1/shutdown") {
       draining = true;
       o.log("draining: a client of another version asked for a handover");

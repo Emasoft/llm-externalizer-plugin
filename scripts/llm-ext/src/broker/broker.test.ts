@@ -12,7 +12,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
 import { dirname, join } from "node:path";
@@ -402,15 +402,21 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
       return ((await res.json()) as { job: string }).job;
     };
     // Keep A busy so B's jobs stay queued, then never poll one and cancel the other.
-    // 80 jobs: A must still be busy when the abandon rule fires 1.5 s after B's submit, or an idle server would take B first.
-    const busy = runClient(dir, jobsOf(A, 80, { maxTokens: 120 }), env);
-    // Long enough for the busy client to have its jobs queued, so B never finds an idle server to rotate in.
-    await new Promise((r) => setTimeout(r, 1500));
+    // A's server is FROZEN once the batch is on it: a timed batch finished too
+    // fast on an idle machine, the server went idle and B was rotated in.
+    const dispatched = (): number => readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n").filter((l) => l.includes("dispatch job")).length;
+    const seen = dispatched();
+    const busy = runClient(dir, jobsOf(A, 8, { maxTokens: 120 }), env);
+    for (let i = 0; i < 300 && dispatched() <= seen; i++) await new Promise((r) => setTimeout(r, 50));
+    const main = readRegistry(dir, "llama").find((e) => e.role === "main")!.pid;
+    process.kill(main, "SIGSTOP");
     const abandoned = await submit(B);
     const cancelled = await submit(B);
     await fetch(`http://127.0.0.1:${st.port}/v1/jobs/${cancelled}`, { method: "DELETE", headers: h });
+    // The abandon rule (1.5 s, checked on the 1 s tick) runs while A still holds the server.
+    await new Promise((r) => setTimeout(r, 3000));
+    process.kill(main, "SIGCONT");
     await busy;
-    await new Promise((r) => setTimeout(r, 2500));
     for (const id of [abandoned, cancelled]) {
       const res = await fetch(`http://127.0.0.1:${st.port}/v1/jobs/${id}?wait=1`, { headers: h });
       const reply = (await res.json()) as { state: string; dispatchedAt?: number };
@@ -484,15 +490,20 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
   }, 300_000);
 });
 
-// Ensure the bundled CLI (not stale dist) accepts the global flags on a generic and a classify command.
-describe("global timeout flags through the real CLI entry", () => {
-  let cli: string;
-  let cliDir: string;
-  afterAll(() => rmSync(cliDir, { recursive: true, force: true }));
-  beforeAll(async () => {
+/**
+ * The CLI the command-level tests run, built once per file from src (not a
+ * stale dist). LLM_EXT_E2E_CLI=<path> runs them against another bundle
+ * instead, e.g. the shipped dist/llm-ext.js after a build.
+ */
+let cliBuild: Promise<string> | null = null;
+let cliBuildDir: string | null = null;
+function cliBundle(): Promise<string> {
+  const given = process.env.LLM_EXT_E2E_CLI;
+  if (given) return Promise.resolve(given);
+  cliBuild ??= (async () => {
     // Under the package node_modules (a gitignored cache), not /tmp: the bundle keeps better-sqlite3 external, and an ESM import resolves it only from a node_modules folder above the importing file.
-    cliDir = mkdtempSync(join(HERE, "..", "..", "node_modules", ".cache-llm-ext-broker-cli-"));
-    cli = join(cliDir, "llm-ext.mjs");
+    cliBuildDir = mkdtempSync(join(HERE, "..", "..", "node_modules", ".cache-llm-ext-broker-cli-"));
+    const out = join(cliBuildDir, "llm-ext.mjs");
     await build({
       entryPoints: [join(HERE, "..", "cli", "main.ts")],
       bundle: true,
@@ -501,8 +512,21 @@ describe("global timeout flags through the real CLI entry", () => {
       target: "node22",
       banner: { js: `import { createRequire as __cjsCreateRequire } from "node:module";\nimport { fileURLToPath as __cjsFileURLToPath } from "node:url";\nimport { dirname as __cjsDirname } from "node:path";\nconst require = __cjsCreateRequire(import.meta.url);\nconst __filename = __cjsFileURLToPath(import.meta.url);\nconst __dirname = __cjsDirname(__filename);\n` },
       external: [...nodeExternals, "better-sqlite3"],
-      outfile: cli,
+      outfile: out,
     });
+    return out;
+  })();
+  return cliBuild;
+}
+afterAll(() => {
+  if (cliBuildDir) rmSync(cliBuildDir, { recursive: true, force: true });
+});
+
+// Ensure the bundled CLI (not stale dist) accepts the global flags on a generic and a classify command.
+describe("global timeout flags through the real CLI entry", () => {
+  let cli: string;
+  beforeAll(async () => {
+    cli = await cliBundle();
   }, 180_000);
   const run = (args: string[]): { code: number; out: string } => {
     const cfg = newDir();
@@ -958,4 +982,168 @@ describe("client against a misbehaving broker (review m4, m1)", () => {
       await s.close();
     }
   });
+});
+
+/**
+ * P1' item 1: end to end through real llm-ext commands on a `server: managed`
+ * profile, with HOME, LLM_EXT_CONFIG_DIR and LLM_EXT_INSTALL_RULE=0 in temp
+ * dirs (the user's config is never read or written).
+ *
+ * Fixture: the tiny-llamas GGUFs declare llama.context_length = 128, and
+ * llama-server caps every slot at the training context, so the ~710-token
+ * prompt a real command sends cannot fit. The tests run on copies whose
+ * context_length is patched to 1024 (u32 metadata, same size, nothing else
+ * changed). 1024 per slot also keeps 4 slots inside the server's unified
+ * 4096-token KV cache: these models never emit EOS, so every reply runs to the
+ * slot limit, and with a larger slot concurrent replies overflow the cache
+ * ("Context size has been exceeded"). No request_options on the profiles:
+ * with them a finish_reason=length reply is a hard OutputLimitError.
+ */
+describe("end to end through real llm-ext commands (P1' item 1)", () => {
+  let cli: string;
+  let modelsDir: string;
+  const modelA = (): string => join(modelsDir, "ctx-stories15M-q4_0.gguf");
+  const modelB = (): string => join(modelsDir, "ctx-stories260K.gguf");
+
+  /** The cached `-hf` downloads of the two tiny models (LLAMA_CACHE layout: models--org--repo/snapshots/<rev>/<file>). */
+  const cachedGguf = (file: string): string => {
+    const repo = join(LLAMA_CACHE, "models--ggml-org--tiny-llamas", "snapshots");
+    for (const rev of readdirSync(repo)) if (existsSync(join(repo, rev, file))) return join(repo, rev, file);
+    throw new Error(`${file} is not in ${repo}`);
+  };
+
+  beforeAll(async () => {
+    cli = await cliBundle();
+    // Fill the model cache through the broker's own -hf path (CI starts empty).
+    const warm = newDir();
+    const r = await runClient(warm, [...jobsOf(A, 1), ...jobsOf(B, 1)]);
+    expect(r.results.every((x) => x.status === 200)).toBe(true);
+    modelsDir = mkdtempSync(join(tmpdir(), "llm-ext-broker-models-"));
+    // stories260K has a 512-token vocabulary, so the same prompt is ~1,700 tokens there: it gets 2048-token slots.
+    for (const [file, slot] of [["stories15M-q4_0.gguf", 1024], ["stories260K.gguf", 2048]] as const) {
+      const b = readFileSync(realpathSync(cachedGguf(file)));
+      const key = Buffer.from("llama.context_length");
+      const at = b.indexOf(key);
+      if (at < 0 || b.readUInt32LE(at + key.length) !== 4) throw new Error(`${file}: llama.context_length is not a u32`);
+      b.writeUInt32LE(slot, at + key.length + 4);
+      writeFileSync(join(modelsDir, `ctx-${file}`), b);
+    }
+  }, 600_000);
+  afterAll(() => {
+    if (modelsDir) rmSync(modelsDir, { recursive: true, force: true });
+  });
+
+  const writeSettings = (cfg: string): void => {
+    // context_window = 4 slots x the patched slot size, so 4 concurrent replies fit the unified KV cache.
+    const profile = (model: string, ctx: number): string[] => [
+      "    profile-type: local",
+      "    mode: local",
+      "    api: llamacpp-local",
+      // The port binds nothing under the broker: the url is only the key the walker marks dead.
+      "    url: http://127.0.0.1:18431",
+      `    model: ${model}`,
+      `    context_window: ${ctx}`,
+      "    server: managed",
+    ];
+    writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), 4096), "  tinyb:", ...profile(modelB(), 8192), ""].join("\n"));
+  };
+
+  /** One real CLI command, in its own process; resolves with its exit code and output. */
+  const runCli = (cfg: string, args: string[], cwd: string): Promise<{ code: number | null; out: string }> =>
+    new Promise((resolve) => {
+      const child = spawn(process.execPath, [cli, ...args], {
+        cwd,
+        env: { ...process.env, HOME: cfg, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0", LLAMA_CACHE },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let out = "";
+      child.stdout.on("data", (c: Buffer) => (out += c));
+      child.stderr.on("data", (c: Buffer) => (out += c));
+      const kill = setTimeout(() => child.kill("SIGKILL"), 240_000);
+      child.on("exit", (code) => {
+        clearTimeout(kill);
+        resolve({ code, out });
+      });
+    });
+
+  const brokerLog = (cfg: string): string[] => readFileSync(join(cfg, "broker-llama.log"), "utf8").split("\n");
+  const dispatches = (cfg: string): Array<{ model: string; command: string }> =>
+    brokerLog(cfg).flatMap((l) => {
+      const m = /dispatch job \S+ model '([^']+)' command (\S+)/.exec(l);
+      return m ? [{ model: m[1], command: m[2] }] : [];
+    });
+  const brokerHealth = async (cfg: string): Promise<{ queued: number; running: number }> => {
+    const st = readBrokerState(cfg, "llama")!;
+    const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } });
+    return (await res.json()) as { queued: number; running: number };
+  };
+  const workDir = (files: number): { dir: string; src: string; files: string[] } => {
+    const dir = newDir();
+    const src = join(dir, "src");
+    mkdirSync(src);
+    const list = Array.from({ length: files }, (_, i) => join(src, `f${i + 1}.txt`));
+    list.forEach((f, i) => writeFileSync(f, `Once upon a time there was cat number ${i + 1}.\n`));
+    return { dir, src, files: list };
+  };
+  const reports = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")) : []);
+
+  it("llm ask (model B) and scan folder on 3 files (model A) run at once through one broker: replies via the broker, at most one main, nothing left queued", async () => {
+    const cfg = newDir();
+    writeSettings(cfg);
+    const w = workDir(3);
+    const mains = watchMains(cfg);
+    const [ask, scan] = await Promise.all([
+      runCli(cfg, ["--profile", "tinyb", "llm", "ask", w.files[0], "--instructions", "continue the story", "-o", join(w.dir, "ask")], w.dir),
+      runCli(cfg, ["--profile", "tinya", "scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", join(w.dir, "scan")], w.dir),
+    ]);
+    expect(mains.stop()).toBeLessThanOrEqual(1);
+    expect(ask.code, ask.out).toBe(0);
+    expect(scan.code, scan.out).toBe(0);
+    expect(reports(join(w.dir, "ask"))).toHaveLength(1);
+    expect(reports(join(w.dir, "scan"))).toHaveLength(3);
+    const d = dispatches(cfg);
+    expect(d.filter((x) => x.model === modelB()).length).toBeGreaterThanOrEqual(1);
+    expect(d.filter((x) => x.model === modelA()).length).toBeGreaterThanOrEqual(3);
+    expect(new Set(d.map((x) => x.command)).size).toBe(2);
+    expect(spawnLines(cfg).some((l) => l.includes(modelA()))).toBe(true);
+    expect(spawnLines(cfg).some((l) => l.includes(modelB()))).toBe(true);
+    expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
+  }, 600_000);
+
+  it("chatCompletionJSON goes through the broker (check imports, whose extract step is a JSON-schema call)", async () => {
+    const cfg = newDir();
+    writeSettings(cfg);
+    const w = workDir(1);
+    const ts = join(w.src, "mod.ts");
+    writeFileSync(ts, 'import { x } from "./missing.js";\nexport const y = x;\n');
+    const r = await runCli(cfg, ["check", "imports", ts, "-o", join(w.dir, "out")], w.dir);
+    // The story model never writes valid JSON, so only the route is asserted, not the verdict.
+    expect(dispatches(cfg).length, r.out).toBeGreaterThanOrEqual(1);
+    expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
+  }, 600_000);
+
+  it("broker SIGKILLed with jobs in flight: those requests fail, the retry starts a new broker that stops the orphaned main, and every file completes", async () => {
+    const cfg = newDir();
+    writeSettings(cfg);
+    const w = workDir(3);
+    const warm = await runCli(cfg, ["llm", "ask", w.files[0], "--instructions", "go on", "-o", join(w.dir, "warm")], w.dir);
+    expect(warm.code, warm.out).toBe(0);
+    const before = readBrokerState(cfg, "llama")!.pid;
+    const orphan = readRegistry(cfg, "llama").find((e) => e.role === "main")!;
+    // Frozen, so the scan's jobs are surely still running on it when the broker dies.
+    process.kill(orphan.pid, "SIGSTOP");
+    const seen = dispatches(cfg).length;
+    const scanP = runCli(cfg, ["scan", "folder", w.src, "--instructions", "go on", "--answer_mode", "0", "-o", join(w.dir, "scan")], w.dir);
+    for (let i = 0; i < 300 && dispatches(cfg).length < seen + 3; i++) await new Promise((r) => setTimeout(r, 100));
+    expect(dispatches(cfg).length).toBeGreaterThanOrEqual(seen + 3);
+    process.kill(before, "SIGKILL");
+    const scan = await scanP;
+    expect(scan.code, scan.out).toBe(0);
+    expect(scan.out).toMatch(/fetch failed — retrying/);
+    expect(reports(join(w.dir, "scan"))).toHaveLength(3);
+    expect(readBrokerState(cfg, "llama")!.pid).not.toBe(before);
+    expect(brokerLog(cfg).join("\n")).toMatch(new RegExp(`stopped orphaned main llama-server pid ${orphan.pid}`));
+    expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
+    expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
+  }, 600_000);
 });
