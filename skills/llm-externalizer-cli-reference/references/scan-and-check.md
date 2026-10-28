@@ -1,6 +1,6 @@
 # llm-ext reference: scan and check groups
 
-Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`). All text below comes from `llm-ext <group> <action> --help`.
+Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see SKILL.md). All text below comes from `llm-ext <group> <action> --help`.
 
 ## Contents
 
