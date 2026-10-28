@@ -4,7 +4,7 @@ title: Repair broken generated profiles inline and in the same run, detect provi
 column: todo
 status: tasked
 created: 2026-10-27T23:56:08+0100
-updated: 2026-10-28T14:00:02+0100
+updated: 2026-10-28T14:15:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -52,3 +52,7 @@ Parent: TRDD-UT7UC025 (USER directive, verbatim). First increment of the self-he
 
 parallel-repair.test.ts now runs and FAILS on a real bug in scripts/llm-ext/src/dynamic-maintainer.ts around lines 233-243: the placeholder section a repair writes is itself invalid, so a second racing repair also backs up the file, and its backup (already-repaired content) appears to overwrite the first backup, losing the user's original bytes (overwrite inferred, not yet traced).
 The test file is not in the include list of scripts/llm-ext/vitest.config.ts, so npm test skips it. Report: reports/parallel-repair-test/20261028_135712+0100-report.md
+
+## Review notes 2026-10-28
+
+(a) The changed-since-read guard was omitted because current comes from loadSettings in memory (migrations or normalization can make it differ from disk) and a false mismatch would block every repair; card GRCE2QUQ (backups never overwrite) is the backstop for a third writer leaving a different invalid section. (b) A racing loser now also runs the fill (placeholder-present, no backup); the second write is guarded by the decidedAgainst compare, and stableStringify of the in-memory unpopulatedDefaultProfile(free) equals stableStringify of the section read back from YAML after the writer wrote it (checked 2026-10-28, generated projection and full profile both equal), so both racers can fill without the compare skipping. Proven end to end by the new test in dynamic-maintainer.test.ts. (c) The recursion replaces profiles[name] in memory with the placeholder, dropping user-owned keys (selection, high_quality_model) for the rest of that pass only.

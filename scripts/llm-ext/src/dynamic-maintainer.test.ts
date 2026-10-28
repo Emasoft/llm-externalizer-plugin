@@ -8,7 +8,7 @@
 // for which profile" is assertable at all). decideDynamicProfile's own pure
 // decision logic is default-profiles.test.ts's job, not re-tested here.
 
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, readdirSync } from "node:fs";
 import { utimesSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "./test-tmp-root.js";
@@ -61,6 +61,7 @@ vi.mock("./dynamic-candidates.js", async (importOriginal) => {
 
 import {
   maintainDynamicProfiles,
+  regenerateInvalidMarkedSection,
   dynamicProfileGate,
   freeToolUnfitRefusal,
   FREE_TOOL_UNFIT_PAID_OFF_SUFFIX,
@@ -597,6 +598,44 @@ describe("maintainDynamicProfiles — fix-queue 56: the never-write-invalid guar
     // The concurrent writer's content survives byte-for-byte — the regenerate
     // write's own re-validation under the lock is what kept it.
     expect(readFileSync(settingsPath, "utf-8")).toBe(FIXED_BY_CONCURRENT_WRITER);
+  });
+
+  it("TRDD-5Q79QZM7: a repair that finds the placeholder a racing repair just wrote still FILLS it in the same run, with no second backup", async () => {
+    writeSettings(ALREADY_INVALID_MARKED_FREE);
+    seedBenchmarkPass(["only/one:free", "only/two:free"]);
+    const logs: string[] = [];
+    const original = readFileSync(settingsPath, "utf-8");
+    const catalog = [
+      { id: "only/one:free", pricing: { prompt: "0", completion: "0" } },
+      { id: "only/two:free", pricing: { prompt: "0", completion: "0" } },
+    ];
+    let racerBackup: string | undefined;
+    const wrote = await withProviderKeys(() =>
+      maintainDynamicProfiles({
+        // Same window as the S-1 test: this pass has already loaded the INVALID
+        // section; the "racer" (the real repair function, real lock, real
+        // backup) lands the placeholder before this pass takes the lock.
+        fetchCatalog: async () => {
+          const current = (parseYaml(original) as { profiles: { free: Profile } }).profiles.free;
+          const raced = regenerateInvalidMarkedSection({ name: "free", settingsPath, current, nowMs: Date.now() });
+          expect(raced.kind).toBe("regenerated");
+          racerBackup = (raced as { backupPath?: string }).backupPath;
+          return catalog;
+        },
+        log: (m) => logs.push(m),
+      }),
+    );
+    expect(wrote).toBe(true);
+    expect(logs.filter((l) => l.includes("no backup taken; filling it now")), JSON.stringify(logs)).toHaveLength(1);
+    expect(logs.filter((l) => l.includes("backed it up"))).toHaveLength(0);
+    // Exactly the racer's one backup exists, and it still holds the user's original bytes.
+    const backups = readdirSync(join(cfgDir, "backups"));
+    expect(backups).toHaveLength(1);
+    expect(racerBackup && readFileSync(racerBackup, "utf-8")).toBe(original);
+    // The section ends populated, not left as the placeholder.
+    const free = (parseYaml(readFileSync(settingsPath, "utf-8")) as { profiles: { free: Profile } }).profiles.free;
+    // A free_only section is "populated" by its free_models pool; the writer never touches `model`.
+    expect([...(free.free_models ?? [])].sort()).toEqual(["only/one:free", "only/two:free"]);
   });
 });
 

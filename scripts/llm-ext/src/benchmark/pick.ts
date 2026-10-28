@@ -1027,6 +1027,22 @@ export interface WriteDynamicProfileSectionResult {
 }
 
 /**
+ * The GENERATED-key projection of a marked profile section (D0, TRDD-AL8GIZYA):
+ * only keys in DYNAMIC_GENERATED_KEYS, undefined values skipped. Exported so the
+ * maintainer's inline repair can ask the same question the writer's no-op check
+ * asks ("would this write change anything this writer owns?") instead of
+ * re-deriving it (TRDD-5Q79QZM7).
+ */
+export function generatedProjection(name: MarkedProfileName, section: unknown): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const rec = section as Record<string, unknown> | undefined;
+  for (const key of DYNAMIC_GENERATED_KEYS[name]) {
+    if (rec?.[key] !== undefined) out[key] = rec[key];
+  }
+  return out;
+}
+
+/**
  * Write (or refresh) a dynamic profile's generated section in settings.yaml.
  *
  *   - Identical (on the GENERATED keys only) to what's already there ⇒ no
@@ -1114,17 +1130,9 @@ export function writeDynamicProfileSection(
     // GENERATED projection only — comparing the whole section would report
     // "changed" on a user-owned edit this writer never touches anyway.
     const generatedKeys = DYNAMIC_GENERATED_KEYS[name];
-    const generatedProjection = (section: unknown): Record<string, unknown> => {
-      const out: Record<string, unknown> = {};
-      const rec = section as Record<string, unknown> | undefined;
-      for (const key of generatedKeys) {
-        if (rec?.[key] !== undefined) out[key] = rec[key];
-      }
-      return out;
-    };
     if (
       existingPlain !== undefined &&
-      stableStringify(generatedProjection(existingPlain)) === stableStringify(generatedProjection(next))
+      stableStringify(generatedProjection(name, existingPlain)) === stableStringify(generatedProjection(name, next))
     ) {
       return { changed: false, backupPath: null };
     }

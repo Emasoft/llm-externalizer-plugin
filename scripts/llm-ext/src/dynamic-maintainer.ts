@@ -95,7 +95,13 @@ import {
   staleFailedModelIds,
 } from "./benchmark/security-triage/index.js";
 import { assessModelPersistence, readModelEvents } from "./model-events.js";
-import { writeDynamicProfileSection, GENERATED_MARKER, stableStringify, backupSettingsFile } from "./benchmark/pick.js";
+import {
+  writeDynamicProfileSection,
+  GENERATED_MARKER,
+  stableStringify,
+  backupSettingsFile,
+  generatedProjection,
+} from "./benchmark/pick.js";
 import { readCandidates, enqueueCandidates } from "./dynamic-candidates.js";
 import {
   populateDefaultProfile,
@@ -188,6 +194,7 @@ export type RegenerateInvalidSectionOutcome =
   | { kind: "not-applicable" }
   | { kind: "user-keys-invalid"; errors: string[] }
   | { kind: "concurrent-fix" }
+  | { kind: "placeholder-present"; regenerated: Profile }
   | { kind: "regenerated"; regenerated: Profile; backupPath: string | undefined; errors: string[] };
 
 /**
@@ -228,6 +235,7 @@ export function regenerateInvalidMarkedSection(args: {
   // Backup runs inside the lock callback, on ONLY the branch that overwrites,
   // so it names precisely the bytes overwritten (coordinator review S-1).
   let backupPath: string | undefined;
+  let placeholderPresent = false;
   const regenResult = writeDynamicProfileSection(
     settingsPath,
     name,
@@ -236,6 +244,23 @@ export function regenerateInvalidMarkedSection(args: {
     // write with a stale "it was invalid" verdict (adversarial review fq56).
     (currentSection) => {
       if (currentSection !== undefined && validateProfile(name, currentSection).valid) {
+        return currentSection;
+      }
+      // TRDD-5Q79QZM7 (race): the placeholder this function itself writes FAILS
+      // validateProfile by design (free always; paid without an API key), so
+      // "valid" cannot tell a racing repair from an untouched broken section.
+      // A second repair that backed up here would copy the ALREADY-REPAIRED
+      // placeholder over the first repair's backup of the user's original
+      // bytes (same-second backup name) and lose them. If the generated keys
+      // under the lock already equal the placeholder, there is nothing of the
+      // user's left to protect: no backup, no write, and flag it so the caller
+      // still fills the placeholder.
+      if (
+        currentSection !== undefined &&
+        stableStringify(generatedProjection(name, currentSection)) ===
+          stableStringify(generatedProjection(name, regenerated))
+      ) {
+        placeholderPresent = true;
         return currentSection;
       }
       // fix-queue row 72: shared backupSettingsFile — no `wrapError`, a backup
@@ -247,7 +272,13 @@ export function regenerateInvalidMarkedSection(args: {
     // IS marked, so suppress it to avoid a second, misleading notice.
     { nowMs, notify: () => {} },
   );
-  if (!regenResult.changed) return { kind: "concurrent-fix" };
+  if (!regenResult.changed) {
+    // changed:false has two causes the caller must tell apart: a concurrent
+    // writer left a VALID section ("concurrent-fix": nothing to fill), or the
+    // section already was the placeholder ("placeholder-present": must still be
+    // filled by this run, see the callback).
+    return placeholderPresent ? { kind: "placeholder-present", regenerated } : { kind: "concurrent-fix" };
+  }
   return { kind: "regenerated", regenerated, backupPath, errors: currentValidation.errors };
 }
 
@@ -404,13 +435,27 @@ async function maintainOneDynamicProfile(args: {
       );
       return false;
     }
-    if (repair.kind === "regenerated") {
-      log(
-        `[llm-externalizer] dynamic profile '${name}': the current section was already invalid ` +
-          `(${repair.errors.join("; ")}) — backed it up to ${repair.backupPath} and regenerated it; continuing.\n`,
-      );
-      // Retry ONCE against the now-regenerated (valid, unpopulated) section so
-      // this pass still makes progress instead of merely leaving a notice —
+    if (repair.kind === "regenerated" || repair.kind === "placeholder-present") {
+      if (repair.kind === "regenerated") {
+        log(
+          `[llm-externalizer] dynamic profile '${name}': the current section was already invalid ` +
+            `(${repair.errors.join("; ")}) — backed it up to ${repair.backupPath} and regenerated it; continuing.\n`,
+        );
+      } else {
+        // The section under the lock already IS the unpopulated placeholder (a
+        // racing repair wrote it, or a crashed run left it). It is invalid BY
+        // DESIGN (free always; paid without an API key), so it must still be
+        // FILLED — returning "done" here would leave a stale placeholder for
+        // good — but it holds no user bytes, so no backup is taken.
+        log(
+          `[llm-externalizer] dynamic profile '${name}': the section already is the unpopulated placeholder ` +
+            `(a concurrent repair or an interrupted run wrote it) — no backup taken; filling it now.\n`,
+        );
+      }
+      // Retry ONCE against the now-regenerated section (an unpopulated
+      // placeholder: for free it is invalid by design, so it is filled, not
+      // validated) so this pass still makes progress instead of merely leaving
+      // a notice —
       // the recursive call re-derives `existing`/`current` from the updated
       // `settings` and provisionally repopulates the pool like any other
       // fresh-install dispatch (addendum J).
