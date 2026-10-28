@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T19:24:31+0100
+updated: 2026-10-28T19:25:48+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -43,3 +43,4 @@ USER directive verbatim (2026-10-28): "of course there is a limit at the number 
 Consequence: llm-ext sends several requests at once to a locals-mlx server (today it sends one at a time to any mode: local profile, index.ts:1117-1118 and rate-limiter.ts:176). Before each additional request it checks free system memory and the memory Locals reports at /stats, and sends only when the request estimated memory fits; the number at once is the lower of the calibrated best and what memory allows. Each server command gets its own port (reading: one server per model, each on its own port; to be confirmed). Measured on this Mac, LFM3-1.7B on port 9090: 69, 242, 357, 399 tok/s at 1, 4, 8, 16 requests; 8 requests of about 6,000-token prompts reached 36 tok/s (report reports/locals-mlx/20261028_192216+0100-concurrency.md; the user Locals server on 8321 was running at the same time).
 USER correction verbatim (2026-10-28): "no, sorry, i was wrong.. the port must not change for every request. all requests can be served by the same port of the same server."
 Consequence: SUPERSEDES the earlier port reading (one server per model on its own port). One Locals server on one port serves every concurrent request; llm-ext sends its parallel requests to that same server and port.
+USER directive verbatim (2026-10-28): "but you need to check the free memory before every new request. but read the documentstion of Local to see more precise details, i may be wrong."

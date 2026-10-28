@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T19:21:27+0100
+updated: 2026-10-28T19:25:48+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -74,6 +74,7 @@ USER directive verbatim (2026-10-28, revising the 2a rulings): "- sleep, but wit
 USER directive verbatim (2026-10-28): "- llama.co server exists even on windows and linux, using the cuda gpus of the mechines. so it must run on evrry machine. install it and configure it if it is missing."
 USER directive verbatim (2026-10-28): "- always fail, but with the optional argument --no_stop_on_fail , if used it will continue using the alternative modules of the profile if defined as fallbacks"
 Consequence: the 2a plan needs a revision before code: (a) idle = --sleep-idle-seconds plus a kill after 2 hours without requests, which needs a watcher process because no llm-ext process lives that long; (b) the win32 refusal is withdrawn, the managed server must work on macOS, Linux and Windows (CUDA), with a cross-platform identity check, and llm-ext installs and configures llama.cpp when it is missing (its own increment); (c) a failure stops the command by default, and the optional flag --no_stop_on_fail lets it continue on the profile fallback models (reading: an llm-ext command flag used when the managed server cannot start, to be confirmed with the user). The four review-born decisions approved earlier (opt-in key, refuse on change, auto-restart, ship before the key) stand.
+Q: Where does --no_stop_on_fail belong? USER answer verbatim: "llm-ext commands" - an llm-ext command flag: when the profile model or managed server fails, the command continues on the profile fallback models instead of stopping (fallbacks behind the same failed server URL are skipped too).
 
 ## Progress
 
