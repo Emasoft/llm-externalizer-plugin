@@ -24,6 +24,8 @@ export interface ResultEnvelope<R> {
   degraded: DegradedRecord[];
   /** "budget" when --max-budget ended the run (E86); null otherwise. */
   stopped: "budget" | null;
+  /** Present only when a run was answered by a model other than the profile's (TRDD-28BAL5ER): question key -> the model that answered it, so a mid-run switch is visible per item. A chunked item lists each distinct model. */
+  answered_by?: Record<string, string>;
 }
 
 export function buildEnvelope<R>(opts: {
@@ -32,6 +34,7 @@ export function buildEnvelope<R>(opts: {
   warnings: Warning[];
   degraded: DegradedRecord[];
   stopped: "budget" | null;
+  answeredBy?: Record<string, string>;
 }): ResultEnvelope<R> {
   const { replies } = opts;
   return {
@@ -48,6 +51,7 @@ export function buildEnvelope<R>(opts: {
     degraded: opts.degraded,
     // WHY always present: a parser must not have to tell a missing key from a clean run.
     stopped: opts.stopped,
+    ...(opts.answeredBy === undefined ? {} : { answered_by: opts.answeredBy }),
   };
 }
 

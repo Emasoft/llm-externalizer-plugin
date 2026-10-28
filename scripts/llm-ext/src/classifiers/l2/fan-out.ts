@@ -87,11 +87,13 @@ export interface MergedReply {
   stopped: "budget" | null;
   /** True when the CALLER's signal (Ctrl-C) fired. */
   aborted: boolean;
+  /** Question key (chunks folded under the item key) -> the model(s) that answered it; see ResultEnvelope.answered_by. */
+  answeredBy: Record<string, string>;
 }
 
 /** The result of a run that sent nothing (a build that declares noCall, E65): complete, no answers, no replies. WHY here: one literal next to the type, so a new MergedReply field cannot be forgotten in a hand-written copy. */
 export function emptyMerged(): MergedReply {
-  return { status: "complete", answers: {}, chunks: {}, replies: [], snapshots: [], warnings: [], failures: [], fatal: null, stopped: null, aborted: false };
+  return { status: "complete", answers: {}, chunks: {}, replies: [], snapshots: [], warnings: [], failures: [], fatal: null, stopped: null, aborted: false, answeredBy: {} };
 }
 
 /**
@@ -223,6 +225,7 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
   }).finally(() => opts.signal?.removeEventListener("abort", onCallerAbort));
 
   const answers: Answers = {};
+  const answeredBy: Record<string, string> = {};
   const replies: EnvelopeReply[] = [];
   const failures: RequestFailure[] = [];
   const warnings: Warning[] = [];
@@ -255,6 +258,12 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
       const set = validateAnswers(request.questions, reply.answers, opts.policy);
       // WHY plain assign: question keys are unique across the job (E28, enforced by the planner), so no request can overwrite another's.
       Object.assign(answers, set.answers);
+      // WHY per question, chunks folded under the item key: a fallback can switch the model mid-run, and the reader must see which model answered which item (TRDD-28BAL5ER).
+      for (const qk of Object.keys(request.questions)) {
+        const itemKey = qk.replace(/#c\d+$/, "");
+        const seen = answeredBy[itemKey]?.split(", ") ?? [];
+        if (!seen.includes(reply.model)) answeredBy[itemKey] = [...seen, reply.model].join(", ");
+      }
       // WHY one warning per request: the keys name which request's model answered something nobody asked (plan §6: ignored and logged).
       if (set.extra.length > 0) warnings.push(warning("extra-answer-keys", `request ${requestIndex} answered keys it did not ask for, ignored: ${set.extra.join(", ")}`, set.extra.length));
     }
@@ -273,5 +282,5 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
   const status = fatal !== null || (failures.length > 0 && opts.split === "whole-result") ? "failed" : failures.length > 0 ? "partial" : "complete";
   // WHY the replies stay when failed: every billed reply is counted in usage and cost, whatever happens to the answers.
   const dropped = status === "failed" && opts.split === "whole-result";
-  return { status, answers: dropped ? {} : answers, chunks: dropped ? {} : chunks, replies, snapshots, warnings, failures, fatal, stopped, aborted: opts.signal?.aborted ?? false };
+  return { status, answers: dropped ? {} : answers, chunks: dropped ? {} : chunks, replies, snapshots, warnings, failures, fatal, stopped, aborted: opts.signal?.aborted ?? false, answeredBy: dropped ? {} : answeredBy };
 }

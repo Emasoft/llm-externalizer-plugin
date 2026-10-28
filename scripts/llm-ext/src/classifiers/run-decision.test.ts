@@ -74,6 +74,16 @@ const depsOf = (fetch: GlobalFetch, over: Record<string, unknown> = {}): RunDeps
   catalogOptions: { path: join(tmp, "catalog.json") },
   sigint: new EventEmitter(),
 });
+// TRDD-28BAL5ER: the runner now answers a failed Jev request with another System One model of the catalog. Tests of the per-request failure plumbing (the Nth request fails) keep their meaning only when no fallback exists, so they serve a catalog where Jev is the only System One model; the fallback itself is tested in system-one-fallback.test.ts.
+function withoutFallback(inner: GlobalFetch): GlobalFetch {
+  return async (url, init) => {
+    const res = await inner(url, init);
+    if (!url.includes("output_modalities=decisions")) return res;
+    const body = JSON.parse(await res.text()) as { data: { id: string; description?: string }[] };
+    body.data = body.data.filter((m) => m.id.includes("typesafe/") || !/system\s*one/i.test(m.description ?? ""));
+    return new Response(JSON.stringify(body), { status: res.status, headers: res.headers });
+  };
+}
 const filterReq = (n: number, over: Partial<RunRequest> = {}): RunRequest => ({
   input: { question: "Does it fail?", items: Array.from({ length: n }, (_, k) => ({ id: `f.log:${k + 1}`, text: `line number ${k}` })) },
   ...over,
@@ -320,7 +330,7 @@ describe("review round: --default and exit-code severity", () => {
 
   it("with failures of several classes the most severe code wins (3 > 4 > 5), not the first: a 503 first, a 400 later gives 4", async () => {
     const s = serve((n, q) => (n === 1 ? syntheticResponse(503, "unavailable") : n === 2 ? replayFixture(fx("p01", "dec-err400-malformed")) : relabeled(q)));
-    const out = await runDecision(filterSpec, filterReq(3), depsOf(s.fetch, { concurrency: 1 }));
+    const out = await runDecision(filterSpec, filterReq(3), depsOf(withoutFallback(s.fetch), { concurrency: 1 }));
     expect(out.envelope).toBeDefined();
     expect(out.exitCode).toBe(4);
   });
@@ -575,9 +585,10 @@ describe("wave 9: runPlan wiring", () => {
   });
 
   it("split: a whole-result spec with a lost request has no envelope (exit 5), where a per-item spec projects the rest", async () => {
-    const reply = (n: number, q: Record<string, unknown>): Response => (n === 2 ? syntheticResponse(503, "unavailable") : relabeled(q));
-    const perItem = await runDecision(filterSpec, filterReq(2), depsOf(serve(reply).fetch, { concurrency: 1 }));
-    const whole = await runDecision({ ...filterSpec, split: "whole-result" } as typeof filterSpec, filterReq(2), depsOf(serve(reply).fetch, { concurrency: 1 }));
+    // WHY 2 and 3: the runner retries the profile model once on a 503 (TRDD-28BAL5ER), so the lost request is the one that fails twice.
+    const reply = (n: number, q: Record<string, unknown>): Response => (n === 2 || n === 3 ? syntheticResponse(503, "unavailable") : relabeled(q));
+    const perItem = await runDecision(filterSpec, filterReq(2), depsOf(withoutFallback(serve(reply).fetch), { concurrency: 1 }));
+    const whole = await runDecision({ ...filterSpec, split: "whole-result" } as typeof filterSpec, filterReq(2), depsOf(withoutFallback(serve(reply).fetch), { concurrency: 1 }));
     expect(perItem.envelope).toBeDefined();
     expect(whole.envelope).toBeUndefined();
     expect(whole.exitCode).toBe(5);

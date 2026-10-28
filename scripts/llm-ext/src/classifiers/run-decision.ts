@@ -8,6 +8,8 @@ import { loadEndpointPromptLimit, malformedModelIdReason, resolveModel } from ".
 import { parseDecisionsText } from "./l0/response.js";
 import { callDecisions, type GlobalFetch } from "./l0/transport.js";
 import { recordDecisionsUsage } from "./l1/usage.js";
+import { selectionCatalogErrors } from "./profile-checks.js";
+import { isModelNotWorking, noteAliasTarget, noteModelPrice, removedModelCeiling, systemOneFallbackCandidates, type RemovedModelCeiling } from "./system-one-fallback.js";
 import { assertChunkDefaults } from "./catalog/index.js";
 import type { DecisionSpec, ProjectCtx, SpecFlag, Thresholds } from "./catalog/spec.js";
 import { installCtrlC, CTRL_C_EXIT_CODE, type SignalSource } from "./l2/abort.js";
@@ -21,7 +23,7 @@ import type { CollectOptions } from "./l2/inputs.js";
 import { assertChunkChars } from "./l2/chunker.js";
 import { modelLimits, planRequests, type PlannedRequest } from "./l2/planner.js";
 import { PolicyError, resolveThresholds } from "./l2/policy-kit.js";
-import { resolveClassifierApiKey, selectClassifierProfile, type ClassifierProfileInput } from "./l2/profile.js";
+import { resolveClassifierApiKey, resolveClassifierProfile, selectClassifierProfile, type ClassifierProfileInput, type ResolvedClassifierProfile } from "./l2/profile.js";
 import { createRedactor } from "./l2/redact.js";
 import { prepareReportDir, writeReport } from "./l2/report.js";
 import { warning, type Warning } from "./l2/warnings.js";
@@ -165,6 +167,8 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const built = spec.build(input, t);
   assertChunkDefaults(spec, input, t, built);
 
+  // WHY declared before conclude: set when the run is answered by a model other than the profile's (a fallback or a replacement for a removed model), which adds answered_by to the envelope.
+  let usedOtherModel = false;
   // WHY a closure over the run's state: the empty plan (E65) and the planned run end the same way (project, envelope, report, exit code); two copies could drift.
   const conclude = (merged: MergedReply): RunOutcome<R> => {
     if (merged.fatal !== null) {
@@ -179,7 +183,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
 
     const ctx: ProjectCtx = { truncated: built.truncated ?? false, chunks: merged.chunks };
     const decision = spec.project(merged.answers, input, t, ctx);
-    const envelope = buildEnvelope({ decision, replies: merged.replies, warnings: [...warnings, ...merged.warnings], degraded: [], stopped: merged.stopped });
+    const envelope = buildEnvelope({ decision, replies: merged.replies, warnings: [...warnings, ...merged.warnings], degraded: [], stopped: merged.stopped, ...(usedOtherModel ? { answeredBy: merged.answeredBy } : {}) });
     const text = safe(renderEnvelope(envelope));
     const reportPath = reportDir === undefined ? undefined : writeReport(reportDir, spec.id, text);
     const exitCode = failureCode(merged) ?? exitCodeForRun({ attention: spec.attention(decision), strictExit: req.strictExit ?? false });
@@ -208,14 +212,43 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   let catalogLoad: Promise<DecisionsModel[]> | undefined;
   const loadCatalog = (): Promise<DecisionsModel[]> => (catalogLoad ??= loadDecisionsCatalog({ fetch: deps.fetch, ...deps.catalogOptions }));
   // WHY the loader is a separate argument, not an option: a public `loadCatalog` option would let any caller replace the cache/TTL/E16 handling silently.
-  const selected = await refusingAsync(5, () => selectClassifierProfile({ settings: deps.settings, profileFlag: req.profileFlag, command }, deps.fetch, deps.catalogOptions, loadCatalog));
-  if (!selected.ok) throw new Refusal(selected.error);
-  const { profile } = selected;
+  // WHY a Refusal text kept: when the profile model is absent from the catalog (removed), the run does not end here; it continues with a System One replacement (TRDD-28BAL5ER, USER: "not available anymore").
+  const selection = await refusingAsync(5, () => selectClassifierProfile({ settings: deps.settings, profileFlag: req.profileFlag, command }, deps.fetch, deps.catalogOptions, loadCatalog));
+  let profile: ResolvedClassifierProfile;
+  let removedRule: RemovedModelCeiling | undefined;
+  const say = (line: string): void => { if (deps.stderr === undefined) process.stderr.write(`${line}\n`); else deps.stderr(line); };
+  if (selection.ok) profile = selection.profile;
+  else {
+    const plain = resolveClassifierProfile({ settings: deps.settings, profileFlag: req.profileFlag, command });
+    if (!plain.ok) throw new Refusal(selection.error);
+    removedRule = removedModelCeiling(plain.profile.model, await refusingAsync(5, loadCatalog));
+    if (removedRule === undefined) throw new Refusal(selection.error);
+    profile = plain.profile;
+  }
   const key = refusing(3, () => resolveClassifierApiKey(profile));
   redactor.register(key);
 
   const catalog = await refusingAsync(5, loadCatalog);
-  const resolved = refusing(1, () => resolveModel(profile.model, catalog));
+  const eligible = async (list: DecisionsModel[]): Promise<DecisionsModel[]> => {
+    const found: DecisionsModel[] = [];
+    for (const m of list) {
+      // WHY the same selection check as the profile model (profile-checks.ts): endpoint 'systemone' needs the candidate to declare it; a refused candidate is skipped, never tried.
+      if ((await selectionCatalogErrors({ name: profile.name, type: "classifier", model: m.id, endpoint: profile.endpoint, fetch: deps.fetch, ...deps.catalogOptions }, loadCatalog)).length === 0) found.push(m);
+    }
+    return found;
+  };
+  let primaryId = profile.model;
+  if (removedRule !== undefined) {
+    // WHY the same filters as a fallback: the replacement must pass the endpoint check too, and it is the cheapest model at or below the ceiling.
+    const replacement = (await eligible(systemOneFallbackCandidates(new Set([profile.model]), removedRule.ceiling, catalog)))[0];
+    if (replacement === undefined) throw new Refusal((selection as { ok: false; error: string }).error);
+    primaryId = replacement.id;
+    usedOtherModel = true;
+    const text = `${profile.model} is not in the decisions catalog (it may have been removed); using System One model ${primaryId} instead, with a price ceiling of ${removedRule.ceiling} USD per million tokens taken from ${removedRule.rule}; quality not benchmarked against ${profile.model}`;
+    warnings.push(warning("profile_model_removed", text));
+    say(`llm-ext: ${safe(text)}`);
+  }
+  const resolved = refusing(1, () => resolveModel(primaryId, catalog));
   // WHY the endpoint's own limit (P-02): the catalog says 64000 but the endpoint accepts about 32k, and a request over it is a non-retried 400. Cached next to the catalog; on a miss a 3 s lookup, and if it fails the catalog's length is used and the envelope says so (plan §5 "Limits" names min(context_length, max_prompt_tokens) and is silent on a failed lookup).
   const promptLimit = await loadEndpointPromptLimit({ modelId: resolved.effective.id, fetch: deps.fetch, catalogPath: deps.catalogOptions?.path, now: deps.catalogOptions?.now, ttlMs: deps.catalogOptions?.ttlMs });
   // WHY the reason: a malformed catalog id is not a failed lookup, and saying "could not be read" would send the user looking at the network.
@@ -233,36 +266,96 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   refusing(1, () => checkEstimate({ maxBudgetUsd: req.maxBudgetUsd, estimatedInputTokens: plan.requests.reduce((n, r) => n + r.tokens, 0), model: resolved }));
 
   let debugStackPrinted = false;
-  // exec = transport + reply parse + usage record. WHY parseReply: the transport owns the body text, so it is parsed once, by parseDecisionsText, whose callback records the usage before the answers are checked (plan §7).
-  const exec = async (request: PlannedRequest, deadline: Deadline): Promise<ExecReply> => {
+  // TRDD-28BAL5ER, USER directive "the code must be ready to discover them and use them if jev is not working": candidates are found once per run, from the catalog already loaded, and only if the profile model fails.
+  if (removedRule === undefined) noteAliasTarget(resolved);
+  const ownIds = new Set([profile.model, primaryId, resolved.requested.id, resolved.requested.canonicalSlug, resolved.effective.id, resolved.effective.canonicalSlug]);
+  const ceiling = removedRule === undefined ? resolved.effective.promptUsdPerM : removedRule.ceiling;
+  let candidates: Promise<DecisionsModel[]> | undefined;
+  const findCandidates = (): Promise<DecisionsModel[]> => (candidates ??= eligible(systemOneFallbackCandidates(ownIds, ceiling, catalog)));
+  // WHY counted: one 503 must not retire the model for the whole run (review of TRDD-28BAL5ER); a model is retired after 2 failures, or at once on not-found (it is gone).
+  const strikes = new Map<string, number>();
+  const retired = new Set<string>();
+  const strike = (id: string, e: ClassifierError): void => {
+    const n = (strikes.get(id) ?? 0) + 1;
+    strikes.set(id, n);
+    if (n >= 2 || e.class === "not-found") retired.add(id);
+  };
+  const announced = new Set<string>();
+  let noCeilingSaid = false;
+  let priceNoted = false;
+  // WHY exec = transport + reply parse + usage record. WHY parseReply: the transport owns the body text, so it is parsed once, by parseDecisionsText, whose callback records the usage before the answers are checked (plan §7).
+  const callModel = async (model: string, request: PlannedRequest, deadline: Deadline): Promise<ExecReply> => {
     const started = Date.now();
     let billed: EnvelopeReply | undefined;
     try {
       const raw = await callDecisions(
-        { endpoint: profile.endpoint, model: profile.model, state: request.state, questions: request.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
+        { endpoint: profile.endpoint, model, state: request.state, questions: request.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
         {
           key,
           deadline,
           maxAttempts: profile.maxAttempts,
           fetchImpl: deps.fetch,
-          parseReply: (text) => parseDecisionsText(text, (usage, model) => {
-            const cost = recordDecisionsUsage({ usage, model: profile.model, catalog, durationMs: Date.now() - started, endpoint: profile.endpoint });
-            billed = { model: typeof model === "string" && model.trim() !== "" ? model : profile.model, usage, cost };
+          parseReply: (text) => parseDecisionsText(text, (usage, replyModel) => {
+            const cost = recordDecisionsUsage({ usage, model, catalog, durationMs: Date.now() - started, endpoint: profile.endpoint });
+            billed = { model: typeof replyModel === "string" && replyModel.trim() !== "" ? replyModel : model, usage, cost };
           }),
         },
       );
       return { answers: raw.answers, model: raw.model, usage: raw.usage, cost: billed!.cost };
     } catch (e) {
       // WHY ANY error after billing, not only a ClassifierError: a reply billed and then lost to a TypeError is in the usage history, so the printed cost must include it (fan-out adds `billed` to the replies).
-      // WHY the stack under LLM_EXT_DEBUG=1|true: wrapping a programming error into a request failure must not hide where it came from; printed for the FIRST unclassified error of the run only, redacted like every other output. WHY deps.stderr: it is the runner's one direct stderr write, so it goes through the optional writer (default process.stderr) and a test captures it without patching a global.
+      // WHY the stack under LLM_EXT_DEBUG=1|true: wrapping a programming error into a request failure must not hide where it came from; printed for the FIRST unclassified error of the run only, redacted like every other output. WHY say: it is the runner's one direct stderr write, so it goes through the optional writer (default process.stderr) and a test captures it without patching a global.
       if (!debugStackPrinted && ["1", "true"].includes(process.env.LLM_EXT_DEBUG ?? "") && !(e instanceof ClassifierError) && !(e instanceof DeadlineError)) {
         debugStackPrinted = true;
-        const stack = safe(e instanceof Error && e.stack ? e.stack : String(e));
-        if (deps.stderr === undefined) process.stderr.write(`${stack}\n`);
-        else deps.stderr(stack);
+        say(safe(e instanceof Error && e.stack ? e.stack : String(e)));
       }
       throw billed !== undefined ? new BilledClassifierError(asClassifierError(e), billed) : e;
     }
+  };
+  const exec = async (request: PlannedRequest, deadline: Deadline): Promise<ExecReply> => {
+    let primaryError: ClassifierError | undefined;
+    // WHY a second attempt only for 'unavailable': a 5xx may heal at once; a not-found never does and a timeout has spent the request's time.
+    for (let attempt = 0; attempt < 2 && !retired.has(primaryId); attempt++) {
+      try {
+        const reply = await callModel(primaryId, request, deadline);
+        if (!priceNoted && removedRule === undefined) { priceNoted = true; noteModelPrice(profile.model, resolved.effective.promptUsdPerM); }
+        return reply;
+      } catch (e) {
+        // WHY the caller's abort never falls back: Ctrl-C must end the run, not start another paid call.
+        if (!isModelNotWorking(e) || deadline.reason === "aborted") throw e;
+        primaryError = e as ClassifierError;
+        strike(primaryId, primaryError);
+        if (primaryError.class !== "unavailable") break;
+      }
+    }
+    // WHY the request's own deadline is shared (not a fresh one per candidate): the total time of a request must not exceed the user's timeout_ms; when the profile model spent it, no fallback is tried and the original error stands.
+    if (primaryError !== undefined && deadline.reason !== undefined) throw primaryError;
+    if (ceiling === null) {
+      if (!noCeilingSaid) { noCeilingSaid = true; say(`llm-ext: no System One fallback tried: the catalog has no prompt price for ${primaryId}, so there is no price ceiling`); }
+    } else {
+      for (const m of await findCandidates()) {
+        if (retired.has(m.id)) continue;
+        if (deadline.reason !== undefined) break;
+        try {
+          const reply = await callModel(m.id, request, deadline);
+          usedOtherModel = true;
+          if (!announced.has(m.id)) {
+            announced.add(m.id);
+            const text = `${primaryId} is not working${primaryError === undefined ? "" : ` (${primaryError.message})`}; answered by System One fallback ${m.id} (prompt price at or below ${ceiling} USD per million tokens; quality not benchmarked against ${profile.model})`;
+            warnings.push(warning("fallback_model", text));
+            say(`llm-ext: ${safe(text)}`);
+          }
+          return reply;
+        } catch (e) {
+          // WHY a billed error is final: the candidate answered and was charged, so its cost must reach the envelope.
+          if (e instanceof BilledClassifierError || deadline.reason === "aborted" || !(e instanceof ClassifierError)) throw e;
+          if (isModelNotWorking(e)) strike(m.id, e);
+        }
+      }
+    }
+    // WHY the original error: with no usable fallback the run reports exactly what it reported before this card (TRDD-28BAL5ER acceptance). With no primaryError the model was retired by an earlier request; call it again to get the true error.
+    if (primaryError !== undefined) throw primaryError;
+    return callModel(primaryId, request, deadline);
   };
 
   const ctrlC = installCtrlC(deps.sigint);

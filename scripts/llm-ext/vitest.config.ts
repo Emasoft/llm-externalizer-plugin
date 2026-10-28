@@ -680,6 +680,7 @@ export default defineConfig({
       'src/classifiers/catalog/filter.test.ts',
       // C4-01 (TRDD-BUL4EEBP): the generic runner end to end over the filter spec: exit codes, cap, chunking, key never leaks; replayed real replies, no network.
       'src/classifiers/run-decision.test.ts',
+      'src/classifiers/system-one-fallback.test.ts',
       // SP-14 (TRDD-OHLMZONY): findings decision spec: four questions per finding, keep/keep_low/drop policy, E71 empty window, index-scoped injection, partial failure; real P-01 noul and score replies.
       'src/classifiers/catalog/findings.test.ts',
       // SP-17 (TRDD-O5NUD6IT): test-output decision spec: grep-found failing blocks first, E74 chunked log, highest-regression merge, class/regression/severity/evidence policy, partial failure; real P-01 noul replies.
