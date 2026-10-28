@@ -33,6 +33,6 @@ Done when: tests prove (a) a default run falls back on a dead model, (b) the fla
 ## Review notes 2026-10-28
 
 - Interpretation, not the user words: "whose local server fails" is read as a case of "not responding". Default "unchanged" is unverified: check that the dead-URL regex in walkProfileChainOnce (index.ts about 3247) matches a failed local server start; if not, the default needs a fix too.
-- --no_stop_on_fail was an option in an earlier plan revision of TRDD-1OOAH3LD, dropped by this ruling; it never shipped.
+- --no_stop_on_fail was an option in design/specs/TRDD-1OOAH3LD-increment-2a-plan.md, dropped by this ruling; no source under scripts/llm-ext/src names it (grep 2026-10-28).
 - When the flag fires in a multi-file command: behave like --command_timeout (write the finished per-file results, list the unfinished files, exit non-zero). One failed ensemble member with the flag set fails the command. The flag applies to remote profiles too (the ruling says every command). Open for the user: confirm the last two.
 - Criterion (a) passes today: it is a regression check. Criterion (c) needs the broker, hence npt TRDD-1OOAH3LD and TRDD-ZGSGGHQG.
