@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:43:51+0100
+updated: 2026-10-28T15:00:28+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -65,3 +65,7 @@ Approved design (after two adversarial review rounds): design/specs/TRDD-1OOAH3L
 - Consequence: the calibration trigger is a model added or changed in a profile of settings.yaml (the user wrote config.yaml; llm-ext reads settings.yaml), detected by comparing each profile's models with the calibration records; each model is calibrated once, never on every run, and the rule applies to every profile, not only local_llama (scope shared with TRDD-UT7UC025).
 - USER directive verbatim (2026-10-28): "no, a benchmark test is something long and complex needed to calibrate the model parameters for each command type, and must be done only when the model is added or updated. instead llama.cpp or any other inference engine update will not trigger the benchmarks of the commands, but just a quick check to verify that the model still run without errors with that inference engine."
 - Consequence: the full per-command calibration benchmark runs only when a model is added or updated in a profile; an update of llama.cpp or any other inference engine runs only a quick smoke check (the model loads and answers without errors on the new engine build) and never a recalibration; a failed smoke check is reported as an error, it does not start a benchmark.
+
+## Progress
+
+2026-10-28 increment 1 (request_options) implemented by a worker, UNCOMMITTED in the working tree. Report reports/llama-cpp-profile/20261028_145937+0100-increment-1-impl.md. npm test 5067 passed, tsc and eslint clean. CHANGELOG hunk removed because git-cliff generates the changelog at publish. NEXT: adversarial REVIEW of the uncommitted diff, then commit by file name, then increment 2 (server supervisor).
