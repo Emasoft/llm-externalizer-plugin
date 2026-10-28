@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T19:28:41+0100
+updated: 2026-10-28T19:44:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -46,3 +46,4 @@ Consequence: SUPERSEDES the earlier port reading (one server per model on its ow
 USER directive verbatim (2026-10-28): "but you need to check the free memory before every new request. but read the documentstion of Local to see more precise details, i may be wrong."
 USER directive verbatim (2026-10-28, REPLACES the --no_stop_on_fail ruling): "no, maybe i'm wrong.. it should do by default the fallback in case of errors. instead the optional flag --stop_on_errors will make it fail and exit if a model is not responding or not found. But beware: not having enough memory is not a failure, it only put the requests in a queue, waiting fot the memory to be freed enough to run another request pending."
 Consequence: default = on a model error (not responding, not found, managed server failed) llm-ext continues on the profile fallback models, as today; the optional llm-ext command flag --stop_on_errors makes the command fail and exit instead. --no_stop_on_fail is withdrawn. Lack of memory is never an error: requests wait in a queue until enough memory is free for the next pending one.
+2026-10-28 design written after two review rounds, WAITING FOR USER APPROVAL: design/specs/TRDD-ZGSGGHQG-locals-mlx-design.md. Order L1 (preset, profile, gates), L3 (max_parallel, memory floor, liveness wait instead of a total timeout), L2 (managed start) after TRDD-1OOAH3LD 2a revision 4 is approved. Open: start method (locals start or the server module directly), idle kill, non-mac CI skip, reuse of a user Locals server, restoring ~/.locals/config.json port 8321 changed by an earlier measurement.
