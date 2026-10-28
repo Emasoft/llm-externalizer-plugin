@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T19:35:34+0100
+updated: 2026-10-28T20:01:13+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -19,6 +19,14 @@ implementation-commits: [f105c646]
 ---
 
 # llm-ext runs local GGUF models through llama.cpp with a local_llama profile
+
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-10-28
+
+- Goal: the /goal directive recorded verbatim under User decisions 2026-10-28.
+- Phase now: (1) smoke-check all six models on private ports; (2) one proposal round on the delta (three models per profile = three servers per profile, per-route managed target, a third GGUF id kind repo/file.gguf); (3) implement 1OOAH3LD 2a-core + CI step, then locals-mlx L1, L3, L2, then calibration of six models, then all commands incl. mass-scouting and ensemble scan on both profiles.
+- Plans: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md (rev 4), design/specs/TRDD-ZGSGGHQG-locals-mlx-design.md.
+- Not on the critical path: 2b, 2c, 2d, 2e, the --stop_on_errors TRDD.
+- NEXT ACTION: read the smoke-check report under reports/llama-cpp-profile/ or reports/locals-mlx/ (newest *-six-model-smoke.md).
 
 ## User directive (verbatim, 2026-10-28)
 
@@ -77,6 +85,8 @@ Consequence: the 2a plan needs a revision before code: (a) idle = --sleep-idle-s
 Q: Where does --no_stop_on_fail belong? USER answer verbatim: "llm-ext commands" - an llm-ext command flag: when the profile model or managed server fails, the command continues on the profile fallback models instead of stopping (fallbacks behind the same failed server URL are skipped too).
 USER directive verbatim (2026-10-28, REPLACES the --no_stop_on_fail ruling): "no, maybe i'm wrong.. it should do by default the fallback in case of errors. instead the optional flag --stop_on_errors will make it fail and exit if a model is not responding or not found. But beware: not having enough memory is not a failure, it only put the requests in a queue, waiting fot the memory to be freed enough to run another request pending."
 Consequence: default = on a model error (not responding, not found, managed server failed) llm-ext continues on the profile fallback models, as today; the optional llm-ext command flag --stop_on_errors makes the command fail and exit instead. --no_stop_on_fail is withdrawn. Lack of memory is never an error: requests wait in a queue until enough memory is free for the next pending one.
+USER /goal directive verbatim (2026-10-28): "make the two new profiles (local-llama and locals-mlx) working perfectly, benchmarked and calibrated with the two models (`AtomicChat/LFM3-1.7B-Uncensored-GGUF` and `LiquidAI/LFM3-1.7B-MLX-4bit` respectively). Make also all commands to work with those 2 profiles, including the mass-scouting, since they cost little, but use a reduced context memory to make the models run faster in that case. ensemble scan can also be used by adding 2 additional local models to both: `mlx-community/Nanbeige4.2-3B-OptiQ-4bit` and `mlx-community/Qwen3.5-4B-MLX-4bit` (the gguf versions for llama.app are `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf` and `insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf`. now each profile has 3 models and can execute the ensemble scan. but check with the benchmarkks first, of ciurse. not only to calibrate but also to ensure they works at all."
+Decided by main-agent under the /goal directive (not user-ruled; the user may override): 2a revision 4 approved for implementation; locals-mlx design approved for implementation; Locals started with the server module directly (option B); an idle Locals server is killed after 2 hours without requests, like local_llama; Locals tests skipped on non-mac CI with a printed reason; a user-started Locals server serving the same model is reused. Reading of "reduced context memory" for mass-scouting: a smaller per-request prompt budget for that command in the calibration record (the server context is fixed at start), to be confirmed by the user. Each profile gets 3 models, each on its own server and port (both engines serve one model per port). ~/.locals/config.json port 8321 changed to 9090 by an earlier measurement, not yet restored.
 
 ## Progress
 
