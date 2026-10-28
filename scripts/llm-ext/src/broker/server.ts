@@ -183,6 +183,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const target = { port, model: first.model, ctx: first.ctx };
       const logFile = roleLogFile(o.dir, "main");
       let exited = false;
+      const loadStartedAt = Date.now();
       const entry = await claimAndSpawn({
         dir: o.dir,
         engine: o.engine,
@@ -203,6 +204,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       busyLogged = false;
       await waitReady(target, entry.pid, () => exited, logFile);
       server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, slots: await totalSlots(port) };
+      // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
+      sched.recordLoad(key, Date.now() - loadStartedAt);
       sched.startRun(key, Date.now());
       o.log(`main llama-server ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}`);
     } catch (err) {
@@ -231,6 +234,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     job.state = "running";
     job.dispatchedAt = Date.now();
     sched.servedInRun++;
+    sched.touch(job.dispatchedAt);
     const ac = new AbortController();
     running.set(job.id, ac);
     notify(job);
@@ -266,6 +270,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       })
       .finally(() => {
         running.delete(job.id);
+        // The linger before an empty-queue rotation counts from the last reply (review M2).
+        if (job.key === sched.current) sched.touch(Date.now());
         pump();
       });
   };
@@ -398,6 +404,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       };
       jobs.set(job.id, job);
       sched.enqueue(job);
+      if (job.key === sched.current) sched.touch(now);
       lastRequestAt = now;
       reply(res, 202, { job: job.id });
       pump();

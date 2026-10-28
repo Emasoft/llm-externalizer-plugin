@@ -179,8 +179,16 @@ export function tokenizeWindowsCommandLine(line: string): string[] {
  */
 function execText(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { windowsHide: true, timeout: 10_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout) =>
-      err ? reject(new ManagedServerError(`${cmd} ${args.join(" ")} failed: ${err.message}`)) : resolve(String(stdout)),
+    // 30 s, not 10 s: a full `ps -axww` failed under the loaded parallel test run (measured 2026-10-28); the code,
+    // signal and stderr ride on the error so a timeout is told apart from a real ps failure.
+    execFile(cmd, args, { windowsHide: true, timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) =>
+      err
+        ? reject(
+            new ManagedServerError(
+              `${cmd} ${args.join(" ")} failed (code ${String((err as NodeJS.ErrnoException & { code?: unknown }).code)}, signal ${String(err.signal)}${err.killed ? ", killed by the timeout" : ""}): ${String(stderr).trim() || err.message}`,
+            ),
+          )
+        : resolve(String(stdout)),
     );
   });
 }

@@ -56,8 +56,9 @@ export function brokerClientVersion(): string {
 
 /**
  * --queue_timeout for this command, in ms (USER ruling 2026-10-28): every job
- * this process submits carries it, and the broker forces a rotation to its
- * model once it waited longer. Undefined = the broker default T (5 min).
+ * this process submits carries it; once a job's wait nears it, the broker
+ * rotates its model in after the current model's minimum slice (spec 6). A
+ * large value lets the job wait. Undefined = the broker default T (5 min).
  * Waiting past it is never an error.
  */
 let queueTimeoutMs: number | undefined;

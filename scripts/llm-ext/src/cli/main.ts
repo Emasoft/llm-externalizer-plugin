@@ -404,8 +404,9 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "Global flags:\n" +
       "  --quiet                       suppress the banner and progress lines\n" +
       "  --profile <name>              use this settings.yaml profile for this call only\n" +
-      "  --queue_timeout <s>           local broker: longest a queued job waits before its model is\n" +
-      "                                forced onto the server (default 300; waiting is never an error)\n" +
+      "  --queue_timeout <s>           local broker: once a queued job nears this wait, its model gets\n" +
+      "                                the server after the current model's minimum slice (default 300;\n" +
+      "                                a large value lets the job wait; waiting is never an error)\n" +
       "  --command_timeout <s>         stop the whole command after <s> seconds, cancel its queued\n" +
       "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n\n" +
       "Groups:\n",

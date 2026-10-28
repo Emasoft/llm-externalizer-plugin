@@ -7,11 +7,11 @@
 
 /** The broker's tunables. Provisional defaults from the spec; every one is overridable through the environment the broker is started with (tests shorten them). */
 export interface BrokerTimings {
-  /** B: rotate after the current model served this many requests (spec 6, provisional 32). */
+  /** B: the minimum slice a loaded model is served before a deadline may rotate it out: min(B, its queued count at load) dispatches (spec 6, provisional 32). */
   batch: number;
-  /** D: ...or after this long on the current model (spec 6, provisional 180 s). */
-  maxRunMs: number;
-  /** T: the default queue timeout, the longest a queued job waits before its model is forced onto the server (USER ruling 2026-10-28: 5 min, not the spec's provisional 15 min). A job may carry its own (--queue_timeout). */
+  /** D: ...or this long on the current model, whichever comes first (spec 6, provisional 180 s). A MINIMUM run, never a maximum. */
+  minRunMs: number;
+  /** T: the default queue timeout (USER ruling 2026-10-28: 5 min). A job's deadline is submit + its queue timeout; a near deadline rotates its model in after the current minimum slice (spec 6). A job may carry its own (--queue_timeout). */
   starveMs: number;
   /** A job not polled for this long is abandoned and never dispatched (spec 4, 120 s). */
   abandonMs: number;
@@ -21,27 +21,35 @@ export interface BrokerTimings {
   idleServerMs: number;
   /** No server and no request for this long: the broker exits (spec 10, 2 h). */
   idleExitMs: number;
+  /** Review M2: an empty current queue rotates only after this long without activity on it (1 s), so a sequential caller can submit its next request first. */
+  lingerMs: number;
+  /** Load-time estimate for a model never loaded yet (60 s); after a load the measured time is used. */
+  defaultLoadMs: number;
 }
 
 export const DEFAULT_TIMINGS: BrokerTimings = {
   batch: 32,
-  maxRunMs: 180_000,
+  minRunMs: 180_000,
   starveMs: 300_000,
   abandonMs: 120_000,
   pollWaitMs: 60_000,
   idleServerMs: 2 * 3_600_000,
   idleExitMs: 2 * 3_600_000,
+  lingerMs: 1000,
+  defaultLoadMs: 60_000,
 };
 
 /** Environment names of the overrides, one per field (LLM_EXT_ prefix, like every llm-ext variable). */
 export const TIMING_ENV: Record<keyof BrokerTimings, string> = {
   batch: "LLM_EXT_BROKER_BATCH",
-  maxRunMs: "LLM_EXT_BROKER_MAX_RUN_MS",
+  minRunMs: "LLM_EXT_BROKER_MIN_RUN_MS",
   starveMs: "LLM_EXT_BROKER_STARVE_MS",
   abandonMs: "LLM_EXT_BROKER_ABANDON_MS",
   pollWaitMs: "LLM_EXT_BROKER_POLL_WAIT_MS",
   idleServerMs: "LLM_EXT_BROKER_IDLE_SERVER_MS",
   idleExitMs: "LLM_EXT_BROKER_IDLE_EXIT_MS",
+  lingerMs: "LLM_EXT_BROKER_LINGER_MS",
+  defaultLoadMs: "LLM_EXT_BROKER_DEFAULT_LOAD_MS",
 };
 
 /** The defaults with every valid positive integer override applied; a malformed value is an error, never silently ignored (fail fast). */
@@ -68,7 +76,7 @@ export interface Job {
   body: string;
   /** Execution timeout counted from dispatch (spec 4: the broker owns timeouts after dispatch). */
   timeoutMs: number;
-  /** This job's queue timeout (--queue_timeout, else T): past it, its model is forced onto the server. Waiting is never an error. */
+  /** This job's queue timeout (--queue_timeout, else T): once its deadline nears, its model is rotated in after the current minimum slice (spec 6). Waiting is never an error. */
   queueTimeoutMs: number;
   submittedAt: number;
   lastPolledAt: number;
@@ -97,6 +105,10 @@ export class Scheduler {
   current: string | null = null;
   servedInRun = 0;
   runStartedAt = 0;
+  /** The current model's queued count when it was loaded: its minimum slice is min(B, this). */
+  queuedAtLoad = 0;
+  /** Last submit/take/finish on the current model (the linger before an empty-queue rotation). */
+  lastActivityAt = 0;
 
   enqueue(job: Job): void {
     let byCmd = this.queues.get(job.key);
@@ -162,18 +174,31 @@ export class Scheduler {
     return best;
   }
 
+  /** Measured load time per key (spawn to ready), recorded by the broker after each start. */
+  private readonly loadMs = new Map<string, number>();
+
+  recordLoad(key: string, ms: number): void {
+    this.loadMs.set(key, ms);
+  }
+
+  /** The key's last measured load time, or the default estimate before its first load. */
+  loadEstimate(key: string, t: BrokerTimings): number {
+    return this.loadMs.get(key) ?? t.defaultLoadMs;
+  }
+
   /**
-   * The other key holding the MOST overdue job, or null. A job's deadline is
-   * its submit time plus its own queue timeout (spec 6 as updated 2026-10-28);
-   * the earliest passed deadline wins, so a short --queue_timeout is served
-   * before an older job with a long one.
+   * The other key holding the EARLIEST deadline that has passed or falls
+   * within that key's load time (deadline = submit + the job's own queue
+   * timeout). Counting the load time makes the swap land by the deadline
+   * instead of starting at it. null when no other job's deadline is that near.
    */
-  overdue(now: number): string | null {
+  dueKey(now: number, t: BrokerTimings): string | null {
     let best: string | null = null;
     let bestDeadline = Infinity;
     for (const j of this.allQueued()) {
+      if (j.key === this.current) continue;
       const deadline = j.submittedAt + j.queueTimeoutMs;
-      if (j.key === this.current || deadline >= now) continue;
+      if (deadline > now + this.loadEstimate(j.key, t)) continue;
       if (deadline < bestDeadline) {
         best = j.key;
         bestDeadline = deadline;
@@ -182,37 +207,50 @@ export class Scheduler {
     return best;
   }
 
+  /** Note activity on the current model (submit, take, finish): the linger before an "empty queue" rotation counts from the last one. */
+  touch(now: number): void {
+    this.lastActivityAt = now;
+  }
+
   /**
-   * Spec 6 with the USER ruling of 2026-10-28. Rotate (returns the key to
-   * switch to; null keeps the current model):
-   *  - when the current queue and in-flight are empty, to the model whose
-   *    oldest request waited longest;
-   *  - FORCED when another model's job has waited longer than its own queue
-   *    timeout (--queue_timeout, default T = 5 min), to that model;
-   *  - when the current model served at least B requests (or ran at least D)
-   *    and another model has work, so batches alternate after a calibrated run.
-   * The quota clause no longer waits for T: with T a per-job value, "B and
-   * waited > T" would let one job with a short --queue_timeout be overridden
-   * by another's long one; the forced clause owns the waiting bound alone.
+   * Spec 6 (coordinator decision 2026-10-28, binding). Returns the key to
+   * switch to, or null to keep the current model:
+   *  1. no current model: the model whose oldest request waited longest;
+   *  2. the current queue and in-flight are empty and nothing happened on the
+   *     current model for lingerMs (review M2: a sequential caller submits its
+   *     next request right after reading the reply; swapping at once cost it a
+   *     full rotation per request): the longest-waiting other model;
+   *  3. otherwise only when BOTH hold:
+   *     (a) the current model dispatched at least min(B, the queued count it
+   *         was loaded for), or ran at least D: B and D are a MINIMUM slice,
+   *         never a maximum, so after every swap the new model is served
+   *         first (this is what ends the review-C1 livelock of two overdue
+   *         models swapping back and forth without serving anything);
+   *     (b) another model's job has a deadline that has passed or falls within
+   *         that model's measured load time (default estimate before its first
+   *         load): the model holding the EARLIEST such deadline.
+   *     A long --queue_timeout (the user's 99990) therefore really lets its
+   *     job wait: its deadline is never near, so (b) never fires for it.
+   * Worst-case queue wait: about T + D (+ draining in-flight and one load).
    * The caller stops dispatching while this returns non-null and swaps once
    * in-flight reaches 0.
    */
   wantRotation(now: number, inFlight: number, t: BrokerTimings): string | null {
-    const next = this.longestWaiting(this.current);
-    if (next === null) return null;
-    if (this.current === null) return next;
-    if (this.queuedCount(this.current) === 0 && inFlight === 0) return next;
-    const forced = this.overdue(now);
-    if (forced !== null) return forced;
-    if (this.servedInRun >= t.batch || now - this.runStartedAt >= t.maxRunMs) return next;
-    return null;
+    const longest = this.longestWaiting(this.current);
+    if (longest === null) return null;
+    if (this.current === null) return longest;
+    if (this.queuedCount(this.current) === 0 && inFlight === 0) return now - this.lastActivityAt >= t.lingerMs ? longest : null;
+    const minimumServed = this.servedInRun >= Math.min(t.batch, this.queuedAtLoad) || now - this.runStartedAt >= t.minRunMs;
+    return minimumServed ? this.dueKey(now, t) : null;
   }
 
-  /** Make `key` current and restart its run counters. */
-  startRun(key: string, now: number): void {
+  /** Make `key` current and restart its run counters; `queued` = its queued count at load (the minimum slice is min(B, queued)). */
+  startRun(key: string, now: number, queued = this.queuedCount(key)): void {
     this.current = key;
     this.servedInRun = 0;
     this.runStartedAt = now;
+    this.queuedAtLoad = queued;
+    this.lastActivityAt = now;
   }
 
   /** Next job of `key`, round-robin across commands. */

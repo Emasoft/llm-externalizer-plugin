@@ -163,16 +163,21 @@ function watchMains(dir: string): { stop: () => number } {
   let max = 0;
   let on = true;
   const marker = roleLogFile(dir, "main");
+  let failure: unknown = null;
+  // Caught and rethrown at stop(): a failed snapshot must fail THIS test, not surface as an unhandled rejection later.
   void (async () => {
     while (on) {
       const n = (await processSnapshot()).filter((r) => r.argv[r.argv.indexOf("--log-file") + 1] === marker && r.argv.indexOf("--log-file") >= 0).length;
       max = Math.max(max, n);
       await new Promise((r) => setTimeout(r, 200));
     }
-  })();
+  })().catch((e: unknown) => {
+    failure = e;
+  });
   return {
     stop: () => {
       on = false;
+      if (failure) throw failure;
       return max;
     },
   };
@@ -220,26 +225,107 @@ describe("scheduler (pure rules)", () => {
     const order = [s.take(queueKey("m", 0))!, s.take(queueKey("m", 0))!].map((j) => j.commandId);
     expect(order).toEqual(["big", "small"]);
   });
-  it("forces a rotation at the EARLIEST passed per-job deadline, not before", () => {
+  const T0 = { ...DEFAULT_TIMINGS, batch: 2, minRunMs: 1e9, lingerMs: 1000, defaultLoadMs: 5_000 };
+  /** A scheduler whose current model "a" was loaded at t=0 with `queued` jobs of its own. */
+  const running = (queued: number): Scheduler => {
     const s = new Scheduler();
+    for (let i = 0; i < queued; i++) s.enqueue(job("a", "c1", i));
     s.startRun(queueKey("a", 0), 0);
-    s.enqueue(job("a", "c1", 0));
-    s.enqueue(job("b", "c2", 0, 10_000));
-    s.enqueue(job("c", "c3", 5, 1_000));
-    const t = { ...DEFAULT_TIMINGS, batch: 1000, maxRunMs: 1e9 };
-    expect(s.wantRotation(500, 1, t)).toBeNull();
-    expect(s.wantRotation(2_000, 1, t)).toBe(queueKey("c", 0));
-  });
-  it("rotates after B requests when another model has work", () => {
-    const s = new Scheduler();
-    s.startRun(queueKey("a", 0), 0);
-    s.enqueue(job("a", "c1", 0));
-    s.enqueue(job("b", "c2", 0));
-    const t = { ...DEFAULT_TIMINGS, batch: 2 };
-    s.servedInRun = 1;
-    expect(s.wantRotation(1, 1, t)).toBeNull();
+    return s;
+  };
+  it("rotates only after the minimum slice AND a near deadline, to the earliest deadline", () => {
+    const s = running(10);
+    s.enqueue(job("b", "c2", 0, 100_000));
+    s.enqueue(job("c", "c3", 0, 20_000));
+    // Minimum slice not served yet: no rotation, even with c's deadline passed.
+    expect(s.wantRotation(50_000, 1, T0)).toBeNull();
     s.servedInRun = 2;
-    expect(s.wantRotation(1, 1, t)).toBe(queueKey("b", 0));
+    // Slice served; c's deadline (20 s) is within its load estimate (5 s) of t = 16 s, b's is not.
+    expect(s.wantRotation(10_000, 1, T0)).toBeNull();
+    expect(s.wantRotation(16_000, 1, T0)).toBe(queueKey("c", 0));
+    // A measured load time moves "near": c loading in 1 s is not due at 16 s.
+    s.recordLoad(queueKey("c", 0), 1_000);
+    expect(s.wantRotation(16_000, 1, T0)).toBeNull();
+    expect(s.wantRotation(19_500, 1, T0)).toBe(queueKey("c", 0));
+  });
+  it("D also completes the minimum slice", () => {
+    const s = running(10);
+    s.enqueue(job("b", "c2", 0, 1));
+    expect(s.wantRotation(5_000, 1, { ...T0, batch: 1000, minRunMs: 6_000 })).toBeNull();
+    expect(s.wantRotation(6_000, 1, { ...T0, batch: 1000, minRunMs: 6_000 })).toBe(queueKey("b", 0));
+  });
+  it("a job with --queue_timeout=99990 does not pull its model in after B requests of other work", () => {
+    const s = running(100);
+    s.enqueue(job("b", "c2", 0, 99_990_000));
+    s.servedInRun = 50;
+    expect(s.wantRotation(3_600_000, 1, T0)).toBeNull();
+  });
+  it("lingers before an empty-queue rotation so a sequential caller can submit again", () => {
+    const s = running(0);
+    s.enqueue(job("b", "c2", 0));
+    s.touch(10_000);
+    expect(s.wantRotation(10_500, 0, T0)).toBeNull();
+    expect(s.wantRotation(11_000, 0, T0)).toBe(queueKey("b", 0));
+  });
+  it("review C1: two models with overdue jobs never swap without serving (the new model gets its slice first)", () => {
+    const s = new Scheduler();
+    for (let i = 0; i < 5; i++) s.enqueue(job("a", "c1", 0, 1));
+    for (let i = 0; i < 5; i++) s.enqueue(job("b", "c2", 0, 1));
+    s.startRun(queueKey("b", 0), 10_000);
+    expect(s.wantRotation(10_000, 0, T0)).toBeNull();
+  });
+  it("invariant over a randomised multi-model simulation: every swap is followed by a dispatch before the next swap, and every job is served", () => {
+    let seed = 12345;
+    const rnd = (): number => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+    for (let run = 0; run < 50; run++) {
+      const s = new Scheduler();
+      const t = { ...DEFAULT_TIMINGS, batch: 1 + Math.floor(rnd() * 6), minRunMs: 2_000 + Math.floor(rnd() * 20_000), lingerMs: 1000, defaultLoadMs: 3_000 };
+      const models = ["m0", "m1", "m2", "m3"].slice(0, 2 + Math.floor(rnd() * 3));
+      let now = 0;
+      let submitted = 0;
+      let served = 0;
+      let current: string | null = null;
+      let dispatchesSinceSwap = 1;
+      let swaps = 0;
+      const inFlight: number[] = [];
+      // Arrivals (about 1 per second for 150 s) stay below the service capacity (2 in flight, about 0.85 s each), then the queue drains.
+      for (let step = 0; step < 20_000 && (step < 1500 || served < submitted); step++) {
+        now += 100;
+        if (step < 1500 && rnd() < 0.1) {
+          const m = models[Math.floor(rnd() * models.length)];
+          s.enqueue(job(m, `c${Math.floor(rnd() * 3)}`, now, rnd() < 0.5 ? 1_000 + Math.floor(rnd() * 5_000) : 300_000));
+          submitted++;
+        }
+        for (let i = inFlight.length - 1; i >= 0; i--) {
+          if (inFlight[i] <= now) {
+            inFlight.splice(i, 1);
+            served++;
+            s.touch(now);
+          }
+        }
+        const next = s.wantRotation(now, inFlight.length, t);
+        if (next !== null && inFlight.length === 0 && next !== current) {
+          expect(dispatchesSinceSwap).toBeGreaterThan(0);
+          current = next;
+          s.startRun(next, now);
+          dispatchesSinceSwap = 0;
+          swaps++;
+          continue;
+        }
+        if (next === null && current !== null) {
+          while (inFlight.length < 2) {
+            const j = s.take(current);
+            if (!j) break;
+            s.servedInRun++;
+            s.touch(now);
+            dispatchesSinceSwap++;
+            inFlight.push(now + 100 + Math.floor(rnd() * 1_500));
+          }
+        }
+      }
+      expect(served).toBe(submitted);
+      expect(swaps).toBeGreaterThan(0);
+    }
   });
   it("drops abandoned jobs before dispatch, never one with a poll waiting", () => {
     const s = new Scheduler();
@@ -256,7 +342,9 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
   it("two client processes: one load per model, A before B, never two main servers", async () => {
     const dir = newDir();
     const w = watchMains(dir);
-    const env = { LLM_EXT_BROKER_BATCH: "1000", LLM_EXT_BROKER_STARVE_MS: "600000" };
+    // Linger 5 s: the two client processes start together, and on a loaded run B's may submit seconds before A's;
+    // with A still current and A's work arriving within the linger, A is served first by design, not by luck.
+    const env = { LLM_EXT_BROKER_BATCH: "1000", LLM_EXT_BROKER_STARVE_MS: "600000", LLM_EXT_BROKER_LINGER_MS: "5000" };
     const first = await runClient(dir, jobsOf(A, 1), env);
     const [c1, c2] = await Promise.all([runClient(dir, jobsOf(A, 6), env), runClient(dir, jobsOf(B, 3, { delayMs: 50 }), env)]);
     const max = w.stop();
@@ -269,26 +357,27 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect(max).toBe(1);
   }, 300_000);
 
-  it("rotates after B requests, and a short --queue_timeout forces an earlier rotation than the default", async () => {
+  it("rotation: the default waits for the queue, a short --queue_timeout preempts after the minimum slice, --queue_timeout=99990 waits", async () => {
     const dir = newDir();
-    const env = { LLM_EXT_BROKER_BATCH: "1000", LLM_EXT_BROKER_STARVE_MS: "600000" };
-    await runClient(dir, jobsOf(A, 1), env);
-    const longA = jobsOf(A, 40, { maxTokens: 120 });
+    // B = 2 is the minimum slice; T = 600 s keeps the default deadline far away.
+    const env = { LLM_EXT_BROKER_BATCH: "2", LLM_EXT_BROKER_STARVE_MS: "600000" };
+    // One client submits A's 40 requests at once and B's request 500 ms later, so A's queue is always
+    // there first (two processes would race on start-up time under a loaded test run).
+    const scenario = async (bExtra: object): Promise<{ a: number; b: number }> => {
+      await runClient(dir, jobsOf(A, 1), env);
+      const r = await runClient(dir, [...jobsOf(A, 40, { maxTokens: 120 }), { model: B, delayMs: 500, ...bExtra }], env);
+      expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
+      return { a: Math.max(...r.results.filter((x) => x.model === A).map((x) => x.at)), b: r.results.find((x) => x.model === B)!.at };
+    };
     // Default queue timeout: B waits until A's queue is empty.
-    const [a1, b1] = await Promise.all([runClient(dir, longA, env), runClient(dir, jobsOf(B, 1, { delayMs: 100 }), env)]);
-    expect([...a1.results, ...b1.results].filter((r) => r.status !== 200)).toEqual([]);
-    expect(b1.results[0].at).toBeGreaterThanOrEqual(Math.max(...a1.results.map((r) => r.at)));
-    // A 1 s queue timeout on B's job: rotation is forced while A still has work.
-    const [a2, b2] = await Promise.all([runClient(dir, longA, env), runClient(dir, jobsOf(B, 1, { delayMs: 100, queueTimeoutMs: 1000 }), env)]);
-    expect(b2.results[0].status).toBe(200);
-    expect(b2.results[0].at).toBeLessThan(Math.max(...a2.results.map((r) => r.at)));
-    // B = 2 (a fresh broker reads the new value): B is served after two of A's requests at most.
-    const dir2 = newDir();
-    const envB = { LLM_EXT_BROKER_BATCH: "2", LLM_EXT_BROKER_STARVE_MS: "600000" };
-    await runClient(dir2, jobsOf(A, 1), envB);
-    const [a3, b3] = await Promise.all([runClient(dir2, longA, envB), runClient(dir2, jobsOf(B, 1, { delayMs: 100 }), envB)]);
-    expect([...a2.results, ...a3.results, ...b3.results].filter((r) => r.status !== 200)).toEqual([]);
-    expect(b3.results[0].at).toBeLessThan(Math.max(...a3.results.map((r) => r.at)));
+    const d = await scenario({});
+    expect(d.b).toBeGreaterThanOrEqual(d.a);
+    // A 1 s queue timeout: once A served its minimum slice, the near deadline rotates B in while A still has work.
+    const s = await scenario({ queueTimeoutMs: 1000 });
+    expect(s.b).toBeLessThan(s.a);
+    // The user's --queue_timeout=99990: the job may wait, so B and many requests of A never pull it in early.
+    const l = await scenario({ queueTimeoutMs: 99_990_000 });
+    expect(l.b).toBeGreaterThanOrEqual(l.a);
   }, 600_000);
 
   it("a model that fails to start does not skip the next model", async () => {
@@ -333,10 +422,12 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     const dir = newDir();
     const env = { LLM_EXT_BROKER_POLL_WAIT_MS: "1000", LLM_EXT_BROKER_BATCH: "1000", LLM_EXT_BROKER_STARVE_MS: "600000" };
     await runClient(dir, jobsOf(A, 1), env);
-    const [a, b] = await Promise.all([runClient(dir, jobsOf(A, 40, { maxTokens: 120 }), env), runClient(dir, jobsOf(B, 1, { delayMs: 50 }), env)]);
-    expect([...a.results, ...b.results].filter((r) => r.status !== 200)).toEqual([]);
+    // One client: A's 40 requests at once, B's 500 ms later, so A's queue is always there first (two processes race on start-up time under a loaded test run).
+    const r = await runClient(dir, [...jobsOf(A, 40, { maxTokens: 120 }), { model: B, delayMs: 500 }], env);
+    expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
     // B waited for A's whole queue, far longer than one 1 s poll window, and still completed.
-    expect(b.results[0].at - Math.min(...a.results.map((r) => r.at))).toBeGreaterThan(1000);
+    const aFirst = Math.min(...r.results.filter((x) => x.model === A).map((x) => x.at));
+    expect(r.results.find((x) => x.model === B)!.at - aFirst).toBeGreaterThan(1000);
   }, 300_000);
 
   it("after a broker SIGKILL the next broker kills the orphaned main by its pgid", async () => {
