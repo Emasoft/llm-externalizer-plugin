@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T20:14:18+0100
+updated: 2026-10-28T20:20:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -60,3 +60,4 @@ Decided by main-agent under the /goal directive (not user-ruled; the user may ov
 USER directive verbatim (2026-10-28, repeating the /goal with one addition): "since we are using Locals for all mlx models, you can drop the support for kiril." Consequence: Krill support is removed from llm-ext; every MLX model (including Nanbeige4.2 and Qwen3.5) runs through Locals; the earlier note that Nanbeige4.2 must run through Krill is superseded.
 2026-10-28 program plan revision 2 reviewed twice; P6a (calibration design review plus a 30-minute LFM3 dry run) added before the overnight run; P10 command table with thresholds is a gate before the goal is complete. Open user question: may calibration restart its own server with a new context (refuse-on-change kept for user runs)?
 USER answer verbatim (2026-10-28) to "may calibration restart its own server with a new context?": "yes calibration can handle thevcalibration server as it see fit. this is whynwe given a separated server to calibration processes." Consequence: calibration runs on its own separate server per model on a private port and controls its context freely; the user-facing servers keep refuse-on-change.
+USER directive verbatim (2026-10-28): "remember to add safeguards that guarantee that only the main server of the local inference engine (whatever it is) and the benchmarking/tedting server of the same must exists at any given time. no third server must be allowed tombe spawned by llm-ext." Consequence: per local inference engine, llm-ext runs at most one main server and one benchmarking/testing (calibration) server at any time, with a safeguard that refuses to spawn a third. This withdraws the per-model one-server-per-port design of the program plan (three servers per profile); the three models of a profile must be served by the one main server (to be measured: llama.cpp router mode, Locals multi-model). P1 implementation paused.
