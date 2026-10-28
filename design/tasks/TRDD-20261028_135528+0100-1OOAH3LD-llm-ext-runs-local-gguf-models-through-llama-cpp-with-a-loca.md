@@ -1,10 +1,10 @@
 ---
 trdd-id: 1OOAH3LD
 title: llm-ext runs local GGUF models through llama.cpp with a local_llama profile
-column: design
+column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:34:12+0100
+updated: 2026-10-28T14:40:57+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -38,6 +38,7 @@ approval-datetime: 2026-10-28T13:55:28+0100
 ## Approval log
 
 - 2026-10-28T13:55:28+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-28T14:40:32+0100 — column → todo by user. design approved through four design questions 2026-10-28
 
 ## User decisions 2026-10-28
 
@@ -55,3 +56,10 @@ Consequence: no effort-level table; each llm-ext command gets thinking off (simp
 Liquid AI docs pasted by the user (docs.liquid.ai LFM3-1.7B page): 1.73B params, 256K context input+output, 24 layers (13 short conv, 5 sliding-window attention, 6 global attention); general generation temperature 0.1, top_k 50, repetition_penalty 1.1; math and science temperature 1.0, top_p 0.95, top_k 20, repetition_penalty 1.0; reasoning on by default, enable_thinking False for direct answers; the page says it is NOT recommended for agentic coding or complex multi-step reasoning due to its size, so bug-search quality must be measured, not assumed.
 USER directive verbatim (2026-10-28): "Make the testing completely automated, so that when a new local model is added to the local_llama profile the tests will run automatically and find the right calibration values for context percentage, max input tokens, max output tokens, reasoning on or off, structured output, etc."
 Consequence: the context-fill benchmark becomes an automatic per-model calibration. When llm-ext finds a model in local_llama with no calibration record, it runs the calibration itself (no user command needed) and stores, per model, the safe context percentage, max input tokens, max output tokens, thinking on or off per task kind, and whether structured output (JSON schema) works; llm-ext then sizes requests from that record. Overlaps TRDD-UT7UC025 (self-healing: benchmark new models): one calibration framework, not two.
+- Q: may llm-ext use a model while it is being calibrated (2-4 hours)? USER answer verbatim: "No, wait"
+- Q: how do calibration and user requests share the model server? USER answer verbatim: "Calibrate when idle (Recommended)"
+- Q: should a llama.cpp upgrade trigger a new calibration? USER answer verbatim: "Quick check only (Recommended)"
+- Q: what happens to an unused server holding about 4.8 GB at full context? USER answer verbatim: "Smaller context + idle stop"
+Approved design (after two adversarial review rounds): design/specs/TRDD-1OOAH3LD-local-llama-design.md
+- USER directive verbatim (2026-10-28): "remember that auto-calibration must be automatically triggered only when a new or updated model is added/edited in the config.yaml local_llama profile. and in general for all profiles it goes the same rule: new models require calibration once."
+- Consequence: the calibration trigger is a model added or changed in a profile of settings.yaml (the user wrote config.yaml; llm-ext reads settings.yaml), detected by comparing each profile's models with the calibration records; each model is calibrated once, never on every run, and the rule applies to every profile, not only local_llama (scope shared with TRDD-UT7UC025).
