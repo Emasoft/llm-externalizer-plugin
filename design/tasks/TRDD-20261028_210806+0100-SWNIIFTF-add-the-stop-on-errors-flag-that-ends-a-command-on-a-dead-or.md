@@ -4,7 +4,7 @@ title: Add the --stop_on_errors flag that ends a command on a dead or missing mo
 column: todo
 status: tasked
 created: 2026-10-28T21:08:06+0100
-updated: 2026-10-28T21:08:06+0100
+updated: 2026-10-28T21:09:15+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-28T21:08:06+0100
+npt: [1OOAH3LD, ZGSGGHQG]
 ---
 
 # Add the --stop_on_errors flag that ends a command on a dead or missing model
