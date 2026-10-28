@@ -4,7 +4,7 @@ title: Suspected - remote ensemble may never fan out because non-reserved member
 column: todo
 status: tasked
 created: 2026-10-28T21:08:06+0100
-updated: 2026-10-28T21:09:15+0100
+updated: 2026-10-28T21:09:28+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -28,3 +28,9 @@ First step: reproduce with a real run on a remote-ensemble profile and count the
 ## Approval log
 
 - 2026-10-28T21:08:06+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Review notes 2026-10-28
+
+- The guard near index.ts:3434 may only choose WHERE requests go (per-member routes vs the profile default endpoint), not WHETHER they fan out. Read index.ts lines 3420-3540 in full before the run and write down both possible outcomes.
+- Done when: a real run on a remote-ensemble profile with 3 members either shows 3 distinct model ids in the report (no bug, close as refused) or shows 1 (bug confirmed), and in the confirmed case a test drives a 3-member fan-out through a tool and fails before the fix.
+- Related: TRDD-YG72CYY7 (its increment 2 targets the 5-minute bound on the remote-ensemble path) and TRDD-WBZJRSQB (14.1.0 release); a confirmed fix changes shipped 14.1.0 behaviour and must be coordinated with both.
