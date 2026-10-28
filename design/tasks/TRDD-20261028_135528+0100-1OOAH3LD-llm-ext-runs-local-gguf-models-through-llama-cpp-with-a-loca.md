@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T15:33:38+0100
+updated: 2026-10-28T15:41:57+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -73,3 +73,4 @@ Approved design (after two adversarial review rounds): design/specs/TRDD-1OOAH3L
 2026-10-28 increment 1 code review: 1 blocker. A real llama-server is detected through GET /props and routed to the native /api/v1/chat path, which returns before request_options apply, so a real server never received them (tests passed only because their fake server answered 404 on /props). A fix worker is forcing the OpenAI-compatible path when options apply, plus 7 smaller fixes, and verifying against a real llama-server. Review: reports/llama-cpp-profile/20261028_150558+0100-increment-1-review.md. Durable backup of the uncommitted work: reports/llama-cpp-profile/20261028_150122+0100-increment-1-wip.patch. Commit subject must carry the changelog line (cliff.toml renders only the first line).
 2026-10-28 increment 1 COMMITTED as f105c646 after the B1 fix and 7 smaller fixes (report reports/llama-cpp-profile/20261028_151529+0100-increment-1-fixes.md); verified on a live llama-server b11960 with LFM3. npm test 5077 passed, tsc and eslint clean. NEXT: increment 2 (server supervisor) per design/specs/TRDD-1OOAH3LD-local-llama-design.md.
 2026-10-28 increment 2a (server supervisor) planned after two review rounds; plan design/specs/TRDD-1OOAH3LD-increment-2a-plan.md; waiting for three user rulings (idle sleep or stop, test skip without llama-server, offline test). API key split to 2c, disk check to 2b.
+2026-10-28 the increment 2a plan is NOT approved yet: it waits for the three user rulings and for the review-born decisions in its "Not yet approved" list; until then the increment 2 section of the approved design stays in force.
