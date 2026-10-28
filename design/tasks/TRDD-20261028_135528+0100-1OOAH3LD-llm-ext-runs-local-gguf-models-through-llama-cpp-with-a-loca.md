@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: design
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T14:00:01+0100
+updated: 2026-10-28T14:05:17+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -45,3 +45,6 @@ Q: how should llm-ext run the model (llama-cli per prompt reloads the 1.6 GB mod
 Q: after llm-ext starts llama-server, what happens when the command finishes? USER answer verbatim: "Keep it running (Recommended)" - llm-ext records the server process id and adds a command to stop it.
 Q: installed llama.cpp 0.5.0 (build 11146) and Homebrew stable 0.7.0 both predate LFM3 support (PR 31252, commit 19cce69, merged 2026-10-27); only v0.8.0 (2026-10-28) has it. How to get a build? USER answer verbatim: "Brew HEAD build (Recommended)"
 Model tag: use AD-Q6_K (exact file LFM3-1.7B-Uncensored-AD-Q6_K.gguf, 1587969920 bytes); the directive's AD-Q6 spelling is untested. Facts report: reports/llama-cpp-profile/20261028_135624+0100-facts.md
+USER directive verbatim (2026-10-28): "notice that the model LFM3-1.7B is reported as having a context memory of 256k tokens. so make sure to split the input files accordingly (if i remember the benchmarks reported errors above 35-40% of the context, so test it well)"
+Consequence: the design must (a) verify the 256k claim from the model config, (b) start llama-server with an explicit context size, and (c) measure answer quality at increasing context fill (for example 10, 20, 30, 35, 40, 50 percent of the window) and set the input-split size from the measured safe fill, not from the nominal 256k.
+Smoke test 2026-10-28: Homebrew HEAD build b11960-8642541b2 (22 commits after LFM3 merge 19cce69) loaded AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K via llama-cli -hf and answered at about 107 tokens/s; the model emits a thinking block before the answer, which llm-ext must strip.
