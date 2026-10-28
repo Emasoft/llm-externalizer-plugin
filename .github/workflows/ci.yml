@@ -89,7 +89,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /tmp/llm-ext-llama-cache
-          key: llama-models-ggml-org-tiny-llamas-stories15M-q4_0-stories260K-v1
+          key: llama-models-${{ hashFiles('scripts/llm-ext/src/broker/broker.test.ts') }}
       - name: Test
         working-directory: scripts/llm-ext
         run: npm test
