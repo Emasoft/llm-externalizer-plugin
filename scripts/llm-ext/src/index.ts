@@ -150,8 +150,7 @@ import {
 } from "./text-tools/core.js";
 
 import type { RetryClock } from "./provider/http.js";
-import { BrokerJobError, brokerClientVersion, brokerQueueTimeoutMs, ensureBroker } from "./broker/client.js";
-import { ManagedServerError } from "./local-llama-server.js";
+import { brokerClientVersion, brokerQueueTimeoutMs, endpointFailureKind, ensureBroker } from "./broker/client.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 
 /**
@@ -3264,21 +3263,12 @@ async function walkProfileChainOnce(
       // marking dead, for a local runner restarting under load" ceiling is
       // a follow-up (0b), not this phase's job -- a bare substring match on
       // the common connection-failure codes is the whole classifier here.
-      // TRDD-1OOAH3LD broker (spec 5): a broker that could not be reached or
-      // started is an ENDPOINT failure (its message carries no network code),
-      // so its base URL is dead for this walk. A failure the broker REPORTED
-      // for one model (the model could not start, its request failed) marks
-      // only (URL, model) dead: other models behind the same broker are still
-      // tried.
+      // TRDD-1OOAH3LD broker (spec 5): the classification lives in
+      // endpointFailureKind (broker/client.ts), where it is unit-tested.
       const unwrapped = err instanceof RetryDeadlineError ? err.cause : err;
-      // ManagedServerError (BrokerUnavailableError is one), not only the
-      // broker-unavailable case: the broker spawn lock throws a plain
-      // ManagedServerError on its 60 s timeout, and as a "model" failure every
-      // next model would wait out the same lock again before the walk reached
-      // another URL. BrokerJobError is NOT a ManagedServerError (endpoint-model).
-      const isEndpointDead =
-        /ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(msg) || unwrapped instanceof ManagedServerError;
-      const isEndpointModelDead = !isEndpointDead && unwrapped instanceof BrokerJobError;
+      const endpointKind = endpointFailureKind(unwrapped, msg);
+      const isEndpointModelDead = endpointKind === "endpoint-model";
+      const isEndpointDead = endpointKind === "endpoint";
       // D4 (design section 6): a CERTAIN payment error is the KEY's credit,
       // not the model — the walk marks `url + keyRef` dead and continues
       // with the SAME id's next group (a different key). keyRef is

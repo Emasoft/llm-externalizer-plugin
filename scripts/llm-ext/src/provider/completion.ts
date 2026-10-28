@@ -61,6 +61,7 @@ import {
   failureText,
   RETRY_DEADLINE_MS,
   retryWindowClosed,
+  clockForCall,
   startRetryClock,
   waitFitsClock,
   type RetryClock,
@@ -503,14 +504,16 @@ function sendChat(
   startTime: number,
   rl429: { saw429: boolean; refusedRetryAt?: number },
   clock: RetryClock | undefined,
-  // The logical call (chatCompletionWithRetry's call object): a retry of it reuses its pending broker job; undefined = no reuse.
-  scope?: object,
+  // The logical call (chatCompletionWithRetry's call object): a retry of it reuses its pending broker job, and its broker queue time is
+  // recorded on it; undefined = no reuse and no queue-time exclusion (chatCompletionJSON).
+  scope?: { brokerQueuedMs?: number },
 ): Promise<Response> {
   if (conn.broker) {
     return brokerExchange(
       conn.broker,
       { body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
-      { clock, scope },
+      // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
+      { scope, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms) },
     );
   }
   return fetchWithRetry429(conn.url, { method: "POST", headers: conn.headers, body: JSON.stringify(body) }, conn.timeout, startTime, rl429, clock);
@@ -529,7 +532,7 @@ export async function chatCompletionSimple(
   clock?: RetryClock,
   // Call-local state of chatCompletionWithRetry: receives `refusedRetryAt` when
   // a Retry-After beyond the window ended this call's retrying (never the clock).
-  call?: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null },
+  call?: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null; brokerQueuedMs?: number },
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once at top of this LLM call. resolveConnection() also
   // snapshots internally to make the URL+model+timeout tuple coherent; here
@@ -1414,11 +1417,13 @@ export async function chatCompletionWithRetry(
   // private clock owns its window (the next model gets a fresh one), so only
   // a call under a caller-supplied clock can throw dispatchClosed true.
   const shared = options.retryClock !== undefined;
-  const clock: RetryClock = options.retryClock ?? { deadlineAt: options.deadlineAt };
   let lastErr: unknown;
   // Call-local: set when a Retry-After beyond the window ended THIS call's
   // retrying. Not on the shared clock, so other models of the dispatch go on.
-  const call: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null } = {};
+  // brokerQueuedMs (TRDD-1OOAH3LD, review M10): this call's time queued in the
+  // local broker, excluded from ITS deadline only, through clockForCall.
+  const call: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null; brokerQueuedMs?: number } = {};
+  const clock: RetryClock = clockForCall(options.retryClock ?? { deadlineAt: options.deadlineAt }, call);
   const stopped = (): boolean => retryWindowClosed(clock) || call.refusedRetryAt !== undefined;
 
   // Call-local snapshot of the clock status/provider, refreshed in the catch

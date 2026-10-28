@@ -13,6 +13,7 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isLlamaServerArgv0, ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { isBrokerProcess } from "./protocol.js";
 
 export type ServerRole = "main" | "cal";
 
@@ -122,7 +123,8 @@ export async function claimAndSpawn(o: ClaimOptions): Promise<RegistryEntry> {
     const kept: RegistryEntry[] = [];
     for (const e of readRegistry(o.dir, o.engine)) {
       if (!(await entryLive(e))) continue;
-      if (e.role === "main" && pidState(e.ownerPid) !== "alive") {
+      // Review M9: the owner must still BE a broker (argv carries __broker), not just a live pid: a reused pid made the orphan look owned.
+      if (e.role === "main" && !(await isBrokerProcess(e.ownerPid))) {
         const how = await stopProcessGroup(e.pgid);
         o.log?.(`stopped orphaned main llama-server pid ${e.pid} (pgid ${e.pgid}, owner ${e.ownerPid} gone): ${how}`);
         continue;

@@ -165,6 +165,26 @@ export function startRetryClock(clock: RetryClock | undefined): void {
   clock.deadlineAt ??= clock.startedAt + RETRY_DEADLINE_MS;
 }
 
+
+/**
+ * A per-call view of a (possibly dispatch-wide shared) retry clock whose
+ * deadline is pushed back by THIS call's broker queue time only (review M10,
+ * TRDD-1OOAH3LD spec 4). The queue time must never be added to the shared
+ * object: with W = 64 slots each adding its own wait, the shared deadline
+ * grew by the SUM of all waits and the 5-minute window of TRDD-YG72CYY7 was
+ * silently switched off for every model of the dispatch. Every other field
+ * (and every write, including the first-failure deadline) goes to the shared
+ * clock unchanged.
+ */
+export function clockForCall(shared: RetryClock, call: { brokerQueuedMs?: number }): RetryClock {
+  return new Proxy(shared, {
+    get(target, prop, receiver) {
+      if (prop === "deadlineAt") return target.deadlineAt === undefined ? undefined : target.deadlineAt + (call.brokerQueuedMs ?? 0);
+      return Reflect.get(target, prop, receiver) as unknown;
+    },
+  });
+}
+
 /** True when the clock has a deadline and it has passed or a wait was refused. */
 export function retryWindowClosed(clock: RetryClock): boolean {
   return (

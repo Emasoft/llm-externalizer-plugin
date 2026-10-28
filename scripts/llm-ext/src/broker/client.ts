@@ -12,7 +12,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { spawnDetachedChild } from "../bench-spawn.js";
 import { fileURLToPath } from "node:url";
-import { attachFailure, type RetryClock } from "../provider/http.js";
+import { attachFailure } from "../provider/http.js";
 import { ManagedServerError, pidState, withAsyncLock } from "../local-llama-server.js";
 import {
   BROKER_ARGV,
@@ -26,6 +26,7 @@ import {
   brokerLogPath,
   brokerSpawnLockPath,
   readBrokerState,
+  isBrokerProcess,
   type BrokerEngine,
   type BrokerState,
   type JobReply,
@@ -35,6 +36,9 @@ import {
 const START_WAIT_MS = 15_000;
 /** The wait a client asks for on every poll; the broker caps it at its own pollWaitMs (spec 4: 60 s). */
 const POLL_WAIT_S = 60;
+/** Health checks of a live broker before giving up (each up to 3 s, HEALTH_RETRY_MS apart): about 15 s on a loaded machine. */
+const HEALTH_TRIES = 4;
+const HEALTH_RETRY_MS = 1000;
 
 /** One id per command process: the unit of the broker's round-robin (spec 3). */
 export const COMMAND_ID = `${process.pid}-${randomUUID().slice(0, 8)}`;
@@ -99,6 +103,25 @@ export class BrokerUnavailableError extends ManagedServerError {
   }
 }
 
+
+/**
+ * The walker's endpoint verdict for a failed chain entry (spec 5):
+ * "endpoint-model" = the broker reported a failure for ONE model, so only
+ * (URL, model) is dead; "endpoint" = the endpoint itself failed (a connection
+ * error, or any ManagedServerError: the broker could not be started or
+ * reached, or its spawn lock timed out, and as a "model" failure every next
+ * model would wait out the same lock again); null = neither.
+ * Review M11: BrokerJobError is tested FIRST, because its text quotes the
+ * server's network error ("read ECONNRESET" when one model's server crashed)
+ * and the regex would mark the whole broker URL dead, skipping every other
+ * local model.
+ */
+export function endpointFailureKind(err: unknown, msg: string): "endpoint" | "endpoint-model" | null {
+  if (err instanceof BrokerJobError) return "endpoint-model";
+  if (/ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|fetch failed/i.test(msg) || err instanceof ManagedServerError) return "endpoint";
+  return null;
+}
+
 function endpointOf(s: BrokerState): BrokerEndpoint {
   return { url: `http://127.0.0.1:${s.port}`, token: s.token, pid: s.pid };
 }
@@ -145,8 +168,22 @@ export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoi
   const usable = async (): Promise<BrokerEndpoint | null> => {
     const s = readBrokerState(o.dir, o.engine);
     if (!s || pidState(s.pid) !== "alive") return null;
-    const h = await health(s);
-    if (!h || h.draining) return null;
+    // A live pid that is not a broker (reused after the broker died): the state is stale, a new broker may start.
+    if (!(await isBrokerProcess(s.pid))) return null;
+    // Review M9: a LIVE broker whose health check fails is never answered with a
+    // second spawn (spec 1: one broker per engine): retry a bounded number of
+    // times, then fail fast with BrokerUnavailableError.
+    let h: Awaited<ReturnType<typeof health>> = null;
+    for (let i = 0; i < HEALTH_TRIES && h === null; i++) {
+      if (i > 0) await new Promise((r) => setTimeout(r, HEALTH_RETRY_MS));
+      h = await health(s);
+    }
+    if (h === null) {
+      throw new BrokerUnavailableError(
+        `the ${o.engine} broker (pid ${s.pid}) is running but did not answer its health check ${HEALTH_TRIES} times; not starting a second broker. See ${brokerLogPath(o.dir, o.engine)}`,
+      );
+    }
+    if (h.draining) return null;
     if (h.version !== o.version) {
       // Handover: ask the old broker to stop accepting, drain and exit.
       await fetch(`http://127.0.0.1:${s.port}/v1/shutdown`, { method: "POST", headers: { [TOKEN_HEADER]: s.token }, signal: AbortSignal.timeout(3000) }).catch(
@@ -245,7 +282,7 @@ async function cancel(ep: BrokerEndpoint, id: string): Promise<void> {
 export async function brokerExchange(
   ep: BrokerEndpoint,
   req: BrokerJobRequest,
-  opts: { clock?: RetryClock; signal?: AbortSignal; onDispatched?: (at: number) => void; scope?: object } = {},
+  opts: { signal?: AbortSignal; onDispatched?: (at: number) => void; onQueued?: (ms: number) => void; scope?: object } = {},
 ): Promise<Response> {
   const reuseKey = createHash("sha256").update(`${ep.url}\u0000${req.model}\u0000${req.ctx}\u0000${req.body}`).digest("hex");
   // Reuse is scoped to ONE logical call (its retries): two concurrent calls with an identical body (two identical files, a benchmark repeating a prompt) must each get their own sampled result. No scope = no reuse.
@@ -299,8 +336,8 @@ export async function brokerExchange(
       pending.delete(reuseKey);
       active.delete(id);
       id = undefined;
-      const clock = opts.clock;
-      if (clock?.deadlineAt !== undefined) clock.deadlineAt += (reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt;
+      // Queue time (dispatch - submit, broker clock) goes to the caller's CALL, never to a shared clock (review M10).
+      opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt);
       if (reply.state === "done") {
         return new Response(reply.body ?? "", { status: reply.status ?? 502, headers: { "content-type": reply.contentType ?? "application/json" } });
       }

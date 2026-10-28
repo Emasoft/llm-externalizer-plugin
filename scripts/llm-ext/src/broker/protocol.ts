@@ -7,6 +7,7 @@
 
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readCommandLine } from "../local-llama-server.js";
 
 /** The one engine this increment brokers; Locals follows in its own increment. */
 export type BrokerEngine = "llama";
@@ -78,4 +79,16 @@ export function writeBrokerState(dir: string, engine: BrokerEngine, state: Broke
 /** Remove the state file only while it still names `pid`: after a version handover it names the NEW broker, which the old one must not erase. */
 export function removeBrokerStateIfOwn(dir: string, engine: BrokerEngine, pid: number): void {
   if (readBrokerState(dir, engine)?.pid === pid) rmSync(brokerStatePath(dir, engine), { force: true });
+}
+
+
+/**
+ * Is `pid` a broker process (its live argv carries BROKER_ARGV)? Review M9: a
+ * bare kill(pid, 0) cannot tell a dead broker whose pid was reused from a live
+ * one, so a reused owner pid made an orphaned main look owned (every job waited
+ * for ever) and a reused state-file pid looked like a running broker.
+ */
+export async function isBrokerProcess(pid: number): Promise<boolean> {
+  const argv = await readCommandLine(pid);
+  return argv !== null && argv.includes(BROKER_ARGV);
 }

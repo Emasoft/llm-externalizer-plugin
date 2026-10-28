@@ -127,6 +127,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let lastServerStopAt = 0;
   let stopping: Promise<void> | null = null;
   let busyLogged = false;
+  let busyTries = 0;
+  /** The spawn of a server that is not `server` yet (claimAndSpawn to ready): shutdown stops it too (review M5). */
+  let loading: Promise<RegistryEntry> | null = null;
   const token = randomBytes(24).toString("hex");
   mkdirSync(o.dir, { recursive: true });
 
@@ -173,6 +176,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const swapTo = async (key: string): Promise<void> => {
     swapping = true;
     let spawned: RegistryEntry | null = null;
+    let repump = true;
     try {
       if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
       const first = sched.allQueued(key)[0];
@@ -184,7 +188,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const logFile = roleLogFile(o.dir, "main");
       let exited = false;
       const loadStartedAt = Date.now();
-      const entry = await claimAndSpawn({
+      const loadingNow = claimAndSpawn({
         dir: o.dir,
         engine: o.engine,
         role: "main",
@@ -200,8 +204,14 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model: first.model, ctx: first.ctx };
         },
       });
+      loading = loadingNow;
+      const entry = await loadingNow;
       spawned = entry;
+      if (exiting) throw new ManagedServerError("broker exiting");
+      // How often the slot was retried while busy: the 1 s tick paces it (review M3; tests bound it by the wait time).
+      if (busyLogged) o.log(`main slot free after ${busyTries} busy attempts`);
       busyLogged = false;
+      busyTries = 0;
       await waitReady(target, entry.pid, () => exited, logFile);
       server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, slots: await totalSlots(port) };
       // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
@@ -215,6 +225,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (err instanceof SlotBusyError && err.holder.ownerPid !== process.pid) {
         if (!busyLogged) o.log(`waiting for the main slot: ${err.message}`);
         busyLogged = true;
+        busyTries++;
+        repump = false;
         return;
       }
       if (spawned !== null) {
@@ -226,7 +238,11 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (sched.current === key) sched.current = null;
     } finally {
       swapping = false;
-      setImmediate(pump);
+      // Review M3: never re-pump straight after a busy slot. That retried at
+      // once, and every retry ran a full `ps` sweep: a busy loop for the whole
+      // handover drain. The 1 s tick retries instead.
+      if (repump) setImmediate(pump);
+      loading = null;
     }
   };
 
@@ -285,6 +301,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     for (const j of sched.allQueued()) finish(j, "failed", `broker exiting: ${why}`);
     if (stopping) await stopping.catch(() => undefined);
     await stopServer(`broker exit: ${why}`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+    // Review M5: a server spawned but not yet ready (swapTo inside waitReady)
+    // is not `server` yet; without this it outlived the broker as an orphan.
+    const l = loading;
+    if (l) {
+      const e = await l.catch(() => null);
+      if (e) await stopOwnServer(o.dir, o.engine, e, o.log).catch((err: Error) => o.log(`stop failed: ${err.message}`));
+    }
     removeBrokerStateIfOwn(o.dir, o.engine, process.pid);
     http.close();
     http.closeAllConnections();
@@ -481,7 +504,18 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const onSignal = (sig: string): void => void shutdown(`signal ${sig}`);
   process.once("SIGTERM", onSignal);
   process.once("SIGINT", onSignal);
+  // Review M5: a crash of the broker itself must not orphan the llama-server it
+  // started (the server runs in its own process group and outlives us).
+  let crashed: unknown = null;
+  const onCrash = (err: unknown): void => {
+    crashed = err;
+    void shutdown("crash");
+  };
+  process.once("uncaughtException", onCrash);
+  process.once("unhandledRejection", onCrash);
   await new Promise<void>((resolve) => http.once("close", () => resolve()));
+  // runBrokerMain logs it and exits 1, after shutdown stopped the server.
+  if (crashed !== null) throw crashed;
 }
 
 

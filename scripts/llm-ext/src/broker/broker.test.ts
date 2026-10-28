@@ -21,9 +21,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { readBrokerState, TOKEN_HEADER } from "./protocol.js";
+import { readBrokerState, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { BrokerJobError, BrokerUnavailableError, endpointFailureKind } from "./client.js";
+import { clockForCall, retryWindowClosed, startRetryClock, type RetryClock } from "../provider/http.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LLAMA_CACHE = "/tmp/llm-ext-llama-cache";
@@ -673,5 +675,130 @@ describe("a dead server never hangs its model's jobs (review C2)", () => {
     expect(r.results.filter((x) => x.status === 200).length).toBeGreaterThan(0);
     expect(r.results.every((x) => x.status === 200 || /BrokerJobError|llama-server request failed/.test(x.error ?? ""))).toBe(true);
     expect(spawnLines(dir)).toHaveLength(2);
+  }, 300_000);
+});
+
+describe("retry clock and walker classification (review M10, M11)", () => {
+  it("M10: a call's broker queue time extends ITS deadline only; the shared clock is never changed", () => {
+    const shared: RetryClock = {};
+    const a = { brokerQueuedMs: 0 };
+    const b = { brokerQueuedMs: 0 };
+    const va = clockForCall(shared, a);
+    const vb = clockForCall(shared, b);
+    startRetryClock(va);
+    const base = shared.deadlineAt!;
+    expect(base).toBeGreaterThan(Date.now());
+    // 64 slots each queued for 10 minutes: the shared deadline used to grow by the SUM.
+    a.brokerQueuedMs = 600_000;
+    b.brokerQueuedMs = 600_000;
+    expect(shared.deadlineAt).toBe(base);
+    expect(va.deadlineAt).toBe(base + 600_000);
+    expect(vb.deadlineAt).toBe(base + 600_000);
+    // Past the shared deadline: a call with no queue time is closed, the queued call is not.
+    shared.deadlineAt = Date.now() - 1;
+    expect(retryWindowClosed(clockForCall(shared, {}))).toBe(true);
+    expect(retryWindowClosed(va)).toBe(false);
+    // Writes go to the shared clock (one expiry flag for the dispatch, unchanged semantics).
+    va.expired = true;
+    expect(shared.expired).toBe(true);
+    expect(retryWindowClosed(va)).toBe(true);
+  });
+
+  it("M11: a BrokerJobError quoting a network error marks only (URL, model) dead; other failures keep their kind", () => {
+    expect(endpointFailureKind(new BrokerJobError("llama-server request failed: read ECONNRESET"), "read ECONNRESET")).toBe("endpoint-model");
+    expect(endpointFailureKind(new BrokerUnavailableError("broker not reachable"), "broker not reachable")).toBe("endpoint");
+    expect(endpointFailureKind(new ManagedServerError("spawn lock timeout"), "spawn lock timeout")).toBe("endpoint");
+    expect(endpointFailureKind(new Error("fetch failed"), "fetch failed")).toBe("endpoint");
+    expect(endpointFailureKind(new Error("HTTP 400 bad request"), "HTTP 400 bad request")).toBeNull();
+  });
+});
+
+describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
+  const waitGone = async (pid: number, ms: number): Promise<void> => {
+    for (let i = 0; i < ms / 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
+  };
+
+  it("M9: a state file naming a live process that is not a broker is stale: a new broker starts and serves", async () => {
+    const dir = newDir();
+    const foreign = foreignProcess();
+    try {
+      writeBrokerState(dir, "llama", { pid: foreign, port: 1, token: "x", version: "t1", startedAt: new Date().toISOString() });
+      const r = await runClient(dir, jobsOf(A, 1));
+      expect(r.results[0].status).toBe(200);
+      expect(r.pid).not.toBe(foreign);
+      expect(alive(foreign)).toBe(true);
+    } finally {
+      killQuietly(foreign);
+    }
+  }, 300_000);
+
+  it("M9: a live broker that fails its health check gives BrokerUnavailableError after bounded retries, never a second broker", async () => {
+    const dir = newDir();
+    const first = await runClient(dir, jobsOf(A, 1));
+    process.kill(first.pid, "SIGSTOP");
+    try {
+      const t0 = Date.now();
+      await expect(runClient(dir, jobsOf(A, 1))).rejects.toThrow(/did not answer its health check 4 times; not starting a second broker/);
+      expect(Date.now() - t0).toBeLessThan(60_000);
+      expect(readBrokerState(dir, "llama")?.pid).toBe(first.pid);
+      const listening = readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n").filter((l) => l.includes(" listening on "));
+      expect(listening).toHaveLength(1);
+    } finally {
+      process.kill(first.pid, "SIGCONT");
+    }
+  }, 300_000);
+
+  it("M3: while the old broker drains, the new one retries the busy main slot about once per second, not in a loop", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1), {}, "t1");
+    // A long batch keeps the old broker (and its main slot) busy through the handover.
+    const old = runClient(dir, jobsOf(A, 40, { maxTokens: 120 }), {}, "t1");
+    await new Promise((r) => setTimeout(r, 1500));
+    const next = await runClient(dir, jobsOf(B, 1), {}, "t2");
+    await old;
+    expect(next.results[0].status).toBe(200);
+    const lines = readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n");
+    const waitLine = lines.find((l) => l.includes("waiting for the main slot"));
+    const freeLine = lines.find((l) => /main slot free after \d+ busy attempts/.test(l));
+    expect(waitLine, "the handover never waited for the slot: the test did not exercise M3").toBeDefined();
+    expect(freeLine).toBeDefined();
+    const waitedS = (Date.parse(freeLine!.split(" ")[0]) - Date.parse(waitLine!.split(" ")[0])) / 1000;
+    const tries = Number(/after (\d+) busy attempts/.exec(freeLine!)![1]);
+    expect(tries).toBeLessThanOrEqual(Math.ceil(waitedS) + 2);
+  }, 300_000);
+
+  it("M4: requests arriving around an idle server stop are all served, by at most one main server", async () => {
+    const dir = newDir();
+    const env = { LLM_EXT_BROKER_IDLE_SERVER_MS: "1500", LLM_EXT_BROKER_IDLE_EXIT_MS: "120000" };
+    await runClient(dir, jobsOf(A, 1), env);
+    const w = watchMains(dir);
+    // Separate client processes started across the idle-stop moment.
+    const late = [1200, 1500, 1800, 2100, 2400].map((ms) => new Promise<ClientResult>((res, rej) => setTimeout(() => runClient(dir, jobsOf(A, 1), env).then(res, rej), ms)));
+    const rs = await Promise.all(late);
+    expect(w.stop()).toBeLessThanOrEqual(1);
+    expect(rs.flatMap((r) => r.results).filter((x) => x.status !== 200)).toEqual([]);
+    expect(readFileSync(join(dir, "broker-llama.log"), "utf8")).not.toMatch(/failed to start/);
+  }, 300_000);
+
+  it("M5: SIGTERM to the broker while its server is still loading leaves no llama-server behind", async () => {
+    const dir = newDir();
+    const client = runClient(dir, jobsOf(A, 1)).catch((e: Error) => e);
+    let line: string | undefined;
+    for (let i = 0; i < 600 && !line; i++) {
+      line = spawnLines(dir)[0];
+      if (!line) await new Promise((r) => setTimeout(r, 20));
+    }
+    const pid = Number(/pid (\d+)/.exec(line!)![1]);
+    // Freeze the server so it can never become ready: the broker is held inside waitReady.
+    process.kill(pid, "SIGSTOP");
+    await new Promise((r) => setTimeout(r, 500));
+    const log = (): string => readFileSync(join(dir, "broker-llama.log"), "utf8");
+    expect(log()).not.toMatch(new RegExp(`ready: pid ${pid} `));
+    const broker = readBrokerState(dir, "llama")!.pid;
+    process.kill(broker, "SIGTERM");
+    await waitGone(broker, 30_000);
+    expect(alive(broker)).toBe(false);
+    await client;
+    expect((await processSnapshot()).filter((p) => p.pgid === pid)).toEqual([]);
   }, 300_000);
 });
