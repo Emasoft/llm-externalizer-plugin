@@ -240,6 +240,7 @@ Local presets require `mode: local`; `openrouter-remote` and `chat-b-ai-remote` 
 | `timeout` | no | request timeout (seconds) |
 | `context_window` | no | override; `0` = auto-detect |
 | `tool_models` | no | per-tool model routing map, e.g. `{ security_scan: "qwen/qwen-2.5-7b-instruct" }` |
+| `request_options` | no | local llama.cpp profiles only (`openai_api` protocol, not LM Studio native): a `default` block plus one block per tool name. Fields: `thinking` (`true`/`false`/`"on"`/`"off"`), `max_output_tokens` (required in `default`), `temperature`, `top_k`, `repeat_penalty`. `max_output_tokens` is a ceiling on every request (a tool's own smaller cap is kept) and a stop instruction is added to the first system message; a reply cut off by the length limit is an `OUTPUT LIMIT:` error, never a half answer. Absent = requests are unchanged. A tool name outside the blocks gets `default` |
 | `high_quality_model` | no | config for the `high_quality_scan` tool — one strong model instead of the cheap ensemble (paid + OpenRouter-only). Sub-keys: `id` (default `z-ai/glm-5.2`), `reasoning_effort` (`off`/`low`/`medium`/`high`/`xhigh`/`max`; default `max` = `xhigh`), `cache` (default `true`), `min_quantization` (default `fp8`, expanded to fp8-or-higher), `provider` (slug, default `gmicloud/fp8`), `allow_fallbacks` (default `false`) |
 
 The `high_quality_model` block (read only by the `high_quality_scan` tool) sits inside any

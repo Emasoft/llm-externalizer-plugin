@@ -1303,6 +1303,23 @@ gates never bump a tool to a *pricier* model than its incumbent.
 > The other tools are gated by **requirements only** until their golden dataset
 > lands — `--assess-model` shows, per tool, whether a benchmark gate also applies.
 
+#### Request options for a local llama.cpp profile
+
+A local profile may set `request_options:` — a `default` block plus one block per tool name
+(same names as `tool_models`). Fields: `thinking` (`true`, `false`, `"on"` or `"off"`; sends
+`chat_template_kwargs.enable_thinking` only when set), `max_output_tokens` (required in `default`;
+a ceiling: a tool that asks for fewer tokens keeps its smaller cap), `temperature`, `top_k`,
+`repeat_penalty`. The profile's values win over the static per-model table. A stop instruction
+is appended to the first system message, and a reply cut off by the length limit (partial or
+empty) fails with an `OUTPUT LIMIT:` error naming the key to raise. Profiles without the key are
+unchanged; the key is refused on free/paid profiles. Applies to the OpenAI-compatible protocol
+(llama-server), not to LM Studio's native API.
+
+```yaml
+request_options:
+  default: { thinking: off, max_output_tokens: 1024, temperature: 0.1, top_k: 50, repeat_penalty: 1.1 }
+  code_task: { thinking: on, max_output_tokens: 4096 }
+```
 ### Backend presets
 
 | Preset | Protocol | Default URL | Auth env var |

@@ -195,6 +195,22 @@ export interface ProfileReservedSlot {
 // WHY defined here: Profile.endpoint needs it and config.ts must not import from classifiers/ (cycle); l0/transport.ts re-exports it.
 export type DecisionsEndpoint = "decisions" | "systemone";
 
+/**
+ * One block of request options (TRDD-1OOAH3LD increment 1). YAML 1.2 loads an
+ * unquoted `on`/`off` as a STRING, so `thinking` accepts true|false|"on"|"off".
+ * Defined here, not in provider/, because config.ts must not import provider/*
+ * (cycle rule).
+ */
+export interface RequestOptionBlock {
+  thinking?: boolean | "on" | "off";
+  max_output_tokens?: number;
+  temperature?: number;
+  top_k?: number;
+  repeat_penalty?: number;
+}
+
+/** `default` block plus one block per tool name. */
+export type RequestOptionsConfig = { default?: RequestOptionBlock } & Record<string, RequestOptionBlock>;
 export interface Profile {
   /**
    * One of PROFILE_TYPES. Typed `string` on purpose: an untrusted YAML value
@@ -303,6 +319,12 @@ export interface Profile {
   timeout?: number;
   /** Context window override (0 = auto-detect) */
   context_window?: number;
+  /**
+   * TRDD-1OOAH3LD increment 1: per-tool request options (sampling, thinking,
+   * output cap) for a local llama.cpp profile. `default` plus one block per
+   * tool. Absent = the request path is unchanged. Local profiles only.
+   */
+  request_options?: RequestOptionsConfig;
   /** App name for OpenRouter dashboard */
   app_name?: string;
   /** HTTP Referer for OpenRouter analytics */
@@ -424,6 +446,8 @@ export interface ResolvedProfile {
   toolModels: Record<string, string>;
   timeout: number;
   contextWindow: number;
+  /** TRDD-1OOAH3LD: the profile request_options block, null when the profile sets none. */
+  requestOptions: RequestOptionsConfig | null;
   appName: string;
   httpReferer: string;
   /** Resolved high-quality-scan model config (TRDD-DBUSM55E; defaults filled). */
@@ -1130,7 +1154,8 @@ export const DYNAMIC_USER_OWNED_KEYS: Readonly<Record<MarkedProfileName, readonl
   // the migrated type on the next regeneration. User-owned keys are preserved.
   free: ["selection", "high_quality_model", "providers", "ensemble", "profile-type"],
   paid: ["selection", "high_quality_model", "providers", "ensemble", "profile-type"],
-  local: ["selection", "high_quality_model", "providers", "ensemble", "profile-type"],
+  // TRDD-1OOAH3LD: request_options is user-written; without this the dynamic-section regeneration would delete it from the built-in `local` profile.
+  local: ["selection", "high_quality_model", "providers", "ensemble", "profile-type", "request_options"],
   scouting: ["profile-type"],
   "or-jev": ["profile-type"],
 };
@@ -1183,7 +1208,8 @@ export const PROFILE_TYPE_FIELDS: Readonly<Record<ProfileType, ProfileTypeFields
   local: {
     template: "local",
     own: ["api_token", "detected_providers"],
-    shared: ["profile-type", "mode", "api", "url", "model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer"],
+    // TRDD-1OOAH3LD: request_options is local-only (never on free/paid/scouting); without being listed here the strict unknown-field check rejects it.
+    shared: ["profile-type", "mode", "api", "url", "model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer", "request_options"],
     spend: "never-bills",
   },
   free: {
@@ -2929,6 +2955,74 @@ export function validateProfile(
     }
   }
 
+  // ── request_options (TRDD-1OOAH3LD increment 1) ───────────────────
+  // Untrusted YAML. Local profiles only (PROFILE_TYPE_FIELDS rejects the key
+  // elsewhere). Unknown tool names and unknown fields are refused so a typo
+  // cannot silently never apply (same rationale as tool_models above). A
+  // `default.max_output_tokens` is REQUIRED: max_tokens is always explicit on
+  // this path, and every tool block falls back to the default block.
+  const rawRequestOptions: unknown = profile.request_options;
+  // O6: a key written with no value (null, e.g. lost indentation) must not silently switch the feature off.
+  if (rawRequestOptions === null || (typeof rawRequestOptions === "object" && !Array.isArray(rawRequestOptions) && Object.keys(rawRequestOptions).length === 0)) {
+    errors.push(`Profile '${name}': request_options is empty; remove the key or add a default block`);
+  } else if (rawRequestOptions !== undefined) {
+    // O1: request_options are only sent on the OpenAI-compatible llama-server path; the LM Studio native API never receives them, so refuse instead of ignoring.
+    if (profile.api !== undefined && API_PRESETS[profile.api]?.protocol === "lmstudio_api") {
+      errors.push(`Profile '${name}': request_options is not supported on api '${profile.api}' (LM Studio native protocol); use a llama.cpp (openai_api) preset`);
+    }
+    if (typeof rawRequestOptions !== "object" || Array.isArray(rawRequestOptions)) {
+      errors.push(`Profile '${name}': request_options must be a map of {default|tool: block}`);
+    } else {
+      const knownTools = new Set(registeredTools());
+      const fieldNames = ["thinking", "max_output_tokens", "temperature", "top_k", "repeat_penalty"];
+      const opts = rawRequestOptions as Record<string, unknown>;
+      for (const [blockName, rawBlock] of Object.entries(opts)) {
+        const where = `Profile '${name}': request_options['${blockName}']`;
+        if (blockName !== "default" && !knownTools.has(blockName)) {
+          errors.push(
+            `Profile '${name}': request_options has unknown tool '${blockName}'. ` +
+              `Use 'default' or one of: ${registeredTools().join(", ")}`,
+          );
+        }
+        if (typeof rawBlock !== "object" || rawBlock === null || Array.isArray(rawBlock)) {
+          errors.push(`${where} must be a map of option fields`);
+          continue;
+        }
+        const block = rawBlock as Record<string, unknown>;
+        for (const key of Object.keys(block)) {
+          if (!fieldNames.includes(key)) {
+            errors.push(`${where} has unknown field '${key}'. Known fields: ${fieldNames.join(", ")}`);
+          }
+        }
+        const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+        if (block.thinking !== undefined && block.thinking !== true && block.thinking !== false && block.thinking !== "on" && block.thinking !== "off") {
+          errors.push(`${where}.thinking must be true, false, "on" or "off"`);
+        }
+        if (block.max_output_tokens !== undefined) {
+          const v = block.max_output_tokens;
+          if (!isNum(v) || !Number.isInteger(v) || v < 1 || v > 10_000_000) {
+            errors.push(`${where}.max_output_tokens must be an integer between 1 and 10,000,000`);
+          } else if (typeof profile.context_window === "number" && profile.context_window > 0 && v >= profile.context_window) {
+            errors.push(`${where}.max_output_tokens (${v}) must be smaller than context_window (${profile.context_window})`);
+          }
+        }
+        if (block.temperature !== undefined && (!isNum(block.temperature) || block.temperature < 0 || block.temperature > 2)) {
+          errors.push(`${where}.temperature must be a number between 0 and 2`);
+        }
+        if (block.top_k !== undefined && (!isNum(block.top_k) || !Number.isInteger(block.top_k) || block.top_k < 0 || block.top_k > 1000)) {
+          errors.push(`${where}.top_k must be an integer between 0 and 1000`);
+        }
+        if (block.repeat_penalty !== undefined && (!isNum(block.repeat_penalty) || block.repeat_penalty <= 0 || block.repeat_penalty > 10)) {
+          errors.push(`${where}.repeat_penalty must be a number above 0 and at most 10`);
+        }
+      }
+      const def = opts.default;
+      const defTokens = typeof def === "object" && def !== null ? (def as Record<string, unknown>).max_output_tokens : undefined;
+      if (defTokens === undefined) {
+        errors.push(`Profile '${name}': request_options.default.max_output_tokens is required (max_tokens is always explicit)`);
+      }
+    }
+  }
   // ── ensemble (E-D2, E-E1..E-E6 — D5, TRDD-90DM5YHO) ───────────────
   // `ensemble_pins` was REMOVED in 14.1.0: it never had a runtime reader, so
   // it never did anything. E-D2 refuses it on ANY profile (static ones are
@@ -3232,6 +3326,17 @@ export function validateSettings(settings: Settings): ValidationResult {
 function coerceToolModels(raw: unknown): Record<string, string> {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return {};
   return { ...(raw as Record<string, string>) };
+}
+
+/**
+ * Coerce an untrusted `request_options` value (TRDD-1OOAH3LD) into the map the
+ * request path reads. null / undefined / arrays / scalars -> null ("no request
+ * options"); never throws, because resolveProfile runs on best-effort paths that
+ * do NOT pre-validate. validateProfile is what reports a malformed value.
+ */
+function coerceRequestOptions(raw: unknown): RequestOptionsConfig | null {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return null;
+  return { ...(raw as RequestOptionsConfig) };
 }
 
 /**
@@ -3766,6 +3871,7 @@ export function resolveProfile(
     toolModels: blanksToolModelsUnderFreeOnly(freeOnly, dynamic) ? {} : coerceToolModels(profile.tool_models),
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
+    requestOptions: coerceRequestOptions(profile.request_options),
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
     // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),

@@ -74,6 +74,7 @@ function depsFor(url: string): CompletionDeps {
     getEnsemblePriceCeilingUsd: () => 1.3,
     defaultTemperature: 0.7,
     getDefaultMaxTokens: () => 256,
+    getRequestOptions: () => null,
   };
 }
 

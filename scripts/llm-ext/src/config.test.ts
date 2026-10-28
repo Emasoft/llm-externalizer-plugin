@@ -66,6 +66,7 @@ function mkResolved(overrides: Partial<ResolvedProfile> = {}): ResolvedProfile {
     toolModels: {},
     timeout: 600,
     contextWindow: 0,
+    requestOptions: null,
     appName: "",
     httpReferer: "",
     highQualityModel: HIGH_QUALITY_MODEL_DEFAULTS,
@@ -2350,6 +2351,7 @@ describe("D0 fix-up 2: reservedDynamicProfileNameError names only keys validateP
     high_quality_model: "vendor/high-quality-model",
     providers: [],
     ensemble: {},
+    request_options: { default: { max_output_tokens: 512 } },
   };
 
   for (const name of DYNAMIC_PROFILE_NAMES) {

@@ -151,6 +151,8 @@ export async function resolveConnection(
       model,
       isNative: false,
       timeout,
+      // TRDD-1OOAH3LD O7: request_options belong to the primary local server only.
+      routed: true,
     };
   }
 

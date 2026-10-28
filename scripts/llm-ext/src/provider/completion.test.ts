@@ -18,6 +18,7 @@ import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
 import {
   chatCompletionWithRetry,
+  chatCompletionJSON,
   resetServiceHealthForTests,
   serviceFailureCountForTests,
   type SimpleCompletionOptions,
@@ -34,8 +35,9 @@ import {
 } from "../free-rotation.js";
 import { getModelEventsPath } from "../model-events.js";
 import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
-import { withUsageContext } from "../usage-history.js";
+import { calibratedOutputTokens, withUsageContext } from "../usage-history.js";
 import { RetryDeadlineError } from "./http.js";
+import { OutputLimitError, OUTPUT_LIMIT_PREFIX, resetNoToolContextWarningForTests, type ResolvedRequestOptions } from "./request-options.js";
 
 let server: Server | undefined;
 
@@ -116,6 +118,7 @@ function baseDeps(backend: BackendConfig, route: ResolvedRoute | null): Completi
     getEnsemblePriceCeilingUsd: () => 1.3,
     defaultTemperature: 0.7,
     getDefaultMaxTokens: () => 256,
+    getRequestOptions: () => null,
   };
 }
 
@@ -879,4 +882,257 @@ describe("payment errors — skip when certain, retry once when not, never a bre
       stderr.restore();
     }
   }, 30_000);
+});
+
+// ── request_options (TRDD-1OOAH3LD increment 1) ───────────────────────
+// REAL node:http server, REAL chatCompletionWithRetry; the server records every
+// POST body so the wire payload is asserted whole, not field by field.
+describe("request_options — wire body and length handling (TRDD-1OOAH3LD)", () => {
+  type Reply = { content: string; finish_reason: string; completion_tokens?: number };
+  async function startRecordingServer(reply: Reply, opts?: { llamacpp?: boolean }) {
+    const bodies: Array<Record<string, unknown>> = [];
+    const paths: string[] = [];
+    server = createServer((req, res) => {
+      paths.push(`${req.method} ${req.url}`);
+      if (req.method === "GET") {
+        // llamacpp: a real llama-server answers /props with model_path, which makes detectEndpointFlavor pick the native path.
+        if (opts?.llamacpp && req.url === "/props") {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ model_path: "/models/local-m.gguf" }));
+          return;
+        }
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+      const chunks: Buffer[] = [];
+      req.on("data", (c) => chunks.push(c));
+      req.on("end", () => {
+        bodies.push(JSON.parse(Buffer.concat(chunks).toString("utf-8")) as Record<string, unknown>);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        if (req.url === "/api/v1/chat") {
+          // native llama.cpp/LM Studio reply shape, so the no-options control test completes in one POST
+          res.end(JSON.stringify({ model_instance_id: "local-m", output: [{ type: "message", content: reply.content }] }));
+          return;
+        }
+        res.end(
+          JSON.stringify({
+            model: "local-m",
+            choices: [{ message: { content: reply.content }, finish_reason: reply.finish_reason }],
+            usage: { prompt_tokens: 5, completion_tokens: reply.completion_tokens ?? 7, total_tokens: 12 },
+          }),
+        );
+      });
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const addr = server!.address();
+    if (typeof addr !== "object" || addr === null) throw new Error("server address unavailable");
+    return { url: `http://127.0.0.1:${addr.port}`, bodies, paths };
+  }
+  const localBackend = (url: string): BackendConfig => ({
+    type: "local",
+    billable: false,
+    isLocal: true,
+    baseUrl: url,
+    apiKey: "",
+    model: "local-m",
+    __version: 1,
+  });
+  const withTool = <T,>(tool: string, fn: () => Promise<T>): Promise<T> =>
+    withUsageContext({ tool, params: "", project: "/p" }, fn);
+  const RO: ResolvedRequestOptions = { maxOutputTokens: 100, thinking: false, temperature: 0.1, topK: 50, repeatPenalty: 1.1 };
+  const depsWith = (url: string, ro: ResolvedRequestOptions | null): CompletionDeps => ({
+    ...baseDeps(localBackend(url), null),
+    getRequestOptions: () => ro,
+  });
+
+  it("no request_options: the request body is exactly what it was before the feature", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    await chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, null));
+    expect(bodies).toHaveLength(1);
+    // Snapshot of the pre-feature behaviour: only messages, temperature, max_tokens (the dep default),
+    // stream and model; nothing about thinking, top_k, repeat_penalty or a stop sentence.
+    expect(bodies[0]).toEqual({
+      messages: [{ role: "user", content: "hi" }],
+      temperature: 0.7,
+      max_tokens: 256,
+      stream: false,
+      model: "local-m",
+    });
+  });
+
+  it("options set: caller max_tokens larger than the profile cap is lowered to the cap", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m", maxTokens: 5000 }, depsWith(url, RO)));
+    expect(bodies[0]!.max_tokens).toBe(100);
+    expect(bodies[0]!.temperature).toBe(0.1);
+    expect(bodies[0]!.top_k).toBe(50);
+    expect(bodies[0]!.repeat_penalty).toBe(1.1);
+    expect(bodies[0]!.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it("options set: a caller max_tokens smaller than the profile cap is kept (the cap is a ceiling)", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m", maxTokens: 40 }, depsWith(url, RO)));
+    expect(bodies[0]!.max_tokens).toBe(40);
+  });
+
+  it("options set without a caller cap: max_tokens is the profile cap; thinking absent sends no chat_template_kwargs", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, { maxOutputTokens: 100 })));
+    expect(bodies[0]!.max_tokens).toBe(100);
+    expect(bodies[0]).not.toHaveProperty("chat_template_kwargs");
+    expect(bodies[0]).not.toHaveProperty("top_k");
+  });
+
+  it("stop sentence goes into the FIRST system message only; a system message is prepended when none exists; input untouched", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    const withSystem: ChatMessage[] = [
+      { role: "system", content: "SYS" },
+      { role: "user", content: "hi" },
+    ];
+    await withTool("chat", () => chatCompletionWithRetry(withSystem, { model: "local-m" }, depsWith(url, RO)));
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, RO)));
+    const first = bodies[0]!.messages as ChatMessage[];
+    expect(first).toHaveLength(2);
+    expect(first[0]!.role).toBe("system");
+    expect(first[0]!.content.startsWith("SYS")).toBe(true);
+    expect(first[0]!.content).toContain("fit in 100 tokens");
+    expect(first[1]!.content).toBe("hi");
+    expect(withSystem[0]!.content).toBe("SYS");
+    const second = bodies[1]!.messages as ChatMessage[];
+    expect(second.filter((m) => m.role === "system")).toHaveLength(1);
+    expect(second[0]!.role).toBe("system");
+    expect(second[1]).toEqual({ role: "user", content: "hi" });
+  });
+
+  it("finish_reason=length with partial text: OutputLimitError after exactly ONE POST, breaker count unchanged", async () => {
+    const partial = "P".repeat(500);
+    const { url, bodies } = await startRecordingServer({ content: partial, finish_reason: "length", completion_tokens: 100 });
+    const before = serviceFailureCountForTests();
+    let caught: unknown;
+    try {
+      await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, RO)));
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(OutputLimitError);
+    const err = caught as OutputLimitError;
+    expect(err.message.startsWith(OUTPUT_LIMIT_PREFIX)).toBe(true);
+    expect(err.message).toMatch(/request_options\.chat\.max_output_tokens/);
+    expect(err.tool).toBe("chat");
+    expect(err.maxTokens).toBe(100);
+    expect(err.completionTokens).toBe(100);
+    expect(err.partialChars).toBe(500);
+    expect(err.message).toContain("100 completion tokens, 500 chars");
+    expect(bodies).toHaveLength(1);
+    expect(serviceFailureCountForTests()).toBe(before);
+  });
+
+  it("finish_reason=length with EMPTY content: OutputLimitError after exactly ONE POST, breaker count unchanged", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "", finish_reason: "length" });
+    const before = serviceFailureCountForTests();
+    await expect(
+      withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, RO))),
+    ).rejects.toBeInstanceOf(OutputLimitError);
+    expect(bodies).toHaveLength(1);
+    expect(serviceFailureCountForTests()).toBe(before);
+  });
+
+  it("finish_reason=length WITHOUT request_options: today's TRUNCATED marker, no error", async () => {
+    const { url } = await startRecordingServer({ content: "half an answer", finish_reason: "length" });
+    const res = await chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, null));
+    expect(res.truncated).toBe(true);
+    expect(res.content).toContain("half an answer");
+    expect(res.content).toContain("**TRUNCATED**");
+  });
+
+  it("no tool context: the default block is used and the process says so once on stderr", async () => {
+    resetNoToolContextWarningForTests();
+    const { url, bodies } = await startRecordingServer({ content: "ok", finish_reason: "stop" });
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: unknown) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    try {
+      let seenTool: string | undefined = "unset";
+      const deps: CompletionDeps = {
+        ...baseDeps(localBackend(url), null),
+        getRequestOptions: (tool) => {
+          seenTool = tool;
+          return RO;
+        },
+      };
+      await chatCompletionWithRetry(MESSAGES, { model: "local-m" }, deps);
+      await chatCompletionWithRetry(MESSAGES, { model: "local-m" }, deps);
+      expect(seenTool).toBeUndefined();
+      expect(bodies[0]!.max_tokens).toBe(100);
+      const notices = lines.join("").split("\n").filter((l) => l.includes("no tool context found"));
+      expect(notices).toHaveLength(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("JSON path: length on a request_options profile throws OutputLimitError", async () => {
+    const { url } = await startRecordingServer({ content: "{\"a\":", finish_reason: "length" });
+    await expect(
+      withTool("chat", () => chatCompletionJSON(MESSAGES, { model: "local-m" }, depsWith(url, RO))),
+    ).rejects.toBeInstanceOf(OutputLimitError);
+  });
+
+  it("B1: a llama.cpp-flavoured server (GET /props with model_path) still gets the request on /v1/chat/completions WITH the options", async () => {
+    const { url, bodies, paths } = await startRecordingServer({ content: "ok", finish_reason: "stop" }, { llamacpp: true });
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, RO)));
+    expect(paths.filter((p) => p.startsWith("POST "))).toEqual(["POST /v1/chat/completions"]);
+    expect(bodies[0]!.max_tokens).toBe(100);
+    expect(bodies[0]!.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(bodies[0]!.top_k).toBe(50);
+    expect((bodies[0]!.messages as ChatMessage[])[0]!.content).toContain("fit in 100 tokens");
+  });
+
+  it("B1: without request_options the same llama.cpp server still uses the native /api/v1/chat path", async () => {
+    const { url, paths } = await startRecordingServer({ content: "ok", finish_reason: "stop" }, { llamacpp: true });
+    await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m" }, depsWith(url, null)));
+    expect(paths.filter((p) => p.startsWith("POST "))).toEqual(["POST /api/v1/chat"]);
+  });
+
+  it("B1: JSON path on a llama.cpp-flavoured server also goes to /v1/chat/completions with the options", async () => {
+    const { url, bodies, paths } = await startRecordingServer({ content: "{\"a\":1}", finish_reason: "stop" }, { llamacpp: true });
+    await withTool("chat", () => chatCompletionJSON(MESSAGES, { model: "local-m" }, depsWith(url, RO)));
+    expect(paths.filter((p) => p.startsWith("POST "))).toEqual(["POST /v1/chat/completions"]);
+    expect(bodies[0]!.max_tokens).toBe(100);
+    expect(bodies[0]!.chat_template_kwargs).toEqual({ enable_thinking: false });
+  });
+
+  it("O7: a non-primary providers[] route gets no request options and its length reply is not an OutputLimitError", async () => {
+    const { url, bodies } = await startRecordingServer({ content: "half", finish_reason: "length" });
+    const route: ResolvedRoute = {
+      name: "other",
+      api: "llamacpp-local",
+      protocol: "openai_api",
+      url,
+      authToken: "",
+      keyRef: "none",
+      isLocal: true,
+      isFreeProvider: false,
+      models: ["local-m"],
+    };
+    const deps: CompletionDeps = { ...baseDeps(localBackend("http://unused.invalid"), route), getRequestOptions: () => RO };
+    const res = await withTool("chat", () => chatCompletionWithRetry(MESSAGES, { model: "local-m", maxTokens: 5000 }, deps));
+    expect(bodies[0]!.max_tokens).toBe(5000);
+    expect(bodies[0]).not.toHaveProperty("top_k");
+    expect(bodies[0]).not.toHaveProperty("chat_template_kwargs");
+    expect(res.content).toContain("half");
+  });
+
+  it("O3: the JSON path records usage before throwing OutputLimitError", async () => {
+    const { url } = await startRecordingServer({ content: "{\"a\":", finish_reason: "length", completion_tokens: 100 });
+    const before = calibratedOutputTokens("chat", "local-m")?.n ?? 0;
+    await expect(
+      withTool("chat", () => chatCompletionJSON(MESSAGES, { model: "local-m" }, depsWith(url, RO))),
+    ).rejects.toBeInstanceOf(OutputLimitError);
+    expect(calibratedOutputTokens("chat", "local-m")?.n ?? 0).toBe(before + 1);
+  });
 });

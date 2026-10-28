@@ -45,7 +45,7 @@ import { appendFileSync } from "node:fs";
 import { applyModelOverrides } from "../request-overrides.js";
 import { safeReadText, safeReadJson } from "../safe-body.js";
 import { appendModelEvent } from "../model-events.js";
-import { recordOutputTokensSample, recordRequest } from "../usage-history.js";
+import { ctxStore, recordOutputTokensSample, recordRequest } from "../usage-history.js";
 import { HEARTBEAT_INTERVAL_MS, type ProgressFn } from "../rate-limiter.js";
 
 import {
@@ -66,6 +66,14 @@ import {
   type RetryClock,
 } from "./http.js";
 import { chatCompletionNative } from "./lmstudio.js";
+import {
+  OutputLimitError,
+  applyRequestOptions,
+  effectiveMaxTokens,
+  warnNoToolContextOnce,
+  withStopInstruction,
+  type ResolvedRequestOptions,
+} from "./request-options.js";
 import { resolveConnection, PRICE_CEILING_REFUSAL_PREFIX } from "./connection.js";
 import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "../benchmark/free-mode.js";
@@ -91,6 +99,7 @@ import {
   type ChatMessage,
   type StreamingResult,
   type CompletionDeps,
+  type ConnectionSetup,
 } from "./types.js";
 
 import { formatProviderState, slimEndpoints, type ProviderStateEntry } from "./provider-state.js";
@@ -436,6 +445,48 @@ export interface SimpleCompletionOptions {
   retryClock?: RetryClock;
 }
 
+/**
+ * The request options for THIS call: the tool name comes from the per-invocation
+ * usage context (the same store provider/connection.ts reads), so no call site
+ * has to pass it. A call without a tool context gets the default block, and the
+ * process says so once.
+ */
+function requestOptionsForCall(deps: CompletionDeps): ResolvedRequestOptions | null {
+  const tool = ctxStore.getStore()?.tool;
+  const ro = deps.getRequestOptions(tool);
+  if (ro !== null && tool === undefined) warnNoToolContextOnce();
+  return ro;
+}
+
+/**
+ * B1: the connection and request options for one call. When request options apply
+ * the request MUST go to the OpenAI-compatible /v1/chat/completions path, never the
+ * native /api/v1/chat one. WHY: llama-server's OpenAI endpoint is the one that honours
+ * max_tokens, top_k, repeat_penalty and chat_template_kwargs and reports
+ * finish_reason "length" (verified live 2026-10-28), while the native path sends no
+ * cap and hard-codes finishReason "stop" (a runaway reply could never be detected).
+ * O7: a non-primary providers[] route gets no options at all (they are profile-wide
+ * settings for the primary local server and must not leak to another vendor/server).
+ * If the OpenAI URL cannot be derived, throw: options are never dropped silently.
+ */
+function requestOptionsConnection(
+  conn: ConnectionSetup,
+  deps: CompletionDeps,
+): { conn: ConnectionSetup; ro: ResolvedRequestOptions | null } {
+  if (conn.routed) return { conn, ro: null };
+  const ro = requestOptionsForCall(deps);
+  if (ro === null || !conn.isNative) return { conn, ro };
+  const nativeSuffix = "/api/v1/chat";
+  if (!conn.url.endsWith(nativeSuffix)) {
+    throw new Error(
+      `request_options: cannot derive the OpenAI-compatible endpoint from '${conn.url}'; refusing to send without the options`,
+    );
+  }
+  return {
+    conn: { ...conn, url: `${conn.url.slice(0, -nativeSuffix.length)}/v1/chat/completions`, isNative: false },
+    ro,
+  };
+}
 // ── Non-streaming text completion ────────────────────────────────────
 // All LLM requests use this. stream=false, single JSON response.
 // Batch-level heartbeat in rateLimitedParallel keeps MCP connection alive.
@@ -449,7 +500,7 @@ export async function chatCompletionSimple(
   clock?: RetryClock,
   // Call-local state of chatCompletionWithRetry: receives `refusedRetryAt` when
   // a Retry-After beyond the window ended this call's retrying (never the clock).
-  call?: { refusedRetryAt?: number },
+  call?: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null },
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once at top of this LLM call. resolveConnection() also
   // snapshots internally to make the URL+model+timeout tuple coherent; here
@@ -457,15 +508,17 @@ export async function chatCompletionSimple(
   // backend-type labels. A mid-call reload that changes `currentBackend`
   // cannot interleave fields between conn building and the request body.
   const backend = deps.getBackend();
-  const conn = await resolveConnection(options, deps);
+  const { conn, ro } = requestOptionsConnection(await resolveConnection(options, deps), deps);
+  // O5: remember the options THIS request used so the length check in chatCompletionWithRetry does not re-resolve them.
+  if (call) call.requestOptions = ro;
 
-  // LM Studio native API — delegate to native handler (different request format)
+  // LM Studio / llama.cpp native API — delegate to native handler (different request format). requestOptionsConnection never leaves a native conn when ro !== null.
   if (conn.isNative) {
     return chatCompletionNative(conn, messages, options, deps);
   }
-
   const baseBody: Record<string, unknown> = {
-    messages,
+    // WHY a copy with the stop sentence: see withStopInstruction (first system message only).
+    messages: ro !== null ? withStopInstruction(messages, effectiveMaxTokens(ro, options.maxTokens)) : messages,
     temperature: options.temperature ?? deps.defaultTemperature,
     max_tokens: options.maxTokens ?? deps.getDefaultMaxTokens(),
     stream: false,
@@ -524,6 +577,8 @@ export async function chatCompletionSimple(
       // Apply per-model overrides before filtering so the filter has
       // the full picture of what we intend to send.
       body = applyModelOverrides(body, conn.model);
+      // TRDD-1OOAH3LD: profile request_options win over the static model table.
+      if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
       // Filter to only fields this model supports. Does nothing for
       // non-OpenRouter backends and for models with unknown metadata.
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
@@ -710,7 +765,7 @@ export async function chatCompletionJSON(
       foreignCause: options.retryClock.lastError !== undefined,
     });
   }
-  const conn = await resolveConnection(options, deps);
+  const { conn, ro } = requestOptionsConnection(await resolveConnection(options, deps), deps);
 
   // Route through LM Studio native API (no json_schema support,
   // but the prompt-based JSON extraction works well with local models).
@@ -750,8 +805,10 @@ export async function chatCompletionJSON(
     };
   }
 
+  // TRDD-1OOAH3LD: null unless the active profile sets request_options (ro and conn come from requestOptionsConnection above).
   const baseBody: Record<string, unknown> = {
-    messages,
+    // WHY a copy with the stop sentence: see withStopInstruction (first system message only).
+    messages: ro !== null ? withStopInstruction(messages, effectiveMaxTokens(ro, options.maxTokens)) : messages,
     temperature: options.temperature ?? deps.defaultTemperature,
     max_tokens: options.maxTokens ?? deps.getDefaultMaxTokens(),
     stream: false, // Non-streaming for structured output
@@ -814,6 +871,8 @@ export async function chatCompletionJSON(
       if (reasoning) body.reasoning = reasoning;
       // Apply per-model overrides last so they win over baseBody defaults.
       body = applyModelOverrides(body, conn.model);
+      // TRDD-1OOAH3LD: profile request_options win over the static model table.
+      if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
       // Filter to only fields this model supports (Nemotron drops
       // frequency_penalty etc., other models may drop reasoning).
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
@@ -904,6 +963,23 @@ export async function chatCompletionJSON(
       model = data.model ?? conn.model ?? "";
       usage = data.usage;
       finishReason = data.choices?.[0]?.finish_reason ?? "";
+      // TRDD-1OOAH3LD: on a request_options profile a reply cut off by the
+      // length limit (partial or empty) is an error, never a half answer.
+      if (ro !== null && finishReason === "length") {
+        // O3: the request completed and was billed; record it like the plain path does before throwing.
+        recordRequest({ ok: true, durationMs: Date.now() - jsonStartTime, costUsd: usage?.cost ?? 0 });
+        if (typeof usage?.completion_tokens === "number" && model) {
+          recordOutputTokensSample(model, usage.completion_tokens);
+        }
+        throw new OutputLimitError({
+          tool: ctxStore.getStore()?.tool,
+          model: model || conn.model || "unknown",
+          maxTokens: effectiveMaxTokens(ro, options.maxTokens),
+          callerCap: ro.maxOutputTokens > (options.maxTokens ?? Infinity),
+          completionTokens: usage?.completion_tokens,
+          partial: rawContent,
+        });
+      }
       gotResponse = true;
       break;
     }
@@ -956,7 +1032,10 @@ export async function chatCompletionJSON(
     }
     return { parsed, model, usage, finishReason };
   } catch (e) {
-    recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
+    // An OutputLimitError already recorded its own ok line (the HTTP request completed); a second fail line would double-count it.
+    if (!(e instanceof OutputLimitError)) {
+      recordRequest({ ok: false, durationMs: Date.now() - jsonStartTime, costUsd: 0 });
+    }
     throw e;
   } finally {
     if (progressTimer) clearInterval(progressTimer);
@@ -1332,7 +1411,7 @@ export async function chatCompletionWithRetry(
   let lastErr: unknown;
   // Call-local: set when a Retry-After beyond the window ended THIS call's
   // retrying. Not on the shared clock, so other models of the dispatch go on.
-  const call: { refusedRetryAt?: number } = {};
+  const call: { refusedRetryAt?: number; requestOptions?: ResolvedRequestOptions | null } = {};
   const stopped = (): boolean => retryWindowClosed(clock) || call.refusedRetryAt !== undefined;
 
   // Call-local snapshot of the clock status/provider, refreshed in the catch
@@ -1604,6 +1683,28 @@ export async function chatCompletionWithRetry(
       return resp;
     }
 
+    // TRDD-1OOAH3LD: on a request_options profile "length" (partial OR empty) is
+    // an error, raised HERE and not inside chatCompletionSimple on purpose: this
+    // point is outside the try/catch above, so the generic retry, the circuit
+    // breaker (recordServiceFailure) and the window logic are never entered. An
+    // HTTP 200 reply is a working transport; retrying would re-bill the same
+    // budget and hit the same limit. Profiles without request_options fall
+    // through to the branches below, unchanged.
+    if (resp.finishReason === "length") {
+      // O5: the options ACTUALLY used for the request (recorded by chatCompletionSimple), not a second resolution that a settings reload could change.
+      const ro = call.requestOptions ?? null;
+      if (ro !== null) {
+        recordServiceSuccess();
+        throw new OutputLimitError({
+          tool: ctxStore.getStore()?.tool,
+          model: resp.model || options.model || backend.model || "unknown",
+          maxTokens: effectiveMaxTokens(ro, options.maxTokens),
+          callerCap: ro.maxOutputTokens > (options.maxTokens ?? Infinity),
+          completionTokens: resp.usage?.completion_tokens,
+          partial: resp.content,
+        });
+      }
+    }
     // "length" WITH CONTENT — the model wrote an answer and ran out of room.
     // Real truncation: the partial output is useful and a retry would just
     // truncate again at the same place. Don't retry.

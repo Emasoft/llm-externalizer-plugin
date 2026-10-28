@@ -50,6 +50,7 @@ import { chatCompletionSimple } from "./provider/completion.js";
 import type { BackendConfig, CompletionDeps } from "./provider/types.js";
 import { withFreeRotation, type RotatingFetchImpl } from "./free-rotation.js";
 import { STATIC_PROFILE_EXHAUSTED_MESSAGE } from "./profile-fallback.js";
+import { OutputLimitError, OUTPUT_LIMIT_PREFIX } from "./provider/request-options.js";
 
 const TMP_BASE = process.platform === "win32" ? tmpdir() : "/tmp";
 
@@ -126,6 +127,7 @@ function completionDeps(backend: BackendConfig): CompletionDeps {
     getEnsemblePriceCeilingUsd: () => 1.3,
     defaultTemperature: 0.7,
     getDefaultMaxTokens: () => 256,
+    getRequestOptions: () => null,
   };
 }
 
@@ -431,4 +433,27 @@ describe("Path 3 (index.ts chatCompletionWithProfileFallback) — a real dispatc
     },
     30_000,
   );
+});
+
+// TRDD-1OOAH3LD: an OUTPUT LIMIT error (reply cut off on a request_options profile) must be final for the file, never the "recoverable" default that re-runs the same costly generation.
+describe("classifyError — OUTPUT LIMIT verdicts (TRDD-1OOAH3LD)", () => {
+  it("a raw OutputLimitError and a ProfileExhaustedError of only such causes are per-file, countsAsFailure, unrecoverable", async () => {
+    const { idx, cleanup } = await loadFreshIndex(NO_FREE_MODELS_YAML);
+    try {
+      const limit = new OutputLimitError({ tool: "chat", model: "m", maxTokens: 10, callerCap: false, completionTokens: 10, partial: "x" });
+      const raw = idx.__classifyErrorForTests(limit);
+      expect(raw.unrecoverable).toBe(true);
+      expect(raw.serviceLevel).toBe(false);
+      expect(raw.countsAsFailure).toBe(true);
+      // loadFreshIndex reset the module registry: the exhaustion class must come from the SAME registry as the fresh index, or instanceof fails.
+      const { ProfileExhaustedError } = await import("./profile-fallback.js");
+      const wrapped = idx.__classifyErrorForTests(new ProfileExhaustedError("p", "static", [limit]));
+      expect(wrapped.unrecoverable).toBe(true);
+      expect(wrapped.serviceLevel).toBe(false);
+      expect(wrapped.countsAsFailure).toBe(true);
+      expect(wrapped.reason).toContain(OUTPUT_LIMIT_PREFIX);
+    } finally {
+      cleanup();
+    }
+  });
 });

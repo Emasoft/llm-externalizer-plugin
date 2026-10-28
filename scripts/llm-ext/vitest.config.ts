@@ -138,6 +138,8 @@ export default defineConfig({
       // D2 split coverage (item D2/A4, 2026-09-16): the empty-response retry
       // ladder + run-level spend stop, against a real local HTTP server.
       'src/provider/completion.test.ts',
+      // TRDD-1OOAH3LD increment 1: request_options helpers + profile-key validation (pure).
+      'src/provider/request-options.test.ts',
       'src/provider/provider-state.test.ts',
       'src/provider/provider-state-render.test.ts',
       'src/provider/retry-clock.test.ts',

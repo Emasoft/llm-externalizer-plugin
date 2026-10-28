@@ -180,6 +180,7 @@ function depsFor(type: BackendConfig["type"], url: string, model: string): Compl
     getEnsemblePriceCeilingUsd: () => 1.3,
     defaultTemperature: 0.7,
     getDefaultMaxTokens: () => 256,
+    getRequestOptions: () => null,
   };
 }
 

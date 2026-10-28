@@ -16,6 +16,7 @@
  */
 
 import type { ResolvedRoute } from "../config.js";
+import type { ResolvedRequestOptions } from "./request-options.js";
 
 /** Immutable backend snapshot (see index.ts's T2.7 snapshot-and-swap note). */
 export interface BackendConfig {
@@ -54,6 +55,8 @@ export interface ConnectionSetup {
   model: string; // Resolved model ID
   isNative: boolean; // true = LM Studio native /api/v1/chat
   timeout: number; // SOFT_TIMEOUT_MS
+  /** true = a non-primary providers[] route (request_options never apply to it). */
+  routed?: true;
 }
 
 export interface ChatMessage {
@@ -174,4 +177,11 @@ export interface ProviderDeps {
 export interface CompletionDeps extends ProviderDeps {
   /** Max output tokens for the current model (index.ts `resolveDefaultMaxTokens()`). */
   getDefaultMaxTokens(): number;
+  /**
+   * TRDD-1OOAH3LD: the active profile's request_options merged for `tool`, or
+   * null when the profile sets none. REQUIRED (not optional) so a lost wiring
+   * fails to compile instead of silently dropping the options; callers that
+   * never use request_options (benchmark runners, fixtures) return null.
+   */
+  getRequestOptions(tool: string | undefined): ResolvedRequestOptions | null;
 }

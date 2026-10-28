@@ -303,6 +303,7 @@ import {
 } from "./or-model-info.js";
 
 import { clearEndpointFlavorCache } from "./provider/endpoint-flavor.js";
+import { OUTPUT_LIMIT_PREFIX, resolveRequestOptions } from "./provider/request-options.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -1787,6 +1788,8 @@ const providerDeps: CompletionDeps = {
   getEnsemblePriceCeilingUsd: () => getEnsemblePriceCeiling(activeSettings),
   defaultTemperature: DEFAULT_TEMPERATURE,
   getDefaultMaxTokens: () => resolveDefaultMaxTokens(),
+  // TRDD-1OOAH3LD: read through activeResolved on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
+  getRequestOptions: (tool) => resolveRequestOptions(activeResolved?.requestOptions ?? null, tool),
   getActiveProtocol: () => activeResolved?.protocol ?? "openai_api",
 };
 
@@ -2328,6 +2331,14 @@ function classifyError(error: unknown): ErrorClassification {
         countsAsFailure: true,
       };
     }
+    // TRDD-1OOAH3LD: every cause is an OUTPUT LIMIT -- the model ran out of its
+    // request_options budget on each attempt. Final for THIS file (rerunning an
+    // expensive generation with the same cap fails the same way), but not
+    // service-level (another file may fit) and still a failed outcome for the
+    // "3 of the last 3 failed" abort.
+    if (every((m) => m.startsWith(OUTPUT_LIMIT_PREFIX))) {
+      return { unrecoverable: true, serviceLevel: false, reason: `${msg} — ${causes[0]}`, countsAsFailure: true };
+    }
     // Same equivalence for the 4xx fallback: a mixed exhaustion (credit
     // cause + a request-specific 413) must stay a per-FILE failure, not fall
     // through to the recoverable default (which would retry the whole walk
@@ -2340,6 +2351,8 @@ function classifyError(error: unknown): ErrorClassification {
   // Use specific "API error NNN" pattern to avoid false positives from file paths containing digits
   // TRDD-VAORGKVF: a raw IRON RULE refusal is final: every file in the batch runs the same tool on the same model, so every file would be refused identically. A raw refusal reaches here from the single-model ensemble and callModel paths; the multi-slot ensemble join was not traced.
   if (msg.startsWith(IRON_RULE_REFUSAL_PREFIX)) return { unrecoverable: true, serviceLevel: true, reason: msg };
+  // TRDD-1OOAH3LD: a raw OUTPUT LIMIT error (reply cut off on a request_options profile). Never "recoverable": the per-file loops would re-run the same costly generation into the same cap. Per-file failure, not service-level.
+  if (msg.startsWith(OUTPUT_LIMIT_PREFIX)) return { unrecoverable: true, serviceLevel: false, reason: msg, countsAsFailure: true };
   if (/API error 401\b/.test(msg))
     return {
       unrecoverable: true,
