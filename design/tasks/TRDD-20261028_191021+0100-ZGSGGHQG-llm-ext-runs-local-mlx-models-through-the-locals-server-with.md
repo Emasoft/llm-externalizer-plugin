@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T20:11:19+0100
+updated: 2026-10-28T20:14:18+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -59,3 +59,4 @@ USER /goal directive verbatim (2026-10-28): "make the two new profiles (local-ll
 Decided by main-agent under the /goal directive (not user-ruled; the user may override): 2a revision 4 approved for implementation; locals-mlx design approved for implementation; Locals started with the server module directly (option B); an idle Locals server is killed after 2 hours without requests, like local_llama; Locals tests skipped on non-mac CI with a printed reason; a user-started Locals server serving the same model is reused. Reading of "reduced context memory" for mass-scouting: a smaller per-request prompt budget for that command in the calibration record (the server context is fixed at start), to be confirmed by the user. Each profile gets 3 models, each on its own server and port (both engines serve one model per port). ~/.locals/config.json port 8321 changed to 9090 by an earlier measurement, not yet restored.
 USER directive verbatim (2026-10-28, repeating the /goal with one addition): "since we are using Locals for all mlx models, you can drop the support for kiril." Consequence: Krill support is removed from llm-ext; every MLX model (including Nanbeige4.2 and Qwen3.5) runs through Locals; the earlier note that Nanbeige4.2 must run through Krill is superseded.
 2026-10-28 program plan revision 2 reviewed twice; P6a (calibration design review plus a 30-minute LFM3 dry run) added before the overnight run; P10 command table with thresholds is a gate before the goal is complete. Open user question: may calibration restart its own server with a new context (refuse-on-change kept for user runs)?
+USER answer verbatim (2026-10-28) to "may calibration restart its own server with a new context?": "yes calibration can handle thevcalibration server as it see fit. this is whynwe given a separated server to calibration processes." Consequence: calibration runs on its own separate server per model on a private port and controls its context freely; the user-facing servers keep refuse-on-change.
