@@ -98,6 +98,7 @@ export default defineConfig({
       'src/calibration/phase-a.test.ts',
       'src/calibration/phase-b.test.ts',
       'src/calibration/phase-b-real.test.ts',
+      'src/calibration/phase-c.test.ts',
       // The population RUNNER's own policy — paid gate, lock-before-gate
       // ordering, fail-open, the dynamic 'paid' daily spend cap (P5).
       'src/default-profiles-runner.test.ts',

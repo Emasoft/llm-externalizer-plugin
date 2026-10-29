@@ -31,6 +31,8 @@ import {
   cutOutcome,
   transportVerdict,
   walkGrid,
+  stepFit,
+  windowTooSmallReason,
 } from "./phase-b-fixtures.js";
 
 const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
@@ -240,36 +242,83 @@ describe("Phase B fixtures", () => {
 });
 
 /**
- * Trial i of a counter as the phase runs it under D1: each attempt gets a reply; a reply cut at the nominal cap
- * (finish "length", cap 2048 with thinking off) is rerun on a new document once, and a second cut is a fail.
- * `replyFor(i, attempt)` plays the model; `cap` is the max_tokens the trial ran with.
+ * Trial i of a counter as the phase runs it under D1: each attempt gets a reply; a reply cut at the cap
+ * (finish "length") is rerun on a new document once, and a second cut is a fail. `replyFor(i, attempt)` plays the model.
  */
-function trialWithCuts(i: number, replyFor: (i: number, attempt: number) => Reply, score: (r: Reply) => Outcome, cap = CAP_OFF): Outcome {
-  let fullCuts = 0;
-  for (let attempt = 0; attempt < 6; attempt++) {
-    const r = replyFor(i, attempt);
+function trialWithCuts(i: number, replyFor: (i: number, attempt: number) => Reply, score: (r: Reply) => Outcome): Outcome {
+  let cuts = 0;
+  for (;;) {
+    const r = replyFor(i, cuts);
     if (r.finishReason !== "length") return score(r);
-    const o = cutOutcome(fullCuts, cap, CAP_OFF);
-    if (cap >= CAP_OFF) fullCuts++;
+    const o = cutOutcome(cuts++);
     if (o !== "inconclusive") return o;
   }
-  return "inconclusive";
 }
 
-describe("D1: a reply cut at max_tokens (main-agent decision 2026-10-29; cap provenance: review of a72827f9)", () => {
-  it("at the nominal cap: rerun once, then a fail; the scorers alone still call it not scored", () => {
-    expect(cutOutcome(0, CAP_OFF, CAP_OFF)).toBe("inconclusive");
-    expect(cutOutcome(1, CAP_OFF, CAP_OFF)).toBe("fail");
-    expect(cutOutcome(1, CAP_ON, CAP_ON)).toBe("fail");
+describe("D1: a reply cut at max_tokens (main-agent decision 2026-10-29)", () => {
+  it("is rerun once, then a fail; the scorers alone still call it not scored", () => {
+    expect(cutOutcome(0)).toBe("inconclusive");
+    expect(cutOutcome(1)).toBe("fail");
     expect(factOutcome(reply("ABCD", { finishReason: "length" }), "ABCD2345", ["ABCD2345"])).toBe("inconclusive");
   });
-  it("at a cap squeezed by W - step - 64: always inconclusive (the pause bound decides), never a fail", () => {
-    expect(cutOutcome(0, 4032, CAP_ON)).toBe("inconclusive");
-    expect(cutOutcome(5, 4032, CAP_ON)).toBe("inconclusive");
-    expect(cutOutcome(3, CAP_OFF - 1, CAP_OFF)).toBe("inconclusive");
-    expect(trialWithCuts(0, () => reply("", { finishReason: "length" }), (r) => aggregateCountOutcome(r, 7), 1984)).toBe("inconclusive");
-    expect(trialWithCuts(0, () => reply("", { finishReason: "length" }), (r) => aggregateCountOutcome(r, 7))).toBe("fail");
+});
+
+/**
+ * The walk of one kind as Phase B runs it (main-agent decision 2026-10-29, amended after review): each step is checked
+ * with stepFit when it runs; "skip" counts as not fitting, "wait" stops the walk (the model waits for memory), and a
+ * step that runs passes when `passes(tokens)` says so. Returns the fill and what happened at each step.
+ */
+async function walkKind(steps: readonly number[], cap: number, hard: number, soft: number, passes: (tokens: number) => boolean): Promise<{ fill: number; log: string[] } | "wait"> {
+  const log: string[] = [];
+  try {
+    const fill = await walkGrid(steps, async (tokens) => {
+      const fit = stepFit(tokens, cap, hard, soft);
+      log.push(`${tokens}:${fit}`);
+      if (fit === "wait") throw new Error("wait");
+      return fit === "run" && passes(tokens);
+    });
+    return { fill, log };
+  } catch {
+    return "wait";
+  }
+}
+
+describe("grid steps and the window (main-agent decision 2026-10-29, amended after review; the user may override)", () => {
+  it("W 10303: no step fits thinking-on output, bug is window-limited (unfit); W 10304 runs bug at 2048; fact and aggregate run at both", async () => {
+    expect(await walkKind([4096, 2048], CAP_ON, 10303, 10303, () => true)).toEqual({ fill: 0, log: ["4096:skip", "2048:skip"] });
+    expect(await walkKind([4096, 2048], CAP_ON, 10304, 10304, () => true)).toEqual({ fill: 2048, log: ["4096:skip", "2048:run"] });
+    for (const W of [10303, 10304]) expect(await walkKind([4096, 2048], CAP_OFF, W, W, () => true)).toEqual({ fill: 4096, log: ["4096:run"] });
+    expect(windowTooSmallReason(10303, "on")).toBe("window 10303 too small for thinking on output");
   });
+  it("the 0.4 x W top step: bug skips it while top + 8192 + 64 > W and runs it from the first W where it fits; fact and aggregate run it at both", async () => {
+    // gridSteps floors 0.4 x W, so the boundary is W 13758 (top 5503, needs 13759) / W 13759 (top 5503, needs 13759),
+    // one token below the 13759 / 13760 the exact 0.4 x W would give.
+    const at = (W: number) => gridSteps(W, null);
+    expect(at(13758)[0]).toBe(5503);
+    expect(await walkKind(at(13758), CAP_ON, 13758, 13758, () => true)).toEqual({ fill: 4096, log: ["5503:skip", "4096:run"] });
+    expect(await walkKind(at(13759), CAP_ON, 13759, 13759, () => true)).toEqual({ fill: 5503, log: ["5503:run"] });
+    expect(at(13760)[0]).toBe(5504);
+    expect(await walkKind(at(13760), CAP_ON, 13760, 13760, () => true)).toEqual({ fill: 5504, log: ["5504:run"] });
+    for (const W of [13758, 13759, 13760]) expect((await walkKind(at(W), CAP_OFF, W, W, () => true)) as { fill: number }).toMatchObject({ fill: at(W)[0] });
+  });
+  it("bug with broken thinking-on runs thinking off: the 2048 cap, floor 4160", async () => {
+    expect(await walkKind([2048], CAP_OFF, 4159, 4159, () => true)).toEqual({ fill: 0, log: ["2048:skip"] });
+    expect(await walkKind([2048], CAP_OFF, 4160, 4160, () => true)).toEqual({ fill: 2048, log: ["2048:run"] });
+  });
+  it("a soft-W shortfall (fits total RAM, not the free memory now) waits, never skips, never gives unfit", async () => {
+    expect(stepFit(4096, CAP_ON, 32768, 10304)).toBe("wait");
+    expect(stepFit(2048, CAP_ON, 32768, 10304)).toBe("run");
+    expect(stepFit(2048, CAP_ON, 10304, 4096)).toBe("wait");
+    expect(await walkKind([4096, 2048], CAP_ON, 32768, 10304, () => true)).toBe("wait");
+    expect(await walkKind([2048], CAP_ON, 10304, 8000, () => true)).toBe("wait");
+  });
+  it("a step that does not fit the hard W is skipped whatever the soft W says", () => {
+    expect(stepFit(4096, CAP_ON, 12351, 32768)).toBe("skip");
+    expect(stepFit(4096, CAP_ON, 12352, 12352)).toBe("run");
+  });
+});
+
+describe("D1 grid walk with cap cuts (main-agent decision 2026-10-29)", () => {
   it("a cap cut at the top step with a pass at a lower step gives fill_tokens = the lower step", async () => {
     const steps = gridSteps(32768, null);
     const fill = await walkGrid(steps, async (tokens) =>

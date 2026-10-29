@@ -191,6 +191,7 @@ function generateRecord(
   category: ScoutCategory,
   idx: number,
   rnd: () => number,
+  tagsOverride?: string,
 ): string {
   const v = VOCAB[category];
   const descWords: string[] = [];
@@ -198,7 +199,8 @@ function generateRecord(
   for (let i = 0; i < wordCount; i++) {
     descWords.push(v.words[Math.floor(rnd() * v.words.length)]!);
   }
-  const tags = v.tags.slice(0, 2 + (idx % 2)).join(" "); // 2..3 tags
+  // The calibration copy passes neutral tags (P6): the category hashtags would let a model copy the label.
+  const tags = tagsOverride ?? v.tags.slice(0, 2 + (idx % 2)).join(" "); // 2..3 tags
   const name = `skill-${String(idx).padStart(6, "0")}`;
   const bodyWords: string[] = [];
   for (let i = 0; i < 4 + (idx % 2); i++) {
@@ -269,6 +271,35 @@ export function generateFixture(seed: number, targetBytes: number): ScoutFixture
   return { body, expected, recordCount: expected.length };
 }
 
+
+// ── Calibration copy (P6, local-calibration-design.md section 4.5) ─────
+
+/** Neutral tags shared by every category: the calibration copy's records carry these instead of category hashtags. */
+export const NEUTRAL_TAGS = ["#notes", "#misc", "#draft", "#wip", "#review", "#internal", "#v2", "#archive"] as const;
+
+/**
+ * The scout fixture as calibration uses it (spec 4.5, F7, A6): the same records, but the per-record categories are a
+ * seeded permutation of a balanced list (so "copy the label cycle of the first records" scores near chance, not 100 %
+ * as on the production fixture's i % 10 order), and every record's tags are neutral (so the label cannot be copied
+ * from a hashtag). `seed` is the permutation seed the record stores. The production fixture and its accuracy ledger
+ * are untouched. Sized like generateFixture: about `targetBytes`, never fewer than MIN_FIXTURE_RECORDS records.
+ */
+export function calibrationScoutFixture(seed: number, targetBytes: number): ScoutFixture {
+  const count = Math.max(MIN_FIXTURE_RECORDS, Math.floor(targetBytes / (MIN_FIXTURE_BYTES / MIN_FIXTURE_RECORDS)));
+  const rnd = mulberry32(seed);
+  const cats: ScoutCategory[] = Array.from({ length: count }, (_, i) => SCOUT_CATEGORIES[i % SCOUT_CATEGORIES.length]!);
+  for (let i = count - 1; i > 0; i--) {
+    const j = Math.floor(rnd() * (i + 1));
+    [cats[i], cats[j]] = [cats[j]!, cats[i]!];
+  }
+  const chunks: string[] = [];
+  for (let i = 0; i < count; i++) {
+    const tags = Array.from({ length: 2 + (i % 2) }, () => NEUTRAL_TAGS[Math.floor(rnd() * NEUTRAL_TAGS.length)]!).join(" ");
+    chunks.push(generateRecord(cats[i]!, i, rnd, tags));
+  }
+  return { body: chunks.join(""), expected: cats, recordCount: count };
+}
+
 // ── Hand-crafted positional JSON Schema ────────────────────────────────
 
 /**
@@ -301,6 +332,43 @@ export function buildPositionalSchema(expectedCount: number): unknown {
   };
 }
 
+// ── Text path: the categories object written as plain text (P6) ───────
+
+/**
+ * The `categories` of a reply written as text, not under json_schema (P6, spec 4.5; P8 and P9 reuse it): a think
+ * block is dropped (also an unterminated one's opening part), code fences are tolerated, and the JSON object is taken
+ * from the first "{" to the last "}"; a bare JSON array is accepted too. Labels are trimmed and lowercased; a
+ * non-string entry is an error, not skipped, because positions after it would shift.
+ */
+export function parsePositionalText(content: string): { categories: string[] } | { error: string } {
+  let text = content.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const open = text.lastIndexOf("</think>");
+  if (open >= 0) text = text.slice(open + "</think>".length);
+  text = text.replace(/```(?:json)?/gi, "").trim();
+  const tryParse = (s: string): unknown => {
+    try {
+      return JSON.parse(s) as unknown;
+    } catch {
+      return undefined;
+    }
+  };
+  let value = tryParse(text);
+  if (value === undefined) {
+    const a = text.indexOf("{");
+    const b = text.lastIndexOf("}");
+    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
+  }
+  if (value === undefined) {
+    const a = text.indexOf("[");
+    const b = text.lastIndexOf("]");
+    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
+  }
+  if (value === undefined) return { error: `no JSON object or array in the reply text: ${JSON.stringify(text.slice(0, 120))}` };
+  const list = Array.isArray(value) ? value : typeof value === "object" && value !== null ? (value as { categories?: unknown }).categories : undefined;
+  if (!Array.isArray(list)) return { error: "the reply text has no categories array" };
+  if (!list.every((v) => typeof v === "string")) return { error: "the categories array holds a non-string entry" };
+  return { categories: (list as string[]).map((v) => v.trim().toLowerCase()) };
+}
 // ── Direct-POST classifier (NO fieldset repair — positional semantics) ──
 
 export interface ClassifyPositionalResult {
@@ -324,15 +392,31 @@ export async function classifyPositional(
   apiKey: string,
   fixture: ScoutFixture,
   schema: unknown,
-  opts: { fetchImpl?: FetchImpl; timeoutMs?: number } = {},
+  opts: {
+    fetchImpl?: FetchImpl;
+    timeoutMs?: number;
+    /**
+     * "json_schema" (default): the schema goes in response_format. "text" (P6, spec 4.5): for a server where a
+     * 40-item json_schema array does not work, the schema goes in the prompt and the reply text is parsed
+     * (parsePositionalText). P8 and P9 reuse it.
+     */
+    responseMode?: "json_schema" | "text";
+    /** Merged into the request body (a local server's chat_template_kwargs, for example). */
+    extraBody?: Record<string, unknown>;
+    maxTokens?: number;
+  } = {},
 ): Promise<ClassifyPositionalResult> {
   const doFetch = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  const mode = opts.responseMode ?? "json_schema";
   const systemPrompt = [
     "You are a skill-file frontmatter classifier.",
     `Each record of the input is one skill-file block, whose frontmatter carries "name: skill-NNNNNN" where NNNNNN is its index (starting at 0).`,
     `Allowed categories: ${SCOUT_CATEGORIES.join(", ")}.`,
     `For EVERY record, return ONE category. Output a JSON object {"categories": [...]} where categories[i] is the category of the record named "skill-" + i padded to 6 digits.`,
     `The "categories" array MUST have exactly ${fixture.recordCount} entries — one per record.`,
+    ...(mode === "text"
+      ? [`Reply with only that JSON object, no other text. It must match this JSON Schema: ${JSON.stringify((schema as { schema?: unknown }).schema ?? schema)}`]
+      : []),
   ].join(" ");
   const userPrompt = `Classify the following ${fixture.recordCount} skill-file records:\n\n${fixture.body}`;
 
@@ -354,8 +438,11 @@ export async function classifyPositional(
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        response_format: { type: "json_schema", json_schema: schema },
+        // The text path (P6) sends no response_format: the schema is in the system prompt instead.
+        ...(mode === "json_schema" ? { response_format: { type: "json_schema", json_schema: schema } } : {}),
+        ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
         temperature: 0.1,
+        ...opts.extraBody,
       }),
       signal: controller.signal,
     });
@@ -413,16 +500,25 @@ export async function classifyPositional(
     };
   }
   let parsed: { categories?: unknown };
-  try {
-    parsed = JSON.parse(content) as typeof parsed;
-  } catch (e) {
-    return {
-      predicted: [],
-      promptTokens: inTok,
-      completionTokens: outTok,
-      durationMs,
-      error: `JSON.parse: ${(e as Error).message}`,
-    };
+  if (mode === "text") {
+    // P6 (spec 4.5): without json_schema the model writes the object as text; parsePositionalText finds it.
+    const t = parsePositionalText(content);
+    if ("error" in t) {
+      return { predicted: [], promptTokens: inTok, completionTokens: outTok, durationMs, error: t.error };
+    }
+    parsed = { categories: t.categories };
+  } else {
+    try {
+      parsed = JSON.parse(content) as typeof parsed;
+    } catch (e) {
+      return {
+        predicted: [],
+        promptTokens: inTok,
+        completionTokens: outTok,
+        durationMs,
+        error: `JSON.parse: ${(e as Error).message}`,
+      };
+    }
   }
   if (!Array.isArray(parsed.categories)) {
     return {

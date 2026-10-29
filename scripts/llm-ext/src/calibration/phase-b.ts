@@ -12,6 +12,7 @@
  * every phase passed (round-2 review F13).
  */
 
+import { totalmem } from "node:os";
 import { timingsFromEnv } from "../broker/scheduler.js";
 import { memoryFreePercent } from "../local-locals-server.js";
 import { pidState } from "../local-llama-server.js";
@@ -37,11 +38,13 @@ import {
   sequentialVerdict,
   variantSeed,
   walkGrid,
+  stepFit,
+  windowTooSmallReason,
   cutOutcome,
   transportVerdict,
   type FactDoc,
 } from "./phase-b-fixtures.js";
-import type { GridEntry, TaskKind } from "./record.js";
+import type { GridEntry, GridSkip, TaskKind } from "./record.js";
 import type { Phase, PhaseContext } from "./runner.js";
 import type { TrialRecord } from "./state.js";
 
@@ -70,13 +73,22 @@ class StepFailed extends Error {
     super(message);
   }
 }
+/** A step fits the hard W but not the free memory now: the model waits, as for B/window; no pause counted, no verdict. */
+class WaitForMemory extends Error {
+  constructor(
+    readonly step: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 const now = (): string => new Date().toISOString();
 const stepKey = (kind: TaskKind, tokens: number): string => `B/${kind}/${tokens}`;
 type Counter = GridEntry["counter"];
 
 /** The data of the last passing trial of `step` (Phase A's measurements), or null. */
-function dataOf(ctx: PhaseContext, step: string): NonNullable<TrialRecord["data"]> | null {
+export function dataOf(ctx: PhaseContext, step: string): NonNullable<TrialRecord["data"]> | null {
   const t = [...ctx.progress.trials].reverse().find((x) => x.step === step && x.data);
   return t?.data ?? null;
 }
@@ -99,11 +111,19 @@ interface Built {
 interface Run {
   ctx: PhaseContext;
   send: Sender;
+  /** The soft W: what free memory allowed when the cal server was (re)started, as llama-server really gave it. */
   window: number;
+  /** The hard W: weights + KV + 1 GB in TOTAL RAM minus the floor, capped like W (decision 2026-10-29, after review). */
+  hardWindow: number;
   prefillTps: number;
   decodeTps: number;
   cpt: Record<TaskKind, number>;
   overhead: Record<TaskKind, number>;
+}
+
+/** The window the cal server has now: a restart or a resume re-measure may have lowered it since the walk began. */
+function softWindow(run: Run): number {
+  return Math.min(run.ctx.server.ctx, run.window);
 }
 
 /** llama-server /tokenize: the token count of `text` (no chat template). */
@@ -148,7 +168,12 @@ async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thin
   const key = stepKey(kind, tokens);
   for (let rebuild = 0; ; rebuild++) {
     const b = await sized(run, kind, tokens, build);
-    const cap = Math.max(64, Math.min(thinking === "on" ? CAP_ON : CAP_OFF, run.window - tokens - 64));
+    const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
+    const W = softWindow(run);
+    // Invariant (main-agent decision 2026-10-29, after review): stepFit lets a step run only with room for the full
+    // cap, so a squeezed cap is a bug. It throws (a runner crash, counted) instead of scoring a cut it could not judge.
+    const cap = Math.min(nominal, W - tokens - 64);
+    if (cap < nominal) throw new Error(`cap squeezed below nominal: step ${tokens}, W ${W}`);
     const before = ctx.server;
     const r = await run.send.chat([{ role: "user", content: b.content }], {
       thinking,
@@ -199,21 +224,18 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
   if (done) return done.outcome;
   const pauses = ctx.progress.paused?.[key] ?? 0;
   const allowed = 2 * (pauses + 1);
-  // Timeouts, network errors and cuts at a squeezed cap count towards the pause (D2, D3); a cut at the nominal cap
-  // is settled by cutOutcome (D1).
-  const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
-  const fullCut = (t: TrialRecord): boolean => t.data?.cut === true && Number(t.data.cap) >= nominal;
-  const waits = (): number => mine().filter((t) => t.outcome === "inconclusive" && !fullCut(t)).length;
+  // Timeouts and network errors count towards the pause (D2, D3); a cut is settled by cutOutcome (D1).
+  const waits = (): number => mine().filter((t) => t.outcome === "inconclusive" && t.data?.cut !== true).length;
   while (waits() < allowed) {
     // A rerun gets a new document variant (variantSeed): at temperature 0 the same input repeats the same cut reply.
     const attempt = mine().filter((x) => x.outcome === "inconclusive").length;
     const t = await oneTrial(run, kind, tokens, thinking, json, (chars) => build(chars, attempt));
     const r = t.reply;
-    // D1 (main-agent decision 2026-10-29): a reply cut at the nominal cap is rerun once on a new document; cut again,
-    // it is a FAIL, so a kind whose answers do not fit the cap ends unfit instead of failing the whole model. The cap
-    // is stored with the cut: a cut at a cap squeezed by the window is not the model's fault (review of a72827f9).
+    // D1 (main-agent decision 2026-10-29): a reply cut at the cap is rerun once on a new document; cut again, it is a
+    // FAIL, so a kind whose answers do not fit the cap ends unfit instead of failing the whole model. The cap is
+    // stored with every trial (provenance); validSteps makes it always the nominal one.
     const cut = r.finishReason === "length";
-    const outcome = cut ? cutOutcome(mine().filter(fullCut).length, t.cap, nominal) : t.outcome;
+    const outcome = cut ? cutOutcome(mine().filter((x) => x.data?.cut === true).length) : t.outcome;
     ctx.record({
       step: key,
       seed: index,
@@ -225,6 +247,8 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
         finish: r.finishReason,
         cut,
         cap: t.cap,
+        // The W this trial ran under: the record's window_tokens is the smallest W of any counted trial.
+        window: softWindow(run),
         thinking,
         short: t.short,
         prompt_tokens: t.promptTokens,
@@ -348,7 +372,7 @@ function gridOf(ctx: PhaseContext, kind: TaskKind, tokens: number): GridEntry[] 
  * Returns null when not even the smallest step fits: not a failure (ruling
  * L86-87), the model waits.
  */
-async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number } | null> {
+async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number } | null> {
   const floorPct = timingsFromEnv(process.env).memoryFloorPct;
   const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
   const weights = weightBytes(ctx.identity.files);
@@ -356,13 +380,16 @@ async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: nu
   await ctx.stopServer("measuring free memory for the calibration window");
   const { free, floor } = await freeMemory(floorPct);
   const window = chooseWindow(layers, weights, free - floor, cap);
+  // The hard W (decision 2026-10-29, after review): the same rule on TOTAL RAM. Only a step that cannot fit it is
+  // window-limited; one that fits it but not the free memory now waits for memory.
+  const hard = chooseWindow(layers, weights, totalmem() - floor, cap);
   const old = dataOf(ctx, "B/window");
   if (old !== null) {
     const oldFree = Number(old.free_ram_bytes);
     const oldWindow = Number(old.window_tokens);
     if (Math.abs(free - oldFree) <= 0.25 * oldFree || window === oldWindow) {
       ctx.log(`calibration window W = ${oldWindow} tokens (kept; free memory ${Math.round(free / 2 ** 20)} MiB)`);
-      return { window: oldWindow, free: oldFree };
+      return { window: oldWindow, free: oldFree, hard };
     }
     // Free memory moved by more than 25 % and W with it: every Phase B result was measured at the old W.
     ctx.log(`free memory changed from ${Math.round(oldFree / 2 ** 20)} to ${Math.round(free / 2 ** 20)} MiB and W from ${oldWindow} to ${window}: Phase B starts again`);
@@ -379,11 +406,11 @@ async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: nu
     step: "B/window",
     seed: 0,
     outcome: "pass",
-    data: { window_tokens: window, free_ram_bytes: free, floor_bytes: floor, weight_bytes: weights, kv_bytes: kvBytes(layers, window), cap },
+    data: { window_tokens: window, hard_window_tokens: hard, free_ram_bytes: free, floor_bytes: floor, weight_bytes: weights, kv_bytes: kvBytes(layers, window), cap },
     at: now(),
   });
   ctx.log(`calibration window W = ${window} tokens (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, KV ${Math.round(kvBytes(layers, window) / 2 ** 20)} MiB)`);
-  return { window, free };
+  return { window, free, hard };
 }
 
 export const phaseB: Phase = {
@@ -430,6 +457,7 @@ export const phaseB: Phase = {
         ctx,
         send: makeSender(ctx, ctx.server.engine === "locals" ? await localsIds(ctx) : []),
         window,
+        hardWindow: w.hard,
         prefillTps: Math.min(Number(speed.prefill_tps_2k), Number(speed.prefill_tps_8k)),
         decodeTps: Number(speed.decode_tps),
         cpt: { fact: cpt, aggregate: cpt, bug: cpt },
@@ -437,18 +465,33 @@ export const phaseB: Phase = {
       };
       const steps = ctx.harness.steps !== null ? steps0 : gridSteps(window, null);
       const fill: Record<TaskKind, number> = { fact: 0, aggregate: 0, bug: 0 };
-      const grid: GridEntry[] = [];
+      const grid: Array<GridEntry | GridSkip> = [];
+      const unfitReasons: Partial<Record<TaskKind, string>> = {};
       for (const kind of kinds) {
+        // Main-agent decision 2026-10-29, amended after review (the user may override): a step runs only with room for
+        // the full output cap of the thinking mode that actually runs; checked as each step runs, against the window the
+        // cal server has then. Not fitting the hard W skips the step (window-limited); not fitting only the free memory
+        // now makes the model wait. Neither is ever a calibration failure.
+        const thinking: Thinking = kind === "bug" ? bugThinking : "off";
+        const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
         // Spec 4.3: start at the top step, step down only on failure; a kind failing at the floor is unfit (0).
-        fill[kind] = await walkGrid(
-          steps.filter((s) => s + 256 <= window),
-          async (tokens) => {
-            const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
-            grid.push(...gridOf(ctx, kind, tokens));
-            ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
-            return ok;
-          },
-        );
+        fill[kind] = await walkGrid(steps, async (tokens) => {
+          const fit = stepFit(tokens, nominal, run.hardWindow, softWindow(run));
+          if (fit === "skip") {
+            grid.push({ kind, tokens, skipped: "window", W: run.hardWindow });
+            ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the hard window ${run.hardWindow}`);
+            return false;
+          }
+          if (fit === "wait") throw new WaitForMemory(stepKey(kind, tokens), `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory now allows ${softWindow(run)} (hard ${run.hardWindow}): the model waits for memory`);
+          const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
+          grid.push(...gridOf(ctx, kind, tokens));
+          ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
+          return ok;
+        });
+        if (fill[kind] === 0 && grid.filter((g) => g.kind === kind).every((g) => "skipped" in g)) {
+          unfitReasons[kind] = windowTooSmallReason(run.hardWindow, thinking);
+          ctx.log(`Phase B ${kind}: unfit, ${unfitReasons[kind]}`);
+        }
       }
       // Output floors (spec 4.3, F15, N4): passing, non-truncated trials only.
       const floors = Object.fromEntries(
@@ -462,6 +505,9 @@ export const phaseB: Phase = {
       if (offMode === "leaky") ctx.log(`thinking off is leaky: ${offTokens.length} short thinking-off answers have a median over ${LEAKY_LIMIT} completion tokens (thinking_works.off: "leaky", not a failure)`);
       const summary = {
         window_tokens: window,
+        hard_window_tokens: run.hardWindow,
+        // Decision 2026-10-29 (after review): the record's window_tokens is the smallest W any counted trial ran under.
+        window_tokens_min: Math.min(window, ...ctx.progress.trials.filter((t) => t.step.startsWith("B/") && t.outcome !== "inconclusive" && typeof t.data?.window === "number").map((t) => Number(t.data?.window))),
         free_ram_bytes: w.free,
         fill_fact: fill.fact,
         fill_aggregate: fill.aggregate,
@@ -474,6 +520,7 @@ export const phaseB: Phase = {
         // D5 (review of a72827f9): the final thinking_works.off, re-judged with Phase B's short thinking-off answers.
         thinking_off_mode: offMode,
         grid: JSON.stringify(grid),
+        unfit_reasons: JSON.stringify(unfitReasons),
       };
       ctx.record({ step: "B/summary", seed: 0, outcome: "pass", data: summary, at: now() });
       ctx.log(
@@ -482,7 +529,7 @@ export const phaseB: Phase = {
       );
       return { passed: true };
     } catch (e) {
-      if (e instanceof StepPaused) return { passed: false, paused: true, step: e.step, message: e.message };
+      if (e instanceof StepPaused || e instanceof WaitForMemory) return { passed: false, paused: true, step: e.step, message: e.message };
       if (e instanceof StepFailed) return { passed: false, step: e.step, message: e.message };
       throw e;
     }
@@ -490,7 +537,7 @@ export const phaseB: Phase = {
 };
 
 /** Locals: the ids its /v1/models lists (the sender picks the thinking variant by id). */
-async function localsIds(ctx: PhaseContext): Promise<string[]> {
+export async function localsIds(ctx: PhaseContext): Promise<string[]> {
   const res = await fetch(`${ctx.server.baseUrl}/v1/models`, { signal: AbortSignal.timeout(10_000) });
   const m = (await res.json()) as { data?: Array<{ id?: unknown }> };
   return (m.data ?? []).map((d) => d.id).filter((id): id is string => typeof id === "string");

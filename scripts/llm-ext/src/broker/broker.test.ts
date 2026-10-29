@@ -970,7 +970,7 @@ describe("jobs held for calibration (P6)", () => {
     const { job, state } = await post(dir, B);
     expect(state).toBe("held");
     await waitFor("the runner to finish", () => runnerLog(dir).includes("calibration runner exiting: done"), 120_000);
-    expect(runnerLog(dir)).toMatch(/phases A, B, C are not implemented yet; no record written, the model stays queued/);
+    expect(runnerLog(dir)).toMatch(/phases A, B, C are not in this runner; no record written, the model stays queued/);
     expect(existsSync(recordPath(dir, "llama", B))).toBe(false);
     expect(readQueue(dir).map((q) => [q.model, q.reason])).toEqual([[B, "first-use"]]);
     // The runner's cal server is gone with it; the main server (A) was never touched.

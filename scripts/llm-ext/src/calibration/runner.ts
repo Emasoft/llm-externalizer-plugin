@@ -24,7 +24,7 @@ import { freePort, parseManagedModel, pidState, spawnLlamaServer, waitReady, wit
 import { parseLocalsModel, spawnLocalsServer, waitLocalsReady } from "../local-locals-server.js";
 import { getConfigDir } from "../config.js";
 import { loadedIdentity, staleness, type LoadedIdentity } from "./fingerprint.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, okRecordFrom, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
 import { acquireModelLock, dequeueUnlocked, loadProgress, readQueue, releaseModelLock, saveProgress, withStateLock, type Progress, type QueueItem } from "./state.js";
 
 /** The phases of the full method, in order (spec section 4). A record is written only once all of them passed. */
@@ -50,10 +50,25 @@ export interface Harness {
   id: string;
   /** Trials per counter before the sequential extension (spec 4.3: 5). */
   trials: number;
+  /** Phase C main-slot candidates (spec 4.5: 1, 2, 4, 8). */
+  mainSlots: number[];
+  /** Phase C scouting shares in tokens per request (spec 4.5: 2048, 4096). */
+  scoutShares: number[];
+  /** Phase C scouting slot counts (spec 4.5: 4, 8). */
+  scoutSlots: number[];
 }
 
 /** Any change here must bump HARNESS_VERSION (record.ts): records are compared by harness id and version only (D4). */
-export const PRODUCTION_HARNESS: Harness = { id: PRODUCTION_HARNESS_ID, phaseACtx: PHASE_A_CTX, windowCap: 32768, steps: null, trials: 5 };
+export const PRODUCTION_HARNESS: Harness = {
+  id: PRODUCTION_HARNESS_ID,
+  phaseACtx: PHASE_A_CTX,
+  windowCap: 32768,
+  steps: null,
+  trials: 5,
+  mainSlots: [1, 2, 4, 8],
+  scoutShares: [2048, 4096],
+  scoutSlots: [4, 8],
+};
 
 /** The harness of this run: LLM_EXT_CALIBRATION_HARNESS (JSON, partial) over the production one. A malformed value is an error, never ignored. */
 export function harnessFromEnv(env: NodeJS.ProcessEnv): Harness {
@@ -68,7 +83,8 @@ export function harnessFromEnv(env: NodeJS.ProcessEnv): Harness {
   // D4: a custom harness is named by the hash of its JSON, so its record never passes for a production one.
   const h: Harness = { ...PRODUCTION_HARNESS, ...v, id: `custom:${createHash("sha256").update(raw).digest("hex")}` };
   const posInt = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0;
-  if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || (h.steps !== null && !(Array.isArray(h.steps) && h.steps.length > 0 && h.steps.every(posInt)))) {
+  const posList = (l: unknown): boolean => Array.isArray(l) && l.length > 0 && l.every(posInt);
+  if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || (h.steps !== null && !posList(h.steps)) || !posList(h.mainSlots) || !posList(h.scoutShares) || !posList(h.scoutSlots)) {
     throw new Error(`LLM_EXT_CALIBRATION_HARNESS has an invalid field: ${raw}`);
   }
   return h;
@@ -492,8 +508,26 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     }
     const missing = METHOD_PHASES.filter((p) => progress.phases[p] !== "passed");
     // Never a record without every phase: a partial record would make the model usable (round-2 review, F13).
-    if (missing.length > 0) o.log(`${name}: phases ${missing.join(", ")} are not implemented yet; no record written, the model stays queued`);
-    return "done";
+    if (missing.length > 0) {
+      o.log(`${name}: phases ${missing.join(", ")} are not in this runner; no record written, the model stays queued`);
+      return "done";
+    }
+    const ok = okRecordFrom(
+      {
+        harness: harness.id,
+        harness_version: HARNESS_VERSION,
+        fixture_version: FIXTURE_VERSION,
+        engine: item.engine,
+        model: item.model,
+        fingerprint: identity.fingerprint,
+        engine_version: identity.engineVersion,
+        engine_version_checked: identity.engineVersion,
+        calibrated_at: new Date().toISOString(),
+        duration_s: Math.round((Date.now() - startedAt) / 1000),
+      },
+      progress.trials,
+    );
+    return finish(ok, `calibrated (${harness.id}): fill_tokens fact ${ok.fill_tokens?.fact}, aggregate ${ok.fill_tokens?.aggregate}, bug ${ok.fill_tokens?.bug}; main ${ok.main?.slots} slot(s) of ${ok.main?.slot_ctx}; scouting ${ok.scouting === "unfit" ? "unfit" : `share ${ok.scouting?.share_tokens} at ${ok.scouting?.slots} slots`}`);
   } catch (err) {
     const msg = (err as Error).message;
     if (err instanceof PausedError) {

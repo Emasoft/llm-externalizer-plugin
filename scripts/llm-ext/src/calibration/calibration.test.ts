@@ -12,7 +12,7 @@ import { tmpdir } from "../test-tmp-root.js";
 import type { Profile } from "../config.js";
 import { CALIBRATE_ARGV, calibratorStatePath } from "../broker/protocol.js";
 import { recordFixture } from "./record-fixture.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord, type GridEntry } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord, type GridEntry, type GridSkip } from "./record.js";
 import { blobSha256, fingerprintOf, ggufShards, snapshotWeightFiles, staleness } from "./fingerprint.js";
 import { acquireModelLock, dequeueUnlocked, enqueueUnlocked, loadProgress, modelLockPath, readQueue, readSeenModels, releaseModelLock, saveProgress, withStateLock } from "./state.js";
 import { checkModelChanges, managedProfileModels, markProfileUsed } from "./triggers.js";
@@ -197,15 +197,29 @@ describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), le
     expect(profileUnfitLines("p", [{ status: "missing" }])).toEqual([]);
     expect(profileUnfitLines("p", [{ status: "failed" }])).toEqual(["fact", "aggregate", "bug"].map((k) => `no model of profile p is fit for ${k}`));
   });
-  it("D1: an unfit kind says \"cut at N tokens\" only when every fail of its grid was a cut at the nominal cap", () => {
+  it("an unfit kind is window-limited (no step fit the hard W) or quality-limited; \"cut at N tokens\" only when every fail was a cut", () => {
     const g = (kind: "fact" | "aggregate" | "bug", trials: number, passed: number, cutFails: number, cutCap: number | null): GridEntry => ({ kind, counter: kind === "bug" ? "bug" : "main", tokens: 2048, trials, passed, inconclusive: cutFails, cuts: 2 * cutFails, cut_fails: cutFails, cut_cap: cutCap });
-    expect(unfitExplanations({ fact: 2048, aggregate: 0, bug: 0 }, [g("aggregate", 3, 0, 3, 2048), g("bug", 3, 0, 1, 8192)])).toEqual(["unfit for aggregate (cut at 2048 tokens)", "unfit for bug"]);
+    const skip = (kind: "fact" | "aggregate" | "bug", tokens: number): GridSkip => ({ kind, tokens, skipped: "window", W: 10303 });
+    expect(unfitExplanations({ fact: 2048, aggregate: 0, bug: 0 }, [g("aggregate", 3, 0, 3, 2048), g("bug", 3, 0, 1, 8192)])).toEqual([
+      "unfit for aggregate: quality-limited (cut at 2048 tokens)",
+      "unfit for bug: quality-limited",
+    ]);
     expect(unfitExplanations({ fact: 4096, aggregate: 4096, bug: 4096 }, [g("aggregate", 3, 0, 3, 2048)])).toEqual([]);
-    expect(unfitExplanations({ fact: 0, aggregate: 4096, bug: 4096 }, [])).toEqual(["unfit for fact"]);
+    expect(unfitExplanations({ fact: 4096, aggregate: 4096, bug: 0 }, [skip("bug", 4096), skip("bug", 2048)], { bug: "window 10303 too small for thinking on output" })).toEqual([
+      "unfit for bug: window-limited (window 10303 too small for thinking on output)",
+    ]);
+    // A skipped top step and a failed lower step: the steps that ran decide, so it is quality-limited.
+    expect(unfitExplanations({ fact: 4096, aggregate: 4096, bug: 0 }, [skip("bug", 4096), g("bug", 3, 0, 0, null)])).toEqual(["unfit for bug: quality-limited"]);
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), grid: [skip("bug", 4096), g("fact", 5, 5, 0, null)] })).toEqual([]);
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), grid: [{ kind: "bug", tokens: 4096, skipped: "window" }] })).toContain("grid");
   });
   it("PRODUCTION_HARNESS is pinned to HARNESS_VERSION: an edit to the harness without a version bump fails here (D4)", () => {
     // A new harness needs HARNESS_VERSION + 1 and a new entry here: records are compared by id and version only.
-    const PINNED: Record<number, string> = { 1: "f8d99b34b756039733fe9622a06c551b13481270d0807c74c45902d44869e2d0" };
+    // 2: Phase C candidates (mainSlots, scoutShares, scoutSlots) joined the harness.
+    const PINNED: Record<number, string> = {
+      1: "f8d99b34b756039733fe9622a06c551b13481270d0807c74c45902d44869e2d0",
+      2: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
+    };
     expect(createHash("sha256").update(JSON.stringify(PRODUCTION_HARNESS)).digest("hex")).toBe(PINNED[HARNESS_VERSION]);
   });
 });

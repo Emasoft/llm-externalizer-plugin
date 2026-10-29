@@ -19,7 +19,7 @@ import type { BrokerEngine } from "../broker/protocol.js";
  * (runner.ts) changes: every record and progress entry of an older harness is
  * invalid (spec section 3).
  */
-export const HARNESS_VERSION = 1;
+export const HARNESS_VERSION = 2;
 /**
  * The `harness` id of a record made with the production harness (D4, main-agent
  * decision 2026-10-29). A custom LLM_EXT_CALIBRATION_HARNESS writes
@@ -35,6 +35,17 @@ export const TASK_KINDS = ["fact", "aggregate", "bug"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 export type PerKind = Record<TaskKind, number>;
 
+/**
+ * A grid step not run for a kind because step + nominal output cap + 64 exceeds the HARD window (main-agent decision
+ * 2026-10-29, the user may override): it is window-limited, not quality-limited.
+ */
+export interface GridSkip {
+  kind: TaskKind;
+  tokens: number;
+  skipped: "window";
+  /** The hard W the step did not fit. */
+  W: number;
+}
 export interface GridEntry {
   kind: TaskKind;
   /** "main" for fact and aggregate; bug runs two counters, "bug" and "control" (spec 4.3). */
@@ -84,7 +95,9 @@ export interface CalibrationRecord {
   min_output_tokens?: PerKind;
   /** 0 = unfit for that kind (it failed at the 2048-token floor). */
   fill_tokens?: PerKind;
-  grid?: GridEntry[];
+  /** Why a kind is unfit when no grid step ran for it (main-agent decision 2026-10-29: "window W too small for thinking on output"). */
+  unfit_reasons?: Partial<Record<TaskKind, string>>;
+  grid?: Array<GridEntry | GridSkip>;
   structured_output?: { off: boolean; on: boolean; array40: boolean; error?: string };
   main?: { slots: number; slot_ctx: number };
   scouting?: { share_tokens: number; slots: number; slot_ctx: number; accuracy: number; records_per_s: number; permutation_seed: number } | "unfit";
@@ -147,15 +160,20 @@ export function recordSchemaErrors(raw: unknown): string[] {
   need(isObj(tw) && (isBool(tw.off) || tw.off === "leaky") && isBool(tw.on), "thinking_works");
   need(perKind(raw.min_output_tokens), "min_output_tokens");
   need(perKind(raw.fill_tokens), "fill_tokens");
+  const ur = raw.unfit_reasons;
+  need(ur === undefined || (isObj(ur) && Object.entries(ur).every(([k, v]) => TASK_KINDS.includes(k as TaskKind) && isStr(v))), "unfit_reasons");
   need(
     Array.isArray(raw.grid) &&
       raw.grid.every(
         (g: unknown) =>
           isObj(g) &&
           TASK_KINDS.includes(g.kind as TaskKind) &&
-          (g.counter === "main" || g.counter === "bug" || g.counter === "control") &&
-          [g.tokens, g.trials, g.passed, g.inconclusive, g.cuts, g.cut_fails].every(isNonNeg) &&
-          (g.cut_cap === null || isNonNeg(g.cut_cap)),
+          isNonNeg(g.tokens) &&
+          (g.skipped === "window"
+            ? isNonNeg(g.W)
+            : (g.counter === "main" || g.counter === "bug" || g.counter === "control") &&
+              [g.trials, g.passed, g.inconclusive, g.cuts, g.cut_fails].every(isNonNeg) &&
+              (g.cut_cap === null || isNonNeg(g.cut_cap))),
       ),
     "grid",
   );
@@ -168,6 +186,50 @@ export function recordSchemaErrors(raw: unknown): string[] {
   const sp = raw.speed;
   need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_decode_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
   return e;
+}
+
+/** The fields of a record that come from the run itself, not from the phase summaries. */
+export type RecordBase = Pick<CalibrationRecord, "harness" | "harness_version" | "fixture_version" | "engine" | "model" | "fingerprint" | "engine_version" | "engine_version_checked" | "calibrated_at" | "duration_s">;
+
+type SummaryData = Record<string, number | string | boolean | null>;
+
+/**
+ * The `status: ok` record of a model whose three phases passed (spec section 7), built from the A/summary,
+ * B/summary and C/summary trials. thinking_works.off is Phase B's re-judged value (D5, review of a72827f9), and
+ * window_tokens is the smallest W any counted Phase B trial ran under (main-agent decision 2026-10-29, after
+ * review). A missing summary is a bug in the runner: it throws, and writeRecord checks the shape.
+ */
+export function okRecordFrom(base: RecordBase, trials: ReadonlyArray<{ step: string; data?: SummaryData }>): CalibrationRecord {
+  const of = (step: string): SummaryData => {
+    const d = [...trials].reverse().find((t) => t.step === step && t.data)?.data;
+    if (!d) throw new Error(`cannot write the calibration record: no ${step}`);
+    return d;
+  };
+  const a = of("A/summary");
+  const b = of("B/summary");
+  const c = of("C/summary");
+  const n = (v: unknown): number => Number(v);
+  const off = b.thinking_off_mode;
+  const reasons = typeof b.unfit_reasons === "string" ? (JSON.parse(b.unfit_reasons) as Partial<Record<TaskKind, string>>) : {};
+  return {
+    schema: 2,
+    ...base,
+    status: "ok",
+    failed_step: null,
+    window_tokens: n(b.window_tokens_min ?? b.window_tokens),
+    free_ram_bytes: n(b.free_ram_bytes),
+    chars_per_token: n(a.chars_per_token),
+    capabilities: { thinking: a.template_thinking === true, n_ctx_train: n(a.n_ctx_train) },
+    thinking_works: { off: off === "leaky" ? "leaky" : off === true, on: a.thinking_on === true },
+    min_output_tokens: { fact: n(b.min_out_fact), aggregate: n(b.min_out_aggregate), bug: n(b.min_out_bug) },
+    fill_tokens: { fact: n(b.fill_fact), aggregate: n(b.fill_aggregate), bug: n(b.fill_bug) },
+    ...(Object.keys(reasons).length > 0 ? { unfit_reasons: reasons } : {}),
+    grid: JSON.parse(String(b.grid)) as Array<GridEntry | GridSkip>,
+    structured_output: { off: a.json_off === true, on: a.json_on === true, array40: a.array40 === true, ...(typeof a.json_error === "string" ? { error: a.json_error } : {}) },
+    main: { slots: n(c.main_slots), slot_ctx: n(c.main_slot_ctx) },
+    scouting: c.scouting === "unfit" ? "unfit" : (JSON.parse(String(c.scouting)) as Exclude<CalibrationRecord["scouting"], "unfit" | undefined>),
+    speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_decode_tps: n(c.aggregate_decode_tps), load_avg: n(c.load_avg) },
+  };
 }
 
 /** Records whose problem was already logged by this process (spec section 3: "logged once"). */

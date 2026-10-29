@@ -340,15 +340,35 @@ export function outputFloor(completions: readonly number[]): number {
 
 
 /**
- * D1 (main-agent decision 2026-10-29): what a reply cut at max_tokens counts as. A cut at the kind's nominal cap
- * (CAP_ON 8192 with thinking on, CAP_OFF 2048 with thinking off) means the answer does not fit the cap: the first is
- * rerun on a new document (inconclusive), a second is a FAIL in the sequential rule, so the step fails like any other
- * and the grid steps down to unfit. A cut at a smaller cap, squeezed by W - step - 64, says nothing about the model:
- * it stays inconclusive and counts towards the pause bound (review of a72827f9). A cut never fails the model.
+ * D1 (main-agent decision 2026-10-29): what a reply cut at max_tokens counts as. Every trial runs at its kind's
+ * nominal cap (validSteps guarantees the room), so a cut means the answer does not fit the cap: the first is rerun on
+ * a new document (inconclusive), a second is a FAIL in the sequential rule, so the step fails like any other and the
+ * grid steps down to unfit. A cut never fails the model.
  */
-export function cutOutcome(earlierFullCuts: number, cap: number, nominalCap: number): Outcome {
-  if (cap < nominalCap) return "inconclusive";
-  return earlierFullCuts === 0 ? "inconclusive" : "fail";
+export function cutOutcome(earlierCuts: number): Outcome {
+  return earlierCuts === 0 ? "inconclusive" : "fail";
+}
+
+/**
+ * Whether a grid step can run for a kind now (main-agent decision 2026-10-29, amended after review; the user may
+ * override). A step needs step + nominalCap + 64 tokens of window, nominalCap being the cap of the thinking mode that
+ * actually runs (bug with broken thinking-on runs thinking off: 2048, floor 4160):
+ *  - "skip" when it does not fit the HARD W (weights + KV + 1 GB in total RAM minus the floor): window-limited, the
+ *    step is not run and counts as "does not fit"; never a failure (the user's ruling: lack of memory never is);
+ *  - "wait" when it fits the hard W but not the current soft W (free memory now): the model waits for memory, as the
+ *    broker does; never an unfit verdict;
+ *  - "run" otherwise. Checked when each step runs, against the window the cal server has then.
+ */
+export function stepFit(step: number, nominalCap: number, hardWindow: number, softWindow: number): "run" | "wait" | "skip" {
+  const need = step + nominalCap + 64;
+  if (need > hardWindow) return "skip";
+  if (need > softWindow) return "wait";
+  return "run";
+}
+
+/** Why a kind with every step skipped is unfit (shown by calibration-status). */
+export function windowTooSmallReason(window: number, thinking: "on" | "off"): string {
+  return `window ${window} too small for thinking ${thinking} output`;
 }
 
 /**

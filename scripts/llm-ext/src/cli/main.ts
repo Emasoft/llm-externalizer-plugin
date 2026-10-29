@@ -711,13 +711,15 @@ async function main(): Promise<void> {
     const { runBrokerMain } = await import("../broker/server.js");
     await runBrokerMain(VERSION);
   }
-  // P6: `llm-ext __calibrate` is the detached calibration runner (calibration/runner.ts); like the broker it never loads settings.
+  // P6: `llm-ext __calibrate` is the detached calibration runner (calibration/runner.ts); like the broker it never loads
+  // settings at start; Phase C only reads scout_accuracy_threshold from settings.yaml (read-only, config.loadSettings).
   if (process.argv[2] === CALIBRATE_ARGV) {
     const { runCalibratorMain } = await import("../calibration/runner.js");
     const { phaseA } = await import("../calibration/phase-a.js");
     const { phaseB } = await import("../calibration/phase-b.js");
-    // P6b: Phases A and B; C follows, and no record says "ok" until all three pass.
-    await runCalibratorMain(VERSION, [phaseA, phaseB]);
+    const { phaseC } = await import("../calibration/phase-c.js");
+    // P6b: all three phases; the runner writes the ok record only when A, B and C passed.
+    await runCalibratorMain(VERSION, [phaseA, phaseB, phaseC]);
   }
   setBrokerClientVersion(VERSION);
   // WHY the engine is loaded HERE for every non-classify command: the static import it replaces loaded it before main() ran, so settings were read/created/migrated before any usage error (`--profile` with no value) or help. Only a classify command defers it (see loadEngine).

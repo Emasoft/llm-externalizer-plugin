@@ -5,7 +5,7 @@
 
 import { existsSync } from "node:fs";
 import type { Profile } from "../config.js";
-import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, TASK_KINDS, type GridEntry, type PerKind, type RecordStatus } from "./record.js";
+import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
 import { liveCalibrator, METHOD_PHASES } from "./runner.js";
 import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
@@ -53,7 +53,7 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (r.harness !== PRODUCTION_HARNESS_ID) state += `; made with a custom harness (${r.harness}): never used for requests`;
         // D5: a leaky thinking-off model is reported, never silently.
         if (r.thinking_works?.off === "leaky") state += `; thinking off is leaky (it reasons in its visible answer)`;
-        if (r.status === "ok" && r.fill_tokens && r.grid) for (const why of unfitExplanations(r.fill_tokens, r.grid)) state += `; ${why}`;
+        if (r.status === "ok" && r.fill_tokens && r.grid) for (const why of unfitExplanations(r.fill_tokens, r.grid, r.unfit_reasons)) state += `; ${why}`;
       }
       else {
         const prog = existsSync(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
@@ -96,16 +96,18 @@ export function profileUnfitLines(profile: string, models: ReadonlyArray<{ statu
 }
 
 /**
- * Why an ok record is unfit for each kind with fill_tokens 0 (D1, review of a72827f9): "cut at N tokens" when every
- * fail of that kind's grid was a reply cut at the nominal cap (N = the cap the cuts hit), so the user sees that the
- * answers did not fit the cap, not that they were wrong.
+ * Why an ok record is unfit for each kind with fill_tokens 0. Window-limited (main-agent decision 2026-10-29, after
+ * review): no step of the kind fit the hard W, so none ran. Quality-limited: steps ran and failed; "cut at N tokens"
+ * when every fail was a reply cut at the nominal cap (D1, review of a72827f9), so the user sees that the answers did
+ * not fit the cap, not that they were wrong.
  */
-export function unfitExplanations(fill: PerKind, grid: readonly GridEntry[]): string[] {
+export function unfitExplanations(fill: PerKind, grid: ReadonlyArray<GridEntry | GridSkip>, reasons: Partial<Record<TaskKind, string>> = {}): string[] {
   return TASK_KINDS.filter((k) => fill[k] === 0).map((k) => {
-    const g = grid.filter((e) => e.kind === k);
+    const g = grid.filter((e): e is GridEntry => e.kind === k && !("skipped" in e));
+    if (g.length === 0) return `unfit for ${k}: window-limited${reasons[k] !== undefined ? ` (${reasons[k]})` : ""}`;
     const fails = g.reduce((n, e) => n + e.trials - e.passed, 0);
     const cutFails = g.reduce((n, e) => n + e.cut_fails, 0);
     const caps = g.map((e) => e.cut_cap).filter((c): c is number => c !== null);
-    return fails > 0 && cutFails === fails && caps.length > 0 ? `unfit for ${k} (cut at ${Math.max(...caps)} tokens)` : `unfit for ${k}`;
+    return `unfit for ${k}: quality-limited${fails > 0 && cutFails === fails && caps.length > 0 ? ` (cut at ${Math.max(...caps)} tokens)` : ""}`;
   });
 }
