@@ -18,6 +18,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI_SCRIPT } from "./test-helpers.js";
+import { localProfileStepIds } from "./benchmark/pick.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -215,7 +216,7 @@ describe("profile command", () => {
     const settingsPath = join(tmpConfigDir, "settings.yaml");
     writeFileSync(settingsPath, MULTI_PROFILE_SETTINGS_YAML, "utf-8");
     // The 14.1.0 migration runs once, on the first command after an upgrade (see the test below); this test is about what the COMMAND does, so that one-time step is already recorded.
-    writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added"] }), "utf-8");
+    writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added", ...localProfileStepIds()] }), "utf-8"); // P5 add-once steps are one-time writes too
     const beforeContent = MULTI_PROFILE_SETTINGS_YAML;
 
     await execFileAsync(

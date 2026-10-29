@@ -25,6 +25,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { CLI_SCRIPT } from "./test-helpers.js";
+import { localProfileStepIds } from "./benchmark/pick.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -73,7 +74,7 @@ async function runCliWithSettings(
   const settingsPath = join(tmpConfigDir, "settings.yaml");
   writeFileSync(settingsPath, settingsYaml, "utf-8");
   // The 14.1.0 migration is a one-time step of the first command after an upgrade (profile.test.ts "design" test); a test about what a COMMAND does to the file records it as already applied.
-  if (opts.migrated) writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added"] }), "utf-8");
+  if (opts.migrated) writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added", ...localProfileStepIds()] }), "utf-8"); // P5 add-once steps are one-time writes too
   const outputDir = mkdtempSync("/tmp/__llm_ext_settingsgrp_out_");
 
   try {

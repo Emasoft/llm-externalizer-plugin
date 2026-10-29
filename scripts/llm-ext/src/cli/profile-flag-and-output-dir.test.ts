@@ -22,6 +22,7 @@ import { promisify } from "node:util";
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CLI_SCRIPT } from "../test-helpers.js";
+import { localProfileStepIds } from "../benchmark/pick.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -157,7 +158,8 @@ describe("--profile <name> global flag", () => {
     const settingsPath = join(tmpConfigDir, "settings.yaml");
     writeFileSync(settingsPath, TWO_PROFILE_SETTINGS_YAML, "utf-8");
     // The 14.1.0 migration is a one-time step of the first command after an upgrade (profile.test.ts "design" test); this test is about what the --profile flag does to the file, so the step is recorded as already applied.
-    writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added"] }), "utf-8");
+    // The P5 add-once steps (local_llama, locals-mlx; benchmark/pick.ts runLocalProfileSteps) are the same kind of one-time write, so they are recorded too: the invariant is that --profile never persists a selection, not that the first command after an upgrade leaves the file untouched.
+    writeFileSync(join(tmpConfigDir, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: {}, migrationsApplied: ["or-jev-section-added", ...localProfileStepIds()] }), "utf-8");
 
     await execFileAsync(
       "node",
