@@ -1661,6 +1661,8 @@ export function migrateSettingsTo141(
      *  writeStamp contract. */
     markApplied: (stepId: string) => Error | null;
     nowMs?: number;
+    /** Test seam for the P5 platform gate; defaults to this process's platform and arch. */
+    platform?: { platform: string; arch: string };
   },
 ): Settings141MigrationResult {
   const result: Settings141MigrationResult = { applied: [] };
@@ -2319,8 +2321,10 @@ export function localProfileStepIds(): string[] {
  *    active; the step is recorded, so a profile the user deletes later is
  *    not added again;
  *  - not runnable on this machine (locals-mlx needs macOS on Apple silicon):
- *    nothing is written and nothing recorded, so the file never carries a
- *    profile that cannot run there; a later run on a Mac adds it. (An
+ *    nothing is written, but the step IS recorded (skipped by platform), so it
+ *    is not retried on every command; the file never carries a profile that
+ *    cannot run there, and a settings.yaml later moved to a Mac does not get it
+ *    from this step. (An
  *    unselected profile is only type- and field-checked at load, so it would
  *    not stop settings.yaml from loading: the gate is about usefulness.)
  * Limit (P5 review m1, as for or-jev-section-added): "not added again" lasts
@@ -2332,13 +2336,18 @@ export function localProfileStepIds(): string[] {
  */
 function runLocalProfileSteps(
   settingsPath: string,
-  opts: { notify: (msg: string) => void; isApplied: (stepId: string) => boolean; nowMs?: number },
+  opts: { notify: (msg: string) => void; isApplied: (stepId: string) => boolean; nowMs?: number; platform?: { platform: string; arch: string } },
   recordApplied: (stepId: string) => void,
 ): void {
   for (const builtin of builtinLocalProfiles()) {
     const step = `${LOCAL_PROFILE_STEP_PREFIX}${builtin.name}`;
     try {
-      if (opts.isApplied(step) || !builtin.supported()) continue;
+      if (opts.isApplied(step)) continue;
+      // WHY recorded, not just skipped: locals-mlx runs only on macOS on Apple silicon (darwin, arm64). Elsewhere nothing is written, and the step is recorded so the check is not repeated on every command. local_llama stays on every platform (llama.cpp runs everywhere).
+      if (!builtin.supported(opts.platform?.platform, opts.platform?.arch)) {
+        recordApplied(step);
+        continue;
+      }
       const doc = parseDocument(readFileSync(settingsPath, "utf-8"));
       if (doc.errors.length > 0) return; // the ordinary load path reports the real parse failure
       let added = false;

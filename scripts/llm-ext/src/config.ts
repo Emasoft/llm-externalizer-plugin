@@ -1991,7 +1991,7 @@ export interface BuiltinLocalProfile {
   header: string[];
   profile: Profile;
   /** Whether this machine can run it. A profile that cannot run here is left out of the file (it would load, unselected: only the selected profile gets the full check). */
-  supported: () => boolean;
+  supported: (platform?: string, arch?: string) => boolean;
 }
 export function builtinLocalProfiles(): BuiltinLocalProfile[] {
   return [
@@ -2034,7 +2034,7 @@ export function builtinLocalProfiles(): BuiltinLocalProfile[] {
         second_model: "mlx-community/Nanbeige4.2-3B-OptiQ-4bit",
         third_model: "mlx-community/Qwen3.5-4B-MLX-4bit",
       } as unknown as Profile,
-      supported: () => localsPlatformSupported(),
+      supported: (platform, arch) => localsPlatformSupported(platform, arch),
     },
   ];
 }

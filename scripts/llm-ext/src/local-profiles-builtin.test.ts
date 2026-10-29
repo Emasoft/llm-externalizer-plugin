@@ -10,9 +10,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, parseDocument } from "yaml";
 import { tmpdir } from "./test-tmp-root.js";
-import { LOCAL_PROFILE_STEP_PREFIX, migrateSettingsTo141 } from "./benchmark/pick.js";
+import { LOCAL_PROFILE_STEP_PREFIX, localProfileStepIds, migrateSettingsTo141 } from "./benchmark/pick.js";
 import { isMigrationStepApplied, markMigrationStepApplied } from "./default-profiles-state.js";
 import { builtinLocalProfiles, getSettingsPath, localsPlatformSupported, profileTypeFieldIssues, validateProfile, type Profile } from "./config.js";
 
@@ -42,8 +42,8 @@ afterEach(() => {
   rmSync(cfgDir, { recursive: true, force: true });
 });
 
-const run = (): ReturnType<typeof migrateSettingsTo141> =>
-  migrateSettingsTo141(getSettingsPath(), { notify: (m) => notices.push(m), isApplied: isMigrationStepApplied, markApplied: markMigrationStepApplied });
+const run = (platform?: { platform: string; arch: string }): ReturnType<typeof migrateSettingsTo141> =>
+  migrateSettingsTo141(getSettingsPath(), { notify: (m) => notices.push(m), isApplied: isMigrationStepApplied, markApplied: markMigrationStepApplied, platform });
 const profiles = (): Record<string, Record<string, unknown>> =>
   (parseYaml(readFileSync(getSettingsPath(), "utf-8")) as { profiles: Record<string, Record<string, unknown>> }).profiles;
 const BASE = ["active: mine", "profiles:", "  mine:", "    profile-type: local", "    mode: local", "    api: ollama-local", "    model: llama3", ""].join("\n");
@@ -99,11 +99,68 @@ describe("built-in local profiles: added once (P5)", () => {
     expect(notices).toEqual([]);
   });
 
-  it.skipIf(ON_APPLE_SILICON)("off macOS on Apple silicon locals-mlx is neither added nor recorded (a later run on a Mac adds it)", () => {
+  const MAC = { platform: "darwin", arch: "arm64" };
+
+  it("the first run adds both profiles on a Mac and records both ids", () => {
     writeFileSync(getSettingsPath(), BASE);
-    run();
+    const r = run(MAC);
+    expect(Object.keys(profiles())).toEqual(expect.arrayContaining(["local_llama", "locals-mlx"]));
+    expect(r.applied).toEqual(expect.arrayContaining(localProfileStepIds()));
+    for (const id of localProfileStepIds()) expect(isMigrationStepApplied(id)).toBe(true);
+  });
+
+  it("a second run leaves settings.yaml byte-identical", () => {
+    writeFileSync(getSettingsPath(), BASE);
+    run(MAC);
+    const first = readFileSync(getSettingsPath(), "utf-8");
+    notices = [];
+    run(MAC);
+    expect(readFileSync(getSettingsPath(), "utf-8")).toBe(first);
+    expect(notices).toEqual([]);
+  });
+
+  it("after the user deletes locals-mlx the next run does not add it again (local_llama is kept)", () => {
+    writeFileSync(getSettingsPath(), BASE);
+    run(MAC);
+    const doc = parseDocument(readFileSync(getSettingsPath(), "utf-8"));
+    doc.deleteIn(["profiles", "locals-mlx"]);
+    writeFileSync(getSettingsPath(), String(doc));
+    const afterDelete = readFileSync(getSettingsPath(), "utf-8");
+    run(MAC);
+    expect(readFileSync(getSettingsPath(), "utf-8")).toBe(afterDelete);
     expect(profiles()["locals-mlx"]).toBeUndefined();
-    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}locals-mlx`)).toBe(false);
+    expect(profiles().local_llama).toBeDefined();
+  });
+
+  it("a user profile named local_llama is neither overwritten nor duplicated", () => {
+    const own = [BASE.trimEnd(), "  local_llama:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:8181", "    server: managed", "    model: org/repo:Q4_K_M", ""].join("\n");
+    writeFileSync(getSettingsPath(), own);
+    run(MAC);
+    const raw = readFileSync(getSettingsPath(), "utf-8");
+    expect(raw.match(/^ {2}local_llama:/gm)).toHaveLength(1);
+    expect(profiles().local_llama.model).toBe("org/repo:Q4_K_M");
+    expect(profiles().local_llama.second_model).toBeUndefined();
+  });
+
+  it.each([
+    ["linux", "x64"],
+    ["linux", "arm64"],
+    ["win32", "x64"],
+    ["darwin", "x64"],
+  ])("on %s/%s locals-mlx is not written but its step is recorded (not retried); local_llama is still added", (platform, arch) => {
+    writeFileSync(getSettingsPath(), BASE);
+    run({ platform, arch });
+    expect(profiles()["locals-mlx"]).toBeUndefined();
+    expect(profiles().local_llama).toBeDefined();
+    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}locals-mlx`)).toBe(true);
+    // The Mac run that follows finds the step recorded and writes nothing.
+    const before = readFileSync(getSettingsPath(), "utf-8");
+    run(MAC);
+    expect(readFileSync(getSettingsPath(), "utf-8")).toBe(before);
+  });
+
+  it("the step-id list is pinned: a new built-in local profile step must be added here on purpose", () => {
+    expect(localProfileStepIds()).toEqual(["local-profile-added:local_llama", "local-profile-added:locals-mlx"]);
   });
 
   // P5 review M1: the file may hold API keys; the write must not widen its mode.
