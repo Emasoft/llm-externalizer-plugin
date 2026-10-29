@@ -155,6 +155,7 @@ import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
 import { ensureCalibrator } from "./calibration/runner.js";
 import { abortReasonText, CommandStoppedError, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
+import { serverStatusText, serverStopText } from "./broker/server-commands.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -2990,6 +2991,9 @@ const RECONCILE_SKIP_TOOLS = new Set([
   // reconcile rewriting settings first would only delay them.
   "calibrate_model",
   "calibration_status",
+  // They only read or stop the server registry and send no model request.
+  "server_status",
+  "server_stop",
   // Local-service scan is its own configuration entry point — it must run
   // (and print a usable list) even before any profile is reconciled, and it
   // never sends an LLM request itself.
@@ -5652,6 +5656,23 @@ async function dispatchCallToolInner(
         }
       }
 
+      case "server_status": {
+        return { content: [{ type: "text", text: await serverStatusText(getConfigDir()) }] };
+      }
+
+      case "server_stop": {
+        const a = (args ?? {}) as Record<string, unknown>;
+        const engine = a.engine;
+        const role = a.role;
+        if (engine !== undefined && engine !== "llama" && engine !== "locals") {
+          return { content: [{ type: "text", text: "--engine must be llama or locals" }], isError: true };
+        }
+        if (role !== undefined && role !== "main" && role !== "cal" && role !== "all") {
+          return { content: [{ type: "text", text: "--role must be main, cal or all" }], isError: true };
+        }
+        const r = await serverStopText(getConfigDir(), { engine, role });
+        return { content: [{ type: "text", text: r.text }], isError: r.isError };
+      }
       case "list_profiles": {
         // `settings profiles` (TRDD settings-rename, requirement C): every
         // profile in settings.yaml, one line each, with a `*` marker on the

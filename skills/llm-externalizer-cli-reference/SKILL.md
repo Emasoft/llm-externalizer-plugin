@@ -102,6 +102,7 @@ Both use `server: managed`: llm-ext starts and stops the model server itself. Yo
 | Check the configured models are healthy (free, no LLM call) | `models health` | references/models-and-settings.md |
 | See new OpenRouter models, or plan replacements for degraded ones | `models discover`, `models replacements` | references/models-and-settings.md |
 | Calibrate a managed local model, or see calibration progress | `models calibrate`, `models calibration-status` | references/models-and-settings.md |
+| List or stop the managed local servers llm-ext started | `models server-status`, `models server-stop` | references/models-and-settings.md |
 | Show effective settings, list profiles, check service and auth | `settings show`, `profile`, `profiles`, `status` | references/models-and-settings.md |
 | Reload settings after a manual edit | `settings reset` | references/models-and-settings.md |
 | Find local LLM servers (LM Studio, Ollama, vLLM, llama.cpp, Jan) | `settings scan-local` | references/models-and-settings.md |

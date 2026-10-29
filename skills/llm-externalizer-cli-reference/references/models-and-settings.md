@@ -11,6 +11,7 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext models replacements`
 - `llm-ext models calibrate`
 - `llm-ext models calibration-status`
+- `llm-ext models server-status` lists the registered managed local servers; `llm-ext models server-stop [--engine llama|locals] [--role main|cal|all]` stops them (only registered ones; the broker starts a new main server only when work arrives)
 - `llm-ext settings show`
 - `llm-ext settings profile`
 - `llm-ext settings profiles`

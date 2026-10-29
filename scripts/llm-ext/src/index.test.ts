@@ -158,6 +158,9 @@ describe('tool catalog', () => {
       // queue a model and start the detached runner; report the records. No LLM call.
       'calibrate_model',
       'calibration_status',
+      // server_status / server_stop — list and stop the registered managed local servers; no LLM call.
+      'server_status',
+      'server_stop',
     ].sort();
 
     expect(toolNames).toEqual(expected);

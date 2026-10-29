@@ -352,7 +352,7 @@ export const ACCEPTED_PROFILE_TYPES: Readonly<Record<string, readonly ProfileTyp
   mass_scout_list_bundled_fieldsets: ANY_PROFILE_TYPE, security_triage_benchmark: ANY_PROFILE_TYPE,
   search_existing_benchmark: ANY_PROFILE_TYPE, assess_model: ANY_PROFILE_TYPE, check_model_health: ANY_PROFILE_TYPE,
   discover_new_models: ANY_PROFILE_TYPE, check_tool_replacements: ANY_PROFILE_TYPE,
-  calibrate_model: ANY_PROFILE_TYPE, calibration_status: ANY_PROFILE_TYPE,
+  calibrate_model: ANY_PROFILE_TYPE, calibration_status: ANY_PROFILE_TYPE, server_status: ANY_PROFILE_TYPE, server_stop: ANY_PROFILE_TYPE,
   ...classifierProfileRows(),
 });
 
@@ -799,6 +799,29 @@ function buildToolsWithoutProfileTypes(limitsText: string) {
               "Name of one profile to show full resolved detail for. Omit to list every " +
               "profile instead.",
           },
+        },
+      },
+    },
+    {
+      name: "server_status",
+      description:
+        "List the llm-ext managed local servers (llama-server and Locals) recorded in the " +
+        "server registry: engine, role (main or cal), model, port, pid, whether the pid is " +
+        "alive, context size and owner; plus the broker process. Read-only; sends no model request.",
+      inputSchema: { type: "object" as const, properties: {} },
+    },
+    {
+      name: "server_stop",
+      description:
+        "Stop the llm-ext managed local servers recorded in the server registry and remove " +
+        "their entries. Never signals a process that is not in the registry (a llama-server or " +
+        "Locals you started yourself is left alone). The owning broker starts a new main server " +
+        "only when work arrives. Default: all engines, all roles.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          engine: { type: "string", enum: ["llama", "locals"], description: "Only this engine's servers. Default: both." },
+          role: { type: "string", enum: ["main", "cal", "all"], description: "Only this role (main or cal). Default: all." },
         },
       },
     },
