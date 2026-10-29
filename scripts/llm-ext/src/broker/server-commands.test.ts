@@ -7,11 +7,14 @@
  */
 
 import { spawn } from "node:child_process";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { pidState } from "../local-llama-server.js";
+import { TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { readRegistry, registryPath, type RegistryEntry, type ServerRole } from "./registry.js";
 import { serverStatusText, serverStopText } from "./server-commands.js";
 
@@ -118,5 +121,38 @@ describe("server-status and server-stop", () => {
     expect(r.text).toContain("nothing was stopped");
     expect(pidState(pid)).toBe("alive");
     expect(readRegistry(dir, "llama")).toHaveLength(1);
+  });
+
+  /**
+   * Review of 2a3ac697 (b): a real HTTP server on 127.0.0.1 answers /v1/health as this dir's broker would, with the
+   * token check, so serverStopText reads the queued count over the network exactly as it does in production.
+   */
+  async function fakeBrokerHealth(models: Array<{ engine: string; model: string; queued: number; running: number; held: number }>): Promise<Server> {
+    const token = "t".repeat(32);
+    const srv = createServer((req, res) => {
+      const ok = req.url === "/v1/health" && req.headers[TOKEN_HEADER] === token;
+      res.writeHead(ok ? 200 : 403, { "content-type": "application/json" });
+      res.end(JSON.stringify(ok ? { pid: process.pid, version: "t", draining: false, queued: 0, running: 0, held: 0, models } : { error: "no" }));
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    writeBrokerState(dir, { pid: process.pid, port: (srv.address() as AddressInfo).port, token, version: "t", startedAt: new Date().toISOString() });
+    return srv;
+  }
+
+  it("stopping a main server with work queued for its model says the broker will start it again; no queued work, no line", async () => {
+    const pid = startFake();
+    const other = startFake();
+    await waitFor(() => pidState(pid) === "alive" && pidState(other) === "alive");
+    register([entryFor(pid, "main", 45684), { ...entryFor(other, "main", 45685), model: "model-idle" }]);
+    const srv = await fakeBrokerHealth([{ engine: "llama", model: "model-main", queued: 3, running: 1, held: 0 }]);
+    try {
+      const r = await serverStopText(dir, {});
+      expect(r.isError).toBe(false);
+      const lines = r.text.split("\n");
+      expect(lines.filter((l) => l.includes("will start the server again"))).toEqual(["the broker still has 3 queued request(s) for 'model-main': it will start the server again to serve them"]);
+      expect(r.text).toContain(`stopped main llama-server pid ${other}`);
+    } finally {
+      await new Promise((r) => srv.close(() => r(undefined)));
+    }
   });
 });

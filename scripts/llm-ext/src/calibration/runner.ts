@@ -297,7 +297,7 @@ export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handove
       }
       const item = readQueue(o.dir).find((i) => !attempted.has(`${i.engine}\u0000${i.model}`));
       if (!item) return "done";
-      const r = await calibrateOne(o, item, (s) => (current = s));
+      const r = await calibrateOne(o, item, (s) => (current = s), () => stopping);
       current = null;
       if (r === "paused") return "paused";
       // A crash is retried at once; the model's crash counter (progress) bounds it, then a failure record ends it.
@@ -328,6 +328,15 @@ export const MAX_CRASHES = 3;
 
 /** Review m5: the runner gave way to the broker's work for too long; the model stays queued (not a crash). */
 class PausedError extends Error {}
+
+/**
+ * The runner got SIGTERM or SIGINT (for example from `models server-stop`, which stops the runner before its cal
+ * server). From then on its cal server is being stopped, so a failed request, a dead server or a phase verdict is the
+ * stop itself, not something the model did: nothing is recorded or counted, and the model stays queued with the
+ * trials finished before the signal (TRDD-1OOAH3LD, review of 2a3ac697: a user stop must never move a model toward
+ * calibration-failed).
+ */
+class RunnerStopping extends Error {}
 
 /** How the runner waits for the broker's other work (spec section 2, review m5). */
 const TURN_POLL_MS = 2000;
@@ -362,7 +371,7 @@ export async function waitForTurn(dir: string, engine: BrokerEngine, model: stri
   }
 }
 
-async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: { stop: (why: string) => Promise<void> } | null) => void): Promise<"done" | "crashed" | "paused"> {
+async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: { stop: (why: string) => Promise<void> } | null) => void, isStopping: () => boolean): Promise<"done" | "crashed" | "paused"> {
   const name = `${item.engine} '${item.model}'`;
   const harness = o.harness ?? PRODUCTION_HARNESS;
   if (!(await acquireModelLock(o.dir, item.engine, item.model))) {
@@ -446,11 +455,16 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       identity,
       loadMs,
       progress,
+      // After a stop signal nothing is saved: a trial or a step crash then comes from the stop (RunnerStopping).
       record: (t) => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
         progress.trials.push(t);
         saveProgress(o.dir, item.engine, item.model, progress);
       },
-      save: () => saveProgress(o.dir, item.engine, item.model, progress),
+      save: () => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
+        saveProgress(o.dir, item.engine, item.model, progress);
+      },
       waitForTurn: () => waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`)),
       stopServer: async (why) => {
         const s = server;
@@ -459,6 +473,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         if (s) await s.stop(why);
       },
       restart: async (c, slots) => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
         await ctx.stopServer(`restart at ctx ${c}, ${slots} slot(s)`);
         const t0 = Date.now();
         server = await startCalServer(o.dir, item.engine, item.model, c, slots, o.log, (s) => setCurrent(s));
@@ -486,6 +501,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     for (const phase of engineCheck ? o.phases.filter((p) => p.name === "A") : o.phases) {
       if (progress.phases[phase.name] === "passed") continue;
       const r = await phase.run(ctx);
+      if (isStopping()) throw new RunnerStopping("the runner is stopping");
       // Spec section 2: a paused step (two inconclusive runs in a row) leaves the model queued; the runner goes on to the
       // next model and retries the step on its next pass. The phase is neither passed nor failed.
       if (!r.passed && r.paused === true) {
@@ -531,6 +547,10 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     return finish(ok, `calibrated (${harness.id}): fill_tokens fact ${ok.fill_tokens?.fact}, aggregate ${ok.fill_tokens?.aggregate}, bug ${ok.fill_tokens?.bug}; main ${ok.main?.slots} slot(s) of ${ok.main?.slot_ctx}; ${ok.scouting_candidates?.length ?? 0} scouting candidate(s) (the threshold is applied when the record is read)`);
   } catch (err) {
     const msg = (err as Error).message;
+    if (err instanceof RunnerStopping || isStopping()) {
+      o.log(`${name}: stopped by a signal (${msg}); not counted as a crash, the model stays queued`);
+      return "paused";
+    }
     if (err instanceof PausedError) {
       o.log(`${name}: ${msg}; the model stays queued`);
       return "paused";

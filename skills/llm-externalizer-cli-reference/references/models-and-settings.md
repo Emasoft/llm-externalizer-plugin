@@ -115,7 +115,7 @@ llm-ext models replacements
 - Bare argument: none (everything goes through flags)
 - Accepted profile types: any
 
-Queue ONE model of a managed local profile (`server: managed`, api `llamacpp-local` or `locals-local`) for calibration and start the detached calibration runner. Calibration measures what the model can do on this machine (safe input size per task kind, output caps, json_schema support, server slots). Until the model has a complete record, requests for it wait (they are held). This can take hours. The command returns at once; follow it with `llm-ext models calibration-status`. A model that already has a record is refused unless `--force` is set. A model of a managed profile is also calibrated once, automatically, on its first use or when the user adds or changes it in the profile.
+Queue ONE model of a managed local profile (`server: managed`, api `llamacpp-local` or `locals-local`) for calibration and start the detached calibration runner. Calibration measures what the model can do on this machine (safe input size per task kind, output caps, json_schema support, server slots). Until the model has a complete record, requests for it wait (they are held). This can take hours. The command returns at once; follow it with `llm-ext models calibration-status`. A model that already has a record is refused unless `--force` is set. A model of a managed profile is also calibrated once, automatically, on its first use or when a model id changes in a profile that has been used.
 
 | Flag | Type | Meaning (as printed by --help; long text is truncated there) |
 |---|---|---|

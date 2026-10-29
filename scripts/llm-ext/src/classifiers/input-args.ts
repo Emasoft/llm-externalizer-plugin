@@ -1,6 +1,6 @@
 // IN-01 (design note EVORI1LK section 3): turns the file-mode words of a command line (positionals, --items, --lines, ...) into the JSON input of a spec that declares `cli`.
 // WHY its own module: run-decision.ts is already over 300 lines and parses flags; the assembly is the ONLY caller of collectInputs, so one reader serves every command.
-import type { AnySpec, SpecFlag } from "./catalog/spec.js";
+import { classifyCliUsage, type AnySpec, type SpecFlag } from "./catalog/spec.js";
 import { collectInputs, readForJev, type CollectOptions } from "./l2/inputs.js";
 import { InputError } from "./l2/input-error.js";
 
@@ -47,7 +47,7 @@ export async function assembleFileInput(spec: AnySpec, positionals: readonly str
   if (cli === undefined) throw new InputError(`classify ${spec.id} does not take file inputs yet; pass --input <file.json> or JSON on stdin`);
   if (cli.lines === false && options.lines === true) throw new InputError(`classify ${spec.id} searches the lines of each file itself; --lines is not supported`);
   if (positionals.length < cli.positional.length) {
-    throw new InputError(`usage: llm-ext classify ${spec.id} ${cli.positional.map((p) => `"<${p.name}>"`).join(" ")} <files, directories, globs, - for stdin> [--items FILE] [--lines]`);
+    throw new InputError(`usage: ${classifyCliUsage(spec)!}`);
   }
   const fields = Object.fromEntries(cli.positional.map((p, k) => [p.field, positionals[k]!]));
   const specs = positionals.slice(cli.positional.length);

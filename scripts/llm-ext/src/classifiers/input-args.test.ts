@@ -11,7 +11,7 @@ import { spec as filterSpec } from "./catalog/filter.js";
 import { spec as findSpec } from "./catalog/find.js";
 import { spec as labelSpec } from "./catalog/label.js";
 import { spec as rankSpec } from "./catalog/rank.js";
-import type { AnySpec } from "./catalog/spec.js";
+import { classifyCliUsage, type AnySpec } from "./catalog/spec.js";
 import { assembleFileInput } from "./input-args.js";
 import { INPUT_FLAGS } from "./shared-flags.js";
 import { replayFixture, type RecordedReply } from "./l0/test-fetch.js";
@@ -166,6 +166,15 @@ describe("assembleFileInput over real files", () => {
   it("no inputs at all: qs wording; a missing leading positional: usage", async () => {
     await expect(assembleFileInput(filterSpec as AnySpec, ["q"], {}, noStdin)).rejects.toThrow("nothing to filter: pass files, directories, globs, --items FILE, or - for stdin");
     await expect(assembleFileInput(filterSpec as AnySpec, [], { lines: true }, noStdin)).rejects.toThrow(/^usage: llm-ext classify filter "<question>"/);
+  });
+
+  it("the usage line names the leading positionals (shared by the parser error and --help); a JSON-only spec has none", () => {
+    expect(classifyCliUsage(filterSpec as AnySpec)).toBe("llm-ext classify filter \"<question>\" <files, directories, globs, - for stdin> [--items FILE] [--lines]");
+    expect(classifyCliUsage(rankSpec as AnySpec)).toBe("llm-ext classify rank \"<query>\" <files, directories, globs, - for stdin> [--items FILE] [--lines]");
+    // find refuses --lines, so its usage does not offer it; label has no leading positional.
+    expect(classifyCliUsage(findSpec as AnySpec)).toBe("llm-ext classify find \"<query>\" <files, directories, globs, - for stdin> [--items FILE]");
+    expect(classifyCliUsage(labelSpec as AnySpec)).toBe("llm-ext classify label <files, directories, globs, - for stdin> [--items FILE] [--lines]");
+    expect(classifyCliUsage(checkSpec as AnySpec)).toBeUndefined();
   });
 });
 

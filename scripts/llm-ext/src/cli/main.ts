@@ -30,6 +30,7 @@ import {
 } from "../config.js";
 import { describeAcceptedTypes, profileSelectionRefusal } from "../profile-accept.js";
 import { selectedChatProfileErrors } from "../classifiers/profile-checks.js";
+import { classifyCliUsage } from "../classifiers/catalog/spec.js";
 import { estimateToolRun, renderEstimate } from "../estimate.js";
 import { buildTools } from "../tools/definitions.js";
 import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, isGroupName, resolveInvocation, runClassifyCommand, suggestCommand } from "./launcher.js";
@@ -602,10 +603,14 @@ function printToolHelp(
   // sees only `--input_file` and cannot tell the same value may be passed
   // bare, which is how every doc and skill actually calls these commands.
   const arg = exampleArgFor(positional);
+  // A classify action that takes files has leading positionals of its own (the filter question, the rank query):
+  // the usage shows them, from the same line its parser prints on a usage error (classifyCliUsage).
+  const classifySpec = classifySpecFor(tool.name);
+  const fileUsage = classifySpec !== undefined ? classifyCliUsage(classifySpec) : undefined;
   process.stdout.write(
-    `\nUsage:\n  llm-ext ${invocation}` +
-      (positional ? ` [${positional}]` : "") +
-      " [--flag value ...]\n",
+    fileUsage !== undefined
+      ? `\nUsage:\n  ${fileUsage} [--flag value ...]\n  llm-ext ${invocation} --input <file.json> [--flag value ...]   (or the JSON input on stdin)\n`
+      : `\nUsage:\n  llm-ext ${invocation}` + (positional ? ` [${positional}]` : "") + " [--flag value ...]\n",
   );
   if (exampleIsRunnable(tool, positional)) {
     process.stdout.write(

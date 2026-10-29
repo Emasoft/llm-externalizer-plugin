@@ -75,8 +75,8 @@ llm-ext classify screen --input ./request.json
 
 ### `llm-ext classify filter`
 
-- Usage: `llm-ext classify filter [--flag value ...]`
-- Bare argument: none (everything goes through flags)
+- Usage: `llm-ext classify filter "<question>" <files, directories, globs, - for stdin> [--items FILE] [--lines] [--flag value ...]`, or `llm-ext classify filter --input <file.json> [--flag value ...]` (or the JSON input on stdin)
+- Bare arguments: the question first (a positional, never a flag), then the inputs
 - Accepted profile types: classifier
 
 Classify decision "filter" (catalog spec; flags, defaults and ranges are generated from it).
@@ -102,13 +102,13 @@ Classify decision "filter" (catalog spec; flags, defaults and ranges are generat
 
 Example:
 ```bash
-llm-ext classify filter --items ./items.jsonl
+llm-ext classify filter "Does this line report a failure (not a warning)?" --items ./items.jsonl
 ```
 
 ### `llm-ext classify label`
 
-- Usage: `llm-ext classify label [--flag value ...]`
-- Bare argument: none (everything goes through flags)
+- Usage: `llm-ext classify label <files, directories, globs, - for stdin> [--items FILE] [--lines] [--flag value ...]`, or `llm-ext classify label --input <file.json> [--flag value ...]` (or the JSON input on stdin)
+- Bare arguments: the inputs (files, directories, globs, `-` for stdin); the labels come from `--labels` or `--labels-json`
 - Accepted profile types: classifier
 
 Classify decision "label" (catalog spec; flags, defaults and ranges are generated from it).
@@ -136,13 +136,13 @@ Classify decision "label" (catalog spec; flags, defaults and ranges are generate
 
 Example:
 ```bash
-llm-ext classify label --items ./items.jsonl
+llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl
 ```
 
 ### `llm-ext classify rank`
 
-- Usage: `llm-ext classify rank [--flag value ...]`
-- Bare argument: none (everything goes through flags)
+- Usage: `llm-ext classify rank "<query>" <files, directories, globs, - for stdin> [--items FILE] [--lines] [--flag value ...]`, or `llm-ext classify rank --input <file.json> [--flag value ...]` (or the JSON input on stdin)
+- Bare arguments: the query first (a positional, never a flag), then the inputs
 - Accepted profile types: classifier
 
 Classify decision "rank" (catalog spec; flags, defaults and ranges are generated from it).
@@ -169,13 +169,13 @@ Classify decision "rank" (catalog spec; flags, defaults and ranges are generated
 
 Example:
 ```bash
-llm-ext classify rank --items ./items.jsonl
+llm-ext classify rank "where do we issue refunds?" ./src
 ```
 
 ### `llm-ext classify find`
 
-- Usage: `llm-ext classify find [--flag value ...]`
-- Bare argument: none (everything goes through flags)
+- Usage: `llm-ext classify find "<query>" <files, directories, globs, - for stdin> [--items FILE] [--flag value ...]`, or `llm-ext classify find --input <file.json> [--flag value ...]` (or the JSON input on stdin)
+- Bare arguments: the query first (a positional, never a flag), then the inputs; `--lines` is refused (find searches the lines of each file itself)
 - Accepted profile types: classifier
 
 Classify decision "find" (catalog spec; flags, defaults and ranges are generated from it).
@@ -203,7 +203,7 @@ Classify decision "find" (catalog spec; flags, defaults and ranges are generated
 
 Example:
 ```bash
-llm-ext classify find --items ./items.jsonl
+llm-ext classify find "the retry backoff logic" ./src/big_module.py
 ```
 
 ### `llm-ext classify decide`

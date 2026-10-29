@@ -25,6 +25,7 @@ import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, isCalibratorProcess, readBrokerState, readCalibratorState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
+import { serverStopText } from "./server-commands.js";
 import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, recordPath, writeRecord } from "../calibration/record.js";
 import { recordFixture } from "../calibration/record-fixture.js";
 import { loadedIdentity, type LoadedIdentity } from "../calibration/fingerprint.js";
@@ -59,7 +60,14 @@ if (mode === "__broker") {
   // TEST_SLOW_PHASE: a phase "A" that records one trial and then waits, so a test can SIGKILL the runner mid-model; resumed, it passes.
   // TEST_PHASE_A: the real Phase A. TEST_PASS_PHASE_A: a phase "A" that records one trial and passes.
   const env = process.env;
-  const phases = env.TEST_SLOW_PHASE === "1"
+  // TEST_STOP_PHASE: a phase "A" that records one trial, then fails the way a request does when its cal server dies.
+  const phases = env.TEST_STOP_PHASE === "1"
+    ? [{ name: "A", run: async (ctx) => {
+        if (ctx.progress.trials.length === 0) ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
+        while (ctx.server.alive()) await new Promise((r) => setTimeout(r, 100));
+        throw new Error("the cal server died during a request");
+      } }]
+    : env.TEST_SLOW_PHASE === "1"
     ? [{ name: "A", run: async (ctx) => {
         if (ctx.progress.trials.length === 0) {
           ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
@@ -1252,6 +1260,31 @@ describe("calibration runner (P6 step 2)", () => {
     await waitFor("the broker's sweep to stop the orphaned cal server", () => /stopped orphaned cal llama-server/.test(brokerLogOf(dir)), 90_000);
     expect(alive(cal.pid)).toBe(false);
   }, 180_000);
+  it("review of 2a3ac697 (a): `models server-stop` on a mid-run cal server stops its runner first: no crash is counted, the trial and the queue entry stay", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    rmSync(recordPath(dir, "llama", B));
+    queueB(dir);
+    const runner = spawnRunner(dir, { TEST_STOP_PHASE: "1" });
+    await waitFor("the first trial", () => existsSync(progressPath(dir, "llama", B)) && loadProgress(dir, "llama", B, null).trials.length === 1);
+    const cal = readRegistry(dir, "llama").find((e) => e.role === "cal")!;
+    expect(cal.ownerPid).toBe(runner);
+    const r = await serverStopText(dir, { role: "cal" });
+    expect(r.isError).toBe(false);
+    expect(r.text).toContain(`stopped the calibration runner pid ${runner} first`);
+    // Before the fix the runner counted the dead server as crash 1 of 3 and started a new cal server at once.
+    await waitFor("the runner to exit", () => !alive(runner), 90_000);
+    expect(alive(cal.pid)).toBe(false);
+    const prog = loadProgress(dir, "llama", B, null);
+    expect(prog.crashes ?? 0).toBe(0);
+    expect(prog.trials.map((t) => t.step)).toEqual(["A/test"]);
+    expect(prog.phases.A).toBeUndefined();
+    expect(readQueue(dir).some((q) => q.model === B)).toBe(true);
+    expect(existsSync(recordPath(dir, "llama", B))).toBe(false);
+    expect(readRegistry(dir, "llama").filter((e) => e.role === "cal")).toEqual([]);
+    expect(runnerLogOf(dir)).toMatch(/not counted as a crash, the model stays queued/);
+    expect(runnerLogOf(dir)).not.toMatch(/calibration stopped \(1 of 3\)/);
+  }, 300_000);
   it("trigger 3: `models calibrate` queues a profile model and starts the runner; `models calibration-status` reports it; an unknown model is refused", async () => {
     const cli = await cliBundle();
     const cfg = newDir();

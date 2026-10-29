@@ -102,3 +102,15 @@ export interface DecisionSpec<I, R> {
 
 // Registry entries are heterogeneous in I and R; the registry only reads the shape-independent fields.
 export type AnySpec = DecisionSpec<any, any>;
+
+/**
+ * The file-mode command line of a spec that declares `cli`, else undefined (JSON input only). WHY one function: the
+ * usage error of input-args.ts and `llm-ext classify <action> --help` print the same line, so the help can never again
+ * say the command takes no bare argument while the parser needs the question as one (review before 14.2.0).
+ */
+export function classifyCliUsage(spec: AnySpec): string | undefined {
+  const cli = spec.cli;
+  if (cli === undefined) return undefined;
+  const lead = cli.positional.map((p) => ` "<${p.name}>"`).join("");
+  return `llm-ext classify ${spec.id}${lead} <files, directories, globs, - for stdin> [--items FILE]${cli.lines === false ? "" : " [--lines]"}`;
+}
