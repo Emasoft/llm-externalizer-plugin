@@ -528,6 +528,11 @@ export function isLlamaServerArgv0(token: string | undefined): boolean {
 /** The -X option that marks a Locals server as llm-ext's own (local-locals-server.ts puts it in the argv). */
 export const LOCALS_MARKER_OPTION = "llm-ext-server";
 
+/** Is this path a Python interpreter (basename python, python3, python3.12, python.exe)? The Locals server's argv[0] must be one. */
+export function isPythonPath(p: string): boolean {
+  return /^python[0-9.]*(\.exe)?$/i.test(p.split(/[\\/]/).pop() ?? "");
+}
+
 /**
  * Is this argv an llm-ext Locals server (TRDD-ZGSGGHQG)? It must run the
  * locals.server module AND carry llm-ext's `-X llm-ext-server=` marker. A
@@ -537,7 +542,7 @@ export const LOCALS_MARKER_OPTION = "llm-ext-server";
 export function isLocalsServerArgv(argv: readonly string[]): boolean {
   // The interpreter too: a process of any other program that merely carries
   // these tokens as arguments (`node -e ... -m locals.server -X ...`) is not one.
-  if (!/^python[0-9.]*(\.exe)?$/i.test((argv[0] ?? "").split(/[\\/]/).pop() ?? "")) return false;
+  if (!isPythonPath(argv[0] ?? "")) return false;
   const m = argv.indexOf("-m");
   if (m < 0 || argv[m + 1] !== "locals.server") return false;
   return argv.some((t, i) => i > 0 && argv[i - 1] === "-X" && t.startsWith(`${LOCALS_MARKER_OPTION}=`));

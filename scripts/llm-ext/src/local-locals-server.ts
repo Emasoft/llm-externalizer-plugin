@@ -22,11 +22,11 @@
  */
 
 import { execFile, type ChildProcess } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, statSync } from "node:fs";
+import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmdirSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { spawnDetachedChild } from "./bench-spawn.js";
-import { httpStatus, LOCALS_MARKER_OPTION, ManagedServerError, pidState, sleep, STALL_MS, POLL_MS, type ManagedTarget } from "./local-llama-server.js";
+import { httpStatus, isPythonPath, LOCALS_MARKER_OPTION, ManagedServerError, pidState, sleep, STALL_MS, POLL_MS, type ManagedTarget } from "./local-llama-server.js";
 
 /**
  * Parallel requests per Locals main server (its --slots): the broker
@@ -72,7 +72,8 @@ function execText(cmd: string, args: string[]): Promise<string | null> {
  */
 export async function localsPython(env: NodeJS.ProcessEnv = process.env): Promise<string> {
   for (const dir of (env.PATH ?? "").split(delimiter)) {
-    if (!dir) continue;
+    // A relative PATH entry would resolve against the broker's cwd: never trusted.
+    if (!dir || !isAbsolute(dir)) continue;
     const cmd = join(dir, "locals");
     if (!existsSync(cmd)) continue;
     let line: string;
@@ -81,8 +82,11 @@ export async function localsPython(env: NodeJS.ProcessEnv = process.env): Promis
     } catch {
       continue;
     }
+    // Review F-5: only an absolute Python interpreter counts (a `#!/usr/bin/env python3`
+    // shim names env, and a non-python basename could never be identified as ours
+    // later by isLocalsServerArgv); anything else falls through to `uv tool dir`.
     const exe = line.startsWith("#!") ? line.slice(2).trim().split(/\s+/)[0] : "";
-    if (exe && isAbsolute(exe) && existsSync(exe)) return exe;
+    if (exe && isAbsolute(exe) && isPythonPath(exe) && existsSync(exe)) return exe;
   }
   const toolDir = (await execText("uv", ["tool", "dir"]))?.trim();
   if (toolDir) {
@@ -141,7 +145,12 @@ export function localsServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   }
   return out;
 }
-const LOCALS_ENV_KEEP = new Set(["PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "XDG_CACHE_HOME", "HUGGINGFACE_HUB_CACHE"]);
+// Review F-9: proxy and CA settings too, or a model download behind a proxy fails.
+const LOCALS_ENV_KEEP = new Set([
+  "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "XDG_CACHE_HOME", "HUGGINGFACE_HUB_CACHE",
+  "HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy",
+  "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+]);
 
 /**
  * Start a Locals server detached in its own process group (pgid === pid), its
@@ -157,20 +166,26 @@ export async function spawnLocalsServer(
   if (existsSync(logFile)) renameSync(logFile, `${logFile}.1`);
   const argv = buildLocalsArgv(python, target, marker);
   const cwd = mkdtempSync(join(tmpdir(), "llm-ext-locals-"));
-  let rejectSpawn: (err: Error) => void = () => undefined;
-  const child = spawnDetachedChild({
-    command: python,
-    args: argv.slice(1),
-    logPath: logFile,
-    env: localsServerEnv(process.env),
-    cwd,
-    onError: (err) => rejectSpawn(new ManagedServerError(`could not start the Locals server (${python}): ${err.message}`)),
-  });
-  const pid = await new Promise<number>((resolve, reject) => {
-    rejectSpawn = reject;
-    child.once("spawn", () => resolve(child.pid as number));
-  });
-  return { pid, argv, child, cwd };
+  try {
+    let rejectSpawn: (err: Error) => void = () => undefined;
+    const child = spawnDetachedChild({
+      command: python,
+      args: argv.slice(1),
+      logPath: logFile,
+      env: localsServerEnv(process.env),
+      cwd,
+      onError: (err) => rejectSpawn(new ManagedServerError(`could not start the Locals server (${python}): ${err.message}`)),
+    });
+    const pid = await new Promise<number>((resolve, reject) => {
+      rejectSpawn = reject;
+      child.once("spawn", () => resolve(child.pid as number));
+    });
+    return { pid, argv, child, cwd };
+  } catch (err) {
+    // Review F-6: a spawn that never started leaves no process in the cwd; remove it (rmdir, never recursive).
+    rmdirSync(cwd);
+    throw err;
+  }
 }
 
 /** The Hugging Face hub cache in huggingface_hub's lookup order (Locals downloads through snapshot_download). */
@@ -190,9 +205,22 @@ function sizeOf(p: string): number {
   }
 }
 
-/** Changes whenever the server log or the model's cache folder grows (a download in progress). */
-function progressSignature(model: string, log: string): string {
-  let sig = String(sizeOf(log));
+/** The process's cumulative CPU time as `ps` prints it (e.g. 0:05.53), "" when unreadable. */
+async function cpuTime(pid: number): Promise<string> {
+  return (await execText("ps", ["-o", "time=", "-p", String(pid)]))?.trim() ?? "";
+}
+
+/**
+ * Changes whenever the server makes progress: its log or the model's cache
+ * folder grows (a download), or its CPU time grows. Review F-3, measured on
+ * a 2.9 GB cached model (reports/locals-mlx P2 fix report): during the load
+ * the port is closed and the log is silent for seconds at a time while the
+ * process reads the weights (RSS +200 MB per 0.27 s, CPU time rising), so a
+ * silent load still counts as progress; only a process that does nothing at
+ * all (no CPU, no log, no download) is stalled.
+ */
+async function progressSignature(model: string, log: string, pid: number): Promise<string> {
+  let sig = `${String(sizeOf(log))}|cpu ${await cpuTime(pid)}`;
   const [org, name] = model.split("/");
   const blobs = join(hubCacheDir(), `models--${org}--${name}`, "blobs");
   try {
@@ -216,12 +244,13 @@ function logTail(log: string): string {
  * Wait until the Locals server answers /health 200 and its /stats.model is the
  * expected model (measured: the full Hugging Face id; the listener opens only
  * after the model loaded, so a closed port with the pid alive is loading or
- * downloading). Not bounded by a request timeout: the only limit is the stall
- * rule (neither the log nor the model's cache grew for STALL_MS).
+ * downloading). Not bounded by a request timeout: waiting is never an error.
+ * The only limit is the stall rule: `stallMs` with no progress at all
+ * (progressSignature: log, model cache and CPU time all unchanged).
  */
-export async function waitLocalsReady(target: ManagedTarget, pid: number, isDead: () => boolean, log: string): Promise<void> {
+export async function waitLocalsReady(target: ManagedTarget, pid: number, isDead: () => boolean, log: string, stallMs = STALL_MS): Promise<void> {
   const base = `http://127.0.0.1:${target.port}`;
-  let sig = progressSignature(target.model, log);
+  let sig = await progressSignature(target.model, log, pid);
   let lastProgress = Date.now();
   for (;;) {
     if (isDead() || pidState(pid) !== "alive") {
@@ -237,22 +266,22 @@ export async function waitLocalsReady(target: ManagedTarget, pid: number, isDead
         served = undefined;
       }
       if (served === target.model) return;
-      throw new ManagedServerError(`the Locals server on port ${target.port} serves '${String(served)}', expected '${target.model}'`);
+      // Review F-4: an unanswered or unreadable /stats is not a verdict: ask again on the next poll.
+      if (typeof served === "string") throw new ManagedServerError(`the Locals server on port ${target.port} serves '${served}', expected '${target.model}'`);
     }
     const now = Date.now();
-    const next = progressSignature(target.model, log);
+    const next = await progressSignature(target.model, log, pid);
     if (next !== sig) {
       sig = next;
       lastProgress = now;
-    } else if (now - lastProgress > STALL_MS) {
+    } else if (now - lastProgress > stallMs) {
       throw new ManagedServerError(
-        `the Locals server for '${target.model}' on port ${target.port} (pid ${pid}) made no progress for ${STALL_MS / 1000} s (neither its log nor the model cache grew). ${logTail(log)}`,
+        `the Locals server for '${target.model}' on port ${target.port} (pid ${pid}) made no progress for ${Math.round(stallMs / 1000)} s (no CPU time, no log output, no download). ${logTail(log)}`,
       );
     }
     await sleep(POLL_MS);
   }
 }
-
 /** The ids the Locals server lists on /v1/models (measured: `locals/<short>` and, for a thinking model, `locals/<short>-thinking`). */
 export async function localsModelIds(port: number): Promise<string[]> {
   const r = await httpStatus(`http://127.0.0.1:${port}/v1/models`, "");

@@ -25,10 +25,10 @@ import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { BROKER_ARGV, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { isLocalsServerArgv, llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { freePort, isLocalsServerArgv, isPythonPath, llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
-import { buildLocalsArgv, hasLocalsMarker, LOCALS_MAIN_SLOTS, localsOutgoingModel, localsPython, parseLocalsModel } from "../local-locals-server.js";
-import { localsPlatformSupported } from "../config.js";
+import { buildLocalsArgv, hasLocalsMarker, LOCALS_MAIN_SLOTS, localsOutgoingModel, localsPython, parseLocalsModel, waitLocalsReady } from "../local-locals-server.js";
+import { localsModelErrors, localsPlatformSupported } from "../config.js";
 import { clockForCall, retryWindowClosed, startRetryClock, type RetryClock } from "../provider/http.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -769,6 +769,77 @@ describe("retry clock and walker classification (review M10, M11)", () => {
   });
 });
 
+/**
+ * Review F-1 (TRDD-ZGSGGHQG): a broker from before the one-broker change
+ * (`__broker llama`, state in broker-llama.json) must never stay alive beside
+ * the new broker-local one. The test runs the REAL pre-change broker: the
+ * dist/llm-ext.js of commit fd7c3862, read from git (a shallow clone fetches
+ * that one commit; if it cannot, the test fails: never a skip).
+ */
+const LEGACY_COMMIT = "fd7c3862";
+let legacyBuildDir: string | null = null;
+function legacyBundle(): string {
+  const repo = join(HERE, "..", "..", "..", "..");
+  const git = (args: string[]): string => execFileSync("git", ["-C", repo, ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  try {
+    git(["cat-file", "-e", `${LEGACY_COMMIT}^{commit}`]);
+  } catch {
+    git(["fetch", "--no-tags", "--depth=1", "origin", LEGACY_COMMIT]);
+  }
+  // Under the package node_modules (a gitignored cache), like cliBundle: the bundle keeps better-sqlite3 external.
+  legacyBuildDir ??= mkdtempSync(join(HERE, "..", "..", "node_modules", ".cache-llm-ext-legacy-broker-"));
+  const out = join(legacyBuildDir, "llm-ext.mjs");
+  if (!existsSync(out)) writeFileSync(out, git(["show", `${LEGACY_COMMIT}:scripts/llm-ext/dist/llm-ext.js`]));
+  return out;
+}
+afterAll(() => {
+  if (legacyBuildDir) rmSync(legacyBuildDir, { recursive: true, force: true });
+});
+
+describe("a pre-ZGSGGHQG broker is drained, never left beside the new one (review F-1)", () => {
+  it("an old `__broker llama` holding a llama main is asked to drain; the new broker starts nothing until it exited; never two mains", async () => {
+    const dir = newDir();
+    const old = spawn(process.execPath, [legacyBundle(), "__broker", "llama"], {
+      env: { ...process.env, LLAMA_CACHE, LLM_EXT_CONFIG_DIR: dir },
+      detached: true,
+      stdio: "ignore",
+    });
+    try {
+      const legacyState = join(dir, "broker-llama.json");
+      for (let i = 0; i < 300 && !existsSync(legacyState); i++) await new Promise((r) => setTimeout(r, 100));
+      const st = JSON.parse(readFileSync(legacyState, "utf8")) as { pid: number; port: number; token: string };
+      expect(st.pid).toBe(old.pid);
+      // Give the old broker a llama main: one job, polled to its end.
+      const sub = await fetch(`http://127.0.0.1:${st.port}/v1/jobs`, {
+        method: "POST",
+        headers: { [TOKEN_HEADER]: st.token, [CTX_HEADER]: "1024", "content-type": "application/json" },
+        body: JSON.stringify({ model: A, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: 2 }),
+      });
+      expect(sub.status).toBe(202);
+      const { job } = (await sub.json()) as { job: string };
+      let status = 204;
+      for (let i = 0; i < 20 && status === 204; i++) status = (await fetch(`http://127.0.0.1:${st.port}/v1/jobs/${job}?wait=30`, { headers: { [TOKEN_HEADER]: st.token } })).status;
+      expect(status).toBe(200);
+      const oldMain = readRegistry(dir, "llama").find((e) => e.role === "main")!;
+      expect(oldMain.ownerPid).toBe(old.pid);
+      expect(alive(oldMain.pid)).toBe(true);
+
+      const w = watchMains(dir);
+      const r = await runClient(dir, jobsOf(B, 1));
+      const max = w.stop();
+      expect(r.results[0].status).toBe(200);
+      expect(r.pid).not.toBe(old.pid);
+      expect(alive(old.pid!)).toBe(false);
+      expect((await processSnapshot()).filter((p) => p.pgid === oldMain.pgid)).toEqual([]);
+      expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(new RegExp(`an older broker \\(pid ${old.pid}, .*asked it to drain`));
+      expect(max).toBe(1);
+    } finally {
+      // The old broker is this test's own child: stopped by its pid if it is still there.
+      killQuietly(old.pid!);
+    }
+  }, 300_000);
+});
+
 describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
   const mainEntryOf = (dir: string) => readRegistry(dir, "llama").find((e) => e.role === "main")!;
   const waitGone = async (pid: number, ms: number): Promise<void> => {
@@ -1431,6 +1502,61 @@ describe("Locals engine helpers (pure)", () => {
     expect(localsOutgoingModel([], {})).toBeNull();
   });
 
+  it("isPythonPath: python interpreters only (review F-5)", () => {
+    for (const p of ["/v/bin/python", "/usr/bin/python3", "/x/python3.12", "C:\\py\\python.exe"]) expect(isPythonPath(p)).toBe(true);
+    for (const p of ["/usr/bin/env", "/x/pypy3", "/x/node", "/x/python-config", ""]) expect(isPythonPath(p)).toBe(false);
+  });
+
+  it("localsPython: a `#!/usr/bin/env python3` shim on PATH is never taken as the interpreter (review F-5)", async () => {
+    const shimDir = mkdtempSync(join(tmpdir(), "llm-ext-locals-shim-"));
+    try {
+      writeFileSync(join(shimDir, "locals"), "#!/usr/bin/env python3\nprint('x')\n", { mode: 0o755 });
+      // Falls through to `uv tool dir` (where uv and Locals exist) or reports Locals missing; never /usr/bin/env.
+      const got = await localsPython({ PATH: shimDir }).then(
+        (p) => p,
+        (e: Error) => e.message,
+      );
+      expect(got === "" || got.includes("/usr/bin/env")).toBe(false);
+      expect(isPythonPath(got) || /Locals is not installed/.test(got)).toBe(true);
+    } finally {
+      rmSync(shimDir, { recursive: true, force: true });
+    }
+  });
+
+  it("localsModelErrors: GGUF and mlx/ always refused; a managed profile also needs an org/name repo id (review F-8)", () => {
+    expect(localsModelErrors("P", [LOCALS_MODEL, "locals/smollm-135m-instruct"], true)).toEqual([]);
+    expect(localsModelErrors("P", ["org/m.gguf"], false)[0]).toMatch(/GGUF/);
+    expect(localsModelErrors("P", ["mlx/org/m"], false)[0]).toMatch(/stock mlx/);
+    expect(localsModelErrors("P", ["smollm"], false)).toEqual([]);
+    expect(localsModelErrors("P", ["smollm"], true)[0]).toMatch(/must be a Hugging Face repo id .*server: managed/);
+    expect(localsModelErrors("P", ["/models/smollm"], true)).toHaveLength(1);
+  });
+
+  it("waitLocalsReady: a silent load that keeps using CPU is waited for; only a process doing nothing at all stalls (review F-3)", async () => {
+    // Real processes, a closed port and a 2 s stall window (production: STALL_MS).
+    // The busy one writes no log and downloads nothing, like a Locals load
+    // reading weights from disk (measured: port closed, log silent, CPU rising).
+    const target = { port: await freePort(), model: "llm-ext-test/no-such-model", ctx: 0 };
+    const log = join(newDir(), "silent.log");
+    writeFileSync(log, "");
+    const busy = spawn(process.execPath, ["-e", "const end = Date.now() + 60000; while (Date.now() < end) {}"], { detached: true, stdio: "ignore" });
+    const idle = foreignProcess();
+    try {
+      const outcome = await Promise.race([
+        waitLocalsReady(target, busy.pid!, () => false, log, 2000).then(
+          () => "ready",
+          (e: Error) => `error: ${e.message}`,
+        ),
+        new Promise<string>((r) => setTimeout(() => r("still waiting"), 7000)),
+      ]);
+      expect(outcome).toBe("still waiting");
+      await expect(waitLocalsReady(target, idle, () => false, log, 2000)).rejects.toThrow(/made no progress for 2 s/);
+    } finally {
+      killQuietly(busy.pid!);
+      killQuietly(idle);
+    }
+  }, 60_000);
+
   it("localsPlatformSupported: macOS on Apple silicon only", () => {
     expect(localsPlatformSupported("darwin", "arm64")).toBe(true);
     expect(localsPlatformSupported("darwin", "x64")).toBe(false);
@@ -1617,6 +1743,43 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
       rmSync(cwd, { recursive: true, force: true });
     }
   }, 120_000);
+
+  it("a live main recorded as this broker's own (an earlier stop failed) is stopped before a main of the other engine starts (review F-2)", async () => {
+    const dir = newDir();
+    // The broker runs with a llama main.
+    const first = await runClient(dir, jobsOf(A, 1), localsEnv(dir));
+    expect(first.results[0].status).toBe(200);
+    // A real llm-ext Locals server (this dir's marker) recorded in the Locals
+    // registry as owned by THAT broker: what a failed stop leaves behind
+    // (stopOwnServer throws before releaseEntry, while `server` is already null).
+    const port = await freePort();
+    const cwd = mkdtempSync(join(osTmpdir(), "llm-ext-locals-test-"));
+    const argv = buildLocalsArgv(python, { port, model: LOCALS_MODEL, ctx: 0 }, roleLogFile(dir, "main", "locals"));
+    const leftover = spawn(argv[0], argv.slice(1), { cwd, env: { PATH: process.env.PATH ?? "", HOME: dir, HF_HOME: process.env.HF_HOME ?? join(homedir(), ".cache", "huggingface") }, detached: true, stdio: "ignore" });
+    try {
+      await new Promise((r) => setTimeout(r, 500));
+      const row = (await processSnapshot()).find((p) => p.pid === leftover.pid)!;
+      expect(isLocalsServerArgv(row.argv)).toBe(true);
+      const entry = { role: "main", pid: leftover.pid!, pgid: leftover.pid!, port, argv: row.argv, model: LOCALS_MODEL, ctx: 0, ownerPid: first.pid, startedAt: new Date().toISOString() };
+      writeFileSync(registryPath(dir, "locals"), JSON.stringify({ entries: [entry] }));
+      expect(readRegistry(dir, "locals")).toHaveLength(1);
+      // A job for the other llama model: the swap must stop the leftover first.
+      const r = await runClient(dir, jobsOf(B, 1), localsEnv(dir));
+      expect(r.results[0].status).toBe(200);
+      expect(r.pid).toBe(first.pid);
+      expect(alive(leftover.pid!)).toBe(false);
+      expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(new RegExp(`stopped this broker's leftover main Locals server pid ${leftover.pid}`));
+      expect(readRegistry(dir, "locals")).toEqual([]);
+    } finally {
+      try {
+        process.kill(-leftover.pid!, "SIGKILL");
+      } catch {
+        /* stopped by the broker, as expected */
+      }
+      for (let i = 0; i < 50 && alive(leftover.pid!); i++) await new Promise((r) => setTimeout(r, 100));
+      rmdirSync(cwd);
+    }
+  }, 300_000);
 
   it("cross-engine orphan: after a broker SIGKILL with a Locals main up, a llama job stops the orphaned Locals main first, never two mains", async () => {
     const dir = newDir();

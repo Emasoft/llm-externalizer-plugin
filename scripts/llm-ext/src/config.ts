@@ -23,6 +23,7 @@ import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { parse as yamlParse, Document as YamlDocument, isScalar, parseDocument, Scalar } from "yaml";
 import { registeredTools } from "./model-qualification/registry.js";
+import { parseLocalsModel } from "./local-locals-server.js";
 // PT-02: cyclic with default-profiles-state (it imports getConfigDir); safe because both sides only call the other inside functions.
 import { isMigrationStepApplied } from "./default-profiles-state.js";
 
@@ -669,6 +670,26 @@ export interface ValidationResult {
 /** TRDD-ZGSGGHQG: Locals (MLX) runs on macOS on Apple silicon only; the first darwin check in llm-ext. */
 export function localsPlatformSupported(platform: string = process.platform, arch: string = process.arch): boolean {
   return platform === "darwin" && arch === "arm64";
+}
+/**
+ * The model-id errors of a locals-local profile or binding. Always refused: a
+ * GGUF file (llama.cpp's format) and the `mlx/` prefix (Locals' stock mlx-lm
+ * engine, which has no memory guard). Managed (the broker starts Locals with
+ * `--model <id>` and checks /stats.model against it): the id must also be a
+ * Hugging Face repo id, the broker's own parseLocalsModel rule (review F-8),
+ * so a short alias or a path fails here, not at the first request.
+ */
+export function localsModelErrors(where: string, models: readonly string[], managed: boolean): string[] {
+  const out: string[] = [];
+  for (const m of models) {
+    if (/\.gguf$/i.test(m)) out.push(`${where}: '${m}' is a GGUF model; api locals-local runs MLX models (use llamacpp-local for GGUF)`);
+    else if (m.startsWith("mlx/")) out.push(`${where}: '${m}' selects Locals' stock mlx engine, which has no memory guard; use the plain model id`);
+    else if (managed) {
+      const p = parseLocalsModel(m);
+      if ("error" in p) out.push(`${where}: ${p.error} (server: managed)`);
+    }
+  }
+  return out;
 }
 export const API_PRESETS: Record<string, ApiPreset> = {
   // ── Local presets ─────────────────────────────────────────────────
@@ -2857,6 +2878,11 @@ export function validateProfile(
         if (ids.length === 0) {
           errors.push(`Profile '${name}': ${at}.models must list at least one model id`);
         }
+        // Review F-8: a locals-local binding gets the same platform and model checks as a locals-local profile (never managed: only the profile's own group is).
+        if (e.api === "locals-local") {
+          if (!localsPlatformSupported()) errors.push(`Profile '${name}': ${at} uses locals-local, which needs macOS on Apple silicon`);
+          errors.push(...localsModelErrors(`Profile '${name}': ${at}`, ids, false));
+        }
         // (D6a) The D0 cross-group duplicate refusal is GONE: the same id in
         // two groups means "tried in group order" (E-P4 keeps only the
         // per-group checks above). E-P3 below refuses the meaningless
@@ -3082,11 +3108,8 @@ export function validateProfile(
   // memory guard (Locals docs). Locals itself enforces the MLX format.
   if (profile.api === "locals-local") {
     if (!localsPlatformSupported()) errors.push(`Profile '${name}': api locals-local needs macOS on Apple silicon (Locals runs MLX models only there)`);
-    for (const m of [profile.model, profile.second_model, profile.third_model]) {
-      if (typeof m !== "string" || m === "") continue;
-      if (/\.gguf$/i.test(m)) errors.push(`Profile '${name}': '${m}' is a GGUF model; api locals-local runs MLX models (use llamacpp-local for GGUF)`);
-      else if (m.startsWith("mlx/")) errors.push(`Profile '${name}': '${m}' selects Locals' stock mlx engine, which has no memory guard; use the plain model id`);
-    }
+    const models = [profile.model, profile.second_model, profile.third_model].filter((m): m is string => typeof m === "string" && m !== "");
+    errors.push(...localsModelErrors(`Profile '${name}'`, models, rawServer === "managed"));
   }
   // ── ensemble (E-D2, E-E1..E-E6 — D5, TRDD-90DM5YHO) ───────────────
   // `ensemble_pins` was REMOVED in 14.1.0: it never had a runtime reader, so

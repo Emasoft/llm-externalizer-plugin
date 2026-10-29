@@ -49,9 +49,12 @@ import {
   STATE_HEADER,
   TIMEOUT_HEADER,
   TOKEN_HEADER,
+  isBrokerProcess,
+  readLegacyBrokerStates,
   removeBrokerStateIfOwn,
   writeBrokerState,
   type BrokerEngine,
+  type BrokerState,
   type JobReply,
 } from "./protocol.js";
 
@@ -157,6 +160,25 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let server: RunningServer | null = null;
   let swapping = false;
   let draining = false;
+  /** Review F-1: a live pre-ZGSGGHQG broker (broker-llama.json), null when none. */
+  let legacy: BrokerState | null = null;
+  let legacyAsked = 0;
+  const checkLegacy = async (): Promise<void> => {
+    let found: BrokerState | null = null;
+    for (const s of readLegacyBrokerStates(o.dir)) if (pidState(s.pid) === "alive" && (await isBrokerProcess(s.pid))) found = s;
+    if (found && legacyAsked !== found.pid) {
+      legacyAsked = found.pid;
+      o.log(`an older broker (pid ${found.pid}, version ${found.version}, broker-llama.json) is running: asked it to drain; no main server starts until it exits`);
+      // The same drain request as a version handover: it refuses new jobs, finishes its queue and exits.
+      await fetch(`http://127.0.0.1:${found.port}/v1/shutdown`, { method: "POST", headers: { [TOKEN_HEADER]: found.token }, signal: AbortSignal.timeout(3000) }).catch((e: Error) =>
+        o.log(`the drain request to the older broker failed (${e.message}); waiting for it to exit`),
+      );
+    }
+    if (!found && legacy) o.log(`the older broker (pid ${legacy.pid}) exited; main servers start again`);
+    legacy = found;
+  };
+  /** A registry-shaped holder for SlotBusyError, so the wait is the busy-slot wait (retried by the tick, never an error). */
+  const legacyHolder = (s: BrokerState): RegistryEntry => ({ role: "main", pid: s.pid, pgid: s.pid, port: s.port, argv: [], model: "", ctx: 0, ownerPid: s.pid, startedAt: s.startedAt });
   let exiting = false;
   let lastRequestAt = Date.now();
   /** Spec 10 "no server and no request": the idle exit also counts from the end of the last server stop. */
@@ -175,10 +197,22 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let memAt = 0;
   let memReading: Promise<void> | null = null;
   let memWaitLoggedAt = 0;
+  /**
+   * Review F-7: bumped at every Locals dispatch. A reading started before a
+   * dispatch is discarded when it lands after it, so the next dispatch is
+   * gated only by memory read AFTER the previous one.
+   */
+  let memGen = 0;
   const refreshMemory = (): void => {
     if (memReading) return;
+    const gen = memGen;
+    let stale = false;
     memReading = memoryFreePercent()
       .then((v) => {
+        if (gen !== memGen) {
+          stale = true;
+          return;
+        }
         memFree = v;
         memAt = Date.now();
         if (v === null && Date.now() - memWaitLoggedAt >= 30_000) {
@@ -188,8 +222,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       })
       .finally(() => {
         memReading = null;
-        // Re-pump at once only on a reading; an unreadable memory_pressure is retried by the 1 s tick, never in a loop.
-        if (memFree !== null) pump();
+        // A discarded reading is taken again at once; a real one re-pumps; an
+        // unreadable memory_pressure is retried by the 1 s tick, never in a loop.
+        if (stale) refreshMemory();
+        else if (memFree !== null) pump();
       });
   };
   /** A fresh reading at or above the floor. Below it, the job waits (never an error); logged at most every 30 s. */
@@ -279,11 +315,22 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // main orphaned by a SIGKILLed broker is stopped here, or it would run
       // beside the new one. A main still owned by a live broker (an old one
       // draining during a version handover) is waited for, exactly as a busy
-      // main slot of the same engine.
+      // main slot of the same engine. A pre-ZGSGGHQG broker is waited for too.
+      await checkLegacy();
+      if (legacy) throw new SlotBusyError(`an older broker (pid ${legacy.pid}, broker-llama.json) is still running; it was asked to drain`, legacyHolder(legacy));
       for (const other of BROKER_ENGINES) {
         if (other === engine) continue;
-        const held = (await sweepEngine(o.dir, other, "main", o.log)).find((e) => e.role === "main" && e.ownerPid !== process.pid);
-        if (held) throw new SlotBusyError(`another broker (pid ${held.ownerPid}) still runs its main ${serverLabel(other)} (pid ${held.pid})`, held);
+        const held = (await sweepEngine(o.dir, other, "main", o.log)).find((e) => e.role === "main");
+        if (!held) continue;
+        // Review F-2: a main of THIS broker that is still alive (an earlier stop
+        // failed after `server` was cleared) counts as well: stop it again, and
+        // if that fails the start fails, never a second main beside it.
+        if (held.ownerPid === process.pid) {
+          const how = await stopOwnServer(o.dir, other, held, o.log);
+          o.log(`stopped this broker's leftover main ${serverLabel(other)} pid ${held.pid} before starting a ${serverLabel(engine)}: ${how}`);
+          continue;
+        }
+        throw new SlotBusyError(`another broker (pid ${held.ownerPid}) still runs its main ${serverLabel(other)} (pid ${held.pid})`, held);
       }
       let llamaArgv: string[] = [];
       if (engine === "llama") {
@@ -484,6 +531,14 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       o.log(`main ${serverLabel(dead.engine)} pid ${dead.pid} (model '${dead.model}') exited on its own; it is restarted when work arrives`);
       void releaseEntry(o.dir, dead.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
     }
+    // Review F-1: while a pre-ZGSGGHQG broker lives, this broker runs no main
+    // server (that broker sees only the llama registry and could start a llama
+    // main beside ours): the running requests finish, the server stops, and
+    // nothing starts until that broker drained and exited (checkLegacy).
+    if (legacy) {
+      if (server && running.size === 0 && !stopping) void stopServer(`an older broker (pid ${legacy.pid}) is still running`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+      return;
+    }
     if (server && server.key !== sched.current) sched.current = server.key;
     const next = sched.wantRotation(now, running.size, t);
     if (next !== null && running.size === 0 && (server === null || next !== server.key)) {
@@ -502,6 +557,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         // Each further dispatch waits for a NEW reading: memory is checked before every new request.
         if (server.engine === "locals") {
           memFree = null;
+          memGen++;
           refreshMemory();
         }
       }
@@ -665,7 +721,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   // No lock here: the CLIENT spawns under the broker spawn lock and waits for this file, so taking that lock here would deadlock.
   writeBrokerState(o.dir, { pid: process.pid, port, token, version: o.version, startedAt: new Date().toISOString() });
   o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
-  const tick = setInterval(pump, TICK_MS);
+  // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
+  const tick = setInterval(() => {
+    void checkLegacy().finally(pump);
+  }, TICK_MS);
   const onSignal = (sig: string): void => void shutdown(`signal ${sig}`);
   process.once("SIGTERM", onSignal);
   process.once("SIGINT", onSignal);
