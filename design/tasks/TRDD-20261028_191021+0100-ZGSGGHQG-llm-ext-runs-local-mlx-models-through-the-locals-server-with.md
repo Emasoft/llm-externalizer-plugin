@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-28T20:53:04+0100
+updated: 2026-10-29T02:40:59+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -67,3 +67,7 @@ USER directive verbatim (2026-10-28): "this rule is only for local models, since
 USER answer verbatim (2026-10-28) to "the longest a single request may wait in the queue before its model gets the server": "no more than 5 minutes, but an optional --queue-timeout=99990 must be added to let the agent define the timeout by itself according to the job complexity and the number of files" Consequence: default maximum queue wait 300 s; optional --queue-timeout=<seconds> per command, carried with each job to the broker; a job waiting longer than its own queue timeout forces a rotation to its model; waiting is never an error.
 USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces a rotation, never an error, seconds): "yes, but of course there should be also the option to set a timeoutnfor the command if the agent wants to limit it" Consequence: an optional --command-timeout=<seconds> limits the whole command (default: no limit); on expiry the command cancels its queued jobs, writes the results already complete, lists the unfinished files and exits non-zero; it applies to every command that sends model requests.
 - Command timeout spellings (USER, verbatim): "simply each command of llm-ext must have the option of setting --timeout=99999 or --command-timeout 99999, etc"
+
+## Progress 2026-10-28
+
+- 2026-10-29 02:40 resume point: llama broker complete (c77d9453..fd7c3862: core, 4 review-fix groups, e2e tests, -np 2 with ctx x 2, cooperative --command_timeout, follow-up fixes, dist rebuilt). Locals engine committed 268cca29: ONE broker for both engines (broker-local.*), locals-local profile type, server: managed; review of 268cca29 running. CI decision: Locals tests are macOS-only and gated by scripts/publish.py npm test (option B). Next: P2 review fixes, then P5 profile shape (3 models each, add-once local-llama and locals-mlx profiles), P6 calibration (slot count, KV estimate, thinking), P7 input sizing, P8 local ensemble (see TRDD-7H5MGN34), P9 local mass-scouting with reduced context, P10 command matrix. Open user questions: 8-min worst-case wait; --stop_on_errors on ensemble members and remote profiles.

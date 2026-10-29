@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-28T21:25:49+0100
+updated: 2026-10-29T02:40:58+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -110,3 +110,4 @@ USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces
 ## Progress 2026-10-28
 
 - 21:30 resume point: broker checkpoint c77d9453 (not pushable: 2 criticals), CI llama step 69995234+8d02a055, flag docs 3accda00. Review reports/llama-cpp-profile/20261028_212123+0100-broker-code-review.md (2 critical, 12 major, 7 minor). Smart-worker ad7febbf6cb1ff07c is fixing it in 4 groups (kill safety+C2; rotation rule reverted to the spec: B/D minimum, deadline-driven, min slice after a swap, 1 s linger, worst case T+D; M10/M9/M11/M3/M4/M5; minors+M13 api-key), stopping after each group for a commit. Open after that: e2e managed-profile test, --command_timeout partial results (spec 15, m3), dist rebuild, Locals engine (P2).
+- 2026-10-29 02:40 resume point: llama broker complete (c77d9453..fd7c3862: core, 4 review-fix groups, e2e tests, -np 2 with ctx x 2, cooperative --command_timeout, follow-up fixes, dist rebuilt). Locals engine committed 268cca29: ONE broker for both engines (broker-local.*), locals-local profile type, server: managed; review of 268cca29 running. CI decision: Locals tests are macOS-only and gated by scripts/publish.py npm test (option B). Next: P2 review fixes, then P5 profile shape (3 models each, add-once local-llama and locals-mlx profiles), P6 calibration (slot count, KV estimate, thinking), P7 input sizing, P8 local ensemble (see TRDD-7H5MGN34), P9 local mass-scouting with reduced context, P10 command matrix. Open user questions: 8-min worst-case wait; --stop_on_errors on ensemble members and remote profiles.
