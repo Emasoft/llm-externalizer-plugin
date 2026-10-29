@@ -220,6 +220,8 @@ import {
   getEnsemblePriceCeiling,
   resolveGroups,
   hasNoTextProfile,
+  builtinLocalProfiles,
+  PROVISIONAL_LOCAL_CTX,
 } from "./config.js";
 import { readCachedModelPrice } from "./catalog-cache.js";
 import { writeDynamicProfileSection, migrateProfileSections, migrateSettingsTo141 } from "./benchmark/pick.js";
@@ -961,7 +963,10 @@ export function overrideActiveProfile(
   // active-among-real-profiles error (untouched: that scenario's profiles
   // map is non-empty).
   // PF-04: `hasNoTextProfile`, not an empty map: the migration adds the classifier `or-jev` to a file with no profile, and a classifier or scouting profile is not "the user has profiles" for the text-profile self-heal.
-  if (source === "default" && hasNoTextProfile(activeSettings.profiles)) {
+  // P5 review m4: the migration also adds the built-in local profiles (local_llama, locals-mlx); they are not "the user has profiles" either, unless `active:` names one of them.
+  const builtinLocalNames = new Set(builtinLocalProfiles().map((b) => b.name));
+  const userProfiles = Object.fromEntries(Object.entries(activeSettings.profiles).filter(([n]) => n === name || !builtinLocalNames.has(n)));
+  if (source === "default" && hasNoTextProfile(userProfiles)) {
     name = DEFAULT_PROFILE_NAME;
   }
   if (!activeSettings.profiles[name] && isDynamicProfileName(name)) {
@@ -1813,7 +1818,8 @@ const providerDeps: CompletionDeps = {
     const r = activeResolved;
     if (!r || r.server === null || (route && !route.primary)) return null;
     const ep = await ensureBroker({ dir: getConfigDir(), version: brokerClientVersion() });
-    return { ...ep, engine: r.server, ctx: r.contextWindow > 0 ? r.contextWindow : 0, queueTimeoutMs: brokerQueueTimeoutMs() };
+    // F11: no context_window means the provisional per-slot context, never the model's whole default (a huge KV cache).
+    return { ...ep, engine: r.server, ctx: r.contextWindow > 0 ? r.contextWindow : PROVISIONAL_LOCAL_CTX, queueTimeoutMs: brokerQueueTimeoutMs() };
   },
 };
 

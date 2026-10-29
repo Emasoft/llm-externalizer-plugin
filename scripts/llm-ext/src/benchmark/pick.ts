@@ -21,7 +21,7 @@
  * baseline (filtered out in step 2).
  */
 
-import { readFileSync, writeFileSync, renameSync as renameSyncCb, existsSync, mkdirSync, rmSync, statSync, chmodSync, readdirSync } from "node:fs";
+import { readFileSync, writeFileSync, renameSync as renameSyncCb, existsSync, mkdirSync, rmSync, statSync, chmodSync, readdirSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { stringify as yamlStringify, parseDocument, Scalar, isMap as yamlIsMap, isScalar as yamlIsScalar, YAMLMap } from "yaml";
 
@@ -296,12 +296,40 @@ function loadProfileForMutation(
  * crash mid-write therefore leaves the ORIGINAL settings.yaml intact, never a
  * half-written one: these writers run unattended (CLI/cron), so a torn config file
  * would silently break every later tool call.
+ *
+ * P5 review M1 (every settings writer in this file goes through here):
+ * - the file may hold API keys and ensureSettingsExist makes it 0600, but a
+ *   tmp file gets the umask mode (0644), so the rename made it world-readable:
+ *   the original mode is copied onto the tmp file first (0600 when unknown);
+ * - a settings.yaml that is a symlink (a dotfiles repo) was replaced by a plain
+ *   file: the write goes to the link's real target, tmp in the TARGET's dir.
+ * P5 review m2: `lineWidth: 0` stops long plain scalars being folded onto a
+ * second line, `flowCollectionPadding: false` keeps `{a: b}` as written, and
+ * CRLF line endings are kept. (The spacing before an inline comment still
+ * collapses to one space: the yaml library does not keep it.)
  */
 function writeSettingsAtomic(settingsPath: string, handle: SettingsHandle): void {
-  const newRaw = handle.doc.toString();
-  const tmp = settingsPath + ".tmp." + process.pid;
-  writeFileSync(tmp, newRaw, "utf-8");
-  renameSyncCb(tmp, settingsPath);
+  let target = settingsPath;
+  try {
+    target = realpathSync(settingsPath);
+  } catch {
+    /* not there yet: the path itself is the target */
+  }
+  let mode = 0o600;
+  let crlf = false;
+  try {
+    mode = statSync(target).mode & 0o777;
+    crlf = readFileSync(target, "utf-8").includes("\r\n");
+  } catch {
+    /* new file: owner-only, LF */
+  }
+  let newRaw = handle.doc.toString({ lineWidth: 0, flowCollectionPadding: false });
+  if (crlf) newRaw = newRaw.replace(/\r?\n/g, "\r\n");
+  const tmp = target + ".tmp." + process.pid;
+  writeFileSync(tmp, newRaw, { encoding: "utf-8", mode });
+  // writeFileSync's mode is filtered by the umask; set it exactly.
+  chmodSync(tmp, mode);
+  renameSyncCb(tmp, target);
 }
 
 /**
@@ -2289,10 +2317,16 @@ export function localProfileStepIds(): string[] {
  *    edited): left byte-identical, the step is recorded;
  *  - absent: added (with its comment header), after a backup, never made
  *    active; the step is recorded, so a profile the user deletes later is
- *    never added again;
- *  - not runnable on this machine (locals-mlx off macOS on Apple silicon):
- *    nothing is written and nothing recorded (it would fail validation and
- *    stop settings.yaml from loading); a later run on a Mac adds it.
+ *    not added again;
+ *  - not runnable on this machine (locals-mlx needs macOS on Apple silicon):
+ *    nothing is written and nothing recorded, so the file never carries a
+ *    profile that cannot run there; a later run on a Mac adds it. (An
+ *    unselected profile is only type- and field-checked at load, so it would
+ *    not stop settings.yaml from loading: the gate is about usefulness.)
+ * Limit (P5 review m1, as for or-jev-section-added): "not added again" lasts
+ * as long as the record in dynamic-profiles-state.json. If that file is lost
+ * or reset, or settings.yaml is copied to a machine without it, a deleted
+ * built-in comes back once, inactive, with this step's notice and a backup.
  * Not marked as generated: these are ordinary user-editable profiles that no
  * maintainer rewrites. Never throws (each profile reports its own failure).
  */
@@ -2307,10 +2341,15 @@ function runLocalProfileSteps(
       if (opts.isApplied(step) || !builtin.supported()) continue;
       const doc = parseDocument(readFileSync(settingsPath, "utf-8"));
       if (doc.errors.length > 0) return; // the ordinary load path reports the real parse failure
+      let added = false;
       if (profileSectionMarkerState(doc, builtin.name) === "absent") {
-        backupSettingsFile(settingsPath, "settings-before-local-profiles", builtin.name, { nowMs: opts.nowMs ?? Date.now(), dedupe: true });
         withSettingsWriteLock(() => {
           const handle = loadSettingsAllowingNoProfiles(settingsPath);
+          // P5 review m3: checked again under the lock: another process may have
+          // added it since the read above (a second add duplicated the header).
+          if (profileSectionMarkerState(handle.doc, builtin.name) !== "absent") return;
+          // The backup is taken under the lock too, so it is exactly the content this write replaces.
+          backupSettingsFile(settingsPath, "settings-before-local-profiles", builtin.name, { nowMs: opts.nowMs ?? Date.now(), dedupe: true });
           handle.doc.setIn(["profiles", builtin.name], handle.doc.createNode(builtin.profile));
           const map = handle.doc.get("profiles", true) as YAMLMap;
           const item = map.items.find((it) => (it.key instanceof Scalar ? it.key.value : it.key) === builtin.name);
@@ -2320,10 +2359,14 @@ function runLocalProfileSteps(
             (item.key as Scalar).commentBefore = builtin.header.join("\n");
           }
           writeSettingsAtomic(settingsPath, handle);
+          added = true;
         });
+      }
+      if (added) {
         opts.notify(
           `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or active: ${builtin.name}). ` +
-            `Deleting it is permanent: it is added only once. A backup of settings.yaml exists in ${join(getConfigDir(), "backups")}.`,
+            `It is added only once: deleting it removes it for good, unless llm-ext's state file dynamic-profiles-state.json is lost. ` +
+            `A backup of settings.yaml exists in ${join(getConfigDir(), "backups")}.`,
         );
       }
       recordApplied(step);

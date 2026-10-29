@@ -1384,13 +1384,17 @@ export function profileTypeFieldIssues(name: string, profile: Profile, type: Pro
     );
   }
   // P5 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG): a local profile may name three models
-  // only when the local-model broker serves it (server: managed, api
-  // llamacpp-local or locals-local, checked by validateProfile): the broker
-  // starts each model's server in turn. An unmanaged local url serves what
-  // its own server loaded, so a second id there would silently be the same model.
-  if (type === "local" && profile.server !== "managed") {
+  // only when the local-model broker serves it: server: managed AND api
+  // llamacpp-local or locals-local (review m6: the api is checked here too,
+  // so a typo in an unselected profile fails at load like every PT-06 issue;
+  // validateProfile repeats the server/api rule for the selected profile).
+  // The broker starts each model's server in turn. An unmanaged local url
+  // serves what its own server loaded, so a second id there would silently be
+  // the same model.
+  const brokerServed = profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
+  if (type === "local" && !brokerServed) {
     for (const key of ["second_model", "third_model"] as const) {
-      if (profile[key] !== undefined) issues.push(`profiles.${name}.${key} needs server: managed on a local profile (only the local-model broker serves several models of one profile). Fix: add server: managed, or delete the key`);
+      if (profile[key] !== undefined) issues.push(`profiles.${name}.${key} needs server: managed with api llamacpp-local or locals-local on a local profile (only the local-model broker serves several models of one profile). Fix: set both, or delete the key`);
     }
   }
   return issues;
@@ -1954,6 +1958,16 @@ export function orJevProfile(): Profile {
 }
 
 /**
+ * Per-slot context (tokens) the local-model broker starts a managed server with
+ * when the profile sets no context_window (calibration design review F11,
+ * coordinator decision 4). Without it the server would load the model's whole
+ * default context (262k for LFM3 and Qwen3.5), a KV cache of many GB. Order:
+ * the profile's context_window, then (P6) the model's calibration record, then
+ * this provisional value.
+ */
+export const PROVISIONAL_LOCAL_CTX = 8192;
+
+/**
  * TRDD-1OOAH3LD / TRDD-ZGSGGHQG (P5): the two built-in local profiles the user
  * asked for, three models each, both served by the local-model broker
  * (`server: managed`). Added ONCE by the `local-profile-added:<name>` steps
@@ -1966,7 +1980,9 @@ export function orJevProfile(): Profile {
  *   repo/file.gguf as the user named them.
  * - MLX: the Hugging Face repo ids; the broker sends Locals the `-thinking`
  *   id it lists when a request asks for thinking (localsOutgoingModel).
- * context_window 8192: the per-slot context the smoke run measured; provisional until calibration (P6).
+ * No context_window (review of the calibration design, open point 1): a value llm-ext writes here is
+ * indistinguishable from one the user wrote, and a user value wins over the calibration record for
+ * ever. Until a model is calibrated (P6) the broker starts its server with PROVISIONAL_LOCAL_CTX per slot.
  * The url binds nothing under the broker (it is the key the fallback walker marks dead): the ports the user named.
  */
 export interface BuiltinLocalProfile {
@@ -1974,7 +1990,7 @@ export interface BuiltinLocalProfile {
   /** Comment lines written above the profile key (without the leading "#"). */
   header: string[];
   profile: Profile;
-  /** Whether this machine can run it: a profile that fails validation here would make settings.yaml fail to load. */
+  /** Whether this machine can run it. A profile that cannot run here is left out of the file (it would load, unselected: only the selected profile gets the full check). */
   supported: () => boolean;
 }
 export function builtinLocalProfiles(): BuiltinLocalProfile[] {
@@ -1999,7 +2015,6 @@ export function builtinLocalProfiles(): BuiltinLocalProfile[] {
         model: "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K",
         second_model: "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf",
         third_model: "insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf",
-        context_window: 8192,
       } as unknown as Profile,
       supported: () => true,
     },
@@ -2018,7 +2033,6 @@ export function builtinLocalProfiles(): BuiltinLocalProfile[] {
         model: "LiquidAI/LFM3-1.7B-MLX-4bit",
         second_model: "mlx-community/Nanbeige4.2-3B-OptiQ-4bit",
         third_model: "mlx-community/Qwen3.5-4B-MLX-4bit",
-        context_window: 8192,
       } as unknown as Profile,
       supported: () => localsPlatformSupported(),
     },
