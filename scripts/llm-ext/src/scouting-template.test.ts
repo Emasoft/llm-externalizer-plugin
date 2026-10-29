@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, it, expect } from "vitest";
 import { parse as parseYaml, parseDocument, stringify as stringifyYaml } from "yaml";
 import { tmpdir } from "./test-tmp-root.js";
-import { migrateSettingsTo141, addProfileToSettings } from "./benchmark/pick.js";
+import { localProfileStepIds, migrateSettingsTo141, addProfileToSettings } from "./benchmark/pick.js";
 import { writeScoutingProfile } from "./benchmark/scout-accuracy.js";
 import { setValidationBypassForTests } from "./benchmark/validated.js";
 import { isMigrationStepApplied, markMigrationStepApplied } from "./default-profiles-state.js";
@@ -37,6 +37,11 @@ beforeEach(() => {
   cfgDir = mkdtempSync(join(tmpdir(), "llm-ext-pt04-"));
   process.env.LLM_EXT_CONFIG_DIR = cfgDir;
   notices = [];
+});
+
+// P5: these tests exercise other steps; mark the built-in local-profile steps applied so their fixtures stay byte-exact. Those steps have their own tests in local-profiles-builtin.test.ts.
+beforeEach(() => {
+  for (const step of localProfileStepIds()) markMigrationStepApplied(step);
 });
 
 afterEach(() => {

@@ -17,6 +17,7 @@ import { tmpdir } from "./test-tmp-root.js";
 import { parse as parseYaml } from "yaml";
 
 import {
+  localProfileStepIds,
   migrateProfileSections,
   migrateSettingsTo141,
   SHIPPED_PLACEHOLDER_SHAPES,
@@ -57,6 +58,11 @@ beforeEach(() => {
   cfgDir = mkdtempSync(join(tmpdir(), "lx-migr-"));
   process.env.LLM_EXT_CONFIG_DIR = cfgDir;
   notices = [];
+});
+
+// P5: these tests exercise other steps; mark the built-in local-profile steps applied so their fixtures stay byte-exact. Those steps have their own tests in local-profiles-builtin.test.ts.
+beforeEach(() => {
+  for (const step of localProfileStepIds()) markMigrationStepApplied(step);
 });
 
 afterEach(() => {
@@ -459,6 +465,8 @@ describe("migrateProfileSections — S5: a migration stamp that cannot be persis
   // all, so it cannot trip it.
   it("prints the persist-failure notice once per call, every time — S-3 (coordinator correction): no process latch, because migrateProfileSections has exactly one production caller (index.ts's boot IIFE) and so never runs twice in one real process", () => {
     write(["profiles: {}", ""].join("\n"));
+    // The file-level beforeEach marked the local-profile steps, which created the state file; this test needs the path free to make it a directory.
+    rmSync(dynamicProfilesStatePath(), { force: true });
     mkdirSync(dynamicProfilesStatePath());
 
     for (let commandNumber = 1; commandNumber <= 3; commandNumber++) {

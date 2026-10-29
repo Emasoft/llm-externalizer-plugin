@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "../test-tmp-root.js";
 import { parse as parseYaml } from "yaml";
 
-import { migrateSettingsTo141 } from "./pick.js";
+import { localProfileStepIds, migrateSettingsTo141 } from "./pick.js";
 import {
   isMigrationStepApplied,
   markMigrationStepApplied,
@@ -39,6 +39,11 @@ beforeEach(() => {
   cfgDir = mkdtempSync(join(tmpdir(), "lx-migr141-"));
   process.env.LLM_EXT_CONFIG_DIR = cfgDir;
   notices = [];
+});
+
+// P5: these tests exercise other steps; mark the built-in local-profile steps applied so their fixtures stay byte-exact. Those steps have their own tests in local-profiles-builtin.test.ts.
+beforeEach(() => {
+  for (const step of localProfileStepIds()) markMigrationStepApplied(step);
 });
 
 afterEach(() => {
@@ -99,6 +104,7 @@ describe("migrateSettingsTo141 — price-ceiling-into-paid", () => {
     const first = run();
     expect(first.applied).toEqual(["price-ceiling-into-paid", "local-detected-providers", "bai-binding-to-reserved-slot", "bai-reserved-seed", "dynamic-unknown-keys", "scouting-section-marked", "or-jev-section-added", "profile-type-written"]);
     expect(readDynamicProfilesState().migrationsApplied).toEqual([
+      ...localProfileStepIds(),
       "price-ceiling-into-paid",
       "local-detected-providers",
       "bai-binding-to-reserved-slot",
@@ -127,6 +133,7 @@ describe("migrateSettingsTo141 — price-ceiling-into-paid", () => {
       failCount: 0,
     }));
     expect(readDynamicProfilesState().migrationsApplied).toEqual([
+      ...localProfileStepIds(),
       "price-ceiling-into-paid",
       "local-detected-providers",
       "bai-binding-to-reserved-slot",

@@ -91,6 +91,8 @@ export default defineConfig({
       // Pure builders for the THIRD dynamic profile, `local` (TRDD-C9SXX7HO,
       // D1) — no I/O, no probe; local_discovery/scan.ts owns the probe.
       'src/local-profile.test.ts',
+      // P5: the built-in local profiles (local_llama, locals-mlx), added once.
+      'src/local-profiles-builtin.test.ts',
       // The population RUNNER's own policy — paid gate, lock-before-gate
       // ordering, fail-open, the dynamic 'paid' daily spend cap (P5).
       'src/default-profiles-runner.test.ts',

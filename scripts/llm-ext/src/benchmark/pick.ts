@@ -33,6 +33,7 @@ import { registeredTools } from "../model-qualification/registry.js";
 import { dynamicProfilesStatePath } from "../default-profiles-state.js";
 import {
   API_PRESETS,
+  builtinLocalProfiles,
   builtinProfileType,
   DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M,
   DYNAMIC_GENERATED_KEYS,
@@ -2119,6 +2120,8 @@ export function migrateSettingsTo141(
 
   // PF-04: the sixth built-in, `or-jev` (see migrateOrJevSection).
   runOrJevStep(settingsPath, opts, recordApplied);
+  // P5: the two built-in local profiles, added once (see runLocalProfileSteps).
+  runLocalProfileSteps(settingsPath, opts, recordApplied);
   // ── Step `profile-type-written` (PT-02, TRDD-IQTF34TC, D32) ──────────
   // Writes the inferred `profile-type` into every profile, built-in and custom,
   // so the field is explicit. WHY it rewrites custom profiles although the code
@@ -2209,13 +2212,7 @@ function migrateOrJevSection(
   if (doc.errors.length > 0) return; // the ordinary load path reports the real parse failure
   const state = profileSectionMarkerState(doc, "or-jev");
   if (state === "absent") {
-    // WHY not loadSettingsRoot here: its "missing profiles map" guard serves writers of an EXISTING profile; this step must also give a file with no, a null or an empty `profiles:` its first profile, so that every file ends loadable.
-    const loadAllowingNoProfiles = (): SettingsHandle => {
-      const d = parseDocument(readFileSync(settingsPath, "utf-8"));
-      if (d.errors.length > 0) throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${d.errors[0].message}`, { cause: d.errors[0] });
-      if (!yamlIsMap(d.get("profiles", true))) d.set("profiles", d.createNode({}));
-      return { doc: d, root: (d.toJS() ?? {}) as SettingsRoot };
-    };
+    const loadAllowingNoProfiles = (): SettingsHandle => loadSettingsAllowingNoProfiles(settingsPath);
     backupSettingsFile(settingsPath, "settings-before-14.1", "or-jev", { nowMs: opts.nowMs ?? Date.now(), dedupe: true });
     let setActive = false;
     withSettingsWriteLock(() => {
@@ -2261,6 +2258,78 @@ function runOrJevStep(
     opts.notify(
       `llm-ext: could not run the 14.1.0 '${OR_JEV_STEP}' migration step: ${err instanceof Error ? err.message : String(err)}`,
     );
+  }
+}
+
+/**
+ * Load settings.yaml for a step that ADDS a profile. WHY not loadSettingsRoot:
+ * its "missing profiles map" guard serves writers of an EXISTING profile; an
+ * adding step must also give a file with no, a null or an empty `profiles:`
+ * its first profile, so that every file ends loadable.
+ */
+function loadSettingsAllowingNoProfiles(settingsPath: string): SettingsHandle {
+  const d = parseDocument(readFileSync(settingsPath, "utf-8"));
+  if (d.errors.length > 0) throw new Error(`settings.yaml at ${settingsPath} is not valid YAML: ${d.errors[0].message}`, { cause: d.errors[0] });
+  if (!yamlIsMap(d.get("profiles", true))) d.set("profiles", d.createNode({}));
+  return { doc: d, root: (d.toJS() ?? {}) as SettingsRoot };
+}
+
+/** P5 step-id prefix: one step per built-in local profile (`local-profile-added:local_llama`, `…:locals-mlx`). */
+export const LOCAL_PROFILE_STEP_PREFIX = "local-profile-added:";
+/** The step ids of every built-in local profile (tests of OTHER steps mark them applied, as they do for or-jev-section-added). */
+export function localProfileStepIds(): string[] {
+  return builtinLocalProfiles().map((p) => `${LOCAL_PROFILE_STEP_PREFIX}${p.name}`);
+}
+
+/**
+ * P5 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG): add each built-in local profile ONCE
+ * (config.ts builtinLocalProfiles). Built-ins are otherwise written only on a
+ * fresh install; this step gives existing installs the two local profiles too.
+ *  - a profile of that name exists (the user's own, or one added earlier and
+ *    edited): left byte-identical, the step is recorded;
+ *  - absent: added (with its comment header), after a backup, never made
+ *    active; the step is recorded, so a profile the user deletes later is
+ *    never added again;
+ *  - not runnable on this machine (locals-mlx off macOS on Apple silicon):
+ *    nothing is written and nothing recorded (it would fail validation and
+ *    stop settings.yaml from loading); a later run on a Mac adds it.
+ * Not marked as generated: these are ordinary user-editable profiles that no
+ * maintainer rewrites. Never throws (each profile reports its own failure).
+ */
+function runLocalProfileSteps(
+  settingsPath: string,
+  opts: { notify: (msg: string) => void; isApplied: (stepId: string) => boolean; nowMs?: number },
+  recordApplied: (stepId: string) => void,
+): void {
+  for (const builtin of builtinLocalProfiles()) {
+    const step = `${LOCAL_PROFILE_STEP_PREFIX}${builtin.name}`;
+    try {
+      if (opts.isApplied(step) || !builtin.supported()) continue;
+      const doc = parseDocument(readFileSync(settingsPath, "utf-8"));
+      if (doc.errors.length > 0) return; // the ordinary load path reports the real parse failure
+      if (profileSectionMarkerState(doc, builtin.name) === "absent") {
+        backupSettingsFile(settingsPath, "settings-before-local-profiles", builtin.name, { nowMs: opts.nowMs ?? Date.now(), dedupe: true });
+        withSettingsWriteLock(() => {
+          const handle = loadSettingsAllowingNoProfiles(settingsPath);
+          handle.doc.setIn(["profiles", builtin.name], handle.doc.createNode(builtin.profile));
+          const map = handle.doc.get("profiles", true) as YAMLMap;
+          const item = map.items.find((it) => (it.key instanceof Scalar ? it.key.value : it.key) === builtin.name);
+          if (item) {
+            // A raw-string key carries no comment: promote it, then put the header above it.
+            if (!(item.key instanceof Scalar)) item.key = new Scalar(item.key);
+            (item.key as Scalar).commentBefore = builtin.header.join("\n");
+          }
+          writeSettingsAtomic(settingsPath, handle);
+        });
+        opts.notify(
+          `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or active: ${builtin.name}). ` +
+            `Deleting it is permanent: it is added only once. A backup of settings.yaml exists in ${join(getConfigDir(), "backups")}.`,
+        );
+      }
+      recordApplied(step);
+    } catch (err) {
+      opts.notify(`llm-ext: could not run the '${step}' migration step: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 }
 

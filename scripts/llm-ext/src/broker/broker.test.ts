@@ -1822,3 +1822,55 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
     expect(localsCwds().filter((d) => !before.has(d))).toEqual([]);
   }, 600_000);
 });
+
+/**
+ * P5: one real `llm ask` per built-in local profile, through the broker, on
+ * the profile's MAIN model, with the user's real models (AtomicChat LFM3 GGUF
+ * on llama.cpp, LiquidAI LFM3 MLX on Locals). The profiles come from a fresh
+ * install (the add-once step), never hand-written. Opt-in with
+ * RUN_REAL_LOCAL_MODELS=1: the models are 1-5 GB and load for seconds to a
+ * minute, too heavy for every run. The model caches are the user's own
+ * (HF_HOME, never LLAMA_CACHE here); HOME and LLM_EXT_CONFIG_DIR are temp.
+ */
+describe.skipIf(process.env.RUN_REAL_LOCAL_MODELS !== "1")("real models of the built-in local profiles (opt-in, RUN_REAL_LOCAL_MODELS=1)", () => {
+  const cases = [
+    { profile: "local_llama", engine: "llama", main: "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K" },
+    ...(localsPlatformSupported(process.platform, process.arch) ? [{ profile: "locals-mlx", engine: "locals", main: "LiquidAI/LFM3-1.7B-MLX-4bit" }] : []),
+  ];
+  for (const c of cases) {
+    it(`llm ask on '${c.profile}' runs through the broker on its main model ${c.main}`, async () => {
+      const cli = await cliBundle();
+      const cfg = newDir();
+      const work = newDir();
+      const file = join(work, "story.txt");
+      writeFileSync(file, "Once upon a time a cat named Tom lived in a red house by the sea.\n");
+      const env: NodeJS.ProcessEnv = { ...process.env, HOME: cfg, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0" };
+      delete env.LLAMA_CACHE;
+      const run = (args: string[]): Promise<{ code: number | null; out: string }> =>
+        new Promise((resolve) => {
+          const child = spawn(process.execPath, [cli, ...args], { cwd: work, env, stdio: ["ignore", "pipe", "pipe"] });
+          let out = "";
+          child.stdout.on("data", (d: Buffer) => (out += d));
+          child.stderr.on("data", (d: Buffer) => (out += d));
+          const kill = setTimeout(() => child.kill("SIGKILL"), 840_000);
+          child.on("exit", (code) => {
+            clearTimeout(kill);
+            resolve({ code, out });
+          });
+        });
+      // The fresh install writes the defaults and adds the built-in local profiles.
+      const boot = await run(["--help"]);
+      expect(boot.code, boot.out).toBe(0);
+      const mains = watchMains(cfg);
+      const ask = await run(["--profile", c.profile, "llm", "ask", file, "--instructions", "In one sentence, who is the main character?", "-o", join(work, "out")]);
+      expect(mains.stop()).toBe(1);
+      expect(ask.code, ask.out).toBe(0);
+      const reports = readdirSync(join(work, "out")).filter((f) => f.endsWith(".md"));
+      expect(reports).toHaveLength(1);
+      expect(readFileSync(join(work, "out", reports[0]), "utf8").length).toBeGreaterThan(0);
+      const spawns = spawnLines(cfg);
+      expect(spawns).toHaveLength(1);
+      expect(spawns[0]).toContain(`engine ${c.engine} model '${c.main}'`);
+    }, 900_000);
+  }
+});

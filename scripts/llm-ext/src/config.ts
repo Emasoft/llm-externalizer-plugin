@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { parse as yamlParse, Document as YamlDocument, isScalar, parseDocument, Scalar } from "yaml";
 import { registeredTools } from "./model-qualification/registry.js";
 import { parseLocalsModel } from "./local-locals-server.js";
+import { parseManagedModel } from "./local-llama-server.js";
 // PT-02: cyclic with default-profiles-state (it imports getConfigDir); safe because both sides only call the other inside functions.
 import { isMigrationStepApplied } from "./default-profiles-state.js";
 
@@ -1263,7 +1264,8 @@ export const PROFILE_TYPE_FIELDS: Readonly<Record<ProfileType, ProfileTypeFields
     own: ["api_token", "detected_providers"],
     // TRDD-1OOAH3LD: request_options is local-only (never on free/paid/scouting); without being listed here the strict unknown-field check rejects it.
     // TRDD-1OOAH3LD 2a-core: server (the managed llama-server opt-in) is local-only for the same reason.
-    shared: ["profile-type", "mode", "api", "url", "model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer", "request_options", "server"],
+    // P5: second_model/third_model too, but only with server: managed (profileTypeFieldIssues).
+    shared: ["profile-type", "mode", "api", "url", "model", "second_model", "third_model", "free_models", "timeout", "context_window", "tool_models", "providers", "app_name", "http_referer", "request_options", "server"],
     spend: "never-bills",
   },
   free: {
@@ -1380,6 +1382,16 @@ export function profileTypeFieldIssues(name: string, profile: Profile, type: Pro
         ? `profiles.${name}.${key} belongs to type ${owners.join("/")}, not '${type}'. Fix: delete the key, or set profile-type to ${owners.join(" or ")}`
         : `profiles.${name}.${key} is unknown to every profile type. Fix: delete the key`,
     );
+  }
+  // P5 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG): a local profile may name three models
+  // only when the local-model broker serves it (server: managed, api
+  // llamacpp-local or locals-local, checked by validateProfile): the broker
+  // starts each model's server in turn. An unmanaged local url serves what
+  // its own server loaded, so a second id there would silently be the same model.
+  if (type === "local" && profile.server !== "managed") {
+    for (const key of ["second_model", "third_model"] as const) {
+      if (profile[key] !== undefined) issues.push(`profiles.${name}.${key} needs server: managed on a local profile (only the local-model broker serves several models of one profile). Fix: add server: managed, or delete the key`);
+    }
   }
   return issues;
 }
@@ -1939,6 +1951,78 @@ export function orJevProfile(): Profile {
     model: "~typesafe/jev-latest",
     api_key: "$OPENROUTER_API_KEY",
   } as unknown as Profile;
+}
+
+/**
+ * TRDD-1OOAH3LD / TRDD-ZGSGGHQG (P5): the two built-in local profiles the user
+ * asked for, three models each, both served by the local-model broker
+ * (`server: managed`). Added ONCE by the `local-profile-added:<name>` steps
+ * of migrateSettingsTo141 (benchmark/pick.ts): only when no profile of that
+ * name exists, never made active, never re-added after the user deletes it.
+ *
+ * Model ids (sources in reports/llama-cpp-profile, P5 report):
+ * - GGUF: the files the six-model smoke loaded (reports/locals-mlx/20261028_200451+0100-six-model-smoke.md):
+ *   AtomicChat LFM3 by its quant tag AD-Q6_K (file LFM3-1.7B-Uncensored-AD-Q6_K.gguf), the other two by
+ *   repo/file.gguf as the user named them.
+ * - MLX: the Hugging Face repo ids; the broker sends Locals the `-thinking`
+ *   id it lists when a request asks for thinking (localsOutgoingModel).
+ * context_window 8192: the per-slot context the smoke run measured; provisional until calibration (P6).
+ * The url binds nothing under the broker (it is the key the fallback walker marks dead): the ports the user named.
+ */
+export interface BuiltinLocalProfile {
+  name: string;
+  /** Comment lines written above the profile key (without the leading "#"). */
+  header: string[];
+  profile: Profile;
+  /** Whether this machine can run it: a profile that fails validation here would make settings.yaml fail to load. */
+  supported: () => boolean;
+}
+export function builtinLocalProfiles(): BuiltinLocalProfile[] {
+  return [
+    {
+      name: "local_llama",
+      // The user's comment header, word for word (TRDD-1OOAH3LD user directive); its command line is commented out, as YAML requires.
+      header: [
+        " The local_llama profile will run llama.cpp locally as inference engine, with any llama.cpp compatible model.",
+        " WARNING: You need a llama.cpp build with LFM3 support (merged in llama.cpp #31252; produced at llama.cpp 19cce69).",
+        " The first model added to the profile is `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K`.",
+        " The profile must automatically download it from huggingface or using the llama-cli command to download it,",
+        " cache it automatically, and run it, like this:",
+        ' llama-cli -hf AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6 -p "The prompt content goes here."',
+      ],
+      profile: {
+        "profile-type": "local",
+        mode: "local",
+        api: "llamacpp-local",
+        url: "http://127.0.0.1:8181",
+        server: "managed",
+        model: "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K",
+        second_model: "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf",
+        third_model: "insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf",
+        context_window: 8192,
+      } as unknown as Profile,
+      supported: () => true,
+    },
+    {
+      name: "locals-mlx",
+      header: [
+        " The locals-mlx profile runs MLX models locally through the Locals server (https://github.com/Generated-Computers/Locals), macOS on Apple silicon only.",
+        " llm-ext starts and stops the Locals server itself (server: managed), one model at a time.",
+      ],
+      profile: {
+        "profile-type": "local",
+        mode: "local",
+        api: "locals-local",
+        url: "http://127.0.0.1:9090",
+        server: "managed",
+        model: "LiquidAI/LFM3-1.7B-MLX-4bit",
+        second_model: "mlx-community/Nanbeige4.2-3B-OptiQ-4bit",
+        third_model: "mlx-community/Qwen3.5-4B-MLX-4bit",
+        context_window: 8192,
+      } as unknown as Profile,
+      supported: () => localsPlatformSupported(),
+    },
+  ];
 }
 
 /**
@@ -3098,6 +3182,16 @@ export function validateProfile(
       errors.push(
         `Profile '${name}': server: managed needs the profile's own api to be llamacpp-local or locals-local (only the profile's primary group is managed), got ${typeof profile.api === "string" ? `'${profile.api}'` : "none"}`,
       );
+    }
+  }
+  // P5: every model of a managed llamacpp-local profile is started by the
+  // broker, so each must be a form it can serve (parseManagedModel); a bad id
+  // fails here, not at its first request.
+  if (rawServer === "managed" && profile.api === "llamacpp-local") {
+    for (const m of [profile.model, profile.second_model, profile.third_model]) {
+      if (typeof m !== "string" || m === "") continue;
+      const p = parseManagedModel(m);
+      if ("error" in p) errors.push(`Profile '${name}': ${p.error}`);
     }
   }
   // ── locals-local (TRDD-ZGSGGHQG L1) ───────────────────────────────
