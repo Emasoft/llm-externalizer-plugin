@@ -75,7 +75,11 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (offMode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
         // Phase C memory waits are shown, never silent (review of fb861fab): the candidate is skipped after MEMORY_WAIT_MAX_MS.
-        for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped after ${MEMORY_WAIT_MAX_MS / 60_000} min)`;
+        for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped for this pass after ${MEMORY_WAIT_MAX_MS / 60_000} min)`;
+        // Review of a3862052: a Phase C candidate skipped for now (memory wait, timeouts) is measured again; say so.
+        const latest = new Map<string, { outcome: string; skipped: unknown }>();
+        for (const t of prog?.trials ?? []) if (t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped });
+        for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") state += `; ${step} skipped for now (${t.skipped === "timeout" ? "its runs timed out" : "it waited too long for free memory"}): measured again on a resume`;
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }

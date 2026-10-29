@@ -19,7 +19,10 @@ import type { BrokerEngine } from "../broker/protocol.js";
  * (runner.ts) changes: every record and progress entry of an older harness is
  * invalid (spec section 3).
  */
-export const HARNESS_VERSION = 2;
+// 3 (review of a3862052, coordinator decision): the Phase C method changed (wall-time throughput, per-kind slot
+// context, non-terminal skips) and Phase B resumes on the hard W, with the same harness JSON: a progress file of
+// fb861fab (version 2) mixes the old measurements in, so it is discarded.
+export const HARNESS_VERSION = 3;
 /**
  * The `harness` id of a record made with the production harness (D4, main-agent
  * decision 2026-10-29). A custom LLM_EXT_CALIBRATION_HARNESS writes

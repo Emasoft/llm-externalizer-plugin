@@ -6,6 +6,9 @@
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir as osTmpdir, totalmem } from "node:os";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildPositionalSchema,
@@ -21,8 +24,12 @@ import {
   type ScoutFixture,
 } from "../mass_scouting/scout-accuracy-fixture.js";
 import { CAP_OFF, CAP_ON } from "./phase-a.js";
-import { batchThroughput, budgetFit, chooseSlots, isScoutTimeout, mainSlotCtx, MEMORY_WAIT_MAX_MS, memoryWaitExpired, scoutSlotCtx, THROUGHPUT_OUTPUT_TOKENS, throughputPromptTokens } from "./phase-c.js";
+import { batchThroughput, budgetFit, chooseSlots, isScoutTimeout, mainSlotCtx, MEMORY_WAIT_MAX_MS, memoryWaitExpired, phaseC, scoutSlotCtx, THROUGHPUT_OUTPUT_TOKENS, throughputPromptTokens } from "./phase-c.js";
 import { okRecordFrom, recordSchemaErrors, scoutingFor, type RecordBase, type ScoutCandidate } from "./record.js";
+import { writeGguf } from "./gguf-fixture.js";
+import { kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
+import type { PhaseContext } from "./runner.js";
+import type { TrialRecord } from "./state.js";
 
 /** The records of a fixture body, split at each frontmatter block. */
 const recordsOf = (fx: ScoutFixture): string[] => fx.body.split(/^---\nname: /m).slice(1);
@@ -247,4 +254,158 @@ describe("the ok record (spec 7) from the three phase summaries", () => {
     expect(recordSchemaErrors({ ...r, scouting_candidates: "unfit" })).not.toEqual([]);
     expect(() => okRecordFrom(base, trials.slice(0, 2))).toThrow(/no C\/summary/);
   });
+});
+
+
+/**
+ * phaseC.run itself (review of a3862052, MINOR-3): the real phase code, the real memory reading (memory_pressure on
+ * macOS) and a real GGUF header, against a real HTTP server on 127.0.0.1 that answers like llama-server. The tiny CI
+ * GGUFs cannot serve Phase C (their trained context is 128 tokens, below any slot), so the server is this loopback
+ * one; the context gives no process control (stop and restart keep the same server), which Phase C only uses to free
+ * memory and change the slot shape.
+ */
+describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns the run", () => {
+  let server: Server | null = null;
+  let dir = "";
+  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  afterEach(async () => {
+    if (server) {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server!.close(() => r()));
+    }
+    server = null;
+    if (dir) rmSync(dir, { recursive: true, force: true });
+    dir = "";
+    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+  });
+
+  const fill = { fact: 2048, aggregate: 2048, bug: 2048 };
+  const minOut = { fact: 256, aggregate: 256, bug: 256 };
+  const recordCount = (body: Record<string, unknown>): number => {
+    const msgs = body.messages as Array<{ content: string }>;
+    return (msgs[msgs.length - 1]!.content.match(/name: skill-\d{6}/g) ?? []).length;
+  };
+
+  /** A loopback server: throughput requests get 256 tokens at once; the first `hang` classify requests never answer. */
+  const serve = async (hang: number): Promise<{ url: string; classify: () => number }> => {
+    let classify = 0;
+    server = createServer((req: IncomingMessage, res: ServerResponse) => {
+      let raw = "";
+      req.on("data", (d: Buffer) => (raw += d.toString()));
+      req.on("end", () => {
+        const body = JSON.parse(raw) as Record<string, unknown>;
+        const system = (body.messages as Array<{ content: string }>)[0]!.content;
+        if (system.includes("frontmatter classifier")) {
+          classify++;
+          if (classify <= hang) return; // never answered: the client times out
+          const content = JSON.stringify({ categories: Array.from({ length: recordCount(body) }, () => "debugging") });
+          res.writeHead(200, { "content-type": "application/json" });
+          res.end(JSON.stringify({ choices: [{ message: { content } }], usage: { prompt_tokens: 100, completion_tokens: 40 } }));
+          return;
+        }
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ choices: [{ message: { content: "words ".repeat(256) }, finish_reason: "length" }], usage: { prompt_tokens: 2048, completion_tokens: 256 } }));
+      });
+    });
+    await new Promise<void>((r) => server!.listen(0, "127.0.0.1", () => r()));
+    return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, classify: () => classify };
+  };
+
+  /** A Phase C context over a synthetic GGUF, with Phase A and B summaries already recorded. */
+  const context = (url: string, harness: { mainSlots: number[]; scoutShares: number[]; scoutSlots: number[] }, memoryWait: Record<string, string> = {}) => {
+    dir = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-run-"));
+    const gguf = join(dir, "m.gguf");
+    writeGguf(gguf, [
+      ["general.architecture", "lfm3"],
+      ["lfm3.block_count", 2],
+      ["lfm3.attention.head_count", 2],
+      ["lfm3.embedding_length", 64],
+      ["lfm3.attention.head_count_kv", 1],
+    ]);
+    const trials: TrialRecord[] = [
+      { step: "A/summary", seed: 0, outcome: "pass", at: "t", data: { chars_per_token: 4, prefill_tps_2k: 100000, prefill_tps_8k: 100000, decode_tps: 100000, array40: true } },
+      { step: "B/summary", seed: 0, outcome: "pass", at: "t", data: { fill_fact: fill.fact, fill_aggregate: fill.aggregate, fill_bug: fill.bug, min_out_fact: 256, min_out_aggregate: 256, min_out_bug: 256, bug_thinking: "off" } },
+    ];
+    const logs: string[] = [];
+    const ctx = {
+      item: { engine: "llama", model: "m", reason: "manual" },
+      identity: { files: [gguf] },
+      harness,
+      server: { engine: "llama", model: "m", baseUrl: url, apiKey: "k" },
+      progress: { trials, phases: { A: "passed", B: "passed" }, paused: {}, stepCrashes: {}, memoryWait },
+      record: (t: TrialRecord) => trials.push(t),
+      save: () => undefined,
+      log: (m: string) => logs.push(m),
+      waitForTurn: async () => undefined,
+      stopServer: async () => undefined,
+      restart: async () => undefined,
+    } as unknown as PhaseContext;
+    return { ctx, trials, logs, gguf };
+  };
+
+  /** A memory floor that leaves room for n slots in total RAM but not in the free memory now (wait, not skip). */
+  const waitFloorPct = (gguf: string, slots: number): number => {
+    const need = weightBytes([gguf]) + kvBytes(modelKvLayers("llama", [gguf]), slots * mainSlotCtx(fill, minOut, "off")) + WINDOW_HEADROOM_BYTES;
+    return Math.floor((100 * (totalmem() - need - 1024 ** 3)) / totalmem());
+  };
+
+  it("a candidate short of free memory waits (paused, the start saved); after 30 min every one is skipped for now: paused, not failed", async () => {
+    const { url } = await serve(0);
+    const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] });
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = String(waitFloorPct(ctx.identity.files[0]!, 2));
+    const first = await phaseC.run(ctx);
+    expect(first).toMatchObject({ passed: false, paused: true, step: "C/main/1" });
+    expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual(["C/main/1"]);
+
+    // Both waits started 31 minutes ago: each candidate is skipped for this pass, and with none measured Phase C pauses.
+    const old = new Date(Date.now() - MEMORY_WAIT_MAX_MS - 60_000).toISOString();
+    ctx.progress.memoryWait = { "C/main/1": old, "C/main/2": old };
+    const second = await phaseC.run(ctx);
+    expect(second).toMatchObject({ passed: false, paused: true });
+    expect((second as { message: string }).message).toMatch(/could be measured yet/);
+    const skips = trials.filter((t) => t.step.startsWith("C/main/"));
+    expect(skips.map((t) => [t.step, t.outcome, t.data?.skipped])).toEqual([
+      ["C/main/1", "inconclusive", "memory-wait"],
+      ["C/main/2", "inconclusive", "memory-wait"],
+    ]);
+    expect(ctx.progress.memoryWait).toEqual({});
+    expect(trials.some((t) => t.step === "C/summary")).toBe(false);
+
+    // A resume with memory back measures both again (the skips were not terminal) and Phase C passes.
+    delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+    const third = await phaseC.run(ctx);
+    expect(third).toEqual({ passed: true });
+    expect(trials.filter((t) => t.step.startsWith("C/main/") && typeof t.data?.aggregate_decode_tps === "number").map((t) => t.step)).toEqual(["C/main/1", "C/main/2"]);
+  }, 120_000);
+
+  it("every main candidate over total RAM fails Phase C (the only memory verdict); the old wait entry is cleared", async () => {
+    const { url } = await serve(0);
+    const { ctx } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] }, { "C/main/1": new Date().toISOString() });
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "99";
+    const r = await phaseC.run(ctx);
+    expect(r).toMatchObject({ passed: false, step: "C/main" });
+    expect(r).not.toHaveProperty("paused");
+    expect(ctx.progress.memoryWait).toEqual({});
+  }, 60_000);
+
+  it("a scouting run whose requests time out is repeated on the same copies and then scored; the timed-out attempt is not", async () => {
+    const { url, classify } = await serve(4);
+    const { ctx, trials, logs } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [4] });
+    const r = await phaseC.run(ctx);
+    expect(r).toEqual({ passed: true });
+    expect(logs.some((l) => /run 1: 4 of 4 request\(s\) timed out; the run is repeated \(1 of 2\)/.test(l))).toBe(true);
+    // 4 hung + 4 rerun + 2 more runs of 4.
+    expect(classify()).toBe(16);
+    const scout = trials.find((t) => t.step === "C/scout/2048/4")!;
+    expect(scout.outcome).toBe("pass");
+    // The same seeds Phase C uses: permutation seed 9000 + share + n, plus run * n + i for each copy.
+    let records = 0;
+    for (let run = 0; run < 3; run++) for (let i = 0; i < 4; i++) records += calibrationScoutFixture(9000 + 2048 + 4 + run * 4 + i, 2048 * 4).recordCount;
+    expect(scout.data).toMatchObject({ errors: 0, records });
+    // The wall time counts only the answered attempts, not the 120 s timeout.
+    expect(Number(scout.data?.records_per_s)).toBeGreaterThan(Number(scout.data?.records) / 60);
+    const summary = trials.find((t) => t.step === "C/summary")!;
+    expect(JSON.parse(String(summary.data?.scout_candidates))).toHaveLength(1);
+  }, 300_000);
 });

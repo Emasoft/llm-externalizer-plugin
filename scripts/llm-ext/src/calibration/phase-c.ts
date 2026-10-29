@@ -11,7 +11,9 @@
  * (scoutingFor in record.ts), so a threshold change needs no new calibration.
  * Memory follows Phase B's rule (main-agent decision 2026-10-29, after review): a candidate that cannot fit the
  * hard budget (total RAM) is skipped; one that fits it but not the free memory now makes the model wait, for at most
- * MEMORY_WAIT_MAX_MS, after which it is skipped too. Neither is ever a failure. Every candidate's result is a trial,
+ * MEMORY_WAIT_MAX_MS, after which it is skipped for this pass only (outcome inconclusive: a resume measures it again),
+ * like a scouting candidate whose runs keep timing out. When no main or no scouting candidate could be scored, Phase C
+ * pauses (no verdict); only "every candidate over total RAM" fails the model (review of a3862052). Every candidate's result is a trial,
  * so a resume measures only what is missing.
  */
 
@@ -97,7 +99,8 @@ class WaitForMemory extends Error {
 /**
  * The parallel throughput of one batch in tok/s (review of fb861fab): every reply's completion tokens over the
  * batch's wall time. A sum of each reply's own predicted_per_second overstates it: each counts only its own decode
- * window, not the time the requests waited for one another. A reply without usage cannot be counted: the step fails.
+ * window, not the time the requests waited for one another. A reply without usage cannot be counted: this throws, and
+ * the runner counts the throw as a crash of the model (the third crash writes a calibration-failed runner/error record).
  */
 export function batchThroughput(replies: ReadonlyArray<Pick<Reply, "completionTokens">>, wallMs: number): number {
   const tokens = replies.reduce((s, r) => {
@@ -136,6 +139,39 @@ export const phaseC: Phase = {
       const waits = (ctx.progress.memoryWait ??= {});
 
       /**
+       * A candidate's terminal result (review of a3862052): its latest trial with outcome pass, that is measured, or
+       * skipped as over total RAM (the hard budget does not change). A memory-wait or timeout skip is inconclusive and
+       * returns null, so a resume measures that candidate again.
+       */
+      const finished = (step: string): ReturnType<typeof dataOf> => {
+        const t = [...ctx.progress.trials].reverse().find((x) => x.step === step);
+        return t?.outcome === "pass" && t.data ? t.data : null;
+      };
+      const skipOutcome = (skip: Record<string, string | number>): "pass" | "inconclusive" => (skip.skipped === "memory" ? "pass" : "inconclusive");
+      /**
+       * With no candidate of `steps` scored (MAJOR-1/2, coordinator decision 2026-10-29): every one over total RAM fails
+       * the model; otherwise Phase C pauses (no verdict, no pause counter), and the model stays queued. null once one
+       * candidate was scored.
+       */
+      const undecided = (steps: readonly string[]): Awaited<ReturnType<Phase["run"]>> | null => {
+        const scored = steps.some((s) => {
+          const d = finished(s);
+          return typeof d?.accuracy === "number" || typeof d?.aggregate_decode_tps === "number";
+        });
+        if (scored) return null;
+        if (steps.every((s) => finished(s)?.skipped === "memory")) {
+          return { passed: false, step: steps[0]!.split("/").slice(0, 2).join("/"), message: `every candidate (${steps.join(", ")}) is over total RAM minus the floor` };
+        }
+        const pending = steps.filter((s) => finished(s) === null);
+        return {
+          passed: false,
+          paused: true,
+          step: pending[0]!,
+          message: `no candidate of ${steps.join(", ")} could be measured yet (${pending.join(", ")} waited too long for free memory or timed out); Phase C pauses and measures them again on a resume`,
+        };
+      };
+
+      /**
        * Stop the cal server, then check the shape against memory (as measureWindow does, with the model unloaded).
        * Returns null when it fits, or why it is skipped: over total RAM, or (review of fb861fab) still short of free
        * memory MEMORY_WAIT_MAX_MS after it first waited, so a busy machine cannot hold the model forever. Otherwise
@@ -155,6 +191,11 @@ export const phaseC: Phase = {
           return null;
         }
         if (fit === "skip") {
+          // MINOR-8 (review of a3862052): an earlier wait of this candidate ends here too.
+          if (waits[step] !== undefined) {
+            delete waits[step];
+            ctx.save();
+          }
           ctx.log(`${step}: skipped, ${mib(need)} MiB does not fit total RAM minus the floor (${mib(totalmem() - floor)} MiB)`);
           return { skipped: "memory" };
         }
@@ -163,7 +204,7 @@ export const phaseC: Phase = {
           const waited = Math.round((Date.now() - Date.parse(since)) / 60_000);
           delete waits[step];
           ctx.save();
-          ctx.log(`${step}: skipped after waiting ${waited} min for free memory (${mib(need)} MiB needed, ${mib(free - floor)} MiB free above the floor)`);
+          ctx.log(`${step}: skipped for now after waiting ${waited} min for free memory (${mib(need)} MiB needed, ${mib(free - floor)} MiB free above the floor); measured again on a resume`);
           return { skipped: "memory-wait", waited_min: waited };
         }
         if (since === undefined) {
@@ -182,10 +223,10 @@ export const phaseC: Phase = {
       const prompt = throughputPromptTokens(fill);
       for (const n of ctx.harness.mainSlots) {
         const step = `C/main/${n}`;
-        if (dataOf(ctx, step)) continue;
+        if (finished(step)) continue;
         const skip = await fits(step, n, slotCtx);
         if (skip !== null) {
-          ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, ...skip }, at: now() });
+          ctx.record({ step, seed: n, outcome: skipOutcome(skip), data: { slots: n, slot_ctx: slotCtx, ...skip }, at: now() });
           continue;
         }
         await ctx.restart(slotCtx, n);
@@ -213,10 +254,15 @@ export const phaseC: Phase = {
         ctx.log(`Phase C main ${n} slot(s) of ${slotCtx}: parallel throughput ${tps} tok/s (completion tokens over wall time)`);
       }
       const measured = ctx.harness.mainSlots
-        .map((n) => dataOf(ctx, `C/main/${n}`))
+        .map((n) => finished(`C/main/${n}`))
         .filter((d): d is NonNullable<typeof d> => d !== null && typeof d.aggregate_decode_tps === "number")
         .map((d) => ({ slots: Number(d.slots), tps: Number(d.aggregate_decode_tps), load: Number(d.load_avg) }));
-      if (measured.length === 0) return { passed: false, step: "C/main", message: `no main-slot candidate (${ctx.harness.mainSlots.join(", ")}) could run at a slot context of ${slotCtx}: each was over total RAM or waited too long for free memory` };
+      if (measured.length === 0) {
+        // Review of a3862052 (MAJOR-1, coordinator decision): a busy machine never gives a verdict. Only "every n is
+        // over total RAM" fails the model; a candidate that waited too long for free memory pauses Phase C.
+        const v = undecided(ctx.harness.mainSlots.map((n) => `C/main/${n}`));
+        if (v !== null) return v;
+      }
       const slots = chooseSlots(measured);
       const chosen = measured.find((m) => m.slots === slots)!;
 
@@ -225,11 +271,11 @@ export const phaseC: Phase = {
       for (const share of ctx.harness.scoutShares) {
         for (const n of ctx.harness.scoutSlots) {
           const step = `C/scout/${share}/${n}`;
-          if (dataOf(ctx, step)) continue;
+          if (finished(step)) continue;
           const sCtx = scoutSlotCtx(share);
           const skip = await fits(step, n, sCtx);
           if (skip !== null) {
-            ctx.record({ step, seed: n, outcome: "pass", data: { share, slots: n, slot_ctx: sCtx, ...skip }, at: now() });
+            ctx.record({ step, seed: n, outcome: skipOutcome(skip), data: { share, slots: n, slot_ctx: sCtx, ...skip }, at: now() });
             continue;
           }
           await ctx.restart(sCtx, n);
@@ -279,8 +325,9 @@ export const phaseC: Phase = {
             }
           }
           if (timedOutRuns > 0) {
-            ctx.record({ step, seed, outcome: "pass", data: { share, slots: n, slot_ctx: sCtx, skipped: "timeout" }, at: now() });
-            ctx.log(`${step}: skipped, a run still timed out after ${SCOUT_TIMEOUT_RERUNS} repeats; not scored`);
+            // Not terminal (review of a3862052, MAJOR-2): outcome inconclusive, so a resume measures it again.
+            ctx.record({ step, seed, outcome: "inconclusive", data: { share, slots: n, slot_ctx: sCtx, skipped: "timeout" }, at: now() });
+            ctx.log(`${step}: skipped for now, a run still timed out after ${SCOUT_TIMEOUT_RERUNS} repeats; not scored, measured again on a resume`);
             continue;
           }
           const accuracy = Math.round((correct / total) * 1000) / 1000;
@@ -289,6 +336,10 @@ export const phaseC: Phase = {
           ctx.log(`Phase C scouting share ${share} at ${n} slots: accuracy ${accuracy} over ${total} records (${errors} failed requests), ${rps} records/s (${responseMode})`);
         }
       }
+      // Review of a3862052 (MAJOR-2, coordinator decision): no scored candidate is a busy machine, not a verdict, unless
+      // every candidate is over total RAM. An empty scouting_candidates is written only when candidates were scored.
+      const unscored = undecided(ctx.harness.scoutShares.flatMap((share) => ctx.harness.scoutSlots.map((n) => `C/scout/${share}/${n}`)));
+      if (unscored !== null) return unscored;
       // Every scored candidate goes into the record; the threshold is applied when it is read (scoutingFor).
       const candidates: ScoutCandidate[] = ctx.progress.trials
         .filter((t) => t.step.startsWith("C/scout/") && typeof t.data?.accuracy === "number")

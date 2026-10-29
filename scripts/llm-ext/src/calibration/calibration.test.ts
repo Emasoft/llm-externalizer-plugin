@@ -219,6 +219,8 @@ describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), le
     const PINNED: Record<number, string> = {
       1: "f8d99b34b756039733fe9622a06c551b13481270d0807c74c45902d44869e2d0",
       2: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
+      // 3: the Phase C method and the Phase B resume rule changed with the same harness JSON (the hash repeats on purpose).
+      3: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
     };
     expect(createHash("sha256").update(JSON.stringify(PRODUCTION_HARNESS)).digest("hex")).toBe(PINNED[HARNESS_VERSION]);
   });
