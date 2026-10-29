@@ -6,12 +6,13 @@
  */
 
 import type { BrokerEngine } from "../broker/protocol.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, type CalibrationRecord } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, type CalibrationRecord } from "./record.js";
 
 /** A complete `status: ok` record with plausible values, or a calibration-failed one when `failed` is given. */
 export function recordFixture(engine: BrokerEngine, model: string, failed?: { step: string; message: string }): CalibrationRecord {
   const base = {
-    schema: 1 as const,
+    schema: 2 as const,
+    harness: PRODUCTION_HARNESS_ID,
     harness_version: HARNESS_VERSION,
     fixture_version: FIXTURE_VERSION,
     engine,

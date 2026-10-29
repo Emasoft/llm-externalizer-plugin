@@ -122,6 +122,19 @@ export function thinkingOnOutcome(r: Reply): Outcome {
   return r.status === 200 && hasReasoning(r) ? "pass" : "fail";
 }
 
+
+/** D5: the thinking-off known-answer reply must end by itself within this many completion tokens. */
+export const LEAKY_LIMIT = 256;
+
+/**
+ * thinking_works.off (D5): false when thinking cannot be turned off; "leaky" when it can, but the
+ * thinking-off known-answer reply did not end with finish "stop" within LEAKY_LIMIT tokens; else true.
+ */
+export function thinkingOffMode(offOk: boolean, finish: unknown, completionTokens: unknown): boolean | "leaky" {
+  if (!offOk) return false;
+  return finish === "stop" && typeof completionTokens === "number" && completionTokens <= LEAKY_LIMIT ? true : "leaky";
+}
+
 /** The json_schema outcome: HTTP 400 = the engine refuses the schema (recorded as unsupported with its text). */
 export function jsonOutcome(r: Reply, check: (v: unknown) => boolean): Outcome | "unsupported" {
   if (r.status === 400) return "unsupported";
@@ -448,6 +461,11 @@ export const phaseA: Phase = {
     const knownOk = known !== null && known[0] === "pass";
     const offOk = off !== null && off.every((o) => o === "pass");
     const onOk = on !== null && on.every((o) => o === "pass");
+    // D5 (main-agent decision 2026-10-29): thinking off is "leaky" when the model passes the thinking-off checks but its
+    // thinking-off known-answer reply does not end by itself (finish "stop") within LEAKY_LIMIT tokens: it reasons in the
+    // visible answer. Recorded and shown, never a Phase A failure (that is a user decision: the goal names such a model).
+    const knownTrial = trialsOf(ctx, "A/known-answer").find((t) => t.outcome !== "inconclusive");
+    const offMode = thinkingOffMode(offOk, knownTrial?.data?.finish ?? null, knownTrial?.data?.completion_tokens ?? null);
     const summary = {
       passed: knownOk && offOk,
       load_s: Math.round(Number(caps.load_ms) / 100) / 10,
@@ -458,6 +476,7 @@ export const phaseA: Phase = {
       prefill_tps_2k: Math.round(Number(speed.prefill_tps_2k)),
       prefill_tps_8k: Math.round(Number(speed.prefill_tps_8k)),
       thinking_off: offOk,
+      thinking_off_mode: offMode,
       thinking_on: onOk,
       json_off: jsonOff,
       json_on: jsonOn,
@@ -470,6 +489,7 @@ export const phaseA: Phase = {
         `json_schema off ${jsonOff} on ${jsonOn} array40 ${array40}${jsonError ? ` (${jsonError.slice(0, 120)})` : ""}; thinking off ${offOk} on ${onOk}; known answer ${knownOk}; chars/token ${summary.chars_per_token}; n_ctx_train ${summary.n_ctx_train}`,
     );
     if (!onOk) ctx.log("thinking cannot be turned on: the bug kind will run with thinking off (thinking_works.on: false)");
+    if (offMode === "leaky") ctx.log(`thinking off is leaky: the known-answer reply took ${String(knownTrial?.data?.completion_tokens)} tokens (finish ${String(knownTrial?.data?.finish)}); it reasons in its visible answer (thinking_works.off: "leaky", not a Phase A failure)`);
     if (known === null) return { passed: false, step: "phase-a/known-answer", message: "the known-answer trial stayed inconclusive (cut at max_tokens or timed out) on every attempt" };
     if (!knownOk) return { passed: false, step: "phase-a/known-answer", message: `the known answer (${KNOWN_ANSWER} to "${KNOWN_QUESTION}") was not given` };
     if (off === null) return { passed: false, step: "phase-a/thinking-off", message: "the thinking-off trials stayed inconclusive on every attempt" };

@@ -337,3 +337,31 @@ export function outputFloor(completions: readonly number[]): number {
   if (completions.length === 0) return 0;
   return Math.ceil((Math.max(...completions) * 1.25) / 256) * 256;
 }
+
+
+/**
+ * D1 (main-agent decision 2026-10-29): what a reply cut at max_tokens counts as. The first cut of a trial is
+ * rerun on a new document (inconclusive, not counted); a second cut is a FAIL in the sequential rule, so the
+ * step fails like any other and the grid steps down to unfit. A cut never fails the model.
+ */
+export function cutOutcome(earlierCuts: number): Outcome {
+  return earlierCuts === 0 ? "inconclusive" : "fail";
+}
+
+/**
+ * How a reply with no HTTP status is treated (D3, main-agent decision 2026-10-29; spec section 2):
+ * the cal server gone (or replaced) = a crash, counted per step; a timeout = inconclusive (the pause
+ * bound, D2); a network error while the same server process is still alive = inconclusive, rerun;
+ * anything else is scored.
+ */
+export function transportVerdict(r: Pick<Reply, "status" | "timedOut">, sameServerAlive: boolean): "crash" | "inconclusive" | "score" {
+  if (!sameServerAlive) return "crash";
+  if (r.status === 0) return "inconclusive";
+  return "score";
+}
+
+/** The grid walk (spec 4.3): from the top step down, the first passing step is the kind's fill_tokens; none = 0 (unfit). */
+export async function walkGrid(steps: readonly number[], passes: (tokens: number) => Promise<boolean>): Promise<number> {
+  for (const tokens of steps) if (await passes(tokens)) return tokens;
+  return 0;
+}

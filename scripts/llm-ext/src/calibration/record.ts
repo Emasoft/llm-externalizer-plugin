@@ -14,8 +14,20 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, wr
 import { dirname, join } from "node:path";
 import type { BrokerEngine } from "../broker/protocol.js";
 
-/** Bumped when the calibration method changes: every record and progress entry of an older harness is invalid (spec section 3). */
+/**
+ * Bumped when the calibration method changes, and whenever PRODUCTION_HARNESS
+ * (runner.ts) changes: every record and progress entry of an older harness is
+ * invalid (spec section 3).
+ */
 export const HARNESS_VERSION = 1;
+/**
+ * The `harness` id of a record made with the production harness (D4, main-agent
+ * decision 2026-10-29). A custom LLM_EXT_CALIBRATION_HARNESS writes
+ * "custom:<sha256 of its JSON>", and such a record never makes a model usable.
+ */
+export const PRODUCTION_HARNESS_ID = "production";
+/** The record format (spec section 7): 2 added `harness` and thinking_works.off "leaky" (D6). */
+export const RECORD_SCHEMA = 2;
 /** Bumped when a fixture (filler, needles, planted bugs, scouting copy) changes. */
 export const FIXTURE_VERSION = 1;
 
@@ -43,7 +55,9 @@ export type RecordStatusValue = "ok" | "engine-check-failed" | "calibration-fail
 
 /** Spec section 7. A calibration-failed record carries the identity, status, failed_step and message only. */
 export interface CalibrationRecord {
-  schema: 1;
+  schema: 2;
+  /** PRODUCTION_HARNESS_ID, or "custom:<sha256>" for a reduced harness (D4). */
+  harness: string;
   harness_version: number;
   fixture_version: number;
   engine: BrokerEngine;
@@ -60,7 +74,8 @@ export interface CalibrationRecord {
   free_ram_bytes?: number;
   chars_per_token?: number;
   capabilities?: { thinking: boolean; n_ctx_train: number };
-  thinking_works?: { off: boolean; on: boolean };
+  /** off: "leaky" = thinking is off but the model reasons in its visible answer (D5; does not fail Phase A). */
+  thinking_works?: { off: boolean | "leaky"; on: boolean };
   min_output_tokens?: PerKind;
   /** 0 = unfit for that kind (it failed at the 2048-token floor). */
   fill_tokens?: PerKind;
@@ -101,7 +116,8 @@ export function recordSchemaErrors(raw: unknown): string[] {
   const need = (ok: boolean, what: string): void => {
     if (!ok) e.push(what);
   };
-  need(raw.schema === 1, "schema must be 1");
+  need(raw.schema === RECORD_SCHEMA, `schema must be ${RECORD_SCHEMA}`);
+  need(isStr(raw.harness) && /^(production|custom:[0-9a-f]{64})$/.test(raw.harness), "harness (production or custom:<sha256>)");
   need(isNonNeg(raw.harness_version), "harness_version");
   need(isNonNeg(raw.fixture_version), "fixture_version");
   need(raw.engine === "llama" || raw.engine === "locals", "engine");
@@ -123,7 +139,7 @@ export function recordSchemaErrors(raw: unknown): string[] {
   const cap = raw.capabilities;
   need(isObj(cap) && isBool(cap.thinking) && isNonNeg(cap.n_ctx_train), "capabilities");
   const tw = raw.thinking_works;
-  need(isObj(tw) && isBool(tw.off) && isBool(tw.on), "thinking_works");
+  need(isObj(tw) && (isBool(tw.off) || tw.off === "leaky") && isBool(tw.on), "thinking_works");
   need(perKind(raw.min_output_tokens), "min_output_tokens");
   need(perKind(raw.fill_tokens), "fill_tokens");
   need(
@@ -208,6 +224,9 @@ export function readRecordStatus(dir: string, engine: BrokerEngine, model: strin
   if (r === null) return { state: "missing" };
   // Review M5: a record of another harness or fixture version describes another method: the model is calibrated again.
   if (r.harness_version !== HARNESS_VERSION || r.fixture_version !== FIXTURE_VERSION) return { state: "missing" };
+  // D4 (main-agent decision 2026-10-29): only the production harness makes a model usable; a reduced-harness
+  // record (custom:<sha256>) counts as missing, compared by id and version, never by deep-equal.
+  if (r.harness !== PRODUCTION_HARNESS_ID) return { state: "missing" };
   if (r.status === "ok") return { state: "ok" };
   const step = r.failed_step !== null ? ` at ${r.failed_step}` : "";
   const why = r.message !== undefined ? `: ${r.message}` : "";

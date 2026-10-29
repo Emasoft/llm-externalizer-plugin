@@ -11,7 +11,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, rea
 import { totalmem } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { hubCacheDir } from "../local-locals-server.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, type Fingerprint } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, type Fingerprint } from "./record.js";
 
 const SHA256_RE = /^[0-9a-f]{64}$/;
 
@@ -156,10 +156,13 @@ export async function loadedIdentity(engine: "llama" | "locals", baseUrl: string
  * (the quick check re-runs Phase A); null: it matches.
  */
 export function staleness(
-  record: { fingerprint: Fingerprint; engine_version_checked: string; harness_version: number; fixture_version: number },
+  record: { fingerprint: Fingerprint; engine_version_checked: string; harness_version: number; harness: string; fixture_version: number },
   now: Pick<LoadedIdentity, "fingerprint" | "engineVersion">,
+  harnessId: string = PRODUCTION_HARNESS_ID,
 ): "weights" | "engine" | null {
   if (record.harness_version !== HARNESS_VERSION || record.fixture_version !== FIXTURE_VERSION) return "weights";
+  // D4: a record of another harness (production against custom:<sha256>, or two custom ones) measured another method.
+  if (record.harness !== harnessId) return "weights";
   if (!sameFingerprint(record.fingerprint, now.fingerprint)) return "weights";
   if (record.engine_version_checked !== now.engineVersion) return "engine";
   return null;

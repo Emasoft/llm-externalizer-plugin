@@ -16,7 +16,8 @@ import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordP
 import { blobSha256, fingerprintOf, ggufShards, snapshotWeightFiles, staleness } from "./fingerprint.js";
 import { acquireModelLock, dequeueUnlocked, enqueueUnlocked, loadProgress, modelLockPath, readQueue, readSeenModels, releaseModelLock, saveProgress, withStateLock } from "./state.js";
 import { checkModelChanges, managedProfileModels, markProfileUsed } from "./triggers.js";
-import { engineOf, queueManual } from "./commands.js";
+import { engineOf, profileUnfitKinds, queueManual } from "./commands.js";
+import { harnessFromEnv } from "./runner.js";
 
 let dir: string;
 beforeEach(() => {
@@ -149,6 +150,51 @@ describe("review fixes of ea8e3869: fingerprint, versions, queue pruning", () =>
     expect(readQueue(dir).map((q) => q.model)).toEqual(["org/manual:Q4"]);
   });
 });
+describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), leaky thinking off (D5), unfit profiles (D1)", () => {
+  const custom = `custom:${"a".repeat(64)}`;
+  it("D4: a record of a custom harness is valid but counts as missing for the broker; the production one is usable", () => {
+    writeRecord(dir, { ...recordFixture("llama", "c/d:Q4"), harness: custom });
+    expect(readRecord(dir, "llama", "c/d:Q4")?.harness).toBe(custom);
+    expect(readRecordStatus(dir, "llama", "c/d:Q4").state).toBe("missing");
+    writeRecord(dir, recordFixture("llama", "c/d:Q4"));
+    expect(readRecordStatus(dir, "llama", "c/d:Q4").state).toBe("ok");
+  });
+  it("D4: the runner sees a record of another harness as stale (by id, never by the harness contents)", () => {
+    const rec = recordFixture("llama", "c/d:Q4");
+    const id = { fingerprint: rec.fingerprint, engineVersion: rec.engine_version_checked };
+    expect(staleness(rec, id)).toBeNull();
+    expect(staleness(rec, id, custom)).toBe("weights");
+    expect(staleness({ ...rec, harness: custom }, id, custom)).toBeNull();
+    expect(staleness({ ...rec, harness: custom }, id)).toBe("weights");
+  });
+  it("D4: LLM_EXT_CALIBRATION_HARNESS gives custom:<sha256 of its JSON>; unset is production; malformed is an error", () => {
+    const raw = "{\"windowCap\":8192}";
+    expect(harnessFromEnv({}).id).toBe("production");
+    const h = harnessFromEnv({ LLM_EXT_CALIBRATION_HARNESS: raw });
+    expect(h.id).toBe(`custom:${createHash("sha256").update(raw).digest("hex")}`);
+    expect(h.windowCap).toBe(8192);
+    expect(harnessFromEnv({ LLM_EXT_CALIBRATION_HARNESS: "{\"id\":\"production\"}" }).id).toMatch(/^custom:/);
+    expect(() => harnessFromEnv({ LLM_EXT_CALIBRATION_HARNESS: "{" })).toThrow(/not JSON/);
+    expect(() => harnessFromEnv({ LLM_EXT_CALIBRATION_HARNESS: "{\"trials\":0}" })).toThrow(/invalid/);
+  });
+  it("D6: schema 2 is required (a schema-1 record counts as missing); D5: thinking_works.off may be \"leaky\", nothing else", () => {
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), schema: 1 })).toContain("schema must be 2");
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), harness: "custom:xyz" })).toContain("harness (production or custom:<sha256>)");
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), thinking_works: { off: "leaky", on: true } })).toEqual([]);
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b"), thinking_works: { off: "maybe", on: true } })).toContain("thinking_works");
+    mkdirSync(join(dir, "calibration", "llama"), { recursive: true });
+    writeFileSync(recordPath(dir, "llama", "old/m"), JSON.stringify({ ...recordFixture("llama", "old/m"), schema: 1 }));
+    expect(readRecordStatus(dir, "llama", "old/m").state).toBe("missing");
+  });
+  it("D1: a profile is unfit for a kind only when every model has a verdict and none is fit for it", () => {
+    const fill = (fact: number, aggregate: number, bug: number) => ({ fact, aggregate, bug });
+    expect(profileUnfitKinds([{ status: "ok", fill: fill(2048, 0, 0) }, { status: "failed" }])).toEqual(["aggregate", "bug"]);
+    expect(profileUnfitKinds([{ status: "ok", fill: fill(2048, 0, 0) }, { status: "ok", fill: fill(0, 0, 4096) }])).toEqual(["aggregate"]);
+    expect(profileUnfitKinds([{ status: "ok", fill: fill(0, 0, 0) }, { status: "missing" }])).toEqual([]);
+    expect(profileUnfitKinds([{ status: "failed" }])).toEqual(["fact", "aggregate", "bug"]);
+  });
+});
+
 describe("per-model lock (spec section 3)", () => {
   it("is taken over from a dead or non-runner holder, refused while a live __calibrate holds it, and released only by its owner", async () => {
     const lock = modelLockPath(dir, "llama", "a/b:Q4");

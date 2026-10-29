@@ -14,6 +14,7 @@
 
 import { timingsFromEnv } from "../broker/scheduler.js";
 import { memoryFreePercent } from "../local-locals-server.js";
+import { pidState } from "../local-llama-server.js";
 import { chooseWindow, freeMemory, kvBytes, modelKvLayers, weightBytes } from "./memory.js";
 import { CAP_OFF, CAP_ON, makeSender, trialTimeoutMs, type Outcome, type Reply, type Sender, type Thinking } from "./phase-a.js";
 import {
@@ -35,6 +36,9 @@ import {
   seedOf,
   sequentialVerdict,
   variantSeed,
+  walkGrid,
+  cutOutcome,
+  transportVerdict,
   type FactDoc,
 } from "./phase-b-fixtures.js";
 import type { GridEntry, TaskKind } from "./record.js";
@@ -143,13 +147,17 @@ async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thin
   for (let rebuild = 0; ; rebuild++) {
     const b = await sized(run, kind, tokens, build);
     const cap = Math.max(64, Math.min(thinking === "on" ? CAP_ON : CAP_OFF, run.window - tokens - 64));
+    const before = ctx.server;
     const r = await run.send.chat([{ role: "user", content: b.content }], {
       thinking,
       maxTokens: cap,
       timeoutMs: trialTimeoutMs(tokens, cap, run.prefillTps, run.decodeTps),
       responseFormat: json ? { type: "json_schema", json_schema: { name: "bug", strict: true, schema: BUG_SCHEMA } } : undefined,
     });
-    if (!ctx.server.alive()) {
+    // D3 (main-agent decision 2026-10-29): only the same server process, still alive after the request, makes a
+    // failed request a network error (inconclusive, rerun); a dead or replaced server is a crash, counted per step.
+    const verdict = transportVerdict(r, ctx.server === before && before.alive() && pidState(before.entry.pid) === "alive");
+    if (verdict === "crash") {
       const crashes = (ctx.progress.stepCrashes ??= {});
       crashes[key] = (crashes[key] ?? 0) + 1;
       ctx.save();
@@ -159,6 +167,7 @@ async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thin
       rebuild--;
       continue;
     }
+    if (verdict === "inconclusive") return { outcome: "inconclusive", reply: r, promptTokens: r.promptTokens ?? 0 };
     const p = r.promptTokens;
     if (r.status === 200 && p !== null && p > 0) {
       // Learn the size of this kind's text from the real count (spec 4.3), whatever the verdict.
@@ -188,20 +197,27 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
   if (done) return done.outcome;
   const pauses = ctx.progress.paused?.[key] ?? 0;
   const allowed = 2 * (pauses + 1);
-  while (mine().filter((t) => t.outcome === "inconclusive").length < allowed) {
+  // Only timeouts and network errors count towards the pause (D2, D3); a cap cut is settled by cutOutcome (D1).
+  const waits = (): number => mine().filter((t) => t.outcome === "inconclusive" && t.data?.cut !== true).length;
+  while (waits() < allowed) {
     // A rerun gets a new document variant (variantSeed): at temperature 0 the same input repeats the same cut reply.
     const attempt = mine().filter((x) => x.outcome === "inconclusive").length;
     const t = await oneTrial(run, kind, tokens, thinking, json, (chars) => build(chars, attempt));
     const r = t.reply;
+    // D1 (main-agent decision 2026-10-29): a reply cut at max_tokens is rerun once on a new document; cut again,
+    // it is a FAIL, so a kind whose answers do not fit the cap ends unfit instead of failing the whole model.
+    const cut = r.finishReason === "length";
+    const outcome = cut ? cutOutcome(mine().filter((x) => x.data?.cut === true).length) : t.outcome;
     ctx.record({
       step: key,
       seed: index,
-      outcome: t.outcome,
+      outcome,
       data: {
         counter,
         index,
         status: r.status,
         finish: r.finishReason,
+        cut,
         prompt_tokens: t.promptTokens,
         completion_tokens: r.completionTokens,
         reasoning: r.reasoning.trim() !== "",
@@ -210,13 +226,13 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
       },
       at: now(),
     });
-    if (t.outcome !== "inconclusive") return t.outcome;
+    if (outcome !== "inconclusive") return outcome;
   }
   const paused = (ctx.progress.paused ??= {});
   paused[key] = pauses + 1;
   ctx.save();
-  if (paused[key] >= 2) throw new StepFailed(key, `trial ${index} of ${key} (${counter}) stayed inconclusive (cut at max_tokens or timed out) after the step was paused once`);
-  throw new StepPaused(key, `trial ${index} of ${key} (${counter}) was inconclusive twice in a row`);
+  if (paused[key] >= 2) throw new StepFailed(key, `trial ${index} of ${key} (${counter}) stayed inconclusive (timed out or a network error) after the step was paused once`);
+  throw new StepPaused(key, `trial ${index} of ${key} (${counter}) was inconclusive (timed out or a network error) twice in a row`);
 }
 
 /** The conclusive outcomes of a counter in index order (what the sequential rule reads). */
@@ -411,15 +427,15 @@ export const phaseB: Phase = {
       const grid: GridEntry[] = [];
       for (const kind of kinds) {
         // Spec 4.3: start at the top step, step down only on failure; a kind failing at the floor is unfit (0).
-        for (const tokens of steps.filter((s) => s + 256 <= window)) {
-          const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
-          grid.push(...gridOf(ctx, kind, tokens));
-          ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
-          if (ok) {
-            fill[kind] = tokens;
-            break;
-          }
-        }
+        fill[kind] = await walkGrid(
+          steps.filter((s) => s + 256 <= window),
+          async (tokens) => {
+            const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
+            grid.push(...gridOf(ctx, kind, tokens));
+            ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
+            return ok;
+          },
+        );
       }
       // Output floors (spec 4.3, F15, N4): passing, non-truncated trials only.
       const floors = Object.fromEntries(

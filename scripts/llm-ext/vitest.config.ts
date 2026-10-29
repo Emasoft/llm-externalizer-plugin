@@ -97,6 +97,7 @@ export default defineConfig({
       // P6b step 3: Phase A scorers with degenerate answerers; pure, no I/O.
       'src/calibration/phase-a.test.ts',
       'src/calibration/phase-b.test.ts',
+      'src/calibration/phase-b-real.test.ts',
       // The population RUNNER's own policy — paid gate, lock-before-gate
       // ordering, fail-open, the dynamic 'paid' daily spend cap (P5).
       'src/default-profiles-runner.test.ts',

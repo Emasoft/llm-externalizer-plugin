@@ -75,7 +75,9 @@ P7 owns the exact command-to-kind table; a command missing from it is refused on
 **Output caps, timeouts and inconclusive trials** (N3, N4, coordinator decision 3).
 - Every calibration request carries `max_tokens` 8192 with thinking on, and 2048 with thinking off.
 - Trial timeout = 3 × (prompt tokens / `speed.prefill_tps` + the trial's `max_tokens` / `speed.decode_tps`), using the Phase A speeds, and at least 120 s.
-- A trial that ends with `finish_reason: length` (it hit the cap), or that times out, is **inconclusive**, never a quality failure. It is rerun once. Two inconclusive runs in a row pause the step: the step is recorded `inconclusive` with both runs, the runner goes on to the next model in line, and it retries the paused step once on its next pass. If it is inconclusive again, the model gets `status: calibration-failed` with that step, and `calibration-status` reports it.
+- A trial that ends with `finish_reason: length` (it hit the cap) is rerun once on a new document; cut again, it is a FAIL in the sequential rule, never a reason to fail the model (D1, main-agent decision, 2026-10-29; the user may override; section 4.3).
+- A trial that times out is **inconclusive**, never a quality failure (D2, main-agent decision, 2026-10-29; the user may override: unchanged). It is rerun once. Two inconclusive runs in a row pause the step: the step is recorded `inconclusive` with both runs, the runner goes on to the next model in line, and it retries the paused step once on its next pass. If it is inconclusive again, the model gets `status: calibration-failed` with that step, and `calibration-status` reports it, so a model too slow by itself cannot hold jobs forever.
+- A request that fails with no HTTP status and no timeout (a network error) is inconclusive and rerun only when the cal server is still alive when checked after the error, with the same pid and no restart in between; otherwise it counts towards the crash limit below (D3, main-agent decision, 2026-10-29; the user may override).
 - A cal server crash is counted per step. After 3 crashes in the same step, the model gets `status: calibration-failed` with the step and the last log lines, the runner moves on, and `calibration-status` reports it. A resume never loops into the same crash.
 
 **Scope.** Calibration covers managed local profiles (`server: managed`, llamacpp-local or locals-local) only: it needs a server llm-ext starts. Remote and unmanaged local profiles are not calibrated and never held (TRDD-UT7UC025 covers remote).
@@ -112,6 +114,8 @@ Never on boot for profiles nobody used. A model removed from every profile is dr
 - total RAM changed;
 - the user runs `models calibrate --model <id> --force`.
 
+- the record's `harness` is not "production" at the current `harness_version` (D4, main-agent decision, 2026-10-29; the user may override): a record made with a custom `LLM_EXT_CALIBRATION_HARNESS` stores "custom:<sha256 of its JSON>" and never makes a model usable; `harness_version` is bumped whenever the production harness changes. Compared by id and version, never by deep-equal.
+
 A change of `scout_accuracy_threshold` re-runs only the scouting part of Phase C.
 
 **W and free memory** (F19, coordinator decision 11). The record stores the free RAM seen when W was measured (`free_ram_bytes`) and the W chosen. Whenever a calibration run of that model starts (any trigger, or a resume) and the free RAM then differs from `free_ram_bytes` by more than 25 %, W is measured again; if the new W differs, the Phase B and C results are dropped and rerun.
@@ -141,6 +145,7 @@ Every phase writes its trials to progress, so a crash or sleep resumes mid-phase
 - Capabilities: llama `/props` `chat_template_caps` and `n_ctx_train`; Locals `/v1/models` `context_length` and whether a `-thinking` id is listed.
 - One known-answer prompt. It passes when the normalised answer contains the expected token as a whole word ("The answer is 42." passes for 42).
 - **Thinking off must work** (N2, coordinator decision 2): 2 trials with thinking off (`chat_template_kwargs.enable_thinking: false`; on Locals the base id) must produce no reasoning tokens and no think block. A model whose thinking cannot be turned off fails Phase A, and is reported.
+- **Leaky thinking off** (D5, main-agent decision, 2026-10-29; the user may override): the thinking-off known-answer trial must also end with `finish_reason: stop` within 256 completion tokens. A model that passes the checks above but not this one reasons in its visible answer: `thinking_works.off` is `"leaky"` (otherwise `true` or `false`), shown by `calibration-status`. "leaky" does not fail Phase A; whether it should is a user decision, because the goal names the LFM3 model that does it.
 - **Thinking on** (F16): 2 trials with thinking on (`enable_thinking: true`; on Locals the `-thinking` id) must produce reasoning. If they do not, the model is reported (`thinking_works.on: false`, a line in `calibration-status`), and the bug kind runs and is calibrated with thinking off. That is reported, never silent.
 - json_schema: a small strict schema, 2 times per thinking mode; and an array schema with minItems = maxItems = 40, as scouting sends for its 40-record minimum (F7). HTTP 400 is recorded as unsupported with the server's text (known answer: Nanbeige GGUF = false).
 - `chars_per_token` from three probe documents: `/tokenize` on llama; on Locals, `usage.prompt_tokens` of a 1-token completion.
@@ -174,6 +179,8 @@ Every phase writes its trials to progress, so a crash or sleep resumes mid-phase
 - The recorded `grid` keeps every count.
 
 **Sizing.** The prompt is built to the target through `chars_per_token`, checked against the real `usage.prompt_tokens` of the reply. A trial more than 3 % off its step is rebuilt, never scored.
+
+**Cap cuts and reruns** (D1, D7, main-agent decision, 2026-10-29; the user may override). A trial cut at `max_tokens` is rerun once on a new document of the same kind and size (at temperature 0 the same input repeats the same cut). Cut again, it is a FAIL in the sequential rule, so the step fails like any other and the grid steps down; at the 2048 floor the kind is unfit (`fill_tokens.<kind> = 0`). A timeout stays inconclusive (section 2).
 
 **Output floors** (F15, N4). `min_output_tokens.<kind>` = the largest completion of a PASSING, non-truncated (`finish_reason: stop`) trial of that kind, times 1.25, rounded up to 256. Failed and inconclusive trials never count. It is only used as a floor (section 6).
 
@@ -221,14 +228,14 @@ For a request of task kind k on model m, with record R and the profile's `contex
 - thinking: off for fact and aggregate, on for bug, unless Phase A reported thinking on broken (then off, reported). The user's `request_options.thinking` wins.
 - `response_format`: sent only when `R.structured_output[mode]` is true.
 - **Broker:** the main server starts with `R.main.slots` and `slot_ctx`; scouting requests use `R.scouting.*`; the broker dispatches at most that many requests at once.
-- **Unfit kind** (F3, coordinator decision 9): a kind unfit at the 2048-token floor (or `scouting: unfit`) on model m sends the command to the next model of the same profile (second, then third) that is fit for that kind, in order. If no model of the profile is fit, the command fails with a clear message naming each model's record. Nothing is refused silently, and nothing is routed outside the profile.
+- **Unfit kind** (F3, coordinator decision 9): a kind unfit at the 2048-token floor (or `scouting: unfit`) on model m sends the command to the next model of the same profile (second, then third) that is fit for that kind, in order. If no model of the profile is fit, the command fails with a clear message naming each model's record. Nothing is refused silently, and nothing is routed outside the profile. A kind whose answers do not fit the output cap is unfit this way, never a failed model (D1, main-agent decision, 2026-10-29; the user may override); `calibration-status` names a profile with no fit model for a kind (section 8).
 - **No complete record:** the job is held (section 2), never refused.
 - **Ensembles** (P8, F19): a member with no complete record is held like any other; a member unfit for the scan's kind is dropped with a warning naming its record; the scan proceeds while at least 1 member is left, and fails only when none is.
 - Records are read once per command.
 
-## 7. Record schema (version 1)
+## 7. Record schema (version 2)
 ```json
-{"schema": 1, "harness_version": 1, "fixture_version": 1,
+{"schema": 2, "harness_version": 1, "harness": "production|custom:<sha256>", "fixture_version": 1,
  "engine": "llama|locals", "model": "<profile id>",
  "fingerprint": {"blobs": ["<sha256>"], "ram_bytes": 0},
  "engine_version": "...", "engine_version_checked": "...",
@@ -236,7 +243,7 @@ For a request of task kind k on model m, with record R and the profile's `contex
  "calibrated_at": "<ISO>", "duration_s": 0, "window_tokens": 32768, "free_ram_bytes": 0,
  "chars_per_token": 0,
  "capabilities": {"thinking": true, "n_ctx_train": 0},
- "thinking_works": {"off": true, "on": true},
+ "thinking_works": {"off": "true|false|leaky", "on": true},
  "min_output_tokens": {"fact": 0, "aggregate": 0, "bug": 0},
  "fill_tokens": {"fact": 13107, "aggregate": 8192, "bug": 4096},
  "grid": [{"kind": "bug", "counter": "control", "tokens": 4096, "trials": 10, "passed": 8, "inconclusive": 1}],
@@ -245,10 +252,10 @@ For a request of task kind k on model m, with record R and the profile's `contex
  "scouting": {"share_tokens": 2048, "slots": 8, "slot_ctx": 0, "accuracy": 0.97, "records_per_s": 0, "permutation_seed": 0},
  "speed": {"prefill_tps": 0, "decode_tps": 0, "aggregate_decode_tps": 0, "load_avg": 0}}
 ```
-Only `status: ok` makes a model usable. The record is checked against this schema on read. Writing a record that fails the schema check is a bug and throws.
+Only `status: ok` makes a model usable. The record is checked against this schema on read. Writing a record that fails the schema check is a bug and throws. Schema 2 (D6, main-agent decision, 2026-10-29; the user may override) adds `harness` (D4) and the "leaky" value of `thinking_works.off` (D5); a schema-1 record counts as missing.
 
 ## 8. Commands
-- `llm-ext models calibration-status`: every managed model, its record status or progress, held jobs, paused time, inconclusive steps, thinking-direction problems, and the time left.
+- `llm-ext models calibration-status`: every managed model, its record status or progress, held jobs, paused time, inconclusive steps, thinking-direction problems (including `thinking_works.off: "leaky"`, D5), and the time left; and one line per managed profile and kind that no model of it is fit for: "no model of profile X is fit for <kind>" (D1, main-agent decision, 2026-10-29; the user may override).
 - `llm-ext models calibrate --model <id> [--force]`: adds the model to `queue.json` and starts the runner (detached), then returns at once.
 - `llm-ext models server-status` and `server-stop`: also list and stop the cal servers.
 
@@ -261,7 +268,7 @@ Only `status: ok` makes a model usable. The record is checked against this schem
   - always a decoy code; always the first needle's code;
   - a count that is always 5, and the list of every capitalised word;
   - scouting: the label cycle copied from the first records, a constant label, and labels copied from the record's tags (with the hashtags removed this must score near chance);
-  - a reply that is only a think block (thinking-off check), and a reply cut at `max_tokens` (inconclusive, never fail).
+  - a reply that is only a think block (thinking-off check), a reply cut at `max_tokens` (rerun on a new document, then a fail: D1), and a reply that timed out (inconclusive, never fail).
 - **Unit:**
   - scoring: fact (code, no other vault's code, thinking stripped, normalisation), aggregate (count and set), bug (file, ±1 line, control);
   - fixture determinism (same seed, same text), the shuffled and de-tagged scouting copy;
@@ -282,7 +289,7 @@ Only `status: ok` makes a model usable. The record is checked against this schem
   - a real request for another model pauses the runner; aborted trials are not counted;
   - an atomic record;
   - the tiny models will mostly score unfit: the test checks the verdicts and the mechanics, not their quality.
-- **Opt-in** (`RUN_REAL_LOCAL_MODELS=1`): the dry run below.
+- **Opt-in** (`RUN_REAL_LOCAL_MODELS=1`): the dry run below; and (D7, main-agent decision, 2026-10-29; the user may override) a reduced-harness Phase B run on the LFM3 GGUF that checks the orphan sweep after a SIGKILL, the resume that reuses finished trials, and a cap cut scored as a fail. The tiny GGUFs cannot run Phase B: llama-server caps their slot at their trained context of 128 tokens.
 
 ## 10. P6a dry run (after the user's answers; about 1 h, LFM3 GGUF only)
 `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K` on a cal server, with a reduced harness:
@@ -362,3 +369,15 @@ Round 2:
 | Q4 "exact" known answer | 4.2: whole-word match after normalisation. |
 | Q4 slot test on 2k prompts | 4.5: the throughput test uses prompts of `fill_tokens.fact`, twice. |
 | Q5 time estimate | Section 5: adopted. |
+
+Round 3 (implementation, P6b step 5: `reports/llama-cpp-profile/20261029_075217+0100-p6b-5-phase-b.md`). Each is a main-agent decision, 2026-10-29; the user may override:
+
+| Finding | What changed |
+|---|---|
+| D1 a cap cut failed the whole model | Section 2 and 4.3: a trial cut at `max_tokens` is rerun once on a new document; cut again, it is a FAIL in the sequential rule. The step walks down the grid like any fail, and the 2048 floor makes the kind unfit (`fill_tokens.<kind> = 0`). The model is never calibration-failed for a cap cut. Section 8: `calibration-status` says when no model of a profile is fit for a kind. |
+| D2 timeouts | Section 2: unchanged, inconclusive with the pause bound, so a model too slow by itself cannot hold jobs forever. |
+| D3 a network error with the server alive | Section 2: inconclusive and rerun only when the server is still alive when checked after the error, with the same pid and no restart; otherwise it counts towards the crash limit. |
+| D4 the reduced harness can write a record | Section 3 and 7: the record stores `harness`: "production" (tied to `harness_version`, bumped whenever the production harness changes) or "custom:<sha256 of the LLM_EXT_CALIBRATION_HARNESS JSON>". Any id other than "production" at the current `harness_version` counts as missing. Compared by id and version, never by deep-equal. |
+| D5 leaky thinking-off (LFM3 reasons in its visible answer) | 4.2: the thinking-off known-answer trial must also end with `finish_reason: stop` within 256 tokens; `thinking_works.off` is true, false or "leaky". "leaky" does not fail Phase A (whether it should is a user decision: the goal names that LFM3 model); `calibration-status` shows it. |
+| D6 record fields changed | Section 7: `schema` 2. |
+| D7 rerun input; real test | 4.3: a rerun uses a new document of the same kind and size (temperature 0 repeats a cut). Section 9: the tiny GGUFs cap their context at 128, so the real Phase B test is opt-in (`RUN_REAL_LOCAL_MODELS=1`, LFM3 GGUF, reduced harness: sweep, resume, a cap cut). |

@@ -12,7 +12,7 @@
  * once in this run, or for a version handover.
  */
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { totalmem } from "node:os";
@@ -24,7 +24,7 @@ import { freePort, parseManagedModel, pidState, spawnLlamaServer, waitReady, wit
 import { parseLocalsModel, spawnLocalsServer, waitLocalsReady } from "../local-locals-server.js";
 import { getConfigDir } from "../config.js";
 import { loadedIdentity, staleness, type LoadedIdentity } from "./fingerprint.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
 import { acquireModelLock, dequeueUnlocked, loadProgress, readQueue, releaseModelLock, saveProgress, withStateLock, type Progress, type QueueItem } from "./state.js";
 
 /** The phases of the full method, in order (spec section 4). A record is written only once all of them passed. */
@@ -46,11 +46,14 @@ export interface Harness {
   windowCap: number;
   /** Phase B grid steps in tokens; null = the spec 4.3 grid (2048, 4096, 8192 and 0.40 x W). */
   steps: number[] | null;
+  /** The record's `harness` id (D4): PRODUCTION_HARNESS_ID, or "custom:<sha256 of the LLM_EXT_CALIBRATION_HARNESS JSON>". */
+  id: string;
   /** Trials per counter before the sequential extension (spec 4.3: 5). */
   trials: number;
 }
 
-export const PRODUCTION_HARNESS: Harness = { phaseACtx: PHASE_A_CTX, windowCap: 32768, steps: null, trials: 5 };
+/** Any change here must bump HARNESS_VERSION (record.ts): records are compared by harness id and version only (D4). */
+export const PRODUCTION_HARNESS: Harness = { id: PRODUCTION_HARNESS_ID, phaseACtx: PHASE_A_CTX, windowCap: 32768, steps: null, trials: 5 };
 
 /** The harness of this run: LLM_EXT_CALIBRATION_HARNESS (JSON, partial) over the production one. A malformed value is an error, never ignored. */
 export function harnessFromEnv(env: NodeJS.ProcessEnv): Harness {
@@ -62,7 +65,8 @@ export function harnessFromEnv(env: NodeJS.ProcessEnv): Harness {
   } catch {
     throw new Error(`LLM_EXT_CALIBRATION_HARNESS is not JSON: ${raw}`);
   }
-  const h = { ...PRODUCTION_HARNESS, ...v };
+  // D4: a custom harness is named by the hash of its JSON, so its record never passes for a production one.
+  const h: Harness = { ...PRODUCTION_HARNESS, ...v, id: `custom:${createHash("sha256").update(raw).digest("hex")}` };
   const posInt = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0;
   if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || (h.steps !== null && !(Array.isArray(h.steps) && h.steps.length > 0 && h.steps.every(posInt)))) {
     throw new Error(`LLM_EXT_CALIBRATION_HARNESS has an invalid field: ${raw}`);
@@ -365,7 +369,8 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       ? // The record keeps its measured body; only the status says the new build failed the quick check.
         { ...existing, status: "engine-check-failed", failed_step: step, message }
       : {
-          schema: 1,
+          schema: 2,
+          harness: harness.id,
           harness_version: HARNESS_VERSION,
           fixture_version: FIXTURE_VERSION,
           engine: item.engine,
@@ -388,7 +393,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     identity = await loadedIdentity(item.engine, server.baseUrl, server.apiKey, item.model, o.dir);
     // A valid record that still matches what is loaded (weights, RAM, engine build, method version) needs nothing, unless --force (spec section 3).
     existing = readRecord(o.dir, item.engine, item.model, o.log);
-    const stale = existing ? staleness(existing, identity) : null;
+    const stale = existing ? staleness(existing, identity, harness.id) : null;
     if (existing && !item.force && stale === null) {
       // Review C1: rewrite it, so a broker that marked the record stale (mtime and size) sees a change and checks again.
       writeRecord(o.dir, existing);

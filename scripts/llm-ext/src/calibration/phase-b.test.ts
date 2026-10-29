@@ -28,6 +28,9 @@ import {
   seedOf,
   sequentialVerdict,
   variantSeed,
+  cutOutcome,
+  transportVerdict,
+  walkGrid,
 } from "./phase-b-fixtures.js";
 
 const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
@@ -233,6 +236,60 @@ describe("Phase B fixtures", () => {
     for (const f of BUG_CORPUS) h.update(`${f.path}\u0000${f.text}\u0000`);
     expect(h.digest("hex")).toBe(BUG_CORPUS_SHA256);
     expect(BUG_CORPUS.some((f) => BUG_PLANTS.some((p) => p.path === f.path))).toBe(false);
+  });
+});
+
+/**
+ * Trial i of a counter as the phase runs it under D1: each attempt gets a reply; a cut reply (finish "length")
+ * is rerun on a new document once, and a second cut is a fail. `replyFor(i, attempt)` plays the model.
+ */
+function trialWithCuts(i: number, replyFor: (i: number, attempt: number) => Reply, score: (r: Reply) => Outcome): Outcome {
+  let cuts = 0;
+  for (let attempt = 0; ; attempt++) {
+    const r = replyFor(i, attempt);
+    if (r.finishReason !== "length") return score(r);
+    const o = cutOutcome(cuts++);
+    if (o !== "inconclusive") return o;
+  }
+}
+
+describe("D1: a reply cut at max_tokens (main-agent decision 2026-10-29)", () => {
+  it("is rerun once, then a fail; the scorers alone still call it not scored", () => {
+    expect(cutOutcome(0)).toBe("inconclusive");
+    expect(cutOutcome(1)).toBe("fail");
+    expect(factOutcome(reply("ABCD", { finishReason: "length" }), "ABCD2345", ["ABCD2345"])).toBe("inconclusive");
+  });
+  it("a cap cut at the top step with a pass at a lower step gives fill_tokens = the lower step", async () => {
+    const steps = gridSteps(32768, null);
+    const fill = await walkGrid(steps, async (tokens) =>
+      verdictOf((i) =>
+        trialWithCuts(i, () => (tokens > 4096 ? reply("rambling…", { finishReason: "length" }) : reply("7")), (r) => aggregateCountOutcome(r, 7)),
+      ) === "pass",
+    );
+    expect(fill).toBe(4096);
+  });
+  it("a cap cut at every step gives 0 (unfit), never a failed model", async () => {
+    const tried: number[] = [];
+    const fill = await walkGrid(gridSteps(32768, null), async (tokens) => {
+      tried.push(tokens);
+      return verdictOf((i) => trialWithCuts(i, () => reply("", { finishReason: "length" }), (r) => aggregateCountOutcome(r, 7))) === "pass";
+    });
+    expect(fill).toBe(0);
+    expect(tried).toEqual([13107, 8192, 4096, 2048]);
+  });
+  it("one cut then a good answer on the rerun document counts as that answer", () => {
+    expect(trialWithCuts(0, (_i, a) => (a === 0 ? reply("", { finishReason: "length" }) : reply("7")), (r) => aggregateCountOutcome(r, 7))).toBe("pass");
+  });
+});
+
+describe("D3: a failed request (main-agent decision 2026-10-29)", () => {
+  it("the same server still alive: a network error or a timeout is inconclusive; a dead or replaced server is a crash; a reply is scored", () => {
+    expect(transportVerdict({ status: 0, timedOut: false }, true)).toBe("inconclusive");
+    expect(transportVerdict({ status: 0, timedOut: true }, true)).toBe("inconclusive");
+    expect(transportVerdict({ status: 0, timedOut: false }, false)).toBe("crash");
+    expect(transportVerdict({ status: 200, timedOut: false }, false)).toBe("crash");
+    expect(transportVerdict({ status: 200, timedOut: false }, true)).toBe("score");
+    expect(transportVerdict({ status: 400, timedOut: false }, true)).toBe("score");
   });
 });
 

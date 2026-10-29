@@ -16,7 +16,9 @@ import {
   proseOf,
   stripThinking,
   thinkingOffOutcome,
+  thinkingOffMode,
   thinkingOnOutcome,
+  LEAKY_LIMIT,
   trialTimeoutMs,
   type Reply,
 } from "./phase-a.js";
@@ -98,6 +100,18 @@ describe("Phase A scorers: cut replies are inconclusive, never a fail", () => {
   });
   it("HTTP 400 on a json_schema request is 'unsupported' (the engine refuses the schema), not a fail of the model", () => {
     expect(jsonOutcome(reply("", { status: 400, error: "Failed to initialize samplers" }), checkSmall)).toBe("unsupported");
+  });
+});
+
+describe("D5: leaky thinking off (main-agent decision 2026-10-29)", () => {
+  it("true only when the thinking-off known-answer reply ends by itself within 256 tokens; else leaky; false when thinking cannot be turned off", () => {
+    expect(LEAKY_LIMIT).toBe(256);
+    expect(thinkingOffMode(true, "stop", 12)).toBe(true);
+    expect(thinkingOffMode(true, "stop", 256)).toBe(true);
+    expect(thinkingOffMode(true, "stop", 257)).toBe("leaky");
+    expect(thinkingOffMode(true, "length", 40)).toBe("leaky");
+    expect(thinkingOffMode(true, "stop", null)).toBe("leaky");
+    expect(thinkingOffMode(false, "stop", 12)).toBe(false);
   });
 });
 
