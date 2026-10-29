@@ -100,7 +100,12 @@ export interface CalibrationRecord {
   grid?: Array<GridEntry | GridSkip>;
   structured_output?: { off: boolean; on: boolean; array40: boolean; error?: string };
   main?: { slots: number; slot_ctx: number };
-  scouting?: { share_tokens: number; slots: number; slot_ctx: number; accuracy: number; records_per_s: number; permutation_seed: number } | "unfit";
+  /**
+   * Every scouting candidate Phase C measured (review of fb861fab; main-agent decision 2026-10-29, the user may
+   * override). scout_accuracy_threshold is applied when the record is read (scoutingFor), so changing the threshold
+   * in settings.yaml needs no new calibration. No candidate passing the threshold means scouting is unfit.
+   */
+  scouting_candidates?: ScoutCandidate[];
   speed?: { prefill_tps: number; decode_tps: number; aggregate_decode_tps: number; load_avg: number };
 }
 
@@ -181,11 +186,35 @@ export function recordSchemaErrors(raw: unknown): string[] {
   need(isObj(so) && isBool(so.off) && isBool(so.on) && isBool(so.array40) && (so.error === undefined || isStr(so.error)), "structured_output");
   const main = raw.main;
   need(isObj(main) && isNum(main.slots) && main.slots >= 1 && isNum(main.slot_ctx) && main.slot_ctx >= 256, "main");
-  const sc = raw.scouting;
-  need(sc === "unfit" || (isObj(sc) && ["share_tokens", "slots", "slot_ctx", "accuracy", "records_per_s", "permutation_seed"].every((k) => isNonNeg(sc[k]))), "scouting");
+  const sc = raw.scouting_candidates;
+  need(Array.isArray(sc) && sc.every((c) => isObj(c) && SCOUT_CANDIDATE_KEYS.every((k) => isNonNeg(c[k]))), "scouting_candidates");
   const sp = raw.speed;
   need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_decode_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
   return e;
+}
+
+/** One measured scouting shape (spec 4.5): the share in tokens per request, the slot count, and what it scored. */
+export interface ScoutCandidate {
+  share_tokens: number;
+  slots: number;
+  slot_ctx: number;
+  accuracy: number;
+  records_per_s: number;
+  permutation_seed: number;
+}
+
+const SCOUT_CANDIDATE_KEYS = ["share_tokens", "slots", "slot_ctx", "accuracy", "records_per_s", "permutation_seed"] as const;
+
+/**
+ * The scouting shape at a threshold (spec 4.5): the highest share whose accuracy reaches it; at that share, the slot
+ * count with the best records per second; "unfit" when no candidate passes. Applied when the record is read, never
+ * when it is written, so the record stays valid across threshold changes.
+ */
+export function scoutingFor(candidates: readonly ScoutCandidate[], threshold: number): ScoutCandidate | "unfit" {
+  const passing = candidates.filter((c) => c.accuracy >= threshold);
+  if (passing.length === 0) return "unfit";
+  const share = Math.max(...passing.map((c) => c.share_tokens));
+  return passing.filter((c) => c.share_tokens === share).reduce((a, b) => (b.records_per_s > a.records_per_s ? b : a));
 }
 
 /** The fields of a record that come from the run itself, not from the phase summaries. */
@@ -227,7 +256,7 @@ export function okRecordFrom(base: RecordBase, trials: ReadonlyArray<{ step: str
     grid: JSON.parse(String(b.grid)) as Array<GridEntry | GridSkip>,
     structured_output: { off: a.json_off === true, on: a.json_on === true, array40: a.array40 === true, ...(typeof a.json_error === "string" ? { error: a.json_error } : {}) },
     main: { slots: n(c.main_slots), slot_ctx: n(c.main_slot_ctx) },
-    scouting: c.scouting === "unfit" ? "unfit" : (JSON.parse(String(c.scouting)) as Exclude<CalibrationRecord["scouting"], "unfit" | undefined>),
+    scouting_candidates: JSON.parse(String(c.scout_candidates)) as ScoutCandidate[],
     speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_decode_tps: n(c.aggregate_decode_tps), load_avg: n(c.load_avg) },
   };
 }

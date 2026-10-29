@@ -39,6 +39,7 @@ import {
   variantSeed,
   walkGrid,
   stepFit,
+  windowResume,
   windowTooSmallReason,
   cutOutcome,
   transportVerdict,
@@ -366,13 +367,14 @@ function gridOf(ctx: PhaseContext, kind: TaskKind, tokens: number): GridEntry[] 
 }
 
 /**
- * W (spec 4.1, coordinator decision 11): measured with the model unloaded. A
- * resume keeps the recorded W while free memory is within 25 % of what it was;
- * otherwise W is measured again, and a different W drops every Phase B trial.
- * Returns null when not even the smallest step fits: not a failure (ruling
- * L86-87), the model waits.
+ * W (spec 4.1, coordinator decision 11), measured with the model unloaded. Phase B's W is the HARD W (main-agent
+ * decision 2026-10-29; the user may override): weights + KV + 1 GB within total RAM minus the floor, under the caps.
+ * It does not depend on free memory, so a resume keeps every Phase B trial while the hard W is the same, however
+ * free memory moved; only a different hard W starts Phase B again (a RAM change also invalidates the record through
+ * the fingerprint). The soft W (free memory now) is what the cal server runs at; a step over it waits for memory.
+ * Returns null when not even the smallest step fits the soft W: not a failure (ruling L86-87), the model waits.
  */
-async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number } | null> {
+export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number } | null> {
   const floorPct = timingsFromEnv(process.env).memoryFloorPct;
   const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
   const weights = weightBytes(ctx.identity.files);
@@ -380,23 +382,18 @@ async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: nu
   await ctx.stopServer("measuring free memory for the calibration window");
   const { free, floor } = await freeMemory(floorPct);
   const window = chooseWindow(layers, weights, free - floor, cap);
-  // The hard W (decision 2026-10-29, after review): the same rule on TOTAL RAM. Only a step that cannot fit it is
-  // window-limited; one that fits it but not the free memory now waits for memory.
   const hard = chooseWindow(layers, weights, totalmem() - floor, cap);
-  const old = dataOf(ctx, "B/window");
-  if (old !== null) {
-    const oldFree = Number(old.free_ram_bytes);
-    const oldWindow = Number(old.window_tokens);
-    if (Math.abs(free - oldFree) <= 0.25 * oldFree || window === oldWindow) {
-      ctx.log(`calibration window W = ${oldWindow} tokens (kept; free memory ${Math.round(free / 2 ** 20)} MiB)`);
-      return { window: oldWindow, free: oldFree, hard };
-    }
-    // Free memory moved by more than 25 % and W with it: every Phase B result was measured at the old W.
-    ctx.log(`free memory changed from ${Math.round(oldFree / 2 ** 20)} to ${Math.round(free / 2 ** 20)} MiB and W from ${oldWindow} to ${window}: Phase B starts again`);
+  // The last measurement that carries a hard W (a post-load halving entry carries only the soft W).
+  const old = [...ctx.progress.trials].reverse().find((t) => t.step === "B/window" && typeof t.data?.hard_window_tokens === "number")?.data ?? null;
+  const resume = windowResume(old === null ? null : Number(old.hard_window_tokens), hard);
+  if (resume === "restart") {
+    ctx.log(`the hard window changed from ${String(old?.hard_window_tokens)} to ${hard} tokens: Phase B starts again`);
     ctx.progress.trials = ctx.progress.trials.filter((t) => !t.step.startsWith("B/") && !t.step.startsWith("C/"));
-    for (const m of [ctx.progress.paused, ctx.progress.stepCrashes]) for (const k of Object.keys(m ?? {})) if (k.startsWith("B/") || k.startsWith("C/")) delete m?.[k];
+    for (const m of [ctx.progress.paused, ctx.progress.stepCrashes, ctx.progress.memoryWait]) for (const k of Object.keys(m ?? {})) if (k.startsWith("B/") || k.startsWith("C/")) delete m?.[k];
     delete ctx.progress.phases.C;
     ctx.save();
+  } else if (resume === "keep") {
+    ctx.log(`hard window W = ${hard} tokens, as before: the Phase B trials are kept (free memory now ${Math.round(free / 2 ** 20)} MiB)`);
   }
   if (window < minWindow) {
     ctx.log(`not enough free memory for calibration: W would be ${window} tokens (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB); the model waits`);
@@ -409,7 +406,7 @@ async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: nu
     data: { window_tokens: window, hard_window_tokens: hard, free_ram_bytes: free, floor_bytes: floor, weight_bytes: weights, kv_bytes: kvBytes(layers, window), cap },
     at: now(),
   });
-  ctx.log(`calibration window W = ${window} tokens (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, KV ${Math.round(kvBytes(layers, window) / 2 ** 20)} MiB)`);
+  ctx.log(`calibration window W = ${window} tokens, hard W ${hard} (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, KV ${Math.round(kvBytes(layers, window) / 2 ** 20)} MiB)`);
   return { window, free, hard };
 }
 
@@ -463,7 +460,8 @@ export const phaseB: Phase = {
         cpt: { fact: cpt, aggregate: cpt, bug: cpt },
         overhead: { fact: 0, aggregate: 0, bug: 0 },
       };
-      const steps = ctx.harness.steps !== null ? steps0 : gridSteps(window, null);
+      // The grid comes from the hard W (main-agent decision 2026-10-29): a busy moment never changes which steps exist.
+      const steps = ctx.harness.steps !== null ? steps0 : gridSteps(w.hard, null);
       const fill: Record<TaskKind, number> = { fact: 0, aggregate: 0, bug: 0 };
       const grid: Array<GridEntry | GridSkip> = [];
       const unfitReasons: Partial<Record<TaskKind, string>> = {};

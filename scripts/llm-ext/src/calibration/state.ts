@@ -244,6 +244,11 @@ export interface Progress {
   paused?: Record<string, number>;
   /** Spec section 2: cal server crashes counted per step (the third fails the model). */
   stepCrashes?: Record<string, number>;
+  /**
+   * Phase C: when each slot or scouting candidate started waiting for free memory (ISO time; review of fb861fab). A
+   * candidate that has waited MEMORY_WAIT_MAX_MS is skipped, so a busy machine cannot hold a model forever.
+   */
+  memoryWait?: Record<string, string>;
 }
 
 export const progressPath = (dir: string, engine: BrokerEngine, model: string): string => join(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
@@ -279,6 +284,7 @@ export function loadProgress(dir: string, engine: BrokerEngine, model: string, f
     crashes: typeof raw.crashes === "number" ? raw.crashes : 0,
     paused: counts(raw.paused),
     stepCrashes: counts(raw.stepCrashes),
+    memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => typeof v === "string")) : {},
   };
 }
 

@@ -21,8 +21,8 @@ import {
   type ScoutFixture,
 } from "../mass_scouting/scout-accuracy-fixture.js";
 import { CAP_OFF, CAP_ON } from "./phase-a.js";
-import { budgetFit, chooseScouting, chooseSlots, mainSlotCtx, scoutSlotCtx, throughputPromptTokens, type ScoutResult } from "./phase-c.js";
-import { okRecordFrom, recordSchemaErrors, type RecordBase } from "./record.js";
+import { batchThroughput, budgetFit, chooseSlots, isScoutTimeout, mainSlotCtx, MEMORY_WAIT_MAX_MS, memoryWaitExpired, scoutSlotCtx, THROUGHPUT_OUTPUT_TOKENS, throughputPromptTokens } from "./phase-c.js";
+import { okRecordFrom, recordSchemaErrors, scoutingFor, type RecordBase, type ScoutCandidate } from "./record.js";
 
 /** The records of a fixture body, split at each frontmatter block. */
 const recordsOf = (fx: ScoutFixture): string[] => fx.body.split(/^---\nname: /m).slice(1);
@@ -150,25 +150,54 @@ describe("Phase C choices (spec 4.5)", () => {
     expect(chooseSlots([{ slots: 2, tps: 50 }])).toBe(2);
     expect(() => chooseSlots([])).toThrow(/no main-slot candidate/);
   });
-  it("the main slot context: max fill + the largest output cap (thinking-on bug: 8192) + 512, rounded up to 256; fact unfit measures at 2048", () => {
+  it("the main slot context, per kind: max over k of (fill_k + cap_k), or the throughput request, + 512, rounded up to 256", () => {
+    expect(CAP_OFF).toBe(2048);
+    expect(CAP_ON).toBe(8192);
     const fill = { fact: 13107, aggregate: 8192, bug: 4096 };
-    expect(mainSlotCtx(fill, { fact: 512, aggregate: 768, bug: 4096 }, "on")).toBe(Math.ceil((13107 + CAP_ON + 512) / 256) * 256);
-    expect(mainSlotCtx(fill, { fact: 512, aggregate: 768, bug: 4096 }, "off")).toBe(Math.ceil((13107 + 4096 + 512) / 256) * 256);
-    expect(mainSlotCtx(fill, { fact: 0, aggregate: 0, bug: 0 }, "off")).toBe(Math.ceil((13107 + CAP_OFF + 512) / 256) * 256);
+    // Thinking-on bug: fact 13107 + 2048 = 15155 beats bug 4096 + 8192 = 12288; 15155 + 512 = 15667, rounded 15872.
+    // The old rule (largest fill + largest cap of different kinds) would give 13107 + 8192 + 512, rounded 22016.
+    expect(mainSlotCtx(fill, { fact: 512, aggregate: 768, bug: 4096 }, "on")).toBe(15872);
+    expect(mainSlotCtx(fill, { fact: 512, aggregate: 768, bug: 4096 }, "off")).toBe(15872);
+    expect(mainSlotCtx(fill, { fact: 0, aggregate: 0, bug: 0 }, "off")).toBe(15872);
+    // A kind with its own large cap decides: bug 8192 + 8192 = 16384, + 512 = 16896.
+    expect(mainSlotCtx({ fact: 2048, aggregate: 2048, bug: 8192 }, { fact: 0, aggregate: 0, bug: 0 }, "on")).toBe(16896);
+    // min_output_tokens above the nominal cap is that kind's cap: aggregate 8192 + 6000 = 14192, + 512 = 14704 -> 14848.
+    expect(mainSlotCtx({ fact: 4096, aggregate: 8192, bug: 0 }, { fact: 0, aggregate: 6000, bug: 0 }, "off")).toBe(14848);
     expect(throughputPromptTokens({ fact: 0, aggregate: 4096, bug: 0 })).toBe(2048);
-    expect(mainSlotCtx({ fact: 0, aggregate: 0, bug: 0 }, { fact: 0, aggregate: 0, bug: 0 }, "off")).toBe(2048 + CAP_OFF + 512);
+    // Everything unfit: the throughput request (2048 + 256) is the largest, + 512 = 2816.
+    expect(mainSlotCtx({ fact: 0, aggregate: 0, bug: 0 }, { fact: 0, aggregate: 0, bug: 0 }, "off")).toBe(2048 + THROUGHPUT_OUTPUT_TOKENS + 512);
     expect(scoutSlotCtx(2048)).toBe(2048 + CAP_OFF + 512);
   });
-  it("scouting: the highest passing share, at its fastest slot count; none passing is unfit", () => {
-    const r = (share: number, slots: number, accuracy: number, recordsPerS: number): ScoutResult => ({ share, slots, slotCtx: scoutSlotCtx(share), accuracy, recordsPerS, seed: 1 });
-    expect(chooseScouting([r(2048, 4, 0.97, 10), r(2048, 8, 0.96, 14), r(4096, 4, 0.95, 9), r(4096, 8, 0.95, 12)], 0.95)).toMatchObject({ share: 4096, slots: 8 });
-    expect(chooseScouting([r(2048, 4, 0.97, 10), r(4096, 8, 0.9, 30)], 0.95)).toMatchObject({ share: 2048, slots: 4 });
-    expect(chooseScouting([r(2048, 4, 0.94, 10)], 0.95)).toBe("unfit");
+  it("scouting at a threshold, applied when the record is read: the highest passing share, at its fastest slot count; none passing is unfit", () => {
+    const r = (share: number, slots: number, accuracy: number, rps: number): ScoutCandidate => ({ share_tokens: share, slots, slot_ctx: scoutSlotCtx(share), accuracy, records_per_s: rps, permutation_seed: 1 });
+    const measured = [r(2048, 4, 0.97, 10), r(2048, 8, 0.96, 14), r(4096, 4, 0.95, 9), r(4096, 8, 0.95, 12)];
+    expect(scoutingFor(measured, 0.95)).toMatchObject({ share_tokens: 4096, slots: 8 });
+    // The same record at a stricter threshold picks another shape: no new calibration is needed.
+    expect(scoutingFor(measured, 0.965)).toMatchObject({ share_tokens: 2048, slots: 4 });
+    expect(scoutingFor(measured, 0.99)).toBe("unfit");
+    expect(scoutingFor([r(2048, 4, 0.97, 10), r(4096, 8, 0.9, 30)], 0.95)).toMatchObject({ share_tokens: 2048, slots: 4 });
+    expect(scoutingFor([], 0.5)).toBe("unfit");
   });
-  it("memory: over total RAM is skipped, over the free memory now waits, never a verdict", () => {
+  it("memory: over total RAM is skipped, over the free memory now waits, never a verdict; a wait expires after 30 minutes", () => {
     expect(budgetFit(10, 20, 15)).toBe("run");
     expect(budgetFit(16, 20, 15)).toBe("wait");
     expect(budgetFit(21, 20, 30)).toBe("skip");
+    expect(MEMORY_WAIT_MAX_MS).toBe(30 * 60_000);
+    const since = "2026-10-29T10:00:00.000Z";
+    const t = Date.parse(since);
+    expect(memoryWaitExpired(since, t + MEMORY_WAIT_MAX_MS - 1)).toBe(false);
+    expect(memoryWaitExpired(since, t + MEMORY_WAIT_MAX_MS)).toBe(true);
+  });
+  it("parallel throughput: all completion tokens over the batch wall time, not a sum of per-reply rates; no usage fails", () => {
+    // Two replies of 256 tokens in 4 s of wall time: 128 tok/s, whatever each reply reports as its own decode rate.
+    expect(batchThroughput([{ completionTokens: 256 }, { completionTokens: 256 }], 4000)).toBe(128);
+    expect(() => batchThroughput([{ completionTokens: 256 }, { completionTokens: null }], 4000)).toThrow(/no usage.completion_tokens/);
+  });
+  it("a scouting timeout is told apart from other request failures (only a timeout reruns the run)", () => {
+    expect(isScoutTimeout("timeout after 90000ms")).toBe(true);
+    expect(isScoutTimeout("network: ECONNRESET")).toBe(false);
+    expect(isScoutTimeout("HTTP 500: boom")).toBe(false);
+    expect(isScoutTimeout(null)).toBe(false);
   });
 });
 
@@ -197,20 +226,25 @@ describe("the ok record (spec 7) from the three phase summaries", () => {
         unfit_reasons: JSON.stringify({ bug: "window 12352 too small for thinking on output" }),
       },
     },
-    { step: "C/summary", data: { main_slots: 2, main_slot_ctx: 13056, aggregate_decode_tps: 180.5, load_avg: 3.2, scouting: "unfit", scout_threshold: 0.95 } },
+    { step: "C/summary", data: { main_slots: 2, main_slot_ctx: 13056, aggregate_decode_tps: 180.5, load_avg: 3.2, scout_candidates: "[]" } },
   ];
-  it("is schema-valid; thinking_works.off comes from Phase B, window_tokens from the smallest W, scouting unfit kept", () => {
+  it("is schema-valid; thinking_works.off comes from Phase B, window_tokens from the smallest W, no scouting candidate kept", () => {
     const r = okRecordFrom(base, trials);
     expect(recordSchemaErrors(r)).toEqual([]);
-    expect(r).toMatchObject({ status: "ok", schema: 2, window_tokens: 10240, thinking_works: { off: "leaky", on: true }, main: { slots: 2, slot_ctx: 13056 }, scouting: "unfit" });
+    expect(r).toMatchObject({ status: "ok", schema: 2, window_tokens: 10240, thinking_works: { off: "leaky", on: true }, main: { slots: 2, slot_ctx: 13056 }, scouting_candidates: [] });
     expect(r.unfit_reasons).toEqual({ bug: "window 12352 too small for thinking on output" });
     expect(r.speed).toEqual({ prefill_tps: 1102, decode_tps: 104.3, aggregate_decode_tps: 180.5, load_avg: 3.2 });
   });
-  it("a passing scouting candidate becomes the record's scouting; a missing summary throws", () => {
-    const scouting = { share_tokens: 2048, slots: 4, slot_ctx: scoutSlotCtx(2048), accuracy: 0.97, records_per_s: 12.5, permutation_seed: 11052 };
-    const r = okRecordFrom(base, [...trials.slice(0, 2), { step: "C/summary", data: { ...trials[2]!.data, scouting: JSON.stringify(scouting) } }]);
+  it("every scored scouting candidate goes into the record, the threshold is not applied there; a missing summary throws", () => {
+    const low = { share_tokens: 4096, slots: 4, slot_ctx: scoutSlotCtx(4096), accuracy: 0.6, records_per_s: 20, permutation_seed: 13100 };
+    const high = { share_tokens: 2048, slots: 4, slot_ctx: scoutSlotCtx(2048), accuracy: 0.97, records_per_s: 12.5, permutation_seed: 11052 };
+    const r = okRecordFrom(base, [...trials.slice(0, 2), { step: "C/summary", data: { ...trials[2]!.data, scout_candidates: JSON.stringify([high, low]) } }]);
     expect(recordSchemaErrors(r)).toEqual([]);
-    expect(r.scouting).toEqual(scouting);
+    expect(r.scouting_candidates).toEqual([high, low]);
+    expect(scoutingFor(r.scouting_candidates!, 0.95)).toEqual(high);
+    expect(scoutingFor(r.scouting_candidates!, 0.5)).toEqual(low);
+    expect(recordSchemaErrors({ ...r, scouting_candidates: [{ ...high, accuracy: -1 }] })).not.toEqual([]);
+    expect(recordSchemaErrors({ ...r, scouting_candidates: "unfit" })).not.toEqual([]);
     expect(() => okRecordFrom(base, trials.slice(0, 2))).toThrow(/no C\/summary/);
   });
 });

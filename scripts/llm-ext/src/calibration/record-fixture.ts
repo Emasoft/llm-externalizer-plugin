@@ -38,7 +38,7 @@ export function recordFixture(engine: BrokerEngine, model: string, failed?: { st
     grid: [],
     structured_output: { off: false, on: false, array40: false },
     main: { slots: 2, slot_ctx: 1024 },
-    scouting: "unfit",
+    scouting_candidates: [],
     speed: { prefill_tps: 1, decode_tps: 1, aggregate_decode_tps: 1, load_avg: 0 },
   };
 }

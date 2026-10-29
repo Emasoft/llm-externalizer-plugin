@@ -4,9 +4,10 @@
  */
 
 import { existsSync } from "node:fs";
-import type { Profile } from "../config.js";
-import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
+import { loadSettings, scoutAccuracyThreshold, type Profile } from "../config.js";
+import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, scoutingFor, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
 import { liveCalibrator, METHOD_PHASES } from "./runner.js";
+import { MEMORY_WAIT_MAX_MS } from "./phase-c.js";
 import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
 import type { BrokerEngine } from "../broker/protocol.js";
@@ -54,6 +55,12 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         // D5: a leaky thinking-off model is reported, never silently.
         if (r.thinking_works?.off === "leaky") state += `; thinking off is leaky (it reasons in its visible answer)`;
         if (r.status === "ok" && r.fill_tokens && r.grid) for (const why of unfitExplanations(r.fill_tokens, r.grid, r.unfit_reasons)) state += `; ${why}`;
+        // The scouting shape at the threshold in settings.yaml now (review of fb861fab: applied when the record is read).
+        if (r.status === "ok" && r.scouting_candidates) {
+          const threshold = scoutAccuracyThreshold(loadSettings());
+          const sc = scoutingFor(r.scouting_candidates, threshold);
+          state += sc === "unfit" ? `; scouting unfit at threshold ${threshold} (${r.scouting_candidates.length} candidate(s) measured)` : `; scouting share ${sc.share_tokens} at ${sc.slots} slots (accuracy ${sc.accuracy} at threshold ${threshold})`;
+        }
       }
       else {
         const prog = existsSync(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
@@ -67,6 +74,8 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (a) state += `; Phase A: thinking off ${offMode ?? a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
         if (offMode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
+        // Phase C memory waits are shown, never silent (review of fb861fab): the candidate is skipped after MEMORY_WAIT_MAX_MS.
+        for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped after ${MEMORY_WAIT_MAX_MS / 60_000} min)`;
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }

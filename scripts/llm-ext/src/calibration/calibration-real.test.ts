@@ -1,5 +1,5 @@
 /**
- * phase-b-real.test.ts — the calibration runner on a real model, opt-in (RUN_REAL_LOCAL_MODELS=1; spec section 9,
+ * calibration-real.test.ts — the calibration runner on a real model, opt-in (RUN_REAL_LOCAL_MODELS=1; spec section 9,
  * D7: main-agent decision 2026-10-29). The tiny CI GGUFs cannot run Phase B: llama-server caps their slot at
  * their trained context of 128 tokens. This runs the LFM3 GGUF of the built-in local_llama profile (it must be
  * in the Hugging Face cache of HF_HOME) with a reduced harness, through the real CLI bundled from the current
@@ -72,9 +72,9 @@ describe.skipIf(!REAL)("calibration on the LFM3 GGUF, reduced harness (opt-in, R
   };
 
   beforeAll(async () => {
-    home = mkdtempSync(join(tmpdir(), "llm-ext-phase-b-real-"));
+    home = mkdtempSync(join(tmpdir(), "llm-ext-calibration-real-"));
     cfg = join(home, "cfg");
-    bundleDir = mkdtempSync(join(PKG, "node_modules", ".cache-llm-ext-phase-b-real-"));
+    bundleDir = mkdtempSync(join(PKG, "node_modules", ".cache-llm-ext-calibration-real-"));
     await build({
       absWorkingDir: PKG,
       bundle: true,

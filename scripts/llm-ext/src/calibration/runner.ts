@@ -430,6 +430,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       progress.crashes = 0;
       progress.paused = {};
       progress.stepCrashes = {};
+      progress.memoryWait = {};
     }
     if (engineCheck) {
       // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
@@ -527,7 +528,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       },
       progress.trials,
     );
-    return finish(ok, `calibrated (${harness.id}): fill_tokens fact ${ok.fill_tokens?.fact}, aggregate ${ok.fill_tokens?.aggregate}, bug ${ok.fill_tokens?.bug}; main ${ok.main?.slots} slot(s) of ${ok.main?.slot_ctx}; scouting ${ok.scouting === "unfit" ? "unfit" : `share ${ok.scouting?.share_tokens} at ${ok.scouting?.slots} slots`}`);
+    return finish(ok, `calibrated (${harness.id}): fill_tokens fact ${ok.fill_tokens?.fact}, aggregate ${ok.fill_tokens?.aggregate}, bug ${ok.fill_tokens?.bug}; main ${ok.main?.slots} slot(s) of ${ok.main?.slot_ctx}; ${ok.scouting_candidates?.length ?? 0} scouting candidate(s) (the threshold is applied when the record is read)`);
   } catch (err) {
     const msg = (err as Error).message;
     if (err instanceof PausedError) {

@@ -366,6 +366,17 @@ export function stepFit(step: number, nominalCap: number, hardWindow: number, so
   return "run";
 }
 
+
+/**
+ * What a Phase B run does with the trials of an earlier one (main-agent decision 2026-10-29; the user may override):
+ * "fresh" with no earlier hard W, "keep" when the hard W is the same (free memory may have moved either way: it is
+ * never a reason to measure again), "restart" only when the hard W changed.
+ */
+export function windowResume(oldHard: number | null, hard: number): "fresh" | "keep" | "restart" {
+  if (oldHard === null) return "fresh";
+  return oldHard === hard ? "keep" : "restart";
+}
+
 /** Why a kind with every step skipped is unfit (shown by calibration-status). */
 export function windowTooSmallReason(window: number, thinking: "on" | "off"): string {
   return `window ${window} too small for thinking ${thinking} output`;

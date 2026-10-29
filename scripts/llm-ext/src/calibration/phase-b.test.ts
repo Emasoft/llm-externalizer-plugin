@@ -33,7 +33,11 @@ import {
   walkGrid,
   stepFit,
   windowTooSmallReason,
+  windowResume,
 } from "./phase-b-fixtures.js";
+import { measureWindow } from "./phase-b.js";
+import type { PhaseContext } from "./runner.js";
+import type { TrialRecord } from "./state.js";
 
 const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
   status: 200,
@@ -465,5 +469,57 @@ describe("the window estimate (spec 4.1)", () => {
     expect(chooseWindow(layers, weights, budget, 32768)).toBe(9984);
     expect(chooseWindow(layers, weights, budget, 4096)).toBe(4096);
     expect(chooseWindow(layers, weights, weights, 32768)).toBe(0);
+  });
+});
+
+describe("a resume keeps Phase B while the hard W is the same (main-agent decision 2026-10-29; the user may override)", () => {
+  it("windowResume: fresh without an earlier hard W, keep when it is the same, restart only when it changed", () => {
+    expect(windowResume(null, 32768)).toBe("fresh");
+    expect(windowResume(32768, 32768)).toBe("keep");
+    expect(windowResume(16384, 32768)).toBe("restart");
+  });
+  /** A Phase B context over a real (synthetic) GGUF and the real free memory; no server, no model. */
+  const ctxOver = (file: string, trials: TrialRecord[]): PhaseContext =>
+    ({
+      item: { engine: "llama", model: "m", reason: "manual" },
+      identity: { files: [file] },
+      harness: { windowCap: 32768 },
+      progress: { trials, phases: { A: "passed" }, paused: {}, stepCrashes: {} },
+      stopServer: async () => undefined,
+      record: (t: TrialRecord) => trials.push(t),
+      save: () => undefined,
+      log: () => undefined,
+    }) as unknown as PhaseContext;
+  it("free memory higher on resume, hard W the same: the B trials are kept; a different hard W drops them", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "llm-ext-resume-"));
+    try {
+      const f = join(dir, "m.gguf");
+      writeGguf(f, [
+        ["general.architecture", "lfm3"],
+        ["lfm3.block_count", 2],
+        ["lfm3.attention.head_count", 2],
+        ["lfm3.embedding_length", 64],
+        ["lfm3.attention.head_count_kv", 1],
+      ]);
+      const first = await measureWindow(ctxOver(f, []), 0, 2304);
+      expect(first).not.toBeNull();
+      const hard = first!.hard;
+      const fact = (i: number): TrialRecord => ({ step: "B/fact/4096", seed: i, outcome: "pass", at: "t", data: { counter: "main", index: i } });
+      // An earlier run measured far less free memory (1 MiB, a soft W of 2304) with the same hard W.
+      const earlier = (oldHard: number): TrialRecord[] => [
+        { step: "B/window", seed: 0, outcome: "pass", at: "t", data: { window_tokens: 2304, hard_window_tokens: oldHard, free_ram_bytes: 2 ** 20 } },
+        fact(0),
+        fact(1),
+      ];
+      const kept = earlier(hard);
+      await measureWindow(ctxOver(f, kept), 0, 2304);
+      expect(kept.filter((t) => t.step === "B/fact/4096")).toHaveLength(2);
+      const changed = earlier(hard - 256);
+      const ctx = ctxOver(f, changed);
+      await measureWindow(ctx, 0, 2304);
+      expect(ctx.progress.trials.filter((t) => t.step === "B/fact/4096")).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

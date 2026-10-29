@@ -116,7 +116,7 @@ Never on boot for profiles nobody used. A model removed from every profile is dr
 
 - the record's `harness` is not "production" at the current `harness_version` (D4, main-agent decision, 2026-10-29; the user may override): a record made with a custom `LLM_EXT_CALIBRATION_HARNESS` stores "custom:<sha256 of its JSON>" and never makes a model usable; `harness_version` is bumped whenever the production harness changes. Compared by id and version, never by deep-equal. The progress file stores the same id: a run of another harness id (or a progress file with none) starts fresh, so a production run never resumes trials of a custom harness, nor the reverse.
 
-A change of `scout_accuracy_threshold` re-runs only the scouting part of Phase C.
+A change of `scout_accuracy_threshold` needs no new calibration: the record keeps every scored scouting candidate and the threshold is applied when the record is read (review of fb861fab; main-agent decision, 2026-10-29; the user may override).
 
 **W and free memory** (F19, coordinator decision 11). The record stores the free RAM seen when W was measured (`free_ram_bytes`) and the W chosen. Whenever a calibration run of that model starts (any trigger, or a resume) and the free RAM then differs from `free_ram_bytes` by more than 25 %, W is measured again; if the new W differs, the Phase B and C results are dropped and rerun.
 
@@ -202,12 +202,14 @@ Thinking follows the ruling: **off** for fact and aggregate, **on** for bug. The
 - Per candidate: 3 runs with different seeds, 40 records each (120 records).
 - The request path: json_schema when Phase A proved the 40-item array works; otherwise the schema in the prompt and the text parsed. That text path does not exist yet in `classifyPositional`; P6 adds it, and P8/P9 reuse it.
 - **Pass:** accuracy over the 120 records at or above `scout_accuracy_threshold` (default 0.95).
-- **Record:** the highest passing share; at that share, the slot count with the best records per second; plus the slot context, accuracy and records per second. If no share passes: `scouting: unfit`, and mass-scouting goes to the next model of the profile that is fit (section 6).
+- **Record:** every scored candidate (`scouting_candidates`: share, slots, slot context, accuracy, records per second, seed). When the record is read, the current threshold picks the highest passing share and, at that share, the slot count with the best records per second (`scoutingFor`). If no candidate passes, scouting is unfit on that model, and mass-scouting goes to the next model of the profile that is fit (section 6).
 - A scouting context is a different server shape: the broker keys queues by (model, ctx, engine), so mixing scouting with other commands on one model costs a stop and reload each time (about 4 s for LFM3, 52-62 s for the 4B GGUFs). That rotation cost belongs to P9 (F18).
 
 **Speed.** llama: `timings.prompt_per_second` and `predicted_per_second`. Locals: streaming time-to-first-token for prefill, and completion tokens over the remaining wall time for decode. Plus `aggregate_decode_tps` at the chosen slots. Each with `load_avg`.
 
 **Phase C as built** (main-agent decision, 2026-10-29; the user may override). The output cap in `slot_ctx` is, per kind, max(`min_output_tokens[k]`, the nominal cap of the thinking mode k runs in): a command's default `max_tokens` is a per-profile setting (`request_options.default.max_output_tokens`) that calibration cannot know. A model unfit for fact runs the throughput test at the 2048-token floor. Memory follows section 4.3's rule: a slot or scouting candidate that cannot fit total RAM minus the floor is skipped (recorded `skipped: memory`), one that fits it but not the free memory now makes the model wait; neither is a verdict. The harness carries the candidates (`mainSlots`, `scoutShares`, `scoutSlots`; production 1, 2, 4, 8 / 2048, 4096 / 4, 8; `HARNESS_VERSION` 2). Each scouting run sends one request per slot at once, each with its own calibration copy (seed = the candidate's `permutation_seed` + its index); accuracy and records per second are summed over the 3 runs, and a failed request scores all its records wrong. The record is written by the runner from the A, B and C summaries once all three passed; `thinking_works.off` is Phase B's value, `window_tokens` the smallest W of any counted trial.
+
+**Phase C review fixes** (review of fb861fab; main-agent decision, 2026-10-29; the user may override). `slot_ctx` is sized per kind: roundup_256(max over k of (`fill_tokens[k]` + the output cap of k), or the throughput request if larger, + 512), since one slot holds one request of one kind. The main-slot throughput is the completion tokens of all n replies over the batch wall time, not a sum of each reply's own decode rate. A scouting run with a timed-out request is repeated on the same copies (at most 2 repeats) and never scored; a run still timing out skips the candidate (`skipped: timeout`). A memory wait is bounded and visible: its start is kept in the progress file and shown by `calibration-status`, and a slot or scouting candidate still short of free memory 30 minutes after it first waited is skipped (`skipped: memory-wait`). Phase B keeps its trials on a resume while the hard W is the same; only a different hard W starts Phase B again.
 
 ## 5. Time budget
 
@@ -256,7 +258,7 @@ For a request of task kind k on model m, with record R and the profile's `contex
           {"kind": "bug", "tokens": 13107, "skipped": "window", "W": 20480}],
  "structured_output": {"off": true, "on": false, "array40": true, "error": "..."},
  "main": {"slots": 2, "slot_ctx": 0},
- "scouting": {"share_tokens": 2048, "slots": 8, "slot_ctx": 0, "accuracy": 0.97, "records_per_s": 0, "permutation_seed": 0},
+ "scouting_candidates": [{"share_tokens": 2048, "slots": 8, "slot_ctx": 0, "accuracy": 0.97, "records_per_s": 0, "permutation_seed": 0}],
  "speed": {"prefill_tps": 0, "decode_tps": 0, "aggregate_decode_tps": 0, "load_avg": 0}}
 ```
 Only `status: ok` makes a model usable. The record is checked against this schema on read. Writing a record that fails the schema check is a bug and throws. Schema 2 (D6, main-agent decision, 2026-10-29; the user may override) adds `harness` (D4) and the "leaky" value of `thinking_works.off` (D5); a schema-1 record counts as missing.
