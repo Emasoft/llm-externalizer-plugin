@@ -81,7 +81,7 @@ export function timingsFromEnv(env: NodeJS.ProcessEnv): BrokerTimings {
  * has no deadline, takes no part in rotation, and never starts a main server;
  * the broker moves it to `queued` once the record says `status: ok`.
  */
-export type JobState = "queued" | "held" | "running" | "done" | "failed" | "cancelled";
+export type JobState = "queued" | "held" | "running" | "done" | "failed" | "cancelled" | "requeued";
 
 export interface Job {
   id: string;

@@ -36,6 +36,10 @@ import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualific
 // (`llm-ext-benchmark --auto-replace --apply`), never through any MCP tool.
 import { planToolReplacements } from "../model-qualification/auto-replace";
 import { defaultOutputDir } from "../project-root";
+import { getConfigDir, loadSettings } from "../config";
+import { brokerClientVersion, defaultBrokerEntry } from "../broker/client";
+import { ensureCalibrator } from "../calibration/runner";
+import { calibrationStatusText, queueManual } from "../calibration/commands";
 
 // ── Public types (mirror the CLI flag set, MCP-flavoured) ─────────────
 
@@ -1044,6 +1048,31 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
     },
   },
   {
+    name: "calibrate_model",
+    description:
+      "Queue ONE model of a managed local profile (server: managed; llamacpp-local or locals-local) for calibration " +
+      "and start the detached calibration runner (P6). Calibration measures what the model can do on this machine " +
+      "(safe input size per task kind, output caps, json_schema support, server slots); until its record exists, " +
+      "requests for that model wait. Returns at once; follow it with `llm-ext models calibration-status`. " +
+      "A model that already has a record is refused unless `force` is set.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        model: { type: "string", description: "The model id exactly as a managed local profile names it (model, second_model or third_model)." },
+        force: { type: "boolean", description: "Calibrate again even when a valid record exists. Default false." },
+      },
+      required: ["model"],
+    },
+  },
+  {
+    name: "calibration_status",
+    description:
+      "Show the calibration state of every model of the managed local profiles (P6): calibrated (with the date), " +
+      "failed (with the step and reason), or not calibrated (phases done, trials finished, queued), plus whether the " +
+      "calibration runner is working. Read-only.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
+  {
     name: "check_tool_replacements",
     description:
       "READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) — for " +
@@ -1524,6 +1553,22 @@ export async function dispatchMassScoutTool(
           isError: true,
         };
       }
+    }
+    case "calibrate_model": {
+      // P6 trigger 3 (spec section 3): queue the model, then start the runner detached (never waits for it).
+      const settings = loadSettings();
+      const model = str(args.model);
+      if (!settings || !model) return { content: [{ type: "text", text: !model ? "--model is required" : "settings.yaml could not be loaded" }], isError: true };
+      const dir = getConfigDir();
+      const q = queueManual(dir, settings.profiles, model, bool(args.force) === true);
+      if ("error" in q) return { content: [{ type: "text", text: q.error }], isError: true };
+      const how = await ensureCalibrator({ dir, version: brokerClientVersion(), entry: defaultBrokerEntry() });
+      return { content: [{ type: "text", text: `${q.text}; calibration runner ${how}. Progress: llm-ext models calibration-status` }], isError: false };
+    }
+    case "calibration_status": {
+      const settings = loadSettings();
+      if (!settings) return { content: [{ type: "text", text: "settings.yaml could not be loaded" }], isError: true };
+      return { content: [{ type: "text", text: await calibrationStatusText(getConfigDir(), settings.profiles) }], isError: false };
     }
     case "check_tool_replacements": {
       // Paid-benchmark opt-in SCOPED to this call (set on entry, restored on exit

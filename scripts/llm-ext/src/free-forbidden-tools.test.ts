@@ -589,6 +589,9 @@ const KNOWN_NON_CLI_ROUTED_TOOLS = new Set([
   "check_model_health",
   "discover_new_models",
   "check_tool_replacements",
+  // P6: queueManual + ensureCalibrator / calibrationStatusText, in-process (no CLI sub-command, no model request).
+  "calibrate_model",
+  "calibration_status",
 ]);
 
 describe("FREE_FORBIDDEN_TOOLS — source-derived (marker-free) completeness", () => {

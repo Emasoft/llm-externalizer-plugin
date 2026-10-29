@@ -154,6 +154,10 @@ describe('tool catalog', () => {
       // (TRDD-828238b5 A7-P3), registered in the same array; in-process, NEVER
       // writes settings (the MCP surface cannot self-rewrite its own config).
       'check_tool_replacements',
+      // calibrate_model / calibration_status — P6 local-model calibration (TRDD-1OOAH3LD):
+      // queue a model and start the detached runner; report the records. No LLM call.
+      'calibrate_model',
+      'calibration_status',
     ].sort();
 
     expect(toolNames).toEqual(expected);

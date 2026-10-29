@@ -29,6 +29,8 @@ export interface BrokerConnection {
   ctx: number;
   /** --queue_timeout in ms, or undefined for the broker default. */
   queueTimeoutMs?: number;
+  /** P6 (review F1): find or start the current broker after this one gave a held job back. */
+  reconnect: () => Promise<{ url: string; token: string; pid: number }>;
 }
 
 /** Immutable backend snapshot (see index.ts's T2.7 snapshot-and-swap note). */

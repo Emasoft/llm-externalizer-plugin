@@ -34,7 +34,7 @@ export const QUEUE_TIMEOUT_HEADER = "x-llm-ext-queue-timeout-ms";
 /** On a 204 poll reply: the job's state and, once dispatched, its dispatch time (ms epoch, broker clock). */
 export const STATE_HEADER = "x-llm-ext-job-state";
 export const DISPATCHED_HEADER = "x-llm-ext-dispatched-at";
-/** P6: on a 204 poll reply of a held job, the line the client prints (once a minute) while it waits for calibration. */
+/** P6: on a 204 poll reply of a held job, "1" (a fixed ASCII marker, review F2): the client prints its own held line, naming the model it knows. */
 export const HELD_HEADER = "x-llm-ext-held";
 /** argv[2] that turns an llm-ext process into a broker (cli/main.ts, before anything else loads). */
 export const BROKER_ARGV = "__broker";
@@ -51,7 +51,8 @@ export interface BrokerState {
 
 /** A finished job, as GET /v1/jobs/<id> returns it. */
 export interface JobReply {
-  state: "done" | "failed" | "cancelled";
+  /** P6: `requeued` = the broker gave the job back (it exited, or dropped a held job): submit it again, never a model error. */
+  state: "done" | "failed" | "cancelled" | "requeued";
   status?: number;
   body?: string;
   contentType?: string;
@@ -134,4 +135,31 @@ export async function isBrokerProcess(pid: number): Promise<boolean> {
 export async function isCalibratorProcess(pid: number): Promise<boolean> {
   const argv = await readCommandLine(pid);
   return argv !== null && argv.includes(CALIBRATE_ARGV);
+}
+
+/** P6: the calibration runner's state file (calibration/runner.ts writes it; the registry sweep reads it). */
+export const calibratorStatePath = (dir: string): string => join(dir, "calibrator-local.json");
+
+export interface CalibratorState {
+  pid: number;
+  version: string;
+  startedAt: string;
+}
+
+export function readCalibratorState(dir: string): CalibratorState | null {
+  try {
+    const s = JSON.parse(readFileSync(calibratorStatePath(dir), "utf8")) as Partial<CalibratorState>;
+    return Number.isInteger(s.pid) && typeof s.version === "string" ? (s as CalibratorState) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is `pid` the calibration runner of `dir` (review F6a)? Its argv carries
+ * __calibrate AND the dir's state file names it: a dead runner's pid reused
+ * by any process whose argv happens to contain the token is not an owner.
+ */
+export async function isRunnerOf(dir: string, pid: number): Promise<boolean> {
+  return readCalibratorState(dir)?.pid === pid && (await isCalibratorProcess(pid));
 }

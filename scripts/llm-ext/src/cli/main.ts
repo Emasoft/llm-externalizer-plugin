@@ -35,7 +35,7 @@ import { buildTools } from "../tools/definitions.js";
 import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, isGroupName, resolveInvocation, runClassifyCommand, suggestCommand } from "./launcher.js";
 import { readFileSync } from "node:fs";
 import type { GlobalFetch } from "../classifiers/l0/transport.js";
-import { BROKER_ARGV } from "../broker/protocol.js";
+import { BROKER_ARGV, CALIBRATE_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
 import { commandStopReason, stopCommand } from "../command-stop.js";
 import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
@@ -710,6 +710,11 @@ async function main(): Promise<void> {
   if (process.argv[2] === BROKER_ARGV) {
     const { runBrokerMain } = await import("../broker/server.js");
     await runBrokerMain(VERSION);
+  }
+  // P6: `llm-ext __calibrate` is the detached calibration runner (calibration/runner.ts); like the broker it never loads settings.
+  if (process.argv[2] === CALIBRATE_ARGV) {
+    const { runCalibratorMain } = await import("../calibration/runner.js");
+    await runCalibratorMain(VERSION);
   }
   setBrokerClientVersion(VERSION);
   // WHY the engine is loaded HERE for every non-classify command: the static import it replaces loaded it before main() ran, so settings were read/created/migrated before any usage error (`--profile` with no value) or help. Only a classify command defers it (see loadEngine).

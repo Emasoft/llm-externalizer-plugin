@@ -516,7 +516,7 @@ function sendChat(
       conn.broker,
       { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
       // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
-      { scope, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms) },
+      { scope, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms), reconnect: conn.broker.reconnect },
     );
   }
   return fetchWithRetry429(conn.url, { method: "POST", headers: conn.headers, body: JSON.stringify(body) }, conn.timeout, startTime, rl429, clock);

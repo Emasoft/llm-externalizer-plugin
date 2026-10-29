@@ -13,7 +13,7 @@ import { mkdirSync } from "node:fs";
 import { spawnDetachedChild } from "../bench-spawn.js";
 import { fileURLToPath } from "node:url";
 import { attachFailure, stoppedError, throwIfStopped } from "../provider/http.js";
-import { commandStopReason, stopCommand } from "../command-stop.js";
+import { CommandStoppedError, commandStopReason, stopCommand } from "../command-stop.js";
 import { ManagedServerError, pidState, withAsyncLock } from "../local-llama-server.js";
 import {
   BROKER_ARGV,
@@ -151,6 +151,8 @@ export interface EnsureBrokerOptions {
   /** The script started as `node <entry> __broker`; default: this bundle. */
   entry?: string;
   env?: NodeJS.ProcessEnv;
+  /** P6: skip the per-process memo (the remembered broker gave a job back because it is exiting). */
+  fresh?: boolean;
 }
 
 /** Last broker seen by this process, per config dir; re-validated with kill(pid,0) on every use. */
@@ -165,7 +167,7 @@ const known = new Map<string, BrokerEndpoint>();
  */
 export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoint> {
   const memo = known.get(o.dir);
-  if (memo && pidState(memo.pid) === "alive") return memo;
+  if (memo && !o.fresh && pidState(memo.pid) === "alive") return memo;
   const usable = async (): Promise<BrokerEndpoint | null> => {
     const s = readBrokerState(o.dir);
     if (!s || pidState(s.pid) !== "alive") return null;
@@ -251,9 +253,17 @@ const active = new Map<string, BrokerEndpoint>();
 const submitting = new Set<Promise<string>>();
 /** How long a --command_timeout waits for in-flight submissions before it cancels what it has. */
 const SUBMIT_DRAIN_MS = 5000;
-/** P6: the held-for-calibration line is printed at most this often per process. */
+/** P6: how many times one call follows a `requeued` reply to the current broker (each is a broker exit or an abandoned held job). */
+const MAX_REQUEUES = 10;
+/** P6 (review F4): the held-for-calibration line is printed at once, then at most this often, per model. */
 const HELD_PRINT_MS = 60_000;
-let heldPrintedAt = 0;
+const heldPrintedAt = new Map<string, number>();
+function printHeld(model: string, engine: BrokerEngine): void {
+  const last = heldPrintedAt.get(model) ?? 0;
+  if (Date.now() - last < HELD_PRINT_MS) return;
+  heldPrintedAt.set(model, Date.now());
+  process.stderr.write(`llm-ext: waiting for the calibration of '${model}' (${engine}); llm-ext models calibration-status shows its progress\n`);
+}
 
 /** Calls cancelling their own job (the finally of brokerExchange), and the job ids whose DELETE failed once the command was stopping (follow-up review m1). */
 const selfCancels = new Set<Promise<void>>();
@@ -300,7 +310,14 @@ async function cancel(ep: BrokerEndpoint, id: string): Promise<boolean> {
 export async function brokerExchange(
   ep: BrokerEndpoint,
   req: BrokerJobRequest,
-  opts: { signal?: AbortSignal; onDispatched?: (at: number) => void; onQueued?: (ms: number) => void; scope?: object } = {},
+  opts: {
+    signal?: AbortSignal;
+    onDispatched?: (at: number) => void;
+    onQueued?: (ms: number) => void;
+    scope?: object;
+    /** P6 (review F1): find or start the current broker after this one gave a held job back (`requeued`). */
+    reconnect?: () => Promise<BrokerEndpoint>;
+  } = {},
 ): Promise<Response> {
   const reuseKey = createHash("sha256").update(`${ep.url}\u0000${req.engine}\u0000${req.model}\u0000${req.ctx}\u0000${req.body}`).digest("hex");
   // Reuse is scoped to ONE logical call (its retries): two concurrent calls with an identical body (two identical files, a benchmark repeating a prompt) must each get their own sampled result. No scope = no reuse.
@@ -309,11 +326,20 @@ export async function brokerExchange(
   pending ??= new Map<string, string>();
   let id = pending.get(reuseKey);
   let networkFailure = false;
-  const headers = { [TOKEN_HEADER]: ep.token };
+  // P6: the broker this call talks to; a `requeued` reply moves it to the current one.
+  let cur = ep;
+  let requeues = 0;
+  /** P6 (review F4): the model this call is waiting on calibration for, or null; named in a --command_timeout stop. */
+  let heldOn: string | null = null;
+  const noteHeld = (): void => {
+    heldOn = req.model;
+    printHeld(req.model, req.engine);
+  };
   try {
     for (let resubmits = 0; ; ) {
       opts.signal?.throwIfAborted();
       throwIfStopped();
+      const headers = { [TOKEN_HEADER]: cur.token };
       if (id === undefined) {
         const h: Record<string, string> = {
           ...headers,
@@ -328,16 +354,19 @@ export async function brokerExchange(
         // promise is in `submitting` until the id is in `active`, so a
         // --command_timeout firing mid-POST waits for it and cancels the job,
         // instead of leaving it queued until the abandon rule drops it.
+        const target = cur;
         const post = (async (): Promise<string> => {
-          const res = await fetch(`${ep.url}/v1/jobs`, { method: "POST", headers: h, body: req.body, signal: opts.signal }).catch((e: unknown) => {
+          const res = await fetch(`${target.url}/v1/jobs`, { method: "POST", headers: h, body: req.body, signal: opts.signal }).catch((e: unknown) => {
             networkFailure = true;
             throw e;
           });
           const text = await res.text();
           if (res.status !== 202) throw new BrokerUnavailableError(`broker refused the job: HTTP ${res.status} ${text.slice(0, 200)}`);
-          const jobId = (JSON.parse(text) as { job: string }).job;
-          active.set(jobId, ep);
-          return jobId;
+          const accepted = JSON.parse(text) as { job: string; state?: string };
+          active.set(accepted.job, target);
+          // Review F4: say at once that the request waits for calibration, not after the first long-poll (60 s).
+          if (accepted.state === "held") noteHeld();
+          return accepted.job;
         })();
         submitting.add(post);
         try {
@@ -347,19 +376,17 @@ export async function brokerExchange(
         }
         pending.set(reuseKey, id);
       }
-      const res = await fetch(`${ep.url}/v1/jobs/${id}?wait=${POLL_WAIT_S}`, { headers, signal: opts.signal }).catch((e: unknown) => {
+      const res = await fetch(`${cur.url}/v1/jobs/${id}?wait=${POLL_WAIT_S}`, { headers, signal: opts.signal }).catch((e: unknown) => {
         networkFailure = !opts.signal?.aborted;
         throw e;
       });
       if (res.status === 204) {
         const at = res.headers.get(DISPATCHED_HEADER);
-        if (at !== null && res.headers.get(STATE_HEADER) === "running") opts.onDispatched?.(Number(at));
-        // P6: a job held for calibration waits (never an error, bounded only by --command_timeout); say so once a minute.
-        const heldLine = res.headers.get(HELD_HEADER);
-        if (heldLine !== null && Date.now() - heldPrintedAt >= HELD_PRINT_MS) {
-          heldPrintedAt = Date.now();
-          process.stderr.write(`llm-ext: ${heldLine}\n`);
-        }
+        const state = res.headers.get(STATE_HEADER);
+        if (at !== null && state === "running") opts.onDispatched?.(Number(at));
+        // P6: a job held for calibration waits (never an error, bounded only by --command_timeout).
+        if (state === "held" && res.headers.get(HELD_HEADER) !== null) noteHeld();
+        else heldOn = null;
         continue;
       }
       if (res.status === 404) {
@@ -387,6 +414,15 @@ export async function brokerExchange(
       pending.delete(reuseKey);
       active.delete(id);
       id = undefined;
+      // P6 (review F1, F7): the broker gave a held job back (it exited, or dropped
+      // the job while this client was suspended). That is not a model failure:
+      // submit it again to the current broker, where it is held again.
+      if (reply.state === "requeued") {
+        if (!opts.reconnect) throw new BrokerUnavailableError(`broker: ${reply.error ?? "the job was given back"}`);
+        if (++requeues > MAX_REQUEUES) throw new BrokerUnavailableError(`broker: the job was given back ${requeues} times (${reply.error ?? "no detail"})`);
+        cur = await opts.reconnect();
+        continue;
+      }
       // Queue time (dispatch - submit, broker clock) goes to the caller's CALL, never to a shared clock (review M10).
       // P6: time held for calibration counts as queue time too (submittedAt restarted at release).
       opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt + (reply.heldMs ?? 0));
@@ -398,6 +434,10 @@ export async function brokerExchange(
       }
       throw new BrokerJobError(`broker: model '${req.model}' ${reply.state}: ${reply.error ?? "no detail"}`);
     }
+  } catch (err) {
+    // Review F4: a --command_timeout that ends a wait for calibration says so.
+    if (heldOn !== null && err instanceof CommandStoppedError) throw stoppedError(`${err.message} (the request was waiting for the calibration of '${heldOn}'; llm-ext models calibration-status)`);
+    throw err;
   } finally {
     if (id !== undefined && !networkFailure) {
       pending.delete(reuseKey);
@@ -406,7 +446,7 @@ export async function brokerExchange(
       // job here, possibly before cancelAllBrokerJobs takes its snapshot; a
       // DELETE the broker did not confirm is recorded for its report.
       const jobId = id;
-      const own = cancel(ep, jobId).then((ok) => {
+      const own = cancel(cur, jobId).then((ok) => {
         if (!ok && commandStopReason() !== null) uncancelled.push(jobId);
       });
       selfCancels.add(own);

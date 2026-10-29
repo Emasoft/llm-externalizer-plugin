@@ -150,7 +150,9 @@ import {
 } from "./text-tools/core.js";
 
 import type { RetryClock } from "./provider/http.js";
-import { brokerClientVersion, brokerQueueTimeoutMs, endpointFailureKind, ensureBroker } from "./broker/client.js";
+import { brokerClientVersion, brokerQueueTimeoutMs, defaultBrokerEntry, endpointFailureKind, ensureBroker } from "./broker/client.js";
+import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
+import { ensureCalibrator } from "./calibration/runner.js";
 import { abortReasonText, CommandStoppedError, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 
@@ -441,6 +443,21 @@ let activeSettings: Settings = (() => {
 // force-free publish in main(), the paid-benchmark guard). Absent ⟺ false = the
 // safe/free posture (USER: "only free models are viable, everything free by default").
 setAllowPaidModels(activeSettings.allow_paid_models === true);
+// P6 trigger 2 (calibration design section 3): a model the user added or changed
+// in a managed local profile that has been used is queued for calibration, and
+// a runner is started. Never fails or blocks a command: a busy state lock
+// skips the check for this run, and the runner is spawned detached.
+try {
+  const changed = checkModelChanges(getConfigDir(), activeSettings.profiles);
+  if (changed.length > 0) {
+    process.stderr.write(`[llm-externalizer] queued for calibration (model changed in a used local profile): ${changed.map((c) => c.model).join(", ")}\n`);
+    void ensureCalibrator({ dir: getConfigDir(), version: brokerClientVersion(), entry: defaultBrokerEntry() }).catch((e: Error) =>
+      process.stderr.write(`[llm-externalizer] could not start the calibration runner: ${e.message}\n`),
+    );
+  }
+} catch (err) {
+  process.stderr.write(`[llm-externalizer] the calibration model-change check failed: ${err instanceof Error ? err.message : String(err)}\n`);
+}
 
 let activeResolved: ResolvedProfile | null = (() => {
   // effectiveProfileName(), not the raw `activeSettings.active` read: this
@@ -1818,8 +1835,17 @@ const providerDeps: CompletionDeps = {
     const r = activeResolved;
     if (!r || r.server === null || (route && !route.primary)) return null;
     const ep = await ensureBroker({ dir: getConfigDir(), version: brokerClientVersion() });
+    // P6: a profile that sent a request is "used": trigger 2 then watches its model ids.
+    markProfileUsed(getConfigDir(), r.name, activeSettings.profiles);
     // F11: no context_window means the provisional per-slot context, never the model's whole default (a huge KV cache).
-    return { ...ep, engine: r.server, ctx: r.contextWindow > 0 ? r.contextWindow : PROVISIONAL_LOCAL_CTX, queueTimeoutMs: brokerQueueTimeoutMs() };
+    return {
+      ...ep,
+      engine: r.server,
+      ctx: r.contextWindow > 0 ? r.contextWindow : PROVISIONAL_LOCAL_CTX,
+      queueTimeoutMs: brokerQueueTimeoutMs(),
+      // P6 (review F1): after a broker exit gave a held job back, the call submits it to the current broker.
+      reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true }),
+    };
   },
 };
 
@@ -2958,6 +2984,10 @@ const RECONCILE_SKIP_TOOLS = new Set([
   "assess_model",
   "check_model_health",
   "discover_new_models",
+  // P6: they queue or report local-model calibration and send no model request;
+  // reconcile rewriting settings first would only delay them.
+  "calibrate_model",
+  "calibration_status",
   // Local-service scan is its own configuration entry point — it must run
   // (and print a usable list) even before any profile is reconciled, and it
   // never sends an LLM request itself.
@@ -4426,7 +4456,9 @@ async function dispatchCallToolInner(
       const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
       // WHY skipped for scouting-only tools (PT-05, D34): their model comes from the scouting-type profile; an injected
       // free-pool id would override it, and activeFreePool() throws on a paid active profile with no pool.
-      const inject = isScoutingOnlyTool(name)
+      // P6: calibrate_model's `model` names the LOCAL model to calibrate, and calibration_status sends no request;
+      // a free-pool id injected here would queue a remote id for calibration (and activeFreePool() throws with no pool).
+      const inject = isScoutingOnlyTool(name) || name === "calibrate_model" || name === "calibration_status"
         ? undefined
         : await resolveMassScoutFreeModelOverride(
             typeof scoutArgs.model === "string" ? scoutArgs.model : "",

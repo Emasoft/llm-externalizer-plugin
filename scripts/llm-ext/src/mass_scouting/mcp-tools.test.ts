@@ -27,7 +27,7 @@ import { _resetDefaultOutputDirCache } from "../project-root";
 // ── Static shape checks ────────────────────────────────────────────────
 
 describe("MASS_SCOUT_TOOLS", () => {
-  it("has twenty-three tools with the documented names", () => {
+  it("has twenty-five tools with the documented names", () => {
     /** Phase B added 3 (jobs_list/audit_sample/body_get).
      *  Phase C2 added 2 (build_fieldset/propose_fieldset).
      *  Phase C3 added 2 (diff/chain).
@@ -46,12 +46,16 @@ describe("MASS_SCOUT_TOOLS", () => {
      *  for the search_existing_implementations task; DB-free, in-process orchestrator).
      *  TRDD-828238b5 A7-P3 added 1 (check_tool_replacements — READ-ONLY advisory
      *  auto-replacement planner; DB-free, in-process, NEVER writes settings).
-     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 = 23. */
-    expect(MASS_SCOUT_TOOLS.length).toBe(23);
+     *  TRDD-1OOAH3LD P6 added 2 (calibrate_model, calibration_status — local-model
+     *  calibration queue and status; DB-free, in-process, no LLM call).
+     *  Total = 8 base + 5 + 2 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 2 = 25. */
+    expect(MASS_SCOUT_TOOLS.length).toBe(25);
     const names = MASS_SCOUT_TOOLS.map((t) => t.name).sort();
     expect(names).toEqual(
       [
         "assess_model",
+        "calibrate_model",
+        "calibration_status",
         "check_model_health",
         "check_tool_replacements",
         "discover_new_models",
@@ -101,6 +105,8 @@ describe("MASS_SCOUT_TOOLS", () => {
       "check_model_health",
       "discover_new_models",
       "check_tool_replacements",
+      "calibrate_model",
+      "calibration_status",
     ]);
     for (const t of MASS_SCOUT_TOOLS) {
       if (NO_DB.has(t.name)) continue;

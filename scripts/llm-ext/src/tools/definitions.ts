@@ -352,6 +352,7 @@ export const ACCEPTED_PROFILE_TYPES: Readonly<Record<string, readonly ProfileTyp
   mass_scout_list_bundled_fieldsets: ANY_PROFILE_TYPE, security_triage_benchmark: ANY_PROFILE_TYPE,
   search_existing_benchmark: ANY_PROFILE_TYPE, assess_model: ANY_PROFILE_TYPE, check_model_health: ANY_PROFILE_TYPE,
   discover_new_models: ANY_PROFILE_TYPE, check_tool_replacements: ANY_PROFILE_TYPE,
+  calibrate_model: ANY_PROFILE_TYPE, calibration_status: ANY_PROFILE_TYPE,
   ...classifierProfileRows(),
 });
 

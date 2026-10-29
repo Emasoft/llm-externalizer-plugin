@@ -14,7 +14,7 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isManagedServerArgv, ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { hasLocalsMarker } from "../local-locals-server.js";
-import { isBrokerProcess, isCalibratorProcess, type BrokerEngine } from "./protocol.js";
+import { isBrokerProcess, isRunnerOf, type BrokerEngine } from "./protocol.js";
 
 export type ServerRole = "main" | "cal";
 
@@ -197,7 +197,7 @@ async function sweepUnlocked(dir: string, engine: BrokerEngine, role: ServerRole
     // P6 (round-1 review F20): a cal server whose owner is not a live calibration
     // runner (a SIGKILLed __calibrate) is an orphan too. Kept, it held its memory
     // for ever and made the resumed runner's claim fail with SlotBusyError.
-    if (e.role === "cal" && !(await isCalibratorProcess(e.ownerPid))) {
+    if (e.role === "cal" && !(await isRunnerOf(dir, e.ownerPid))) {
       const how = await stopProcessGroup(e.pgid);
       log?.(`stopped orphaned cal ${serverLabel(engine)} pid ${e.pid} (pgid ${e.pgid}, owner ${e.ownerPid} is not a live calibration runner): ${how}`);
       continue;

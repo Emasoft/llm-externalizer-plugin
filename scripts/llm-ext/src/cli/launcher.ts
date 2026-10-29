@@ -96,6 +96,8 @@ const FIXED_GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>
     health: { command: "check_model_health" },
     discover: { command: "discover_new_models" },
     replacements: { command: "check_tool_replacements" },
+    calibrate: { command: "calibrate_model" },
+    "calibration-status": { command: "calibration_status" },
   },
   settings: {
     show: { command: "get_settings" },

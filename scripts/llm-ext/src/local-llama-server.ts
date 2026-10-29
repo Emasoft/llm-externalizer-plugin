@@ -59,6 +59,8 @@ export interface ManagedTarget {
   model: string;
   /** Server context (-c); 0 = llama-server's own default (no -c). */
   ctx: number;
+  /** P6: the slot count (the calibration runner sets it per phase); absent = the main-server default. */
+  slots?: number;
 }
 
 export type ManagedModelKind = "hf" | "hf-file" | "file";
@@ -111,8 +113,8 @@ export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logF
     // The broker dispatches at most /props total_slots (the -np below) at once.
     // Follow-up review m5: with no context_window, ONE slot, so that slot keeps
     // the model's whole default context (MAIN_SLOTS slots would split it).
-    "-np", String(target.ctx > 0 ? MAIN_SLOTS : 1),
-    ...(target.ctx > 0 ? ["-c", String(target.ctx * MAIN_SLOTS)] : []),
+    "-np", String(target.slots ?? (target.ctx > 0 ? MAIN_SLOTS : 1)),
+    ...(target.ctx > 0 ? ["-c", String(target.ctx * (target.slots ?? MAIN_SLOTS))] : []),
     "--jinja",
     "--sleep-idle-seconds", String(SLEEP_IDLE_SECONDS),
     "--log-file", logFile,

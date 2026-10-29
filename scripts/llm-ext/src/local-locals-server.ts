@@ -114,7 +114,7 @@ export function buildLocalsArgv(python: string, target: ManagedTarget, marker: s
     "--model",
     target.model,
     "--slots",
-    String(LOCALS_MAIN_SLOTS),
+    String(target.slots ?? LOCALS_MAIN_SLOTS),
     // --max-context = prompt + reply tokens per request, the profile's context_window (Locals' default: what fits in memory).
     ...(target.ctx > 0 ? ["--max-context", String(target.ctx)] : []),
   ];
