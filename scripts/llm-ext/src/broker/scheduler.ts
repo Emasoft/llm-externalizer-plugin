@@ -1,9 +1,11 @@
 /**
- * broker/scheduler.ts — the per-engine broker's queueing and rotation rules
+ * broker/scheduler.ts — the local-engine broker's queueing and rotation rules
  * (TRDD-1OOAH3LD, TRDD-ZGSGGHQG; design/specs/local-engine-broker-design.md
  * points 3, 4 and 6). Pure: no I/O, no timers, the clock is a parameter, so
  * every rule is testable with tiny values.
  */
+
+import type { BrokerEngine } from "./protocol.js";
 
 /** The broker's tunables. Provisional defaults from the spec; every one is overridable through the environment the broker is started with (tests shorten them). */
 export interface BrokerTimings {
@@ -25,6 +27,13 @@ export interface BrokerTimings {
   lingerMs: number;
   /** Load-time estimate for a model never loaded yet (60 s); after a load the measured time is used. */
   defaultLoadMs: number;
+  /**
+   * Locals only (TRDD-ZGSGGHQG L3.4): a job beyond the first in flight is
+   * dispatched only while macOS `memory_pressure` reports at least this free
+   * percentage; otherwise it waits (never an error). Provisional 10, to be
+   * calibrated (P6). A tunable like the others, though not a time.
+   */
+  memoryFloorPct: number;
 }
 
 export const DEFAULT_TIMINGS: BrokerTimings = {
@@ -37,6 +46,7 @@ export const DEFAULT_TIMINGS: BrokerTimings = {
   idleExitMs: 2 * 3_600_000,
   lingerMs: 1000,
   defaultLoadMs: 60_000,
+  memoryFloorPct: 10,
 };
 
 /** Environment names of the overrides, one per field (LLM_EXT_ prefix, like every llm-ext variable). */
@@ -50,6 +60,7 @@ export const TIMING_ENV: Record<keyof BrokerTimings, string> = {
   idleExitMs: "LLM_EXT_BROKER_IDLE_EXIT_MS",
   lingerMs: "LLM_EXT_BROKER_LINGER_MS",
   defaultLoadMs: "LLM_EXT_BROKER_DEFAULT_LOAD_MS",
+  memoryFloorPct: "LLM_EXT_BROKER_MEMORY_FLOOR",
 };
 
 /** The defaults with every valid positive integer override applied; a malformed value is an error, never silently ignored (fail fast). */
@@ -68,8 +79,10 @@ export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
   id: string;
-  /** Queue key: the model id plus its server context (a different -c is a different server). */
+  /** Queue key: the model id plus its server context and engine (a different -c or engine is a different server). */
   key: string;
+  /** Which engine runs it (TRDD-ZGSGGHQG): llama-server or Locals. */
+  engine: BrokerEngine;
   model: string;
   ctx: number;
   commandId: string;
@@ -89,8 +102,9 @@ export interface Job {
   error?: string;
 }
 
-export function queueKey(model: string, ctx: number): string {
-  return `${model}\u0000${ctx}`;
+/** The model id first (logs print key.split("\u0000")[0]), then its context and engine: the same id on another engine is another server. */
+export function queueKey(model: string, ctx: number, engine: BrokerEngine): string {
+  return `${model}\u0000${ctx}\u0000${engine}`;
 }
 
 /**

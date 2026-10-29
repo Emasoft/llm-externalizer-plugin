@@ -9,8 +9,15 @@ import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readCommandLine } from "../local-llama-server.js";
 
-/** The one engine this increment brokers; Locals follows in its own increment. */
-export type BrokerEngine = "llama";
+/**
+ * The local inference engines the broker serves (TRDD-ZGSGGHQG adds Locals).
+ * Each engine keeps its own server registry (servers-<engine>.json: one main
+ * and one calibration server per engine), but ONE broker process serves both
+ * engines, so only one local model is loaded at a time across them (see
+ * runBroker's single `server`).
+ */
+export type BrokerEngine = "llama" | "locals";
+export const BROKER_ENGINES: readonly BrokerEngine[] = ["llama", "locals"];
 
 /** The random per-broker token every request must carry (spec 2): a loopback port is reachable by any local process, the token keeps other processes from submitting or cancelling jobs. */
 export const TOKEN_HEADER = "x-llm-ext-broker-token";
@@ -18,6 +25,8 @@ export const TOKEN_HEADER = "x-llm-ext-broker-token";
 export const COMMAND_HEADER = "x-llm-ext-command";
 /** The server context the job needs (a different -c is a different server). */
 export const CTX_HEADER = "x-llm-ext-ctx";
+/** The engine whose server runs the job (TRDD-ZGSGGHQG): a job of each engine is queued under its own key. */
+export const ENGINE_HEADER = "x-llm-ext-engine";
 /** Execution timeout, counted by the broker from dispatch (spec 4). */
 export const TIMEOUT_HEADER = "x-llm-ext-timeout-ms";
 /** The job's own queue timeout in ms (--queue_timeout); absent = the broker's default T. */
@@ -48,19 +57,24 @@ export interface JobReply {
   finishedAt?: number;
 }
 
-export function brokerStatePath(dir: string, engine: BrokerEngine): string {
-  return join(dir, `broker-${engine}.json`);
+/**
+ * The broker's state, log and spawn lock. One broker for every local engine
+ * (TRDD-ZGSGGHQG): two per-engine brokers could each hold a model, and the
+ * user's rule is one local model at a time across engines.
+ */
+export function brokerStatePath(dir: string): string {
+  return join(dir, "broker-local.json");
 }
-export function brokerLogPath(dir: string, engine: BrokerEngine): string {
-  return join(dir, `broker-${engine}.log`);
+export function brokerLogPath(dir: string): string {
+  return join(dir, "broker-local.log");
 }
-export function brokerSpawnLockPath(dir: string, engine: BrokerEngine): string {
-  return join(dir, `broker-${engine}.lock`);
+export function brokerSpawnLockPath(dir: string): string {
+  return join(dir, "broker-local.lock");
 }
 
-export function readBrokerState(dir: string, engine: BrokerEngine): BrokerState | null {
+export function readBrokerState(dir: string): BrokerState | null {
   try {
-    const s = JSON.parse(readFileSync(brokerStatePath(dir, engine), "utf8")) as Partial<BrokerState>;
+    const s = JSON.parse(readFileSync(brokerStatePath(dir), "utf8")) as Partial<BrokerState>;
     if (typeof s.pid !== "number" || typeof s.port !== "number" || typeof s.token !== "string" || typeof s.version !== "string") return null;
     return { pid: s.pid, port: s.port, token: s.token, version: s.version, startedAt: String(s.startedAt ?? "") };
   } catch {
@@ -69,16 +83,16 @@ export function readBrokerState(dir: string, engine: BrokerEngine): BrokerState 
 }
 
 /** Temp-then-rename, mode 0600 (the file holds the token). */
-export function writeBrokerState(dir: string, engine: BrokerEngine, state: BrokerState): void {
-  const target = brokerStatePath(dir, engine);
+export function writeBrokerState(dir: string, state: BrokerState): void {
+  const target = brokerStatePath(dir);
   const tmp = `${target}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
   renameSync(tmp, target);
 }
 
 /** Remove the state file only while it still names `pid`: after a version handover it names the NEW broker, which the old one must not erase. */
-export function removeBrokerStateIfOwn(dir: string, engine: BrokerEngine, pid: number): void {
-  if (readBrokerState(dir, engine)?.pid === pid) rmSync(brokerStatePath(dir, engine), { force: true });
+export function removeBrokerStateIfOwn(dir: string, pid: number): void {
+  if (readBrokerState(dir)?.pid === pid) rmSync(brokerStatePath(dir), { force: true });
 }
 
 

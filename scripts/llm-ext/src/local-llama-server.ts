@@ -275,7 +275,7 @@ export async function withAsyncLock<T>(dir: string, fn: () => Promise<T>, refres
   }
 }
 
-function sleep(ms: number): Promise<void> {
+export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
@@ -352,7 +352,8 @@ export function failureHints(log: string): string {
   return `${hints.length ? `${hints.join("; ")}. ` : ""}Last log lines (${log}):\n${tail.join("\n")}`;
 }
 
-async function httpStatus(url: string, apiKey: string): Promise<{ status: number; body: string } | null> {
+/** GET with a 3 s timeout; null when refused or not answering. Shared by the llama and Locals readiness checks. */
+export async function httpStatus(url: string, apiKey: string): Promise<{ status: number; body: string } | null> {
   try {
     const res = await fetch(url, { headers: { authorization: `Bearer ${apiKey}` }, signal: AbortSignal.timeout(3000) });
     return { status: res.status, body: await res.text() };
@@ -524,6 +525,29 @@ export function isLlamaServerArgv0(token: string | undefined): boolean {
   return b === "llama-server" || b.toLowerCase() === "llama-server.exe";
 }
 
+/** The -X option that marks a Locals server as llm-ext's own (local-locals-server.ts puts it in the argv). */
+export const LOCALS_MARKER_OPTION = "llm-ext-server";
+
+/**
+ * Is this argv an llm-ext Locals server (TRDD-ZGSGGHQG)? It must run the
+ * locals.server module AND carry llm-ext's `-X llm-ext-server=` marker. A
+ * Locals server the user started (`locals serve`, e.g. on port 8321) has no
+ * marker, so kill safety never signals it.
+ */
+export function isLocalsServerArgv(argv: readonly string[]): boolean {
+  // The interpreter too: a process of any other program that merely carries
+  // these tokens as arguments (`node -e ... -m locals.server -X ...`) is not one.
+  if (!/^python[0-9.]*(\.exe)?$/i.test((argv[0] ?? "").split(/[\\/]/).pop() ?? "")) return false;
+  const m = argv.indexOf("-m");
+  if (m < 0 || argv[m + 1] !== "locals.server") return false;
+  return argv.some((t, i) => i > 0 && argv[i - 1] === "-X" && t.startsWith(`${LOCALS_MARKER_OPTION}=`));
+}
+
+/** Kill safety: a process llm-ext may signal leads with a llama-server executable or is an llm-ext Locals server. */
+export function isManagedServerArgv(argv: readonly string[]): boolean {
+  return isLlamaServerArgv0(argv[0]) || isLocalsServerArgv(argv);
+}
+
 /**
  * Stop a whole process group: SIGTERM to -pgid, SIGKILL after STOP_GRACE_MS,
  * then a process snapshot must show no member left (spec point 7), else a
@@ -533,7 +557,7 @@ export function isLlamaServerArgv0(token: string | undefined): boolean {
  *
  * Kill safety (review M7), checked HERE so every caller inherits it: the
  * group must be > 1 (kill(-0) is our own group, kill(-1) every process the
- * user owns), and its leader (pid === pgid) must be a llama-server. Anything
+ * user owns), and its leader (pid === pgid) must be a llama-server or an llm-ext Locals server. Anything
  * else is refused: llm-ext never signals a process it did not start.
  */
 export async function stopProcessGroup(pgid: number, graceMs = STOP_GRACE_MS): Promise<string> {
@@ -541,16 +565,16 @@ export async function stopProcessGroup(pgid: number, graceMs = STOP_GRACE_MS): P
   if (process.platform === "win32") {
     const argv = await readCommandLine(pgid);
     if (argv === null) return "already gone";
-    if (!isLlamaServerArgv0(argv[0])) throw new ManagedServerError(`refusing to stop pid ${pgid}: it is not a llama-server (${argv[0]})`);
+    if (!isManagedServerArgv(argv)) throw new ManagedServerError(`refusing to stop pid ${pgid}: it is not a llama-server or an llm-ext Locals server (${argv[0]})`);
     process.kill(pgid);
     return "ended at once (Windows)";
   }
   const members = (await processSnapshot()).filter((r) => r.pgid === pgid);
   if (members.length === 0) return "already gone";
   const leader = members.find((r) => r.pid === pgid);
-  if (!leader || !isLlamaServerArgv0(leader.argv[0])) {
+  if (!leader || !isManagedServerArgv(leader.argv)) {
     throw new ManagedServerError(
-      `refusing to signal process group ${pgid}: its leader is not a llama-server (${leader ? leader.argv[0] : "no leader"}); llm-ext never touches a process it did not start`,
+      `refusing to signal process group ${pgid}: its leader is not a llama-server or an llm-ext Locals server (${leader ? leader.argv[0] : "no leader"}); llm-ext never touches a process it did not start`,
     );
   }
   const signal = (sig: NodeJS.Signals): void => {

@@ -23,6 +23,8 @@ export interface BrokerConnection {
   url: string;
   token: string;
   pid: number;
+  /** The engine whose server runs the request (TRDD-ZGSGGHQG): llama-server or Locals. */
+  engine: "llama" | "locals";
   /** Server context for the model (-c); 0 = llama-server's default. */
   ctx: number;
   /** --queue_timeout in ms, or undefined for the broker default. */

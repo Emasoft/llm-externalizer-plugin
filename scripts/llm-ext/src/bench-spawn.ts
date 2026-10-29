@@ -266,6 +266,8 @@ export function spawnDetachedChild(o: {
   logPath: string | null;
   env: NodeJS.ProcessEnv;
   onError: (err: NodeJS.ErrnoException) => void;
+  /** Working directory of the child; default: this process's cwd (the Locals server gets a fresh empty one, TRDD-ZGSGGHQG). */
+  cwd?: string;
 }): ChildProcess {
   const fd = o.logPath === null ? null : openSync(o.logPath, "a");
   try {
@@ -273,6 +275,7 @@ export function spawnDetachedChild(o: {
       detached: true,
       stdio: fd === null ? "ignore" : ["ignore", fd, fd],
       env: o.env,
+      ...(o.cwd === undefined ? {} : { cwd: o.cwd }),
       windowsHide: true,
     });
     child.on("error", o.onError);

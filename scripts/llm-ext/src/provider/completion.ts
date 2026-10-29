@@ -514,7 +514,7 @@ function sendChat(
   if (conn.broker) {
     return brokerExchange(
       conn.broker,
-      { body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
+      { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
       // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
       { scope, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms) },
     );

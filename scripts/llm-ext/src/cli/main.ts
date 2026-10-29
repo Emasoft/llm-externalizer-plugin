@@ -702,13 +702,14 @@ const isClassifyWord = (word: string | undefined): boolean =>
   word === "classify" || (word !== undefined && classifySpecFor(word.replaceAll("-", "_")) !== undefined);
 
 async function main(): Promise<void> {
-  // TRDD-1OOAH3LD: `llm-ext __broker <engine>` turns this process into the
-  // per-engine request broker (broker/server.ts). Checked before loadEngine so
-  // a broker never reads, creates or migrates settings; the broker module is
-  // imported lazily so ordinary commands never load it.
+  // TRDD-1OOAH3LD, TRDD-ZGSGGHQG: `llm-ext __broker` turns this process into
+  // the local-model request broker (broker/server.ts), one for every local
+  // engine. Checked before loadEngine so a broker never reads, creates or
+  // migrates settings; the broker module is imported lazily so ordinary
+  // commands never load it.
   if (process.argv[2] === BROKER_ARGV) {
     const { runBrokerMain } = await import("../broker/server.js");
-    await runBrokerMain(process.argv[3], VERSION);
+    await runBrokerMain(VERSION);
   }
   setBrokerClientVersion(VERSION);
   // WHY the engine is loaded HERE for every non-classify command: the static import it replaces loaded it before main() ran, so settings were read/created/migrated before any usage error (`--profile` with no value) or help. Only a classify command defers it (see loadEngine).

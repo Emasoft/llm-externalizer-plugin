@@ -1,5 +1,5 @@
 /**
- * broker/client.ts — the command-process side of the per-engine broker
+ * broker/client.ts — the command-process side of the local-model broker
  * (spec points 1, 2, 4 and 11): find or start the broker, submit a finished
  * request body, long-poll for the result, cancel on abort.
  *
@@ -19,6 +19,7 @@ import {
   BROKER_ARGV,
   COMMAND_HEADER,
   CTX_HEADER,
+  ENGINE_HEADER,
   DISPATCHED_HEADER,
   QUEUE_TIMEOUT_HEADER,
   STATE_HEADER,
@@ -144,10 +145,9 @@ export function defaultBrokerEntry(): string {
 }
 
 export interface EnsureBrokerOptions {
-  engine: BrokerEngine;
   dir: string;
   version: string;
-  /** The script started as `node <entry> __broker <engine>`; default: this bundle. */
+  /** The script started as `node <entry> __broker`; default: this bundle. */
   entry?: string;
   env?: NodeJS.ProcessEnv;
 }
@@ -156,23 +156,23 @@ export interface EnsureBrokerOptions {
 const known = new Map<string, BrokerEndpoint>();
 
 /**
- * Find the live broker of this engine and version, or start one. One broker
- * per engine: the spawn happens under the broker spawn lock after a re-check
- * (spec 1). A broker of another version is asked to drain and exit, and a new
- * one is started at once (spec 11); the new one waits for the old one's main
- * server slot (registry), so the two never run two main servers.
+ * Find the live broker of this version, or start one. ONE broker serves every
+ * local engine (TRDD-ZGSGGHQG): the spawn happens under the broker spawn lock
+ * after a re-check (spec 1). A broker of another version is asked to drain and
+ * exit, and a new one is started at once (spec 11); the new one waits for the
+ * old one's main server slot (registry), so the two never run two main servers.
  */
 export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoint> {
-  const memo = known.get(`${o.dir}\u0000${o.engine}`);
+  const memo = known.get(o.dir);
   if (memo && pidState(memo.pid) === "alive") return memo;
   const usable = async (): Promise<BrokerEndpoint | null> => {
-    const s = readBrokerState(o.dir, o.engine);
+    const s = readBrokerState(o.dir);
     if (!s || pidState(s.pid) !== "alive") return null;
     // A live pid that is not a broker (reused after the broker died): the state is stale, a new broker may start.
     if (!(await isBrokerProcess(s.pid))) return null;
     // Review M9: a LIVE broker whose health check fails is never answered with a
-    // second spawn (spec 1: one broker per engine): retry a bounded number of
-    // times, then fail fast with BrokerUnavailableError.
+    // second spawn (spec 1: one broker): retry a bounded number of times, then
+    // fail fast with BrokerUnavailableError.
     let h: Awaited<ReturnType<typeof health>> = null;
     for (let i = 0; i < HEALTH_TRIES && h === null; i++) {
       if (i > 0) await new Promise((r) => setTimeout(r, HEALTH_RETRY_MS));
@@ -180,7 +180,7 @@ export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoi
     }
     if (h === null) {
       throw new BrokerUnavailableError(
-        `the ${o.engine} broker (pid ${s.pid}) is running but did not answer its health check ${HEALTH_TRIES} times; not starting a second broker. See ${brokerLogPath(o.dir, o.engine)}`,
+        `the local-model broker (pid ${s.pid}) is running but did not answer its health check ${HEALTH_TRIES} times; not starting a second broker. See ${brokerLogPath(o.dir)}`,
       );
     }
     if (h.draining) return null;
@@ -196,29 +196,23 @@ export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoi
   mkdirSync(o.dir, { recursive: true });
   const ep =
     (await usable()) ??
-    (await withAsyncLock(brokerSpawnLockPath(o.dir, o.engine), async () => {
+    (await withAsyncLock(brokerSpawnLockPath(o.dir), async () => {
       const again = await usable();
       if (again) return again;
-      const before = readBrokerState(o.dir, o.engine)?.pid;
+      const before = readBrokerState(o.dir)?.pid;
       startBroker(o);
       const deadline = Date.now() + START_WAIT_MS;
       while (Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, 100));
-        const s = readBrokerState(o.dir, o.engine);
+        const s = readBrokerState(o.dir);
         if (s && s.pid !== before && (await health(s))?.version === o.version) return endpointOf(s);
       }
-      throw new BrokerUnavailableError(`the ${o.engine} broker did not start within ${START_WAIT_MS / 1000} s; see ${brokerLogPath(o.dir, o.engine)}`);
+      throw new BrokerUnavailableError(`the local-model broker did not start within ${START_WAIT_MS / 1000} s; see ${brokerLogPath(o.dir)}`);
     }));
-  known.set(`${o.dir}\u0000${o.engine}`, ep);
+  known.set(o.dir, ep);
   return ep;
 }
 
-/**
- * Start the detached broker (the spawnDetachedBench mechanics, bench-spawn.ts):
- * log fd opened before spawn and OUR copy closed after (a leaked fd per spawn
- * otherwise), an 'error' listener (an unlistened async spawn error would be an
- * uncaught exception), detached + unref so it outlives this command.
- */
 /**
  * Start the detached broker through bench-spawn.ts (the one place detached
  * children are spawned): log fd lifetime, error listener and unref are owned
@@ -227,14 +221,16 @@ export async function ensureBroker(o: EnsureBrokerOptions): Promise<BrokerEndpoi
 function startBroker(o: EnsureBrokerOptions): void {
   spawnDetachedChild({
     command: process.execPath,
-    args: [o.entry ?? defaultBrokerEntry(), BROKER_ARGV, o.engine],
-    logPath: brokerLogPath(o.dir, o.engine),
+    args: [o.entry ?? defaultBrokerEntry(), BROKER_ARGV],
+    logPath: brokerLogPath(o.dir),
     env: { ...(o.env ?? process.env), LLM_EXT_CONFIG_DIR: o.dir },
-    onError: (e) => process.stderr.write(`[llm-externalizer] the ${o.engine} broker failed to start: ${e.message}\n`),
+    onError: (e) => process.stderr.write(`[llm-externalizer] the local-model broker failed to start: ${e.message}\n`),
   });
 }
 
 export interface BrokerJobRequest {
+  /** The engine whose server runs it (TRDD-ZGSGGHQG). */
+  engine: BrokerEngine;
   /** The finished request body (JSON text), exactly as it would go to the server. */
   body: string;
   model: string;
@@ -302,7 +298,7 @@ export async function brokerExchange(
   req: BrokerJobRequest,
   opts: { signal?: AbortSignal; onDispatched?: (at: number) => void; onQueued?: (ms: number) => void; scope?: object } = {},
 ): Promise<Response> {
-  const reuseKey = createHash("sha256").update(`${ep.url}\u0000${req.model}\u0000${req.ctx}\u0000${req.body}`).digest("hex");
+  const reuseKey = createHash("sha256").update(`${ep.url}\u0000${req.engine}\u0000${req.model}\u0000${req.ctx}\u0000${req.body}`).digest("hex");
   // Reuse is scoped to ONE logical call (its retries): two concurrent calls with an identical body (two identical files, a benchmark repeating a prompt) must each get their own sampled result. No scope = no reuse.
   let pending = opts.scope ? pendingByScope.get(opts.scope) : undefined;
   if (opts.scope && !pending) pendingByScope.set(opts.scope, (pending = new Map()));
@@ -320,6 +316,7 @@ export async function brokerExchange(
           "content-type": "application/json",
           [COMMAND_HEADER]: COMMAND_ID,
           [CTX_HEADER]: String(req.ctx),
+          [ENGINE_HEADER]: req.engine,
           [TIMEOUT_HEADER]: String(req.timeoutMs),
         };
         if (req.queueTimeoutMs !== undefined) h[QUEUE_TIMEOUT_HEADER] = String(req.queueTimeoutMs);

@@ -12,8 +12,9 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isLlamaServerArgv0, ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
-import { isBrokerProcess } from "./protocol.js";
+import { isManagedServerArgv, ManagedServerError, pidState, processSnapshot, readCommandLine, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { hasLocalsMarker } from "../local-locals-server.js";
+import { isBrokerProcess, type BrokerEngine } from "./protocol.js";
 
 export type ServerRole = "main" | "cal";
 
@@ -42,7 +43,7 @@ export interface RegistryEntry {
   startedAt: string;
 }
 
-export function registryPath(dir: string, engine: string): string {
+export function registryPath(dir: string, engine: BrokerEngine): string {
   return join(dir, `servers-${engine}.json`);
 }
 
@@ -63,12 +64,21 @@ export function hasLogFileMarker(command: string, marker: string): boolean {
   return false;
 }
 
-function registryLockPath(dir: string, engine: string): string {
+function registryLockPath(dir: string, engine: BrokerEngine): string {
   return join(dir, `servers-${engine}.lock`);
 }
-/** The --log-file of a role's server: the stable marker of an llm-ext server (spec point 8). */
-export function roleLogFile(dir: string, role: ServerRole): string {
-  return join(dir, `llama-server-${role}.log`);
+/**
+ * The stable marker of a role's llm-ext server (spec point 8): llama-server's
+ * --log-file, and for Locals the log its stdout goes to, also named in its
+ * argv by `-X llm-ext-server=<marker>` (TRDD-ZGSGGHQG).
+ */
+export function roleLogFile(dir: string, role: ServerRole, engine: BrokerEngine): string {
+  return join(dir, engine === "locals" ? `locals-server-${role}.log` : `llama-server-${role}.log`);
+}
+
+/** How logs and errors name an engine's server. */
+export function serverLabel(engine: BrokerEngine): string {
+  return engine === "locals" ? "Locals server" : "llama-server";
 }
 
 /**
@@ -77,7 +87,7 @@ export function roleLogFile(dir: string, role: ServerRole): string {
  * group or every process the user owns (review M7). An entry that is not a
  * well-formed llama-server group leader record is dropped.
  */
-export function readRegistry(dir: string, engine: string): RegistryEntry[] {
+export function readRegistry(dir: string, engine: BrokerEngine): RegistryEntry[] {
   try {
     const raw = JSON.parse(readFileSync(registryPath(dir, engine), "utf8")) as { entries?: unknown };
     if (!Array.isArray(raw.entries)) return [];
@@ -90,7 +100,7 @@ export function readRegistry(dir: string, engine: string): RegistryEntry[] {
         Number.isInteger(e.ownerPid) &&
         Array.isArray(e.argv) &&
         e.argv.every((t) => typeof t === "string") &&
-        isLlamaServerArgv0(e.argv[0]),
+        isManagedServerArgv(e.argv),
     );
   } catch {
     return [];
@@ -98,7 +108,7 @@ export function readRegistry(dir: string, engine: string): RegistryEntry[] {
 }
 
 /** Temp-then-rename, 0600, so a crash never leaves a half-written registry another process would misread. */
-function writeRegistry(dir: string, engine: string, entries: RegistryEntry[]): void {
+function writeRegistry(dir: string, engine: BrokerEngine, entries: RegistryEntry[]): void {
   const target = registryPath(dir, engine);
   const tmp = `${target}.${process.pid}.tmp`;
   writeFileSync(tmp, `${JSON.stringify({ entries }, null, 2)}\n`, { mode: 0o600 });
@@ -119,7 +129,7 @@ async function entryLive(e: Pick<RegistryEntry, "pid" | "argv">): Promise<boolea
 
 export interface ClaimOptions {
   dir: string;
-  engine: string;
+  engine: BrokerEngine;
   role: ServerRole;
   ownerPid: number;
   /** Starts the server; called with the lock held. */
@@ -138,33 +148,13 @@ export interface ClaimOptions {
 export async function claimAndSpawn(o: ClaimOptions): Promise<RegistryEntry> {
   mkdirSync(o.dir, { recursive: true });
   return withAsyncLock(registryLockPath(o.dir, o.engine), async () => {
-    const kept: RegistryEntry[] = [];
-    for (const e of readRegistry(o.dir, o.engine)) {
-      if (!(await entryLive(e))) continue;
-      // Review M9: the owner must still BE a broker (argv carries __broker), not just a live pid: a reused pid made the orphan look owned.
-      if (e.role === "main" && !(await isBrokerProcess(e.ownerPid))) {
-        const how = await stopProcessGroup(e.pgid);
-        o.log?.(`stopped orphaned main llama-server pid ${e.pid} (pgid ${e.pgid}, owner ${e.ownerPid} gone): ${how}`);
-        continue;
-      }
-      kept.push(e);
-    }
-    const marker = roleLogFile(o.dir, o.role);
-    for (const row of await processSnapshot()) {
-      if (!hasLogFileMarker(row.command, marker) || kept.some((e) => e.pid === row.pid)) continue;
-      // Review M7: the marker alone is not identity. `grep -- --log-file <marker>`
-      // or an agent's diagnostic carries it too, and may share a foreign group
-      // (a terminal job, a Claude Code session). Only a llama-server that leads
-      // its own group is ours to stop (stopProcessGroup re-asserts this).
-      if (row.pid !== row.pgid || row.pgid <= 1 || !isLlamaServerArgv0(row.argv[0])) continue;
-      const how = await stopProcessGroup(row.pgid);
-      o.log?.(`stopped unrecorded ${o.role} llama-server pid ${row.pid} (pgid ${row.pgid}, found by its --log-file marker): ${how}`);
-    }
+    const kept = await sweepUnlocked(o.dir, o.engine, o.role, o.log);
+    const label = serverLabel(o.engine);
     const holder = kept.find((e) => e.role === o.role);
     if (holder) {
       writeRegistry(o.dir, o.engine, kept);
       throw new SlotBusyError(
-        `llm-ext already runs its ${o.role} llama-server (pid ${holder.pid}, port ${holder.port}, model '${holder.model}', owner pid ${holder.ownerPid}); ` +
+        `llm-ext already runs its ${o.role} ${label} (pid ${holder.pid}, port ${holder.port}, model '${holder.model}', owner pid ${holder.ownerPid}); ` +
           `at most one main and one calibration server run per engine. Stop it with 'llm-ext models server-stop'.`,
         holder,
       );
@@ -176,8 +166,53 @@ export async function claimAndSpawn(o: ClaimOptions): Promise<RegistryEntry> {
   });
 }
 
+/**
+ * The sweep of claimAndSpawn on its own, under the engine's registry lock:
+ * stop orphaned mains (owner broker gone) and unrecorded marked servers of
+ * `engine`, and return the live entries kept. TRDD-ZGSGGHQG: the broker runs
+ * it on the OTHER engine before every start, so a main orphaned by a
+ * SIGKILLed broker can never run beside the new one (one local model at a
+ * time across engines; claimAndSpawn only sweeps its own engine).
+ */
+export async function sweepEngine(dir: string, engine: BrokerEngine, role: ServerRole, log?: (msg: string) => void): Promise<RegistryEntry[]> {
+  mkdirSync(dir, { recursive: true });
+  return withAsyncLock(registryLockPath(dir, engine), async () => {
+    const kept = await sweepUnlocked(dir, engine, role, log);
+    writeRegistry(dir, engine, kept);
+    return kept;
+  });
+}
+
+/** The sweep itself; the caller holds the engine's registry lock. */
+async function sweepUnlocked(dir: string, engine: BrokerEngine, role: ServerRole, log?: (msg: string) => void): Promise<RegistryEntry[]> {
+  const kept: RegistryEntry[] = [];
+  for (const e of readRegistry(dir, engine)) {
+    if (!(await entryLive(e))) continue;
+    // Review M9: the owner must still BE a broker (argv carries __broker), not just a live pid: a reused pid made the orphan look owned.
+    if (e.role === "main" && !(await isBrokerProcess(e.ownerPid))) {
+      const how = await stopProcessGroup(e.pgid);
+      log?.(`stopped orphaned main ${serverLabel(engine)} pid ${e.pid} (pgid ${e.pgid}, owner ${e.ownerPid} gone): ${how}`);
+      continue;
+    }
+    kept.push(e);
+  }
+  const marker = roleLogFile(dir, role, engine);
+  const label = serverLabel(engine);
+  for (const row of await processSnapshot()) {
+    const marked = engine === "locals" ? hasLocalsMarker(row.command, marker) : hasLogFileMarker(row.command, marker);
+    if (!marked || kept.some((e) => e.pid === row.pid)) continue;
+    // Review M7: the marker alone is not identity. `grep -- --log-file <marker>`
+    // or an agent's diagnostic carries it too, and may share a foreign group
+    // (a terminal job, a Claude Code session). Only an llm-ext server that leads
+    // its own group is ours to stop (stopProcessGroup re-asserts this).
+    if (row.pid !== row.pgid || row.pgid <= 1 || !isManagedServerArgv(row.argv)) continue;
+    const how = await stopProcessGroup(row.pgid);
+    log?.(`stopped unrecorded ${role} ${label} pid ${row.pid} (pgid ${row.pgid}, found by its marker): ${how}`);
+  }
+  return kept;
+}
 /** Drop the entry of `pid` (after its group was stopped, or it exited). */
-export async function releaseEntry(dir: string, engine: string, pid: number): Promise<void> {
+export async function releaseEntry(dir: string, engine: BrokerEngine, pid: number): Promise<void> {
   await withAsyncLock(registryLockPath(dir, engine), async () => {
     writeRegistry(dir, engine, readRegistry(dir, engine).filter((e) => e.pid !== pid));
   });
@@ -193,7 +228,7 @@ export async function releaseEntry(dir: string, engine: string, pid: number): Pr
  */
 export async function stopOwnServer(
   dir: string,
-  engine: string,
+  engine: BrokerEngine,
   e: Pick<RegistryEntry, "pid" | "pgid" | "argv">,
   log: (msg: string) => void,
 ): Promise<string> {

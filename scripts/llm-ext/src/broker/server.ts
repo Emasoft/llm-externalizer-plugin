@@ -1,9 +1,10 @@
 /**
- * broker/server.ts — the per-engine request broker process (TRDD-1OOAH3LD,
+ * broker/server.ts — the local-model request broker process (TRDD-1OOAH3LD,
  * TRDD-ZGSGGHQG; design/specs/local-engine-broker-design.md).
  *
- * A detached llm-ext child (`llm-ext __broker llama`) that owns the engine's
- * single main llama-server. Every command process submits its finished
+ * A detached llm-ext child (`llm-ext __broker`) that owns the single main
+ * server of every local engine: llama-server for GGUF models, Locals for MLX
+ * models, never both at once. Every command process submits its finished
  * request bodies here (POST /v1/jobs) and long-polls for the result
  * (GET /v1/jobs/<id>?wait=60), so requests from all running commands are
  * grouped by model, each model batch runs on one server, and the model is
@@ -12,8 +13,9 @@
  * hold no timer or open handle once it finishes (index.ts, launcher-boot.test.ts).
  */
 
+import type { ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmdirSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   ManagedServerError,
@@ -25,13 +27,24 @@ import {
   waitReady,
   SPAWN_MARKER,
 } from "../local-llama-server.js";
-import { claimAndSpawn, releaseEntry, roleLogFile, SlotBusyError, stopOwnServer, type RegistryEntry } from "./registry.js";
+import {
+  LOCALS_MAIN_SLOTS,
+  localsModelIds,
+  localsOutgoingModel,
+  memoryFreePercent,
+  parseLocalsModel,
+  spawnLocalsServer,
+  waitLocalsReady,
+} from "../local-locals-server.js";
+import { claimAndSpawn, releaseEntry, roleLogFile, serverLabel, SlotBusyError, stopOwnServer, sweepEngine, type RegistryEntry } from "./registry.js";
 import { queueKey, Scheduler, timingsFromEnv, type BrokerTimings, type Job } from "./scheduler.js";
 import { getConfigDir } from "../config.js";
 import {
+  BROKER_ENGINES,
   COMMAND_HEADER,
   CTX_HEADER,
   DISPATCHED_HEADER,
+  ENGINE_HEADER,
   QUEUE_TIMEOUT_HEADER,
   STATE_HEADER,
   TIMEOUT_HEADER,
@@ -43,7 +56,6 @@ import {
 } from "./protocol.js";
 
 export interface BrokerOptions {
-  engine: BrokerEngine;
   dir: string;
   version: string;
   timings: BrokerTimings;
@@ -59,8 +71,19 @@ const FINISHED_KEEP_MS = 600_000;
 /** A request body above this is refused: a local model's context bounds a real request far below it. */
 const MAX_BODY_BYTES = 64 * 1024 * 1024;
 
+/**
+ * The one main server the broker runs. ONE variable for every engine
+ * (TRDD-ZGSGGHQG): the user's rule is one local model loaded at a time, so a
+ * llama-server and a Locals server never run together; a swap stops this one
+ * before it starts the next, whatever its engine. Two per-engine brokers with
+ * a cross-engine lock were rejected: the rotation rule (spec 6, 3b) weighs
+ * every model's deadline against the current one, which only a broker that
+ * sees both engines' queues can do; a lock alone would let one engine starve
+ * the other until its queue emptied.
+ */
 interface RunningServer {
   key: string;
+  engine: BrokerEngine;
   model: string;
   ctx: number;
   port: number;
@@ -69,8 +92,12 @@ interface RunningServer {
   slots: number;
   /** The recorded argv: the identity checked before the broker signals it (review M8). */
   argv: string[];
-  /** Review M13: the per-spawn key the server requires (LLAMA_API_KEY). */
+  /** Review M13: the per-spawn key llama-server requires (LLAMA_API_KEY); Locals has no key. */
   apiKey: string;
+  /** Locals: the ids its /v1/models lists (the outgoing model field picks one); [] for llama-server. */
+  modelIds: string[];
+  /** Locals: the fresh empty working directory it was started in, removed after it stops. */
+  cwd?: string;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -137,8 +164,50 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let stopping: Promise<void> | null = null;
   let busyLogged = false;
   let busyTries = 0;
-  /** The spawn of a server that is not `server` yet (claimAndSpawn to ready): shutdown stops it too (review M5). */
-  let loading: Promise<RegistryEntry> | null = null;
+  /** The spawn of a server that is not `server` yet (claimAndSpawn to ready), with its engine: shutdown stops it too (review M5). */
+  let loading: { engine: BrokerEngine; promise: Promise<RegistryEntry> } | null = null;
+  /**
+   * Locals memory floor (TRDD-ZGSGGHQG L3.4): the last `memory_pressure` free
+   * percentage, null = no fresh reading yet. One reading allows ONE further
+   * dispatch (pump clears it), so memory is checked before every new request.
+   */
+  let memFree: number | null = null;
+  let memAt = 0;
+  let memReading: Promise<void> | null = null;
+  let memWaitLoggedAt = 0;
+  const refreshMemory = (): void => {
+    if (memReading) return;
+    memReading = memoryFreePercent()
+      .then((v) => {
+        memFree = v;
+        memAt = Date.now();
+        if (v === null && Date.now() - memWaitLoggedAt >= 30_000) {
+          memWaitLoggedAt = Date.now();
+          o.log("memory_pressure gave no reading: Locals runs one request at a time until it does");
+        }
+      })
+      .finally(() => {
+        memReading = null;
+        // Re-pump at once only on a reading; an unreadable memory_pressure is retried by the 1 s tick, never in a loop.
+        if (memFree !== null) pump();
+      });
+  };
+  /** A fresh reading at or above the floor. Below it, the job waits (never an error); logged at most every 30 s. */
+  const memoryAllows = (s: RunningServer): boolean => {
+    // A reading older than 2 s is no reading: a leftover from a drained queue must not admit a new batch.
+    if (memFree === null || Date.now() - memAt > 2000) {
+      refreshMemory();
+      return false;
+    }
+    if (memFree >= t.memoryFloorPct) return true;
+    const now = Date.now();
+    if (now - memWaitLoggedAt >= 30_000) {
+      memWaitLoggedAt = now;
+      o.log(`waiting for memory: ${memFree}% free < floor ${t.memoryFloorPct}% (${running.size} in flight on ${s.model}, ${sched.allQueued(s.key).length} queued)`);
+    }
+    memFree = null;
+    return false;
+  };
   const token = randomBytes(24).toString("hex");
   mkdirSync(o.dir, { recursive: true });
 
@@ -163,8 +232,16 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     // Review M8: identity-checked stop (dead pid = release only). Review M4:
     // the stop is tracked, so pump and shutdown wait for it; an idle exit 1 s
     // after an idle stop used to exit mid-stop and leave the server running.
-    const p = stopOwnServer(o.dir, o.engine, s, o.log).then((how) => {
-      o.log(`stopped main llama-server pid ${s.pid} model '${s.model}' (${why}): ${how}`);
+    const p = stopOwnServer(o.dir, s.engine, s, o.log).then((how) => {
+      o.log(`stopped main ${serverLabel(s.engine)} pid ${s.pid} model '${s.model}' (${why}): ${how}`);
+      // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
+      if (s.cwd !== undefined) {
+        try {
+          rmdirSync(s.cwd);
+        } catch (e) {
+          o.log(`left the Locals working directory ${s.cwd}: ${(e as Error).message}`);
+        }
+      }
     });
     stopping = p;
     try {
@@ -186,37 +263,69 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const swapTo = async (key: string): Promise<void> => {
     swapping = true;
     let spawned: RegistryEntry | null = null;
+    let spawnedEngine: BrokerEngine = "llama";
+    // Hoisted so a failed start can remove the Locals cwd too.
+    let cwd: string | undefined;
     let repump = true;
     try {
       if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
       const first = sched.allQueued(key)[0];
       if (!first) return;
-      const parsed = parseManagedModel(first.model);
-      if ("error" in parsed) throw new ManagedServerError(parsed.error);
+      const engine = first.engine;
+      spawnedEngine = engine;
+      // One local model at a time ACROSS engines (TRDD-ZGSGGHQG): this broker's
+      // single `server` guarantees it for its own servers. The other engine's
+      // registry is swept first (claimAndSpawn sweeps only its own engine): a
+      // main orphaned by a SIGKILLed broker is stopped here, or it would run
+      // beside the new one. A main still owned by a live broker (an old one
+      // draining during a version handover) is waited for, exactly as a busy
+      // main slot of the same engine.
+      for (const other of BROKER_ENGINES) {
+        if (other === engine) continue;
+        const held = (await sweepEngine(o.dir, other, "main", o.log)).find((e) => e.role === "main" && e.ownerPid !== process.pid);
+        if (held) throw new SlotBusyError(`another broker (pid ${held.ownerPid}) still runs its main ${serverLabel(other)} (pid ${held.pid})`, held);
+      }
+      let llamaArgv: string[] = [];
+      if (engine === "llama") {
+        const parsed = parseManagedModel(first.model);
+        if ("error" in parsed) throw new ManagedServerError(parsed.error);
+        llamaArgv = parsed.argv;
+      } else {
+        const parsed = parseLocalsModel(first.model);
+        if ("error" in parsed) throw new ManagedServerError(parsed.error);
+      }
       const port = await freePort();
       const target = { port, model: first.model, ctx: first.ctx };
-      const logFile = roleLogFile(o.dir, "main");
+      const logFile = roleLogFile(o.dir, "main", engine);
       let exited = false;
       const loadStartedAt = Date.now();
-      // Review M13 (hardening): a fresh key per spawn, so no other local process can use the server behind the broker's back.
+      // Review M13 (hardening): a fresh key per spawn, so no other local process
+      // can use the server behind the broker's back. Locals has no API key
+      // (measured): its access control is loopback Host/Origin checks only.
       const apiKey = randomBytes(24).toString("hex");
       const loadingNow = claimAndSpawn({
         dir: o.dir,
-        engine: o.engine,
+        engine,
         role: "main",
         ownerPid: process.pid,
         log: o.log,
         spawn: async () => {
-          const s = await spawnLlamaServer(target, parsed.argv, logFile, apiKey);
+          let s: { pid: number; argv: string[]; child: ChildProcess };
+          if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
+          else {
+            const l = await spawnLocalsServer(target, logFile, logFile);
+            cwd = l.cwd;
+            s = l;
+          }
           s.child.once("exit", () => {
             exited = true;
           });
           // Tests count spawns by this line in the broker log.
-          o.log(`${SPAWN_MARKER} pid ${s.pid} model '${first.model}' ctx ${first.ctx} port ${port}`);
+          o.log(`${SPAWN_MARKER} pid ${s.pid} engine ${engine} model '${first.model}' ctx ${first.ctx} port ${port}`);
           return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model: first.model, ctx: first.ctx };
         },
       });
-      loading = loadingNow;
+      loading = { engine, promise: loadingNow };
       const entry = await loadingNow;
       spawned = entry;
       if (exiting) throw new ManagedServerError("broker exiting");
@@ -224,12 +333,19 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (busyLogged) o.log(`main slot free after ${busyTries} busy attempts`);
       busyLogged = false;
       busyTries = 0;
-      await waitReady(target, entry.pid, () => exited, logFile, apiKey);
-      server = { key, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: await totalSlots(port, apiKey) };
+      if (engine === "llama") {
+        await waitReady(target, entry.pid, () => exited, logFile, apiKey);
+        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: await totalSlots(port, apiKey), modelIds: [] };
+      } else {
+        await waitLocalsReady(target, entry.pid, () => exited, logFile);
+        // Locals exposes no slot count: C is the --slots value the broker passed.
+        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: LOCALS_MAIN_SLOTS, modelIds: await localsModelIds(port), cwd };
+      }
       // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
       sched.recordLoad(key, Date.now() - loadStartedAt);
       sched.startRun(key, Date.now());
-      o.log(`main llama-server ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}; ${slotSizing(entry.argv, logFile)}`);
+      const sizing = engine === "llama" ? `; ${slotSizing(entry.argv, logFile)}` : `; ids ${server.modelIds.join(", ")}`;
+      o.log(`main ${serverLabel(engine)} ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}${sizing}`);
     } catch (err) {
       // A version handover: the OLD broker still owns the main slot while it
       // drains. Waiting is not an error (spec 6/11): keep the jobs queued and
@@ -242,7 +358,15 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         return;
       }
       if (spawned !== null) {
-        await stopOwnServer(o.dir, o.engine, spawned, o.log).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+        await stopOwnServer(o.dir, spawnedEngine, spawned, o.log).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+      }
+      // A Locals server that failed before ready leaves its empty cwd: rmdir, never a recursive delete.
+      if (cwd !== undefined) {
+        try {
+          rmdirSync(cwd);
+        } catch (e) {
+          o.log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
+        }
       }
       const msg = (err as Error).message;
       o.log(`model '${key.split("\u0000")[0]}' failed to start: ${msg}`);
@@ -270,8 +394,12 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     notify(job);
     let body: string;
     try {
-      // Spec 2: bodies are unchanged except the model field, set to what this server serves (its --alias).
-      body = JSON.stringify({ ...(JSON.parse(job.body) as Record<string, unknown>), model: s.model });
+      // Spec 2: bodies are unchanged except the model field, set to what this
+      // server serves: llama-server's --alias; for Locals the id it lists, its
+      // -thinking variant when the request asks for thinking (TRDD-ZGSGGHQG).
+      const parsed = JSON.parse(job.body) as Record<string, unknown>;
+      const model = s.engine === "locals" ? (localsOutgoingModel(s.modelIds, parsed) ?? s.model) : s.model;
+      body = JSON.stringify({ ...parsed, model });
     } catch {
       body = job.body;
     }
@@ -286,7 +414,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       .catch((err: Error) => {
         if (job.state === "cancelled") return;
         if (timeout.aborted) {
-          finish(job, "failed", `llama-server did not answer within ${job.timeoutMs} ms of dispatch (model '${job.model}')`);
+          finish(job, "failed", `${serverLabel(s.engine)} did not answer within ${job.timeoutMs} ms of dispatch (model '${job.model}')`);
           return;
         }
         // The server died under the request: forget it AND clear current
@@ -296,9 +424,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         if (server === s && pidState(s.pid) !== "alive") {
           server = null;
           sched.current = null;
-          void releaseEntry(o.dir, o.engine, s.pid).catch(() => undefined);
+          void releaseEntry(o.dir, s.engine, s.pid).catch(() => undefined);
         }
-        finish(job, "failed", `llama-server request failed (model '${job.model}'): ${err.message}`);
+        finish(job, "failed", `${serverLabel(s.engine)} request failed (model '${job.model}'): ${err.message}`);
       })
       .finally(() => {
         running.delete(job.id);
@@ -321,10 +449,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     // is not `server` yet; without this it outlived the broker as an orphan.
     const l = loading;
     if (l) {
-      const e = await l.catch(() => null);
-      if (e) await stopOwnServer(o.dir, o.engine, e, o.log).catch((err: Error) => o.log(`stop failed: ${err.message}`));
+      const e = await l.promise.catch(() => null);
+      if (e) await stopOwnServer(o.dir, l.engine, e, o.log).catch((err: Error) => o.log(`stop failed: ${err.message}`));
     }
-    removeBrokerStateIfOwn(o.dir, o.engine, process.pid);
+    removeBrokerStateIfOwn(o.dir, process.pid);
     http.close();
     http.closeAllConnections();
   };
@@ -353,8 +481,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const dead = server;
       server = null;
       sched.current = null;
-      o.log(`main llama-server pid ${dead.pid} (model '${dead.model}') exited on its own; it is restarted when work arrives`);
-      void releaseEntry(o.dir, o.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
+      o.log(`main ${serverLabel(dead.engine)} pid ${dead.pid} (model '${dead.model}') exited on its own; it is restarted when work arrives`);
+      void releaseEntry(o.dir, dead.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
     }
     if (server && server.key !== sched.current) sched.current = server.key;
     const next = sched.wantRotation(now, running.size, t);
@@ -364,9 +492,18 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
     if (next === null && server && sched.current === server.key) {
       while (running.size < server.slots) {
+        // TRDD-ZGSGGHQG L3.4: on Locals, a job beyond the first in flight needs a
+        // fresh memory reading at or above the floor; one is always allowed, as
+        // Locals' own prompt cache counts as used memory until it admits a request.
+        if (server.engine === "locals" && running.size > 0 && !memoryAllows(server)) break;
         const job = sched.take(server.key);
         if (!job) break;
         dispatch(job, server);
+        // Each further dispatch waits for a NEW reading: memory is checked before every new request.
+        if (server.engine === "locals") {
+          memFree = null;
+          refreshMemory();
+        }
       }
     }
     const idle = sched.queuedCount() === 0 && running.size === 0;
@@ -429,10 +566,14 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       }
       if (typeof model !== "string" || model === "") return reply(res, 400, { error: "body has no model" });
       const ctx = intHeader(req, CTX_HEADER, 0);
+      // TRDD-ZGSGGHQG: the engine is required, never guessed (a GGUF and an MLX id can look alike).
+      const engine = req.headers[ENGINE_HEADER];
+      if (engine !== "llama" && engine !== "locals") return reply(res, 400, { error: `bad or missing ${ENGINE_HEADER}: '${String(engine)}'` });
       const now = Date.now();
       const job: Job = {
         id: randomUUID(),
-        key: queueKey(model, ctx),
+        key: queueKey(model, ctx, engine),
+        engine,
         model,
         ctx,
         commandId: String(req.headers[COMMAND_HEADER] ?? "anonymous"),
@@ -522,8 +663,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const addr = http.address();
   const port = typeof addr === "object" && addr ? addr.port : 0;
   // No lock here: the CLIENT spawns under the broker spawn lock and waits for this file, so taking that lock here would deadlock.
-  writeBrokerState(o.dir, o.engine, { pid: process.pid, port, token, version: o.version, startedAt: new Date().toISOString() });
-  o.log(`broker ${o.engine} listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version})`);
+  writeBrokerState(o.dir, { pid: process.pid, port, token, version: o.version, startedAt: new Date().toISOString() });
+  o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
   const tick = setInterval(pump, TICK_MS);
   const onSignal = (sig: string): void => void shutdown(`signal ${sig}`);
   process.once("SIGTERM", onSignal);
@@ -544,21 +685,17 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
 
 
 /**
- * `llm-ext __broker <engine>` (cli/main.ts): run the broker until it exits,
- * then end the process explicitly: the broker is the only thing this process
- * does, and an exit that waited on a stray handle would leave a broker-less
- * zombie holding nothing but memory.
+ * `llm-ext __broker` (cli/main.ts): run the broker until it exits, then end
+ * the process explicitly: the broker is the only thing this process does, and
+ * an exit that waited on a stray handle would leave a broker-less zombie
+ * holding nothing but memory. One broker serves every local engine.
  */
-export async function runBrokerMain(engine: string | undefined, version: string): Promise<never> {
+export async function runBrokerMain(version: string): Promise<never> {
   const log = (msg: string): void => {
     process.stdout.write(`${new Date().toISOString()} ${msg}\n`);
   };
-  if (engine !== "llama") {
-    log(`unknown broker engine '${String(engine)}' (this increment brokers llama only)`);
-    process.exit(2);
-  }
   try {
-    await runBroker({ engine, dir: getConfigDir(), version, timings: timingsFromEnv(process.env), log });
+    await runBroker({ dir: getConfigDir(), version, timings: timingsFromEnv(process.env), log });
     process.exit(0);
   } catch (err) {
     log(`broker failed: ${(err as Error).stack ?? String(err)}`);

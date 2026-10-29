@@ -1,6 +1,6 @@
 /**
- * broker.test.ts — the per-engine broker, real and unmocked (TRDD-1OOAH3LD,
- * spec point 14, llama part). A real llama-server serves two tiny GGUF models
+ * broker.test.ts — the local-model broker, real and unmocked (TRDD-1OOAH3LD,
+ * TRDD-ZGSGGHQG; spec point 14). A real llama-server serves two tiny GGUF models
  * (ggml-org/tiny-llamas stories15M-q4_0.gguf and stories260K.gguf, cached in
  * the persistent LLAMA_CACHE /tmp/llm-ext-llama-cache); the broker and every
  * client are SEPARATE node processes, bundled from the current source with
@@ -12,9 +12,10 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
+import { homedir, tmpdir as osTmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -22,10 +23,12 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { BROKER_ARGV, CTX_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { BROKER_ARGV, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { isLocalsServerArgv, llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
+import { buildLocalsArgv, hasLocalsMarker, LOCALS_MAIN_SLOTS, localsOutgoingModel, localsPython, parseLocalsModel } from "../local-locals-server.js";
+import { localsPlatformSupported } from "../config.js";
 import { clockForCall, retryWindowClosed, startRetryClock, type RetryClock } from "../provider/http.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,7 +38,7 @@ const B = "ggml-org/tiny-llamas/stories260K.gguf";
 const nodeExternals = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 const REQUIRE_SHIM = `import { createRequire as __cjsCreateRequire } from "node:module";\nconst require = __cjsCreateRequire(import.meta.url);\n`;
 
-// One bundle is both the broker (`__broker llama`) and a client: the client's
+// One bundle is both the broker (`__broker`) and a client: the client's
 // default broker entry is the bundle it runs from, exactly as dist/llm-ext.js
 // in production.
 const ENTRY = `
@@ -43,16 +46,16 @@ import { runBrokerMain } from "./server.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
 if (mode === "__broker") {
-  await runBrokerMain(arg, process.env.TEST_BROKER_VERSION ?? "t1");
+  await runBrokerMain(process.env.TEST_BROKER_VERSION ?? "t1");
 } else {
   const spec = JSON.parse(arg);
   setBrokerClientVersion(spec.version);
-  const ep = await ensureBroker({ engine: "llama", dir: spec.dir, version: spec.version });
+  const ep = await ensureBroker({ dir: spec.dir, version: spec.version });
   const results = await Promise.all(spec.jobs.map(async (j, i) => {
     await new Promise((r) => setTimeout(r, j.delayMs ?? 0));
     const body = JSON.stringify({ model: j.model, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: j.maxTokens ?? 4 });
     try {
-      const res = await brokerExchange(ep, { body, model: j.model, ctx: 1024, timeoutMs: 120000, queueTimeoutMs: j.queueTimeoutMs });
+      const res = await brokerExchange(ep, { engine: j.engine ?? "llama", body, model: j.model, ctx: 1024, timeoutMs: 120000, queueTimeoutMs: j.queueTimeoutMs });
       await res.text();
       return { i, model: j.model, status: res.status, at: Date.now() };
     } catch (e) {
@@ -94,7 +97,7 @@ function newDir(): string {
 
 /** Stop every process a test left: the broker (SIGTERM, then SIGKILL), every registry pgid, every process carrying this dir's marker. */
 async function cleanup(dir: string): Promise<void> {
-  const st = readBrokerState(dir, "llama");
+  const st = readBrokerState(dir);
   // Follow-up review m7: a state-file pid is signalled only while it is STILL a
   // broker: the broker may have exited and its pid been reused by an unrelated process.
   if (st && (await isBrokerProcess(st.pid))) {
@@ -126,13 +129,14 @@ async function cleanup(dir: string): Promise<void> {
   // Follow-up review m8: without our own pgid that guard is blind, so fail loudly.
   const ownPgid = rows.find((r) => r.pid === process.pid)?.pgid;
   if (ownPgid === undefined) throw new Error(`cleanup: this test runner (pid ${process.pid}) is not in the process snapshot; refusing to signal any group`);
-  const registryPgids = new Set(readRegistry(dir, "llama").map((e) => e.pgid));
+  const registryPgids = new Set([...readRegistry(dir, "llama"), ...readRegistry(dir, "locals")].map((e) => e.pgid));
   // Follow-up review m7: a registry pgid alone is not proof (pgids are reused):
   // only a llama-server or a broker in it is signalled. A process carrying this
   // test's unique dir in its argv is this test's own by construction.
-  const isServerOrBroker = (argv: readonly string[]): boolean => basename(argv[0] ?? "") === "llama-server" || argv.includes(BROKER_ARGV);
+  const isServerOrBroker = (argv: readonly string[]): boolean => basename(argv[0] ?? "") === "llama-server" || isLocalsServerArgv(argv) || argv.includes(BROKER_ARGV);
   for (const row of rows) {
-    const ownsDir = row.argv.some((t) => t.startsWith(dir));
+    // A Locals server names this dir only inside its -X marker token, so the unsplit command line is searched, not argv prefixes.
+    const ownsDir = row.command.includes(dir);
     if (ownsDir || (registryPgids.has(row.pgid) && isServerOrBroker(row.argv))) {
       try {
         if (row.pgid === ownPgid || row.pgid <= 1) process.kill(row.pid, "SIGKILL");
@@ -143,7 +147,7 @@ async function cleanup(dir: string): Promise<void> {
     }
   }
   await new Promise((r) => setTimeout(r, 300));
-  const left = (await processSnapshot()).filter((r) => r.argv.some((t) => t.startsWith(dir)));
+  const left = (await processSnapshot()).filter((r) => r.command.includes(dir));
   rmSync(dir, { recursive: true, force: true });
   expect(left.map((r) => r.argv.join(" "))).toEqual([]);
 }
@@ -176,20 +180,23 @@ function runClient(dir: string, jobs: object[], env: Record<string, string> = {}
 }
 
 const spawnLines = (dir: string): string[] => {
-  const log = join(dir, "broker-llama.log");
+  const log = join(dir, "broker-local.log");
   return existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((l) => l.includes(SPAWN_MARKER)) : [];
 };
 
-/** Count, over the whole run, the most main servers of this dir alive at once (process snapshots every 200 ms). */
+/** Count, over the whole run, the most main servers of this dir alive at once, llama-server and Locals together (process snapshots every 200 ms). */
 function watchMains(dir: string): { stop: () => number } {
   let max = 0;
   let on = true;
-  const marker = roleLogFile(dir, "main");
+  const marker = roleLogFile(dir, "main", "llama");
+  const localsMarker = roleLogFile(dir, "main", "locals");
   let failure: unknown = null;
   // Caught and rethrown at stop(): a failed snapshot must fail THIS test, not surface as an unhandled rejection later.
   void (async () => {
     while (on) {
-      const n = (await processSnapshot()).filter((r) => r.argv[r.argv.indexOf("--log-file") + 1] === marker && r.argv.indexOf("--log-file") >= 0).length;
+      const n = (await processSnapshot()).filter(
+        (r) => (r.argv.indexOf("--log-file") >= 0 && r.argv[r.argv.indexOf("--log-file") + 1] === marker) || hasLocalsMarker(r.command, localsMarker),
+      ).length;
       max = Math.max(max, n);
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -228,7 +235,8 @@ describe("timeout flags (pure parser)", () => {
 describe("scheduler (pure rules)", () => {
   const job = (model: string, commandId: string, at: number, queueTimeoutMs = DEFAULT_TIMINGS.starveMs): Job => ({
     id: `${model}-${commandId}-${at}`,
-    key: queueKey(model, 0),
+    key: queueKey(model, 0, "llama"),
+    engine: "llama",
     model,
     ctx: 0,
     commandId,
@@ -244,7 +252,7 @@ describe("scheduler (pure rules)", () => {
     const s = new Scheduler();
     for (let i = 0; i < 5; i++) s.enqueue(job("m", "big", i));
     s.enqueue(job("m", "small", 10));
-    const order = [s.take(queueKey("m", 0))!, s.take(queueKey("m", 0))!].map((j) => j.commandId);
+    const order = [s.take(queueKey("m", 0, "llama"))!, s.take(queueKey("m", 0, "llama"))!].map((j) => j.commandId);
     expect(order).toEqual(["big", "small"]);
   });
   const T0 = { ...DEFAULT_TIMINGS, batch: 2, minRunMs: 1e9, lingerMs: 1000, defaultLoadMs: 5_000 };
@@ -252,7 +260,7 @@ describe("scheduler (pure rules)", () => {
   const running = (queued: number): Scheduler => {
     const s = new Scheduler();
     for (let i = 0; i < queued; i++) s.enqueue(job("a", "c1", i));
-    s.startRun(queueKey("a", 0), 0);
+    s.startRun(queueKey("a", 0, "llama"), 0);
     return s;
   };
   it("rotates only after the minimum slice AND a near deadline, to the earliest deadline", () => {
@@ -264,17 +272,17 @@ describe("scheduler (pure rules)", () => {
     s.servedInRun = 2;
     // Slice served; c's deadline (20 s) is within its load estimate (5 s) of t = 16 s, b's is not.
     expect(s.wantRotation(10_000, 1, T0)).toBeNull();
-    expect(s.wantRotation(16_000, 1, T0)).toBe(queueKey("c", 0));
+    expect(s.wantRotation(16_000, 1, T0)).toBe(queueKey("c", 0, "llama"));
     // A measured load time moves "near": c loading in 1 s is not due at 16 s.
-    s.recordLoad(queueKey("c", 0), 1_000);
+    s.recordLoad(queueKey("c", 0, "llama"), 1_000);
     expect(s.wantRotation(16_000, 1, T0)).toBeNull();
-    expect(s.wantRotation(19_500, 1, T0)).toBe(queueKey("c", 0));
+    expect(s.wantRotation(19_500, 1, T0)).toBe(queueKey("c", 0, "llama"));
   });
   it("D also completes the minimum slice", () => {
     const s = running(10);
     s.enqueue(job("b", "c2", 0, 1));
     expect(s.wantRotation(5_000, 1, { ...T0, batch: 1000, minRunMs: 6_000 })).toBeNull();
-    expect(s.wantRotation(6_000, 1, { ...T0, batch: 1000, minRunMs: 6_000 })).toBe(queueKey("b", 0));
+    expect(s.wantRotation(6_000, 1, { ...T0, batch: 1000, minRunMs: 6_000 })).toBe(queueKey("b", 0, "llama"));
   });
   it("a job with --queue_timeout=99990 does not pull its model in after B requests of other work", () => {
     const s = running(100);
@@ -287,13 +295,13 @@ describe("scheduler (pure rules)", () => {
     s.enqueue(job("b", "c2", 0));
     s.touch(10_000);
     expect(s.wantRotation(10_500, 0, T0)).toBeNull();
-    expect(s.wantRotation(11_000, 0, T0)).toBe(queueKey("b", 0));
+    expect(s.wantRotation(11_000, 0, T0)).toBe(queueKey("b", 0, "llama"));
   });
   it("review C1: two models with overdue jobs never swap without serving (the new model gets its slice first)", () => {
     const s = new Scheduler();
     for (let i = 0; i < 5; i++) s.enqueue(job("a", "c1", 0, 1));
     for (let i = 0; i < 5; i++) s.enqueue(job("b", "c2", 0, 1));
-    s.startRun(queueKey("b", 0), 10_000);
+    s.startRun(queueKey("b", 0, "llama"), 10_000);
     expect(s.wantRotation(10_000, 0, T0)).toBeNull();
   });
   it("invariant over a randomised multi-model simulation: every swap is followed by a dispatch before the next swap, and every job is served", () => {
@@ -414,8 +422,8 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     const dir = newDir();
     const env = { LLM_EXT_BROKER_ABANDON_MS: "1500", LLM_EXT_BROKER_BATCH: "1000", LLM_EXT_BROKER_STARVE_MS: "600000" };
     await runClient(dir, jobsOf(A, 1), env);
-    const st = readBrokerState(dir, "llama")!;
-    const h = { [TOKEN_HEADER]: st.token, "content-type": "application/json" };
+    const st = readBrokerState(dir)!;
+    const h = { [TOKEN_HEADER]: st.token, [ENGINE_HEADER]: "llama", "content-type": "application/json" };
     const submit = async (model: string): Promise<string> => {
       const res = await fetch(`http://127.0.0.1:${st.port}/v1/jobs`, { method: "POST", headers: h, body: JSON.stringify({ model, messages: [{ role: "user", content: "x" }], max_tokens: 2 }) });
       return ((await res.json()) as { job: string }).job;
@@ -423,7 +431,7 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     // Keep A busy so B's jobs stay queued, then never poll one and cancel the other.
     // A's server is FROZEN once the batch is on it: a timed batch finished too
     // fast on an idle machine, the server went idle and B was rotated in.
-    const dispatched = (): number => readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n").filter((l) => l.includes("dispatch job")).length;
+    const dispatched = (): number => readFileSync(join(dir, "broker-local.log"), "utf8").split("\n").filter((l) => l.includes("dispatch job")).length;
     const seen = dispatched();
     const busy = runClient(dir, jobsOf(A, 8, { maxTokens: 120 }), env);
     for (let i = 0; i < 300 && dispatched() <= seen; i++) await new Promise((r) => setTimeout(r, 50));
@@ -461,7 +469,7 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
   it("after a broker SIGKILL the next broker kills the orphaned main by its pgid", async () => {
     const dir = newDir();
     await runClient(dir, jobsOf(A, 1));
-    const st = readBrokerState(dir, "llama")!;
+    const st = readBrokerState(dir)!;
     const orphan = readRegistry(dir, "llama").find((e) => e.role === "main")!;
     process.kill(st.pid, "SIGKILL");
     await new Promise((r) => setTimeout(r, 300));
@@ -469,7 +477,7 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect(r.results[0].status).toBe(200);
     expect(r.pid).not.toBe(st.pid);
     expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
-    expect(readFileSync(join(dir, "broker-llama.log"), "utf8")).toMatch(new RegExp(`stopped orphaned main llama-server pid ${orphan.pid}`));
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(new RegExp(`stopped orphaned main llama-server pid ${orphan.pid}`));
   }, 300_000);
 
   it("a client of another version hands over: the old broker drains and exits, the new one serves", async () => {
@@ -487,7 +495,7 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
       await new Promise((r) => setTimeout(r, 100));
     }
     expect(() => process.kill(old.pid, 0)).toThrow();
-    expect(readBrokerState(dir, "llama")?.version).toBe("t2");
+    expect(readBrokerState(dir)?.version).toBe("t2");
   }, 300_000);
 
   it("idle: stops its server, then exits, with short windows", async () => {
@@ -505,7 +513,7 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     }
     expect(() => process.kill(r.pid, 0)).toThrow();
     expect((await processSnapshot()).filter((p) => p.pgid === main.pgid)).toEqual([]);
-    expect(readBrokerState(dir, "llama")).toBeNull();
+    expect(readBrokerState(dir)).toBeNull();
   }, 300_000);
 });
 
@@ -622,7 +630,7 @@ describe("kill safety (review M6, M7, M8, M12)", () => {
 
   it("invariant: a non-llama-server process whose argv carries the marker survives the sweep", async () => {
     const dir = newDir();
-    const marker = roleLogFile(dir, "main");
+    const marker = roleLogFile(dir, "main", "llama");
     const pid = foreignProcess(["--log-file", marker]);
     try {
       await new Promise((r) => setTimeout(r, 200));
@@ -771,7 +779,7 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
     const dir = newDir();
     const foreign = foreignProcess();
     try {
-      writeBrokerState(dir, "llama", { pid: foreign, port: 1, token: "x", version: "t1", startedAt: new Date().toISOString() });
+      writeBrokerState(dir, { pid: foreign, port: 1, token: "x", version: "t1", startedAt: new Date().toISOString() });
       const r = await runClient(dir, jobsOf(A, 1));
       expect(r.results[0].status).toBe(200);
       expect(r.pid).not.toBe(foreign);
@@ -789,8 +797,8 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
       const t0 = Date.now();
       await expect(runClient(dir, jobsOf(A, 1))).rejects.toThrow(/did not answer its health check 4 times; not starting a second broker/);
       expect(Date.now() - t0).toBeLessThan(60_000);
-      expect(readBrokerState(dir, "llama")?.pid).toBe(first.pid);
-      const listening = readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n").filter((l) => l.includes(" listening on "));
+      expect(readBrokerState(dir)?.pid).toBe(first.pid);
+      const listening = readFileSync(join(dir, "broker-local.log"), "utf8").split("\n").filter((l) => l.includes(" listening on "));
       expect(listening).toHaveLength(1);
     } finally {
       process.kill(first.pid, "SIGCONT");
@@ -806,7 +814,7 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
     process.kill(mainEntryOf(dir).pid, "SIGSTOP");
     const next = await runClient(dir, jobsOf(B, 1), {}, "t2");
     expect(next.results[0].status).toBe(200);
-    const lines = readFileSync(join(dir, "broker-llama.log"), "utf8").split("\n");
+    const lines = readFileSync(join(dir, "broker-local.log"), "utf8").split("\n");
     const waitLine = lines.find((l) => l.includes("waiting for the main slot"));
     const freeLine = lines.find((l) => /main slot free after \d+ busy attempts/.test(l));
     expect(waitLine, "the handover never waited for the slot: the test did not exercise M3").toBeDefined();
@@ -826,7 +834,7 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
     const rs = await Promise.all(late);
     expect(w.stop()).toBeLessThanOrEqual(1);
     expect(rs.flatMap((r) => r.results).filter((x) => x.status !== 200)).toEqual([]);
-    expect(readFileSync(join(dir, "broker-llama.log"), "utf8")).not.toMatch(/failed to start/);
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).not.toMatch(/failed to start/);
   }, 300_000);
 
   it("M5: SIGTERM to the broker while its server is still loading leaves no llama-server behind", async () => {
@@ -841,9 +849,9 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
     // Freeze the server so it can never become ready: the broker is held inside waitReady.
     process.kill(pid, "SIGSTOP");
     await new Promise((r) => setTimeout(r, 500));
-    const log = (): string => readFileSync(join(dir, "broker-llama.log"), "utf8");
+    const log = (): string => readFileSync(join(dir, "broker-local.log"), "utf8");
     expect(log()).not.toMatch(new RegExp(`ready: pid ${pid} `));
-    const broker = readBrokerState(dir, "llama")!.pid;
+    const broker = readBrokerState(dir)!.pid;
     process.kill(broker, "SIGTERM");
     await waitGone(broker, 30_000);
     expect(alive(broker)).toBe(false);
@@ -899,11 +907,11 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
   it("m5: a delivered job is forgotten at once (a second poll gets 404)", async () => {
     const dir = newDir();
     await runClient(dir, jobsOf(A, 1));
-    const st = readBrokerState(dir, "llama")!;
+    const st = readBrokerState(dir)!;
     const base = `http://127.0.0.1:${st.port}`;
     const sub = await fetch(`${base}/v1/jobs`, {
       method: "POST",
-      headers: { [TOKEN_HEADER]: st.token, [CTX_HEADER]: "1024", "content-type": "application/json" },
+      headers: { [TOKEN_HEADER]: st.token, [CTX_HEADER]: "1024", [ENGINE_HEADER]: "llama", "content-type": "application/json" },
       body: JSON.stringify({ model: A, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: 4 }),
     });
     expect(sub.status).toBe(202);
@@ -924,7 +932,7 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
     const dir = join(parent, "with space");
     dirs.push(dir);
     await runClient(dir, jobsOf(A, 1));
-    const st = readBrokerState(dir, "llama")!;
+    const st = readBrokerState(dir)!;
     const orphan = mainEntry(dir);
     process.kill(st.pid, "SIGKILL");
     // Unrecorded: only the --log-file marker can find it now.
@@ -932,7 +940,7 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
     await new Promise((r) => setTimeout(r, 300));
     const r = await runClient(dir, jobsOf(A, 1));
     expect(r.results[0].status).toBe(200);
-    expect(readFileSync(join(dir, "broker-llama.log"), "utf8")).toMatch(new RegExp(`stopped unrecorded main llama-server pid ${orphan.pid} `));
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(new RegExp(`stopped unrecorded main llama-server pid ${orphan.pid} `));
     expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
   }, 300_000);
 
@@ -961,7 +969,7 @@ describe("client against a misbehaving broker (review m4, m1)", () => {
       close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
     };
   };
-  const req = { body: JSON.stringify({ model: "m" }), model: "m", ctx: 0, timeoutMs: 5000 };
+  const req = { engine: "llama" as const, body: JSON.stringify({ model: "m" }), model: "m", ctx: 0, timeoutMs: 5000 };
 
   it("m4: a poll reply other than 200/204/404, or one that is not a job result, is BrokerUnavailableError (endpoint)", async () => {
     for (const [status, body] of [[500, "boom"], [401, "{}"], [200, "not json"], [200, "{}"]] as const) {
@@ -1206,7 +1214,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
       });
     });
 
-  const brokerLog = (cfg: string): string[] => readFileSync(join(cfg, "broker-llama.log"), "utf8").split("\n");
+  const brokerLog = (cfg: string): string[] => readFileSync(join(cfg, "broker-local.log"), "utf8").split("\n");
   /** Every dispatch in the broker log: model, command, dispatch time, and submit time (dispatch time minus its queue time), in ms. */
   const dispatches = (cfg: string): Array<{ model: string; command: string; at: number; submitted: number }> =>
     brokerLog(cfg).flatMap((l) => {
@@ -1216,7 +1224,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
       return [{ model: m[2], command: m[3], at, submitted: at - Number(m[4]) }];
     });
   const brokerHealth = async (cfg: string): Promise<{ queued: number; running: number }> => {
-    const st = readBrokerState(cfg, "llama")!;
+    const st = readBrokerState(cfg)!;
     const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } });
     return (await res.json()) as { queued: number; running: number };
   };
@@ -1342,7 +1350,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     const w = workDir(3);
     const warm = await runCli(cfg, ["llm", "ask", w.files[0], "--instructions", "go on", "-o", join(w.dir, "warm")], w.dir);
     expect(warm.code, warm.out).toBe(0);
-    const before = readBrokerState(cfg, "llama")!.pid;
+    const before = readBrokerState(cfg)!.pid;
     const orphan = readRegistry(cfg, "llama").find((e) => e.role === "main")!;
     // Frozen, so the scan's jobs are surely still running on it when the broker dies.
     process.kill(orphan.pid, "SIGSTOP");
@@ -1356,9 +1364,298 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(scan.code, scan.out).toBe(0);
     expect(scan.out).toMatch(/fetch failed — retrying/);
     expect(reports(join(w.dir, "scan"))).toHaveLength(3);
-    expect(readBrokerState(cfg, "llama")!.pid).not.toBe(before);
+    expect(readBrokerState(cfg)!.pid).not.toBe(before);
     expect(brokerLog(cfg).join("\n")).toMatch(new RegExp(`stopped orphaned main llama-server pid ${orphan.pid}`));
     expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
     expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
+  }, 600_000);
+});
+
+/**
+ * TRDD-ZGSGGHQG: the Locals engine (MLX models) in the same broker. The pure
+ * helpers run everywhere; the real-server tests need macOS on Apple silicon
+ * and the `locals` tool. There, a missing `locals` FAILS the tests (beforeAll
+ * throws): a missing dependency is never a silent skip. The tiny model is
+ * mlx-community/SmolLM-135M-Instruct-4bit (~75 MB, read from the user's
+ * Hugging Face cache, HF_HOME). Every Locals server here is started by the
+ * broker as `<locals python> -I -X llm-ext-server=<marker> -m locals.server`
+ * in a fresh empty cwd, with HOME set to the test's dir, so the user's
+ * ~/.locals is never read or written; the user's own Locals server (no
+ * marker) is never signalled.
+ */
+const LOCALS_MODEL = "mlx-community/SmolLM-135M-Instruct-4bit";
+const ON_APPLE_SILICON = localsPlatformSupported(process.platform, process.arch);
+
+describe("Locals engine helpers (pure)", () => {
+  it("buildLocalsArgv: -I, the marker, the module, loopback, --slots, --max-context only when known", () => {
+    const t = { port: 50123, model: LOCALS_MODEL, ctx: 2048 };
+    expect(buildLocalsArgv("/v/bin/python", t, "/c/locals-server-main.log")).toEqual([
+      "/v/bin/python", "-I", "-X", "llm-ext-server=/c/locals-server-main.log", "-m", "locals.server",
+      "--host", "127.0.0.1", "--port", "50123", "--model", LOCALS_MODEL, "--slots", String(LOCALS_MAIN_SLOTS), "--max-context", "2048",
+    ]);
+    expect(buildLocalsArgv("/v/bin/python", { ...t, ctx: 0 }, "/m")).not.toContain("--max-context");
+  });
+
+  it("isLocalsServerArgv: only a Python running locals.server WITH llm-ext's marker", () => {
+    const ours = buildLocalsArgv("/v/bin/python", { port: 1, model: LOCALS_MODEL, ctx: 0 }, "/c/m.log");
+    expect(isLocalsServerArgv(ours)).toBe(true);
+    // The user's own server (e.g. port 8321) carries no marker: never ours.
+    expect(isLocalsServerArgv(["/v/bin/python", "-m", "locals.server", "--port", "8321", "--model", "x/y"])).toBe(false);
+    // Another program that only carries the tokens as arguments.
+    expect(isLocalsServerArgv(["/usr/bin/node", "-e", "", "-X", "llm-ext-server=/c/m.log", "-m", "locals.server"])).toBe(false);
+    // Another module under the marker.
+    expect(isLocalsServerArgv(["/v/bin/python", "-X", "llm-ext-server=/c/m.log", "-m", "http.server"])).toBe(false);
+  });
+
+  it("hasLocalsMarker: exact marker on the unsplit line, a path with spaces included, never a prefix", () => {
+    const m = "/x/My Config/locals-server-main.log";
+    const line = `/v/bin/python -I -X llm-ext-server=${m} -m locals.server --port 1`;
+    expect(hasLocalsMarker(line, m)).toBe(true);
+    expect(hasLocalsMarker(line, "/x/My Config/locals-server-main")).toBe(false);
+    expect(hasLocalsMarker(`/v/bin/python -m locals.server --port 8321`, m)).toBe(false);
+  });
+
+  it("parseLocalsModel: a Hugging Face repo id, never a GGUF file or a path", () => {
+    expect(parseLocalsModel(LOCALS_MODEL)).toEqual({ ok: true });
+    expect(parseLocalsModel("ggml-org/tiny-llamas/stories15M-q4_0.gguf")).toHaveProperty("error");
+    expect(parseLocalsModel("org/model.gguf")).toHaveProperty("error");
+    expect(parseLocalsModel("/abs/path/model")).toHaveProperty("error");
+  });
+
+  it("localsOutgoingModel: the -thinking id only when thinking is asked AND listed (recorded LFM3 and SmolLM /v1/models)", () => {
+    const lfm = ["locals/lfm3-1.7b-mlx-4bit", "locals/lfm3-1.7b-mlx-4bit-thinking"];
+    expect(localsOutgoingModel(lfm, { chat_template_kwargs: { enable_thinking: true } })).toBe("locals/lfm3-1.7b-mlx-4bit-thinking");
+    expect(localsOutgoingModel(lfm, { chat_template_kwargs: { enable_thinking: false } })).toBe("locals/lfm3-1.7b-mlx-4bit");
+    expect(localsOutgoingModel(lfm, {})).toBe("locals/lfm3-1.7b-mlx-4bit");
+    expect(localsOutgoingModel(["locals/smollm-135m-instruct"], { chat_template_kwargs: { enable_thinking: true } })).toBe("locals/smollm-135m-instruct");
+    expect(localsOutgoingModel([], {})).toBeNull();
+  });
+
+  it("localsPlatformSupported: macOS on Apple silicon only", () => {
+    expect(localsPlatformSupported("darwin", "arm64")).toBe(true);
+    expect(localsPlatformSupported("darwin", "x64")).toBe(false);
+    expect(localsPlatformSupported("linux", "arm64")).toBe(false);
+    expect(localsPlatformSupported("win32", "arm64")).toBe(false);
+  });
+});
+
+describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS on Apple silicon)", () => {
+  let python: string;
+  beforeAll(async () => {
+    // Missing `locals` on a Mac fails here, by design (never a skip).
+    python = await localsPython();
+  });
+
+  /** The client env of a Locals test: HOME is the test's dir, so Locals never sees the user's ~/.locals. */
+  const localsEnv = (dir: string, extra: Record<string, string> = {}): Record<string, string> => ({ HOME: dir, ...extra });
+  const localsJobs = (n: number, extra: object = {}): object[] => jobsOf(LOCALS_MODEL, n, { engine: "locals", ...extra });
+  const localsCwds = (): string[] => readdirSync(osTmpdir()).filter((f) => f.startsWith("llm-ext-locals-"));
+
+  /** The most requests Locals itself held at once (its /stats.active lists running AND queued ones), sampled every 100 ms. */
+  const watchLocalsActive = (dir: string): { stop: () => number } => {
+    let max = 0;
+    let on = true;
+    void (async () => {
+      while (on) {
+        const main = readRegistry(dir, "locals").find((e) => e.role === "main");
+        if (main) {
+          try {
+            const res = await fetch(`http://127.0.0.1:${main.port}/stats`);
+            const s = (await res.json()) as { active?: unknown[] };
+            max = Math.max(max, s.active?.length ?? 0);
+          } catch {
+            /* loading or stopped */
+          }
+        }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+    })();
+    return {
+      stop: () => {
+        on = false;
+        return max;
+      },
+    };
+  };
+
+  it("start, reuse and readiness: one load for two clients, every reply 200, the main is an llm-ext Locals server in an empty cwd", async () => {
+    const dir = newDir();
+    const env = localsEnv(dir);
+    const first = await runClient(dir, localsJobs(2), env);
+    const second = await runClient(dir, localsJobs(3), env);
+    expect([...first.results, ...second.results].filter((r) => r.status !== 200)).toEqual([]);
+    expect(second.pid).toBe(first.pid);
+    const spawns = spawnLines(dir);
+    expect(spawns).toHaveLength(1);
+    expect(spawns[0]).toContain("engine locals");
+    const main = readRegistry(dir, "locals").find((e) => e.role === "main")!;
+    expect(main.argv[0]).toBe(python);
+    expect(isLocalsServerArgv(main.argv)).toBe(true);
+    expect(main.argv).toContain(`llm-ext-server=${roleLogFile(dir, "main", "locals")}`);
+    const row = (await processSnapshot()).find((r) => r.pid === main.pid)!;
+    expect(hasLocalsMarker(row.command, roleLogFile(dir, "main", "locals"))).toBe(true);
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(/main Locals server ready: .* slots 4; ids locals\/smollm-135m-instruct/);
+    expect(readRegistry(dir, "llama")).toEqual([]);
+  }, 300_000);
+
+  it("end to end through real llm-ext commands: llm ask and scan folder on a `api: locals-local` + `server: managed` profile run through one broker and one Locals load", async () => {
+    const cli = await cliBundle();
+    const cfg = newDir();
+    writeFileSync(
+      join(cfg, "settings.yaml"),
+      [
+        "active: smol",
+        "profiles:",
+        "  smol:",
+        "    profile-type: local",
+        "    mode: local",
+        "    api: locals-local",
+        // Binds nothing under the broker; required by the preset (its natural default would collide with a user's Locals port).
+        "    url: http://127.0.0.1:18433",
+        `    model: ${LOCALS_MODEL}`,
+        "    context_window: 2048",
+        "    server: managed",
+        "",
+      ].join("\n"),
+    );
+    const work = newDir();
+    const src = join(work, "src");
+    mkdirSync(src);
+    const files = [1, 2, 3].map((i) => join(src, `f${i}.txt`));
+    files.forEach((f, i) => writeFileSync(f, `Once upon a time there was cat number ${i + 1}.\n`));
+    const run = (args: string[]): Promise<{ code: number | null; out: string }> =>
+      new Promise((resolve) => {
+        const child = spawn(process.execPath, [cli, ...args], {
+          cwd: work,
+          env: { ...process.env, HOME: cfg, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let out = "";
+        child.stdout.on("data", (c: Buffer) => (out += c));
+        child.stderr.on("data", (c: Buffer) => (out += c));
+        const kill = setTimeout(() => child.kill("SIGKILL"), 240_000);
+        child.on("exit", (code) => {
+          clearTimeout(kill);
+          resolve({ code, out });
+        });
+      });
+    const mains = watchMains(cfg);
+    const [ask, scan] = await Promise.all([
+      run(["llm", "ask", files[0], "--instructions", "continue the story", "-o", join(work, "ask")]),
+      run(["scan", "folder", src, "--instructions", "continue the story", "--answer_mode", "0", "-o", join(work, "scan")]),
+    ]);
+    expect(mains.stop()).toBe(1);
+    expect(ask.code, ask.out).toBe(0);
+    expect(scan.code, scan.out).toBe(0);
+    const md = (d: string): string[] => (existsSync(d) ? readdirSync(d).filter((f) => f.endsWith(".md")) : []);
+    expect(md(join(work, "ask"))).toHaveLength(1);
+    expect(md(join(work, "scan"))).toHaveLength(3);
+    const log = readFileSync(join(cfg, "broker-local.log"), "utf8").split("\n");
+    const d = log.filter((l) => / dispatch job \S+ model '([^']+)' command /.test(l));
+    expect(d.length).toBeGreaterThanOrEqual(4);
+    expect(new Set(d.map((l) => / command (\S+)/.exec(l)?.[1])).size).toBe(2);
+    expect(spawnLines(cfg)).toHaveLength(1);
+    expect(spawnLines(cfg)[0]).toContain("engine locals");
+    const st = readBrokerState(cfg)!;
+    const health = (await (await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } })).json()) as object;
+    expect(health).toMatchObject({ queued: 0, running: 0 });
+  }, 600_000);
+
+  it("memory floor: forced above 100% (proves the gate, not real pressure), Locals never holds more than one request and every job completes; at the default floor it holds several", async () => {
+    // Control: at the default floor (10%, the machine has far more free) the
+    // sampler DOES see several requests at once, so the forced run's 1 is the
+    // gate's doing, not a sampler that cannot see overlap.
+    const ctl = newDir();
+    const cw = watchLocalsActive(ctl);
+    const c = await runClient(ctl, localsJobs(8, { maxTokens: 200 }), localsEnv(ctl));
+    expect(c.results.filter((r) => r.status !== 200)).toEqual([]);
+    expect(cw.stop()).toBeGreaterThanOrEqual(2);
+
+    const dir = newDir();
+    const w = watchLocalsActive(dir);
+    const r = await runClient(dir, localsJobs(6, { maxTokens: 64 }), localsEnv(dir, { LLM_EXT_BROKER_MEMORY_FLOOR: "101" }));
+    expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
+    expect(w.stop()).toBe(1);
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(/waiting for memory: \d+% free < floor 101%/);
+  }, 600_000);
+
+  it("kill safety: a real Locals server without llm-ext's marker (the user's kind) is never signalled; a non-Python process with the marker survives the sweep", async () => {
+    const dir = newDir();
+    const port = 50000 + Math.floor(Math.random() * 9000);
+    const cwd = mkdtempSync(join(osTmpdir(), "llm-ext-locals-test-"));
+    // Started exactly as the broker does, minus the marker (the user's server has none).
+    const user = spawn(python, ["-I", "-m", "locals.server", "--host", "127.0.0.1", "--port", String(port), "--model", LOCALS_MODEL, "--slots", "1"], {
+      cwd,
+      env: { PATH: process.env.PATH ?? "", HOME: dir, HF_HOME: process.env.HF_HOME ?? join(homedir(), ".cache", "huggingface") },
+      detached: true,
+      stdio: "ignore",
+    });
+    const fake = foreignProcess(["-X", `llm-ext-server=${roleLogFile(dir, "main", "locals")}`, "-m", "locals.server"]);
+    try {
+      await new Promise((r) => setTimeout(r, 1000));
+      const row = (await processSnapshot()).find((p) => p.pid === user.pid)!;
+      expect(row.argv).toContain("locals.server");
+      expect(isLocalsServerArgv(row.argv)).toBe(false);
+      await expect(stopProcessGroup(user.pid!, 100)).rejects.toThrow(/leader is not a llama-se/);
+      await expect(stopProcessGroup(fake, 100)).rejects.toThrow(/leader is not a llama-se/);
+      await expect(
+        claimAndSpawn({ dir, engine: "locals", role: "main", ownerPid: process.pid, spawn: () => Promise.reject(new Error("no spawn in this test")) }),
+      ).rejects.toThrow(/no spawn in this test/);
+      // Even recorded under its own argv, the unmarked server is refused (an error, never a signal).
+      await expect(stopOwnServer(dir, "locals", { pid: user.pid!, pgid: user.pid!, argv: row.argv }, () => undefined)).rejects.toThrow(/leader is not a llama-se/);
+      expect(alive(user.pid!)).toBe(true);
+      expect(alive(fake)).toBe(true);
+    } finally {
+      killQuietly(fake);
+      // Our own test process, by its pid (never by pattern).
+      try {
+        process.kill(-user.pid!, "SIGKILL");
+      } catch {
+        /* gone */
+      }
+      for (let i = 0; i < 50 && alive(user.pid!); i++) await new Promise((r) => setTimeout(r, 100));
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }, 120_000);
+
+  it("cross-engine orphan: after a broker SIGKILL with a Locals main up, a llama job stops the orphaned Locals main first, never two mains", async () => {
+    const dir = newDir();
+    const before = new Set(localsCwds());
+    await runClient(dir, localsJobs(1), localsEnv(dir));
+    const st = readBrokerState(dir)!;
+    const orphan = readRegistry(dir, "locals").find((e) => e.role === "main")!;
+    process.kill(st.pid, "SIGKILL");
+    await new Promise((r) => setTimeout(r, 300));
+    const w = watchMains(dir);
+    const r = await runClient(dir, jobsOf(A, 1), localsEnv(dir));
+    const max = w.stop();
+    expect(r.results[0].status).toBe(200);
+    expect(r.pid).not.toBe(st.pid);
+    expect((await processSnapshot()).filter((p) => p.pgid === orphan.pgid)).toEqual([]);
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(new RegExp(`stopped orphaned main Locals server pid ${orphan.pid}`));
+    expect(max).toBe(1);
+    // A SIGKILLed broker cannot remove its Locals server's empty cwd (disclosed); this test removes the one it caused.
+    for (const d of localsCwds().filter((x) => !before.has(x))) rmdirSync(join(osTmpdir(), d));
+  }, 300_000);
+
+  it("one model at a time across engines: llama and MLX jobs queued together never run two main servers at once, all succeed, and the Locals cwd is removed when it stops", async () => {
+    const dir = newDir();
+    const before = new Set(localsCwds());
+    const w = watchMains(dir);
+    // MLX first, then GGUF while MLX still has work, then MLX again: two swaps across engines.
+    const r = await runClient(
+      dir,
+      [...localsJobs(4, { maxTokens: 32 }), ...jobsOf(A, 3, { delayMs: 100 }), ...localsJobs(2, { delayMs: 200 })],
+      localsEnv(dir, { LLM_EXT_BROKER_BATCH: "2", LLM_EXT_BROKER_STARVE_MS: "600000" }),
+    );
+    const engines = spawnLines(dir).map((l) => /engine (\w+)/.exec(l)?.[1]);
+    // Stop the broker before counting cwds: the last Locals main is stopped (and its cwd removed) on exit.
+    await cleanup(dirs.splice(dirs.indexOf(dir), 1)[0]);
+    const max = w.stop();
+    expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
+    expect(engines).toContain("locals");
+    expect(engines).toContain("llama");
+    expect(max).toBe(1);
+    expect(localsCwds().filter((d) => !before.has(d))).toEqual([]);
   }, 600_000);
 });

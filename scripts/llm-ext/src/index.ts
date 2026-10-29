@@ -1121,7 +1121,7 @@ async function getRateLimitConfig(): Promise<RateLimitConfig> {
   // only the submission window W = 2 x B, so the broker has a full batch of
   // this command's files to group. rps = W too: rps 1 would spread W submits
   // over W seconds. Checked before the generic local rule below.
-  if (activeResolved?.server === "managed") {
+  if (activeResolved !== null && activeResolved.server !== null) {
     const w = 2 * timingsFromEnv(process.env).batch;
     return { rps: w, maxInFlight: w };
   }
@@ -1805,13 +1805,15 @@ const providerDeps: CompletionDeps = {
   getActiveProtocol: () => activeResolved?.protocol ?? "openai_api",
   // TRDD-1OOAH3LD broker: read through activeResolved on EVERY call
   // (reload-safe, like routeForModel above). Only the profile's own primary
-  // group is managed (the validator requires its api to be llamacpp-local);
-  // a providers[] route is sent directly, as before.
+  // (reload-safe, like routeForModel above). Only the profile's own primary
+  // group is managed (the validator requires its api to be llamacpp-local or
+  // locals-local; r.server names the engine); a providers[] route is sent
+  // directly, as before.
   localBroker: async ({ route }) => {
     const r = activeResolved;
-    if (!r || r.server !== "managed" || (route && !route.primary)) return null;
-    const ep = await ensureBroker({ engine: "llama", dir: getConfigDir(), version: brokerClientVersion() });
-    return { ...ep, ctx: r.contextWindow > 0 ? r.contextWindow : 0, queueTimeoutMs: brokerQueueTimeoutMs() };
+    if (!r || r.server === null || (route && !route.primary)) return null;
+    const ep = await ensureBroker({ dir: getConfigDir(), version: brokerClientVersion() });
+    return { ...ep, engine: r.server, ctx: r.contextWindow > 0 ? r.contextWindow : 0, queueTimeoutMs: brokerQueueTimeoutMs() };
   },
 };
 

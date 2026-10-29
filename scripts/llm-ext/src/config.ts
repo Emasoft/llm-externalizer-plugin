@@ -326,7 +326,7 @@ export interface Profile {
    */
   request_options?: RequestOptionsConfig;
   /**
-   * TRDD-1OOAH3LD: `managed` = requests to the profile's own llamacpp-local
+   * TRDD-1OOAH3LD, TRDD-ZGSGGHQG: `managed` = requests to the profile's own llamacpp-local or locals-local
    * group go through the per-engine broker, which starts llama-server on first
    * use and swaps models in it. Absent = llm-ext never starts a server. Local profiles only.
    */
@@ -454,8 +454,12 @@ export interface ResolvedProfile {
   contextWindow: number;
   /** TRDD-1OOAH3LD: the profile request_options block, null when the profile sets none. */
   requestOptions: RequestOptionsConfig | null;
-  /** TRDD-1OOAH3LD: "managed" when the profile opts in to the per-engine broker, else null. */
-  server: "managed" | null;
+  /**
+   * The broker engine of a managed profile (server: managed): "llama" for
+   * api llamacpp-local (TRDD-1OOAH3LD), "locals" for locals-local
+   * (TRDD-ZGSGGHQG); null when the profile starts no server.
+   */
+  server: "llama" | "locals" | null;
   appName: string;
   httpReferer: string;
   /** Resolved high-quality-scan model config (TRDD-DBUSM55E; defaults filled). */
@@ -662,6 +666,10 @@ export interface ValidationResult {
 // Each preset bundles protocol + default connection settings.
 // Names use -local / -remote suffix to prevent mode/preset mismatches.
 
+/** TRDD-ZGSGGHQG: Locals (MLX) runs on macOS on Apple silicon only; the first darwin check in llm-ext. */
+export function localsPlatformSupported(platform: string = process.platform, arch: string = process.arch): boolean {
+  return platform === "darwin" && arch === "arm64";
+}
 export const API_PRESETS: Record<string, ApiPreset> = {
   // ── Local presets ─────────────────────────────────────────────────
   "lmstudio-local": {
@@ -713,6 +721,21 @@ export const API_PRESETS: Record<string, ApiPreset> = {
     defaultUrl: "",
     defaultAuthEnv: "$LM_API_TOKEN",
     defaultTimeout: 300,
+
+    defaultAppName: "",
+    defaultHttpReferer: "",
+    defaultContextWindow: 0,
+    isLocal: true,
+  },
+  // TRDD-ZGSGGHQG: the Locals server (MLX models, macOS on Apple silicon only).
+  // No default url: Locals' own default port (8321) is the user's own server,
+  // and a managed profile's url binds nothing (the broker picks the port).
+  // 1800 s: a Locals request held for memory or a slot produces no bytes.
+  "locals-local": {
+    protocol: "openai_api",
+    defaultUrl: "",
+    defaultAuthEnv: "",
+    defaultTimeout: 1800,
 
     defaultAppName: "",
     defaultHttpReferer: "",
@@ -2653,9 +2676,10 @@ export function validateProfile(
     }
   }
 
-  // generic-local requires explicit url (no default)
-  if (profile.api === "generic-local" && !profile.url) {
-    errors.push("Api preset 'generic-local' requires explicit 'url'");
+  // generic-local and locals-local require an explicit url (no default; for
+  // locals-local, Locals' own default port 8321 is the user's own server).
+  if ((profile.api === "generic-local" || profile.api === "locals-local") && !profile.url) {
+    errors.push(`Api preset '${profile.api}' requires explicit 'url'`);
   }
 
   // ── Numeric field validation ─────────────────────────────────────
@@ -2856,8 +2880,8 @@ export function validateProfile(
           errors.push(`Profile '${name}': ${at}.api_key must be a string (an env-var ref like '$BAI_API_KEY', or the key itself)`);
         }
         const bUrl = typeof e.url === "string" ? e.url : undefined;
-        if (e.api === "generic-local" && !bUrl) {
-          errors.push(`Profile '${name}': ${at} uses 'generic-local', which requires an explicit 'url'`);
+        if ((e.api === "generic-local" || e.api === "locals-local") && !bUrl) {
+          errors.push(`Profile '${name}': ${at} uses '${String(e.api)}', which requires an explicit 'url'`);
         }
         // A binding carries its OWN account. An unresolvable key here is fatal
         // for the same reason as the profile-level one, and MORE silent: the
@@ -3044,10 +3068,24 @@ export function validateProfile(
   if (rawServer !== undefined) {
     if (rawServer !== "managed") {
       errors.push(`Profile '${name}': server must be 'managed' (the only accepted value); remove the key to start no server`);
-    } else if (profile.api !== "llamacpp-local") {
+    } else if (profile.api !== "llamacpp-local" && profile.api !== "locals-local") {
       errors.push(
-        `Profile '${name}': server: managed needs the profile's own api to be llamacpp-local (only the profile's primary group is managed), got ${typeof profile.api === "string" ? `'${profile.api}'` : "none"}`,
+        `Profile '${name}': server: managed needs the profile's own api to be llamacpp-local or locals-local (only the profile's primary group is managed), got ${typeof profile.api === "string" ? `'${profile.api}'` : "none"}`,
       );
+    }
+  }
+  // ── locals-local (TRDD-ZGSGGHQG L1) ───────────────────────────────
+  // Locals runs MLX models on Apple silicon only, so the profile is refused
+  // elsewhere instead of failing at its first request. The MLX gate refuses
+  // the inputs known to be wrong: a GGUF file (llama.cpp's format) and the
+  // `mlx/` prefix, which selects Locals' stock mlx-lm engine, the one with no
+  // memory guard (Locals docs). Locals itself enforces the MLX format.
+  if (profile.api === "locals-local") {
+    if (!localsPlatformSupported()) errors.push(`Profile '${name}': api locals-local needs macOS on Apple silicon (Locals runs MLX models only there)`);
+    for (const m of [profile.model, profile.second_model, profile.third_model]) {
+      if (typeof m !== "string" || m === "") continue;
+      if (/\.gguf$/i.test(m)) errors.push(`Profile '${name}': '${m}' is a GGUF model; api locals-local runs MLX models (use llamacpp-local for GGUF)`);
+      else if (m.startsWith("mlx/")) errors.push(`Profile '${name}': '${m}' selects Locals' stock mlx engine, which has no memory guard; use the plain model id`);
     }
   }
   // ── ensemble (E-D2, E-E1..E-E6 — D5, TRDD-90DM5YHO) ───────────────
@@ -3899,7 +3937,7 @@ export function resolveProfile(
     timeout: profile.timeout ?? preset.defaultTimeout,
     contextWindow: profile.context_window ?? preset.defaultContextWindow,
     requestOptions: coerceRequestOptions(profile.request_options),
-    server: profile.server === "managed" ? "managed" : null,
+    server: profile.server !== "managed" ? null : profile.api === "locals-local" ? "locals" : "llama",
     appName: profile.app_name ?? preset.defaultAppName,
     httpReferer: profile.http_referer ?? preset.defaultHttpReferer,
     // High-quality-scan model (TRDD-DBUSM55E): always resolved (defaults filled),
