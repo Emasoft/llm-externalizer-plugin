@@ -11,7 +11,7 @@
  */
 
 import { localsOutgoingModel } from "../local-locals-server.js";
-import { PHASE_A_CTX, type Phase, type PhaseContext } from "./runner.js";
+import type { Phase, PhaseContext } from "./runner.js";
 import type { TrialRecord } from "./state.js";
 
 // ── Replies and scorers (pure) ──────────────────────────────────────────
@@ -227,18 +227,22 @@ const MEASURE_TIMEOUT_MS = 600_000;
 /** Attempts per required conclusive trial before the step is given up as inconclusive. */
 const EXTRA_ATTEMPTS = 2;
 
-type Thinking = "on" | "off";
+export type Thinking = "on" | "off";
 
-interface Sender {
+export interface Sender {
   chat: (messages: Array<{ role: string; content: string }>, o: { thinking: Thinking; maxTokens: number; timeoutMs: number; responseFormat?: unknown }) => Promise<Reply>;
 }
 
-function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
-  const s = ctx.server;
+/**
+ * The calibration request sender. It reads `ctx.server` on every call, so a
+ * restarted cal server (Phase B reloads it at W) is used at once.
+ */
+export function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
   return {
     chat: async (messages, o) => {
       // Spec section 2 (review m5): every calibration request first gives way to the broker's work for other models.
       await ctx.waitForTurn();
+      const s = ctx.server;
       const body: Record<string, unknown> = {
         messages,
         max_tokens: o.maxTokens,
@@ -246,6 +250,8 @@ function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
         chat_template_kwargs: { enable_thinking: o.thinking === "on" },
       };
       if (o.responseFormat !== undefined) body.response_format = o.responseFormat;
+      // Spec 4.3: the fact questions reuse the cached document prefix (llama-server; Locals keeps its own prefix cache).
+      if (s.engine === "llama") body.cache_prompt = true;
       // Locals selects the thinking variant by id (local-locals-server.ts); llama-server takes any model field.
       body.model = s.engine === "locals" ? (localsOutgoingModel(localsIds, body) ?? s.model) : s.model;
       const t0 = Date.now();
@@ -348,12 +354,13 @@ export const phaseA: Phase = {
       };
     });
 
-    // Phase A runs at PHASE_A_CTX (spec 4.2, N8): an 8k speed prompt plus its output must fit. A server that got
-    // less (llama-server caps -c at the trained context) fails here with the reason, not later in an HTTP 400.
+    // Phase A runs at the harness context (spec 4.2, N8: 16384, so an 8k speed prompt plus its output fits). A server
+    // that got less (llama-server caps -c at the trained context) fails here with the reason, not later in an HTTP 400.
     const nCtx = Number(caps.n_ctx);
-    if (nCtx > 0 && nCtx < PHASE_A_CTX) {
-      ctx.log(`Phase A FAIL: the server's context is ${nCtx} tokens; Phase A needs ${PHASE_A_CTX}`);
-      return { passed: false, step: "phase-a/context", message: `the model's context is ${nCtx} tokens (trained ${String(caps.n_ctx_train)}); calibration needs at least ${PHASE_A_CTX}` };
+    const needCtx = ctx.harness.phaseACtx;
+    if (nCtx > 0 && nCtx < needCtx) {
+      ctx.log(`Phase A FAIL: the server's context is ${nCtx} tokens; Phase A needs ${needCtx}`);
+      return { passed: false, step: "phase-a/context", message: `the model's context is ${nCtx} tokens (trained ${String(caps.n_ctx_train)}); calibration needs at least ${needCtx}` };
     }
 
     // chars_per_token from the three probe documents.
@@ -394,7 +401,8 @@ export const phaseA: Phase = {
         return { tps: r.promptPerSecond ?? n / Math.max(r.wallMs / 1000, 0.001), tokens: n };
       };
       const p2 = await prefill(2048, 202);
-      const p8 = await prefill(8192, 808);
+// A reduced harness (spec 9) runs Phase A below 16384: the second prefill then fits its context.
+      const p8 = await prefill(Math.min(8192, ctx.harness.phaseACtx - 1024), 808);
       return { decode_tps: decodeTps, decode_tokens: dec.completionTokens, prefill_tps_2k: p2.tps, prompt_tokens_2k: p2.tokens, prefill_tps_8k: p8.tps, prompt_tokens_8k: p8.tokens };
     });
     const prefillTps = Math.min(Number(speed.prefill_tps_2k), Number(speed.prefill_tps_8k));

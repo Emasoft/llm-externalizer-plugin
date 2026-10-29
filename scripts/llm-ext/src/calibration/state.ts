@@ -238,6 +238,10 @@ export interface Progress {
   phases: Record<string, "passed" | "failed">;
   /** Review M2: calibration runs of this model that ended in an exception (reset when a record is written). */
   crashes?: number;
+  /** Spec section 2: how often each step was paused after two inconclusive runs in a row (the second pause fails the model). */
+  paused?: Record<string, number>;
+  /** Spec section 2: cal server crashes counted per step (the third fails the model). */
+  stepCrashes?: Record<string, number>;
 }
 
 export const progressPath = (dir: string, engine: BrokerEngine, model: string): string => join(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
@@ -256,7 +260,17 @@ export function loadProgress(dir: string, engine: BrokerEngine, model: string, f
   }
   const old = raw.fingerprint ?? null;
   if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint };
-  return { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: fingerprint ?? old, trials: raw.trials, phases: raw.phases, crashes: typeof raw.crashes === "number" ? raw.crashes : 0 };
+  const counts = (v: unknown): Record<string, number> => (typeof v === "object" && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) : {});
+  return {
+    harness_version: HARNESS_VERSION,
+    fixture_version: FIXTURE_VERSION,
+    fingerprint: fingerprint ?? old,
+    trials: raw.trials,
+    phases: raw.phases,
+    crashes: typeof raw.crashes === "number" ? raw.crashes : 0,
+    paused: counts(raw.paused),
+    stepCrashes: counts(raw.stepCrashes),
+  };
 }
 
 export function saveProgress(dir: string, engine: BrokerEngine, model: string, p: Progress): void {

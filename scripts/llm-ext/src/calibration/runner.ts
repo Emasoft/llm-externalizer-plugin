@@ -34,6 +34,42 @@ export type PhaseName = (typeof METHOD_PHASES)[number];
 /** Phase A loads the cal server with one slot at this context (round-2 review N8: an 8k speed prompt plus its output fits). */
 export const PHASE_A_CTX = 16384;
 
+/**
+ * The calibration harness: the sizes the method runs at. Production uses
+ * PRODUCTION_HARNESS; a reduced harness (spec 9 "Real" and 10, the dry run)
+ * comes from LLM_EXT_CALIBRATION_HARNESS, so a run can be checked in minutes.
+ */
+export interface Harness {
+  /** Phase A context (spec 4.2). */
+  phaseACtx: number;
+  /** The largest calibration window W (spec 4.1: 32768). */
+  windowCap: number;
+  /** Phase B grid steps in tokens; null = the spec 4.3 grid (2048, 4096, 8192 and 0.40 x W). */
+  steps: number[] | null;
+  /** Trials per counter before the sequential extension (spec 4.3: 5). */
+  trials: number;
+}
+
+export const PRODUCTION_HARNESS: Harness = { phaseACtx: PHASE_A_CTX, windowCap: 32768, steps: null, trials: 5 };
+
+/** The harness of this run: LLM_EXT_CALIBRATION_HARNESS (JSON, partial) over the production one. A malformed value is an error, never ignored. */
+export function harnessFromEnv(env: NodeJS.ProcessEnv): Harness {
+  const raw = env.LLM_EXT_CALIBRATION_HARNESS;
+  if (raw === undefined || raw === "") return PRODUCTION_HARNESS;
+  let v: Partial<Harness>;
+  try {
+    v = JSON.parse(raw) as Partial<Harness>;
+  } catch {
+    throw new Error(`LLM_EXT_CALIBRATION_HARNESS is not JSON: ${raw}`);
+  }
+  const h = { ...PRODUCTION_HARNESS, ...v };
+  const posInt = (n: unknown): boolean => Number.isInteger(n) && (n as number) > 0;
+  if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || (h.steps !== null && !(Array.isArray(h.steps) && h.steps.length > 0 && h.steps.every(posInt)))) {
+    throw new Error(`LLM_EXT_CALIBRATION_HARNESS has an invalid field: ${raw}`);
+  }
+  return h;
+}
+
 export interface CalServer {
   engine: BrokerEngine;
   model: string;
@@ -42,6 +78,11 @@ export interface CalServer {
   entry: RegistryEntry;
   /** Locals: the ids its /v1/models lists. */
   baseUrl: string;
+  /** The context per slot and the slot count it was started with. */
+  ctx: number;
+  slots: number;
+  /** False once the server process exited (a crash, or a stop). */
+  alive: () => boolean;
   stop: (why: string) => Promise<void>;
 }
 
@@ -49,7 +90,9 @@ export interface CalServer {
 export interface PhaseContext {
   dir: string;
   item: QueueItem;
+  /** The current cal server; `restart` replaces it. */
   server: CalServer;
+  harness: Harness;
   /** What the cal server loaded: the record is written with exactly this (spec section 3). */
   identity: LoadedIdentity;
   /** How long the cal server took to load and become ready (reported by Phase A). */
@@ -57,15 +100,26 @@ export interface PhaseContext {
   progress: Progress;
   /** Append a finished trial and save progress atomically. */
   record: (t: Progress["trials"][number]) => void;
+  /** Save progress after a phase changed it in place (dropped trials, a step pause). */
+  save: () => void;
   /** Wait while the broker serves another model (spec section 2, review m5); throws after 5 minutes of pausing. */
   waitForTurn: () => Promise<void>;
+  /** Stop the cal server (spec 4.1: free memory is measured with the model unloaded). */
+  stopServer: (why: string) => Promise<void>;
+  /** Start the cal server again with `ctx` per slot and `slots` slots (spec 2: the runner restarts it freely); updates `server` and `loadMs`. */
+  restart: (ctx: number, slots: number) => Promise<void>;
+  /** The last lines of the cal server log (for a crash report). */
+  logTail: () => string;
   log: (msg: string) => void;
 }
 
 export interface Phase {
   name: PhaseName;
-  /** "passed", or a failure that ends this model's calibration with `status: calibration-failed`. */
-  run: (ctx: PhaseContext) => Promise<{ passed: true } | { passed: false; step: string; message: string }>;
+  /**
+   * "passed"; a failure that ends this model with `status: calibration-failed`; or a paused step
+   * (spec section 2: two inconclusive runs in a row), which leaves the model queued for the runner's next pass.
+   */
+  run: (ctx: PhaseContext) => Promise<{ passed: true } | { passed: false; step: string; message: string; paused?: boolean }>;
 }
 
 export const calibratorLogPath = (dir: string): string => join(dir, "calibrator-local.log");
@@ -153,14 +207,15 @@ export async function startCalServer(dir: string, engine: BrokerEngine, model: s
     log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
     // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
     if (cwd !== undefined) {
-  onClaimed?.({ stop });
-  try {
+      try {
         rmdirSync(cwd);
       } catch (e) {
         log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
       }
     }
   };
+  // Review M3: from here on the caller can stop the server, while it is still loading (a load can take minutes).
+  onClaimed?.({ stop });
   try {
     if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
     else await waitLocalsReady(target, entry.pid, () => exited, logFile);
@@ -168,7 +223,7 @@ export async function startCalServer(dir: string, engine: BrokerEngine, model: s
     await stop("it did not become ready");
     throw err;
   }
-  return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, stop };
+  return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, ctx, slots, alive: () => !exited, stop };
 }
 
 export interface RunnerOptions {
@@ -177,6 +232,8 @@ export interface RunnerOptions {
   log: (msg: string) => void;
   /** The implemented phases, in order; a model is recorded only when METHOD_PHASES all passed. */
   phases: readonly Phase[];
+  /** Default PRODUCTION_HARNESS. */
+  harness?: Harness;
 }
 
 /**
@@ -287,6 +344,7 @@ export async function waitForTurn(dir: string, engine: BrokerEngine, model: stri
 
 async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: { stop: (why: string) => Promise<void> } | null) => void): Promise<"done" | "crashed" | "paused"> {
   const name = `${item.engine} '${item.model}'`;
+  const harness = o.harness ?? PRODUCTION_HARNESS;
   if (!(await acquireModelLock(o.dir, item.engine, item.model))) {
     o.log(`${name}: another runner holds its lock; skipped`);
     return "done";
@@ -324,7 +382,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         };
   try {
     await waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`));
-    server = await startCalServer(o.dir, item.engine, item.model, PHASE_A_CTX, 1, o.log, (s) => setCurrent(s));
+    server = await startCalServer(o.dir, item.engine, item.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s));
     const loadMs = Date.now() - startedAt;
     setCurrent(server);
     identity = await loadedIdentity(item.engine, server.baseUrl, server.apiKey, item.model, o.dir);
@@ -349,6 +407,8 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       progress.trials = [];
       progress.phases = {};
       progress.crashes = 0;
+      progress.paused = {};
+      progress.stepCrashes = {};
     }
     if (engineCheck) {
       // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
@@ -360,6 +420,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       dir: o.dir,
       item,
       server,
+      harness,
       identity,
       loadMs,
       progress,
@@ -367,7 +428,29 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         progress.trials.push(t);
         saveProgress(o.dir, item.engine, item.model, progress);
       },
+      save: () => saveProgress(o.dir, item.engine, item.model, progress),
       waitForTurn: () => waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`)),
+      stopServer: async (why) => {
+        const s = server;
+        server = null;
+        setCurrent(null);
+        if (s) await s.stop(why);
+      },
+      restart: async (c, slots) => {
+        await ctx.stopServer(`restart at ctx ${c}, ${slots} slot(s)`);
+        const t0 = Date.now();
+        server = await startCalServer(o.dir, item.engine, item.model, c, slots, o.log, (s) => setCurrent(s));
+        setCurrent(server);
+        ctx.server = server;
+        ctx.loadMs = Date.now() - t0;
+      },
+      logTail: () => {
+        try {
+          return readFileSync(roleLogFile(o.dir, "cal", item.engine), "utf8").split("\n").slice(-20).join("\n");
+        } catch {
+          return "(no cal server log)";
+        }
+      },
       log: (m) => o.log(`${name}: ${m}`),
     };
     const finish = (r: CalibrationRecord, line: string): "done" => {
@@ -381,6 +464,12 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     for (const phase of engineCheck ? o.phases.filter((p) => p.name === "A") : o.phases) {
       if (progress.phases[phase.name] === "passed") continue;
       const r = await phase.run(ctx);
+      // Spec section 2: a paused step (two inconclusive runs in a row) leaves the model queued; the runner goes on to the
+      // next model and retries the step on its next pass. The phase is neither passed nor failed.
+      if (!r.passed && r.paused === true) {
+        o.log(`${name}: step ${r.step} paused (${r.message}); the model stays queued`);
+        return "done";
+      }
       progress.phases[phase.name] = r.passed ? "passed" : "failed";
       saveProgress(o.dir, item.engine, item.model, progress);
       // Spec 4.2: a failed phase ends this model with a record that says why; held jobs then fail at once with it.
@@ -431,7 +520,7 @@ export async function runCalibratorMain(version: string, phases: readonly Phase[
     process.stdout.write(`${new Date().toISOString()} ${msg}\n`);
   };
   try {
-    const why = await runCalibrator({ dir: getConfigDir(), version, log, phases });
+    const why = await runCalibrator({ dir: getConfigDir(), version, log, phases, harness: harnessFromEnv(process.env) });
     log(`calibration runner exiting: ${why}`);
     process.exit(0);
   } catch (err) {

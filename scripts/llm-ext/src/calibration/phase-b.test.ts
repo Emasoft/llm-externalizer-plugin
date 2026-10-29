@@ -1,0 +1,352 @@
+// P6b: Phase B (spec 4.3) and the window estimate (spec 4.1), pure parts.
+// Degenerate answerers (spec section 9, coordinator decision 16) must FAIL the
+// step they target at every grid step, through the real sequential rule; a
+// reply cut at max_tokens is inconclusive, never a fail.
+import { createHash } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { BUG_CORPUS, BUG_CORPUS_SHA256 } from "./bug-corpus.js";
+import { BUG_PLANTS, plantLines } from "./bug-plants.js";
+import { chooseWindow, configKvLayers, ggufKvLayers, kvBytes, readGgufMetadata, WINDOW_HEADROOM_BYTES } from "./memory.js";
+import type { Outcome, Reply } from "./phase-a.js";
+import {
+  aggregateCountOutcome,
+  aggregateDocument,
+  aggregateIsCount,
+  aggregateListOutcome,
+  bugDocument,
+  bugOutcome,
+  factDocument,
+  factOutcome,
+  gridSteps,
+  listedNames,
+  NEEDLE_POSITIONS,
+  outputFloor,
+  parseBugAnswer,
+  seedOf,
+  sequentialVerdict,
+  variantSeed,
+} from "./phase-b-fixtures.js";
+
+const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
+  status: 200,
+  content,
+  reasoning: "",
+  finishReason: "stop",
+  promptTokens: 30,
+  completionTokens: 5,
+  timedOut: false,
+  wallMs: 100,
+  ...o,
+});
+
+/** The production grid at W = 32768, as characters (about 3.5 per token). */
+const STEPS = gridSteps(32768, null);
+const charsOf = (tokens: number): number => Math.round(tokens * 3.5);
+
+/** Run a counter to its verdict with `outcome(i)` as trial i's result (the phase's own loop, without a model). */
+function verdictOf(outcome: (i: number) => Outcome, t = 5): "pass" | "fail" {
+  const outs: Outcome[] = [];
+  for (;;) {
+    const v = sequentialVerdict(outs, t);
+    if (v !== "more") return v;
+    outs.push(outcome(outs.length));
+  }
+}
+
+const factStep = (tokens: number, answer: (doc: ReturnType<typeof factDocument>, q: number) => string): "pass" | "fail" => {
+  const seed = seedOf("fact", tokens);
+  return verdictOf((i) => {
+    const doc = factDocument(seedOf(seed, Math.floor(i / 5)), charsOf(tokens));
+    const q = i % 5;
+    return factOutcome(reply(answer(doc, q)), doc.needles[q].code, [...doc.needles, ...doc.decoys].map((x) => x.code));
+  });
+};
+
+const aggregateStep = (tokens: number, answer: (doc: ReturnType<typeof aggregateDocument>, count: boolean) => string): "pass" | "fail" => {
+  const seed = seedOf("aggregate", tokens);
+  return verdictOf((i) => {
+    const doc = aggregateDocument(seed, i, charsOf(tokens));
+    const count = aggregateIsCount(i);
+    const r = reply(answer(doc, count));
+    return count ? aggregateCountOutcome(r, doc.vaults.length) : aggregateListOutcome(r, doc.vaults);
+  });
+};
+
+/** A bug step: both counters must pass (spec 4.3). */
+const bugStep = (tokens: number, answer: (doc: ReturnType<typeof bugDocument>) => string): "pass" | "fail" => {
+  const seed = seedOf("bug", tokens);
+  const counter = (buggy: boolean): "pass" | "fail" =>
+    verdictOf((i) => {
+      const doc = bugDocument(seed, i, charsOf(tokens), buggy);
+      return bugOutcome(reply(answer(doc)), doc);
+    });
+  return counter(true) === "pass" && counter(false) === "pass" ? "pass" : "fail";
+};
+
+const plantOf = (doc: { path: string }) => {
+  const p = BUG_PLANTS.find((x) => x.path === doc.path);
+  if (!p) throw new Error(`no plant ${doc.path}`);
+  return p;
+};
+
+describe("Phase B: real answers pass every step", () => {
+  it.each(STEPS)("fact, aggregate and bug at %i tokens", (tokens) => {
+    expect(factStep(tokens, (doc, q) => doc.needles[q].code)).toBe("pass");
+    expect(aggregateStep(tokens, (doc, count) => (count ? `There are ${doc.vaults.length} vaults.` : doc.vaults.map((v) => `vault ${v}`).join(", ")))).toBe("pass");
+    expect(bugStep(tokens, (doc) => JSON.stringify(doc.line === null ? { file: null, line: null } : { file: doc.path, line: doc.line + 1 }))).toBe("pass");
+  });
+});
+
+describe("Phase B: degenerate answerers fail every step (spec 9)", () => {
+  it.each(STEPS)("fact at %i tokens: every code, a decoy code, the first needle's code, an empty answer", (tokens) => {
+    expect(factStep(tokens, (doc) => [...doc.needles, ...doc.decoys].map((x) => x.code).join(" "))).toBe("fail");
+    expect(factStep(tokens, (doc) => doc.decoys[0].code)).toBe("fail");
+    expect(factStep(tokens, (doc) => doc.needles[0].code)).toBe("fail");
+    expect(factStep(tokens, () => "")).toBe("fail");
+  });
+  it.each(STEPS)("aggregate at %i tokens: always 5, and the list of every capitalised word", (tokens) => {
+    expect(aggregateStep(tokens, () => "5")).toBe("fail");
+    expect(aggregateStep(tokens, (doc) => [...new Set(doc.text.match(/\b[A-Z][a-z]+\b/g) ?? [])].join(", "))).toBe("fail");
+  });
+  it.each(STEPS)("bug at %i tokens: always null, the planted function's first line, the file's last line, one fixed real corpus line", (tokens) => {
+    const nul = JSON.stringify({ file: null, line: null });
+    expect(bugStep(tokens, () => nul)).toBe("fail");
+    expect(bugStep(tokens, (doc) => JSON.stringify({ file: doc.path, line: 1 }))).toBe("fail");
+    expect(bugStep(tokens, (doc) => JSON.stringify({ file: doc.path, line: plantOf(doc).code.length }))).toBe("fail");
+    expect(bugStep(tokens, () => JSON.stringify({ file: BUG_CORPUS[0].path, line: 10 }))).toBe("fail");
+  });
+  it("always null passes every control and fails every bug trial, so the bug step fails on the bug counter alone", () => {
+    const seed = seedOf("bug", 4096);
+    for (let i = 0; i < 10; i++) {
+      expect(bugOutcome(reply('{"file": null, "line": null}'), bugDocument(seed, i, charsOf(4096), false))).toBe("pass");
+      expect(bugOutcome(reply('{"file": null, "line": null}'), bugDocument(seed, i, charsOf(4096), true))).toBe("fail");
+    }
+  });
+});
+
+describe("Phase B scorers", () => {
+  it("fact: the code alone, in a sentence, in lower case or after a think block passes; another vault's code beside it fails", () => {
+    const all = ["ABCD2345", "WXYZ6789"];
+    expect(factOutcome(reply("ABCD2345"), "ABCD2345", all)).toBe("pass");
+    expect(factOutcome(reply("The code is abcd2345."), "ABCD2345", all)).toBe("pass");
+    expect(factOutcome(reply("<think>WXYZ6789?</think>ABCD2345"), "ABCD2345", all)).toBe("pass");
+    expect(factOutcome(reply("ABCD2345 or WXYZ6789"), "ABCD2345", all)).toBe("fail");
+    expect(factOutcome(reply("XABCD2345"), "ABCD2345", all)).toBe("fail");
+  });
+  it("aggregate count: digits or a number word; a second, different number fails", () => {
+    expect(aggregateCountOutcome(reply("7"), 7)).toBe("pass");
+    expect(aggregateCountOutcome(reply("Seven vaults."), 7)).toBe("pass");
+    expect(aggregateCountOutcome(reply("7 or 8"), 7)).toBe("fail");
+    expect(aggregateCountOutcome(reply("several"), 7)).toBe("fail");
+  });
+  it("aggregate list: commas, 'and', bullets and the word vault are handled; a missing or extra name fails", () => {
+    expect(listedNames("- Vault Harlow\n- Brindle and corvin.")).toEqual(["harlow", "brindle", "corvin"]);
+    expect(aggregateListOutcome(reply("Harlow, Brindle and Corvin"), ["Corvin", "Harlow", "Brindle"])).toBe("pass");
+    expect(aggregateListOutcome(reply("Harlow, Brindle"), ["Corvin", "Harlow", "Brindle"])).toBe("fail");
+    expect(aggregateListOutcome(reply("Harlow, Brindle, Corvin, Elwick"), ["Corvin", "Harlow", "Brindle"])).toBe("fail");
+  });
+  it("bug: the right file within 1 line passes; 2 lines off, another file, prose or a broken object fails; the control wants null for both", () => {
+    const exp = { path: "src/a.ts", line: 10 };
+    expect(bugOutcome(reply('{"file": "src/a.ts", "line": 11}'), exp)).toBe("pass");
+    expect(bugOutcome(reply('Found it: {"file": "./src/a.ts", "line": "9"}'), exp)).toBe("pass");
+    expect(bugOutcome(reply('```json\n{"file": "src/a.ts", "line": 10}\n```'), exp)).toBe("pass");
+    expect(bugOutcome(reply('{"file": "src/a.ts", "line": 12}'), exp)).toBe("fail");
+    expect(bugOutcome(reply('{"file": "src/b.ts", "line": 10}'), exp)).toBe("fail");
+    expect(bugOutcome(reply("line 10 of src/a.ts"), exp)).toBe("fail");
+    expect(bugOutcome(reply('{"file": "src/a.ts"}'), exp)).toBe("fail");
+    expect(bugOutcome(reply('{"file": null, "line": null}'), { path: "src/a.ts", line: null })).toBe("pass");
+    expect(bugOutcome(reply('{"file": "src/a.ts", "line": null}'), { path: "src/a.ts", line: null })).toBe("fail");
+    expect(parseBugAnswer('<think>{"file": "x", "line": 1}</think>{"file": null, "line": null}')).toEqual({ file: null, line: null });
+  });
+  it("a reply cut at max_tokens or by the timeout is inconclusive for every Phase B scorer, never a fail", () => {
+    for (const r of [reply("", { finishReason: "length" }), reply("", { status: 0, timedOut: true, finishReason: null })]) {
+      expect(factOutcome(r, "ABCD2345", ["ABCD2345"])).toBe("inconclusive");
+      expect(aggregateCountOutcome(r, 3)).toBe("inconclusive");
+      expect(aggregateListOutcome(r, ["A"])).toBe("inconclusive");
+      expect(bugOutcome(r, { path: "a", line: 3 })).toBe("inconclusive");
+      expect(bugOutcome(r, { path: "a", line: null })).toBe("inconclusive");
+    }
+  });
+});
+
+describe("Phase B fixtures", () => {
+  it("are deterministic: the same seed rebuilds the same text; another seed does not", () => {
+    expect(factDocument(7, 9000)).toEqual(factDocument(7, 9000));
+    expect(factDocument(7, 9000).text).not.toBe(factDocument(8, 9000).text);
+    expect(aggregateDocument(3, 4, 9000)).toEqual(aggregateDocument(3, 4, 9000));
+    expect(bugDocument(5, 2, 20000, true)).toEqual(bugDocument(5, 2, 20000, true));
+  });
+  it("a rerun (variant 1, 2) gets a new document of the same kind: the same vault count, the same planted function, other text", () => {
+    const seed = seedOf("aggregate", 4096);
+    expect(aggregateDocument(seed, 3, 9000, 1).vaults).toHaveLength(aggregateDocument(seed, 3, 9000, 0).vaults.length);
+    expect(aggregateDocument(seed, 3, 9000, 1).text).not.toBe(aggregateDocument(seed, 3, 9000, 0).text);
+    const b0 = bugDocument(seed, 3, 20000, true, 0);
+    const b1 = bugDocument(seed, 3, 20000, true, 1);
+    expect([b1.path, b1.line]).toEqual([b0.path, b0.line]);
+    expect(b1.text).not.toBe(b0.text);
+    expect(variantSeed(seed, 3, 0)).toBe(seedOf(seed, 3));
+    expect(variantSeed(seed, 3, 1)).not.toBe(variantSeed(seed, 3, 2));
+  });
+  it("fact: 5 needles in order at 5-95 %, 3 decoys, 8 distinct codes, and 'vault' only in the planted sentences", () => {
+    const doc = factDocument(11, 40000);
+    expect(doc.needles.map((n) => n.at)).toEqual([...NEEDLE_POSITIONS]);
+    const codes = [...doc.needles, ...doc.decoys].map((x) => x.code);
+    expect(new Set(codes).size).toBe(8);
+    expect(doc.text.match(/\bvault\b/g)?.length).toBe(8);
+    const at = doc.needles.map((n) => doc.text.indexOf(n.code) / doc.text.length);
+    at.forEach((p, i) => expect(Math.abs(p - NEEDLE_POSITIONS[i])).toBeLessThan(0.03));
+    expect(Math.abs(doc.text.length - 40000)).toBeLessThan(400);
+  });
+  it("aggregate: 3 to 9 vaults; the count never repeats within 7 consecutive count trials", () => {
+    const seed = seedOf("aggregate", 2048);
+    const counts = Array.from({ length: 14 }, (_, k) => aggregateDocument(seed, 2 * k, 5000).vaults.length);
+    expect(counts.every((n) => n >= 3 && n <= 9)).toBe(true);
+    expect(new Set(counts.slice(0, 7)).size).toBe(7);
+    expect(new Set(counts.slice(7, 14)).size).toBe(7);
+  });
+  it("bug: the plant and its control twin differ in exactly the bug line, shown numbered, and the document is near its size", () => {
+    const b = bugDocument(9, 1, 30000, true);
+    const c = bugDocument(9, 1, 30000, false);
+    const diff = b.text.split("\n").filter((l, i) => l !== c.text.split("\n")[i]);
+    expect(diff).toHaveLength(1);
+    expect(diff[0]).toMatch(new RegExp(`^\\s*${b.line}\\| `));
+    expect(b.text).toContain(`=== ${b.path} ===`);
+    expect(c.line).toBeNull();
+    expect(Math.abs(b.text.length - 30000)).toBeLessThan(1500);
+  });
+  it("every plant: exactly one line changes, never the first two or the last two lines of its file", () => {
+    expect(BUG_PLANTS).toHaveLength(20);
+    expect(new Set(BUG_PLANTS.map((p) => p.path)).size).toBe(20);
+    for (const p of BUG_PLANTS) {
+      const good = plantLines(p, false);
+      const bad = plantLines(p, true);
+      expect(bad.filter((l, i) => l !== good[i])).toHaveLength(1);
+      expect(p.bug.line).toBeGreaterThanOrEqual(3);
+      expect(p.bug.line).toBeLessThanOrEqual(good.length - 2);
+    }
+  });
+  it("the bug corpus is pinned: a change must bump FIXTURE_VERSION and BUG_CORPUS_SHA256 together", () => {
+    const h = createHash("sha256");
+    for (const f of BUG_CORPUS) h.update(`${f.path}\u0000${f.text}\u0000`);
+    expect(h.digest("hex")).toBe(BUG_CORPUS_SHA256);
+    expect(BUG_CORPUS.some((f) => BUG_PLANTS.some((p) => p.path === f.path))).toBe(false);
+  });
+});
+
+describe("Phase B rules", () => {
+  const o = (s: string): Outcome[] => [...s].map((c) => (c === "p" ? "pass" : "fail"));
+  it("the sequential rule: 5/5 passes, 2 or fewer of 5 fails, 3 or 4 adds 5 more and passes at 8 of 10", () => {
+    expect(sequentialVerdict(o("ppppp"), 5)).toBe("pass");
+    expect(sequentialVerdict(o("ppfff"), 5)).toBe("fail");
+    expect(sequentialVerdict(o("pppff"), 5)).toBe("more");
+    expect(sequentialVerdict(o("ppppf"), 5)).toBe("more");
+    expect(sequentialVerdict(o("pppffppppp"), 5)).toBe("pass");
+    expect(sequentialVerdict(o("ppppfppppf"), 5)).toBe("pass");
+    expect(sequentialVerdict(o("pppffpppfp"), 5)).toBe("fail");
+    // A certain verdict is returned early.
+    expect(sequentialVerdict(o("fff"), 5)).toBe("fail");
+    expect(sequentialVerdict(o("pppffpppp"), 5)).toBe("more");
+    expect(sequentialVerdict(o("ppppfpppp"), 5)).toBe("pass");
+    expect(sequentialVerdict(o("pppfff"), 5)).toBe("fail");
+    expect(sequentialVerdict([], 5)).toBe("more");
+  });
+  it("the grid: 2048, 4096, 8192 and 0.40 x W, none above 0.40 x W, largest first; a reduced harness keeps its steps", () => {
+    expect(gridSteps(32768, null)).toEqual([13107, 8192, 4096, 2048]);
+    expect(gridSteps(16384, null)).toEqual([6553, 4096, 2048]);
+    expect(gridSteps(5120, null)).toEqual([2048]);
+    expect(gridSteps(4096, [1024, 2048])).toEqual([2048, 1024]);
+  });
+  it("output floors: the largest passing completion x 1.25, up to a multiple of 256; none = 0", () => {
+    expect(outputFloor([100, 300])).toBe(512);
+    expect(outputFloor([1024])).toBe(1280);
+    expect(outputFloor([])).toBe(0);
+  });
+});
+
+/** A hand-written GGUF v3 file with only metadata (strings, u32 scalars and u32/bool arrays). */
+function writeGguf(file: string, kv: Array<[string, number | string | number[] | boolean[]]>): void {
+  const parts: Buffer[] = [Buffer.from("GGUF", "latin1")];
+  const u32 = (n: number): Buffer => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32LE(n);
+    return b;
+  };
+  const u64 = (n: number): Buffer => {
+    const b = Buffer.alloc(8);
+    b.writeBigUInt64LE(BigInt(n));
+    return b;
+  };
+  const str = (s: string): Buffer => Buffer.concat([u64(Buffer.byteLength(s)), Buffer.from(s)]);
+  parts.push(u32(3), u64(0), u64(kv.length));
+  for (const [k, v] of kv) {
+    parts.push(str(k));
+    if (typeof v === "string") parts.push(u32(8), str(v));
+    else if (typeof v === "number") parts.push(u32(4), u32(v));
+    else if (typeof v[0] === "boolean") parts.push(u32(9), u32(7), u64(v.length), Buffer.from((v as boolean[]).map((x) => (x ? 1 : 0))));
+    else parts.push(u32(9), u32(4), u64(v.length), ...(v as number[]).map(u32));
+  }
+  writeFileSync(file, Buffer.concat(parts));
+}
+
+describe("the window estimate (spec 4.1)", () => {
+  it("reads GGUF metadata: per-layer KV heads (0 = a layer without KV), and a per-layer sliding-window pattern", () => {
+    const dir = mkdtempSync(join(tmpdir(), "llm-ext-gguf-"));
+    try {
+      const f = join(dir, "m.gguf");
+      writeGguf(f, [
+        ["general.architecture", "lfm3"],
+        ["lfm3.block_count", 4],
+        ["lfm3.attention.head_count", 8],
+        ["lfm3.embedding_length", 512],
+        ["lfm3.attention.head_count_kv", [0, 2, 0, 2]],
+        ["lfm3.attention.sliding_window", 256],
+        ["lfm3.attention.sliding_window_pattern", [false, true, false, false]],
+        ["tokenizer.ggml.tokens.count", 7],
+      ]);
+      const layers = ggufKvLayers(readGgufMetadata(f));
+      // head size 512 / 8 = 64: K + V = 2 x 2 x 64 = 256 elements per KV layer.
+      expect(layers).toEqual([
+        { kvElems: 0, window: 0 },
+        { kvElems: 256, window: 256 },
+        { kvElems: 0, window: 0 },
+        { kvElems: 256, window: 0 },
+      ]);
+      // 4096 tokens: the sliding layer holds 256 of them, the full layer all; 2 bytes per element.
+      expect(kvBytes(layers, 4096)).toBe(256 * 2 * 256 + 256 * 2 * 4096);
+      writeFileSync(join(dir, "bad.gguf"), "NOPE");
+      expect(() => readGgufMetadata(join(dir, "bad.gguf"))).toThrow(/not a GGUF|ends early/);
+    } finally {
+      rmSync(dir, { recursive: true });
+    }
+  });
+  it("a hybrid model counts only every n-th layer (plus its MTP layers); a looped model counts each pass; unknown layouts count every layer", () => {
+    const m = (kv: Record<string, unknown>) => new Map(Object.entries({ "general.architecture": "x", "x.block_count": 9, "x.attention.head_count": 4, "x.attention.head_count_kv": 2, "x.attention.key_length": 64, "x.attention.value_length": 64, ...kv }) as Array<[string, never]>);
+    expect(ggufKvLayers(m({ "x.full_attention_interval": 4, "x.nextn_predict_layers": 1 })).map((l) => l.kvElems > 0)).toEqual([false, false, false, true, false, false, false, true, true]);
+    expect(ggufKvLayers(m({ "x.num_loops": 2 }))[0].kvElems).toBe(2 * 2 * 128);
+    expect(ggufKvLayers(m({ "x.attention.sliding_window": 128 })).every((l) => l.window === 0 && l.kvElems === 256)).toBe(true);
+    expect(ggufKvLayers(m({ "x.attention.sliding_window": 128, "x.attention.sliding_window_pattern": 3 })).map((l) => l.window)).toEqual([128, 128, 0, 128, 128, 0, 128, 128, 0]);
+  });
+  it("reads config.json: layer_types (conv and linear layers hold no KV), full_attention_interval, text_config, num_loops", () => {
+    const lfm = configKvLayers({ num_hidden_layers: 3, num_attention_heads: 8, num_key_value_heads: 2, head_dim: 64, sliding_window: 256, layer_types: ["conv", "sliding_attention", "full_attention"] });
+    expect(lfm).toEqual([
+      { kvElems: 0, window: 0 },
+      { kvElems: 256, window: 256 },
+      { kvElems: 256, window: 0 },
+    ]);
+    const qwen = configKvLayers({ text_config: { num_hidden_layers: 8, num_attention_heads: 8, num_key_value_heads: 2, head_dim: 64, full_attention_interval: 4 } });
+    expect(qwen.filter((l) => l.kvElems > 0)).toHaveLength(2);
+    expect(configKvLayers({ num_hidden_layers: 2, hidden_size: 512, num_attention_heads: 8, num_key_value_heads: 2, num_loops: 2 })[0].kvElems).toBe(2 * 2 * 2 * 64);
+    expect(() => configKvLayers({ num_hidden_layers: 2 })).toThrow(/head size/);
+  });
+  it("W is the largest multiple of 256 with weights + KV + 1 GB under the budget, at most the cap", () => {
+    const layers = [{ kvElems: 1024, window: 0 }]; // 2048 bytes per token
+    const weights = 2 * 1024 ** 3;
+    const budget = weights + WINDOW_HEADROOM_BYTES + 2048 * 10_000;
+    expect(chooseWindow(layers, weights, budget, 32768)).toBe(9984);
+    expect(chooseWindow(layers, weights, budget, 4096)).toBe(4096);
+    expect(chooseWindow(layers, weights, weights, 32768)).toBe(0);
+  });
+});

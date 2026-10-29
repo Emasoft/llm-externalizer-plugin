@@ -111,6 +111,8 @@ export interface LoadedIdentity {
   fingerprint: Fingerprint;
   /** llama-server /props build_info ("b11960-8642541b2"); Locals /health "<version>+<build>". */
   engineVersion: string;
+  /** The weight files themselves (spec 4.1 reads the model shape and the weight size from them). */
+  files: string[];
 }
 
 async function getJson(url: string, headers: Record<string, string>): Promise<Record<string, unknown>> {
@@ -138,11 +140,13 @@ export async function loadedIdentity(engine: "llama" | "locals", baseUrl: string
     const props = await getJson(`${baseUrl}/props`, { authorization: `Bearer ${apiKey}` });
     if (typeof props.model_path !== "string" || props.model_path === "") throw new Error(`llama-server /props names no model_path for '${model}'`);
     if (typeof props.build_info !== "string" || props.build_info === "") throw new Error("llama-server /props names no build_info");
-    return { fingerprint: await fingerprintOf(ggufShards(props.model_path), dir), engineVersion: props.build_info };
+    const files = ggufShards(props.model_path);
+    return { fingerprint: await fingerprintOf(files, dir), engineVersion: props.build_info, files };
   }
   const h = await getJson(`${baseUrl}/health`, {});
   if (typeof h.version !== "string") throw new Error("the Locals server /health names no version");
-  return { fingerprint: await fingerprintOf(snapshotWeightFiles(model), dir), engineVersion: typeof h.build === "string" ? `${h.version}+${h.build}` : h.version };
+  const files = snapshotWeightFiles(model);
+  return { fingerprint: await fingerprintOf(files, dir), engineVersion: typeof h.build === "string" ? `${h.version}+${h.build}` : h.version, files };
 }
 
 /**
@@ -153,7 +157,7 @@ export async function loadedIdentity(engine: "llama" | "locals", baseUrl: string
  */
 export function staleness(
   record: { fingerprint: Fingerprint; engine_version_checked: string; harness_version: number; fixture_version: number },
-  now: LoadedIdentity,
+  now: Pick<LoadedIdentity, "fingerprint" | "engineVersion">,
 ): "weights" | "engine" | null {
   if (record.harness_version !== HARNESS_VERSION || record.fixture_version !== FIXTURE_VERSION) return "weights";
   if (!sameFingerprint(record.fingerprint, now.fingerprint)) return "weights";
