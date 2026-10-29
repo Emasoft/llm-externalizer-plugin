@@ -1334,6 +1334,19 @@ request_options:
 | `generic-local` | OpenAI-compatible | (url required) | `LM_API_TOKEN` |
 | `locals-local` | OpenAI-compatible (Locals, MLX models, macOS on Apple silicon only) | (url required; with `server: managed` llm-ext starts Locals itself) | — |
 
+#### Managed local profiles, broker and calibration
+
+Two local profiles are built in and added to `settings.yaml` once (not active by default; select with `--profile`). Both use `server: managed`: llm-ext starts and stops the model server itself.
+
+| Profile | Engine | `model` / `second_model` / `third_model` |
+|---|---|---|
+| `local_llama` | GGUF models through llama.cpp's `llama-server` (`llamacpp-local`) | `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K` / `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf` / `insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf` |
+| `locals-mlx` | MLX models through the Locals server (`locals-local`; macOS on Apple silicon) | `LiquidAI/LFM3-1.7B-MLX-4bit` / `mlx-community/Nanbeige4.2-3B-OptiQ-4bit` / `mlx-community/Qwen3.5-4B-MLX-4bit` |
+
+- **Request broker.** One local broker serves every managed profile. Per engine it runs one model at a time, groups the queued requests by model and rotates to the next model once the current one has had its minimum slice and another model's request nears `--queue_timeout` (default 300 s; waiting is never an error).
+- **Calibration.** A new model is calibrated once, automatically (on first use, or when you add or change it in a profile). Requests for it are held until its record is complete, which can take hours. `llm-ext models calibration-status` shows progress; `llm-ext models calibrate --model <id> [--force]` starts or redoes it.
+- **`--command_timeout <s>`** (aliases `--command-timeout`, `--timeout`; `=` or a space) limits a whole command. On expiry it writes the finished results, lists the unfinished files and exits non-zero (124). Held requests are bounded only by it.
+
 ### Environment variables
 
 | Variable | Used by |

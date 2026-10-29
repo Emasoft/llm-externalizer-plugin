@@ -9,6 +9,8 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext models health`
 - `llm-ext models discover`
 - `llm-ext models replacements`
+- `llm-ext models calibrate`
+- `llm-ext models calibration-status`
 - `llm-ext settings show`
 - `llm-ext settings profile`
 - `llm-ext settings profiles`
@@ -104,6 +106,37 @@ READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) — for every LLM
 Example:
 ```bash
 llm-ext models replacements
+```
+
+### `llm-ext models calibrate`
+
+- Usage: `llm-ext models calibrate [--flag value ...]`
+- Bare argument: none (everything goes through flags)
+- Accepted profile types: any
+
+Queue ONE model of a managed local profile (`server: managed`, api `llamacpp-local` or `locals-local`) for calibration and start the detached calibration runner. Calibration measures what the model can do on this machine (safe input size per task kind, output caps, json_schema support, server slots). Until the model has a complete record, requests for it wait (they are held). This can take hours. The command returns at once; follow it with `llm-ext models calibration-status`. A model that already has a record is refused unless `--force` is set. A model of a managed profile is also calibrated once, automatically, on its first use or when the user adds or changes it in the profile.
+
+| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+|---|---|---|
+| `--model` | string | (required) The model id exactly as a managed local profile names it (model, second_model or third_model). |
+| `--force` | boolean | Calibrate again even when a valid record exists. Default false. |
+
+Example:
+```bash
+llm-ext models calibrate --model LiquidAI/LFM3-1.7B-MLX-4bit
+```
+
+### `llm-ext models calibration-status`
+
+- Usage: `llm-ext models calibration-status`
+- Bare argument: none
+- Accepted profile types: any
+
+Show the calibration state of every model of the managed local profiles: calibrated (with the date), failed (with the step and reason), or its progress and queue state. Takes no parameters.
+
+Example:
+```bash
+llm-ext models calibration-status
 ```
 
 ## `settings` group

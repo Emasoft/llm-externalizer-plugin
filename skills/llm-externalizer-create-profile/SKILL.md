@@ -74,7 +74,9 @@ profiles:
 
 **`api` presets** (`llm-ext settings status` prints the live list):
 `lmstudio-local`, `ollama-local`, `vllm-local`, `llamacpp-local`, `generic-local`,
-`openrouter-remote`, `chat-b-ai-remote`.
+`openrouter-remote`, `chat-b-ai-remote`, `locals-local`.
+
+**Managed local servers.** On a local profile, `server: managed` (api `llamacpp-local` or `locals-local` only) makes llm-ext start and stop the model server itself, one model at a time. Only then may a profile also set `second_model` and `third_model`. The built-in profiles `local_llama` (GGUF, llama.cpp) and `locals-mlx` (MLX, Locals; macOS on Apple silicon) already do this: copy one instead of writing it from scratch. A new model of a managed profile is calibrated once, automatically, and its requests are held until the record is complete (see `llm-ext models calibration-status`).
 
 **Validation is enforced, not advisory.** An unknown `api` preset, a `tool_models`
 key that is not a registered tool, or a `free_models` entry missing the `:free`

@@ -11,6 +11,8 @@ effort: low
 
 Profile-based configuration for local and remote LLM backends. Settings stored at `~/.llm-externalizer/settings.yaml`. Three modes: `local` (sequential), `remote` (parallel via OpenRouter), `remote-ensemble` (three models in parallel).
 
+Two managed local profiles are built in: `local_llama` (GGUF models through llama.cpp's `llama-server`) and `locals-mlx` (MLX models through the Locals server, macOS on Apple silicon). They use `server: managed`, so llm-ext starts the model server itself. A new model of such a profile is calibrated once, automatically; requests for it wait until its record is complete (can take hours). Follow it with `llm-ext models calibration-status`.
+
 ## Policy — user-only configuration
 
 Changing models, profiles, API keys, URLs, or timeouts is **user-only**. This is a deliberate design choice.

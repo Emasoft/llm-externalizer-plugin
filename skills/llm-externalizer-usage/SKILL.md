@@ -34,6 +34,8 @@ Copy this checklist and track your progress:
 
 Long-running commands (`scan-folder`, `security-scan`, `mass-scout*`, `code-task` on big folders) need an extended Bash timeout or `run_in_background: true` (background commands are capped at 30 min, max 2 h, in unattended sessions (`-p`, CI); interactive sessions are uncapped) — there is no long-lived server process keeping work alive between calls.
 
+Every command also takes `--command_timeout <s>` (aliases `--command-timeout`, `--timeout`): it limits the whole command, and on expiry writes the finished results, lists the unfinished files and exits non-zero. For local models served by the broker, `--queue_timeout <s>` is the longest a job waits for its model's server before a rotation is forced (default 300; never an error). The managed local profiles `local_llama` and `locals-mlx` calibrate a new model once, automatically, and hold its requests until the record is complete (can take hours); see `llm-ext models calibration-status` and `llm-ext models calibrate --model <id> [--force]`.
+
 ## Context
 
 Use when you need to analyze files without consuming orchestrator context, scan a codebase, compare files, or check imports. Do NOT use for surgical edits or tasks needing real-time tool access.
