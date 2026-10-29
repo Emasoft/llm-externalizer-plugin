@@ -62,6 +62,7 @@ import {
   hasNamedGroups,
   autoGroupByHeuristic,
 } from "../grouping.js";
+import { abortReasonText, isCommandStopped, unfinishedFileLines } from "../command-stop.js";
 import type { ProgressFn } from "../rate-limiter.js";
 
 export type CodeTaskChatMessage = {
@@ -453,6 +454,8 @@ export async function runCodeTask(
           }
         }
         const ctAllGroupReports: string[] = [];
+        /** Follow-up review M2: files of batches whose call threw, as "FAILED: <file> — <reason>" lines. */
+        const ctFailedLines: string[] = [];
 
         for (const fg of ctFileGroups) {
           const fgPaths = fg.files;
@@ -472,31 +475,46 @@ export async function runCodeTask(
                 modelOverride: deps.modelOverride, outputDir: deps.outputDir,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
-              if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
-              if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+              // Follow-up review M1/m2: once stopped, every non-success file (skipped ones too) is listed, and the abort reason is the stop.
+              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              lines.push(...unfinishedFileLines(rpResult.results));
+              if (rpResult.aborted) lines.push("", `ABORTED: ${abortReasonText(rpResult.abortReason)}`);
               return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
             }
             // Simple sequential path (max_retries=1, no retry)
+            // Follow-up review M2: a file whose call THROWS (a --command_timeout stop
+            // above all) is recorded as "FAILED: <file> — <reason>" and the loop goes
+            // on; before, the first throw dropped every finished report path.
             const perFileResults: string[] = [];
+            let threw = false;
             for (const fp of fgPaths) {
-              const result = await deps.processFileCheck(fp, ctTask, {
-                language,
-                maxTokens: deps.resolveDefaultMaxTokens(),
-                redact: ctRedact,
-                regexRedact: ctRegexRedact,
-                onProgress: deps.onProgress,
-                ensemble: ctUseEnsemble,
-                maxBytes: ctBudgetBytes,
-                modelOverride: deps.modelOverride, outputDir: deps.outputDir,
-              });
+              let result: Awaited<ReturnType<typeof deps.processFileCheck>>;
+              try {
+                result = await deps.processFileCheck(fp, ctTask, {
+                  language,
+                  maxTokens: deps.resolveDefaultMaxTokens(),
+                  redact: ctRedact,
+                  regexRedact: ctRegexRedact,
+                  onProgress: deps.onProgress,
+                  ensemble: ctUseEnsemble,
+                  maxBytes: ctBudgetBytes,
+                  modelOverride: deps.modelOverride, outputDir: deps.outputDir,
+                });
+              } catch (err) {
+                threw = true;
+                perFileResults.push(`FAILED: ${fp} — ${(err as Error).message}`);
+                continue;
+              }
               perFileResults.push(
                 result.success && result.reportPath
                   ? result.reportPath
                   : `FAILED: ${fp} — ${result.error}`,
               );
             }
+            // A thrown failure used to end the command as an error; it still does, now with the finished paths listed.
             return {
               content: [{ type: "text", text: perFileResults.join("\n") }],
+              isError: threw,
             };
           }
 
@@ -524,11 +542,20 @@ export async function runCodeTask(
               },
               { role: "user", content: userContent },
             ];
-            const codeResp = await deps.ensembleStreaming(
-              codeMessages,
-              { temperature: deps.defaultTemperature, maxTokens: deps.resolveDefaultMaxTokens(), onProgress: deps.onProgress, modelOverride: deps.modelOverride },
-              ctUseEnsemble,
-            );
+            // Follow-up review M2: a failed batch (a --command_timeout stop above all)
+            // is recorded per file and the loop goes on, so the batches and
+            // groups already answered are still written and reported.
+            let codeResp: Awaited<ReturnType<typeof deps.ensembleStreaming>>;
+            try {
+              codeResp = await deps.ensembleStreaming(
+                codeMessages,
+                { temperature: deps.defaultTemperature, maxTokens: deps.resolveDefaultMaxTokens(), onProgress: deps.onProgress, modelOverride: deps.modelOverride },
+                ctUseEnsemble,
+              );
+            } catch (err) {
+              for (const fd of group) ctFailedLines.push(`FAILED: ${fd.path} — ${(err as Error).message}`);
+              continue;
+            }
             const codeFooter = deps.formatFooter(codeResp, "code_task", group[0]?.path);
             if (codeResp.content.trim().length > 0) {
               ctBatchResults.push(
@@ -555,13 +582,13 @@ export async function runCodeTask(
             const labelId = fgId || "auto";
             ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
           } else {
-            return { content: [{ type: "text", text: savedPath }] };
+            return { content: [{ type: "text", text: [savedPath, ...ctFailedLines].join("\n") }], isError: ctFailedLines.length > 0 };
           }
         }
 
         // Grouped: return all per-group report paths
         if (ctAllGroupReports.length === 0) {
-          return { content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }], isError: true };
+          return { content: [{ type: "text", text: ctFailedLines.length > 0 ? ctFailedLines.join("\n") : "FAILED: LLM returned empty response for all groups." }], isError: true };
         }
-        return { content: [{ type: "text", text: ctAllGroupReports.join("\n") }] };
+        return { content: [{ type: "text", text: [...ctAllGroupReports, ...ctFailedLines].join("\n") }], isError: ctFailedLines.length > 0 };
 }

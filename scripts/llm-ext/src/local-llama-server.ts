@@ -108,56 +108,15 @@ export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logF
     // c tokens). With `-c ctx` and 4 auto slots, concurrent long requests
     // overflowed it: HTTP 500 "Context size has been exceeded" (P1' item 1).
     // So every slot holds one full request of the profile's context_window.
-    // The broker dispatches at most /props total_slots (= MAIN_SLOTS) at once.
-    "-np", String(MAIN_SLOTS),
+    // The broker dispatches at most /props total_slots (the -np below) at once.
+    // Follow-up review m5: with no context_window, ONE slot, so that slot keeps
+    // the model's whole default context (MAIN_SLOTS slots would split it).
+    "-np", String(target.ctx > 0 ? MAIN_SLOTS : 1),
     ...(target.ctx > 0 ? ["-c", String(target.ctx * MAIN_SLOTS)] : []),
     "--jinja",
     "--sleep-idle-seconds", String(SLEEP_IDLE_SECONDS),
     "--log-file", logFile,
   ];
-}
-
-export interface ArgvIdentity {
-  isLlamaServer: boolean;
-  /** The llm-ext model id the argv serves (reconstructed), or null. */
-  model: string | null;
-  port: number | null;
-  /** Context per slot (one request's room): -c divided by -np. */
-  ctx: number;
-  /** -np, the parallel slots; 0 = not given (llama.cpp auto). */
-  slots: number;
-  /** The --log-file value: the llm-ext marker (spec point 8), or null. */
-  logFile: string | null;
-}
-
-/**
- * What a llama-server command line serves. EXACT token comparison only:
- * `--port 818` must never match 8181, so values are whole tokens, never
- * substrings of the joined command line.
- */
-export function describeArgv(tokens: readonly string[]): ArgvIdentity {
-  const exe = tokens[0] ? basename(tokens[0].replace(/\\/g, "/")) : "";
-  const after = (flag: string): string | undefined => {
-    const i = tokens.indexOf(flag, 1);
-    return i > 0 ? tokens[i + 1] : undefined;
-  };
-  const repo = after("-hf") ?? after("--hf-repo");
-  const file = after("--hf-file");
-  const path = after("-m") ?? after("--model");
-  const model = path ?? (repo !== undefined && file !== undefined ? `${repo}/${file}` : repo) ?? null;
-  const portTok = after("--port");
-  const ctxTok = after("-c") ?? after("--ctx-size");
-  const npTok = after("-np") ?? after("--parallel");
-  const slots = npTok !== undefined && /^\d+$/.test(npTok) ? Number(npTok) : 0;
-  return {
-    isLlamaServer: exe === "llama-server" || exe.toLowerCase() === "llama-server.exe",
-    model,
-    port: portTok !== undefined && /^\d+$/.test(portTok) ? Number(portTok) : null,
-    // Per-slot context: -c is the TOTAL llama.cpp splits across the -np slots (see buildServerArgv).
-    ctx: ctxTok !== undefined && /^\d+$/.test(ctxTok) ? Number(ctxTok) / (slots > 0 ? slots : 1) : 0,
-    slots,
-    logFile: after("--log-file") ?? null,
-  };
 }
 
 /**

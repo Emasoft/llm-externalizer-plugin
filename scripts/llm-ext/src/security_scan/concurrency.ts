@@ -1,3 +1,5 @@
+import { commandStopReason } from "../command-stop.js";
+
 /**
  * Tiny worker-pool runner — N parallel workers pull from a shared index.
  * Re-implemented locally (≤15 LOC of logic) per TRDD §2 so this module does
@@ -18,6 +20,8 @@ export async function runWithLimit<T>(
     workers.push(
       (async (): Promise<void> => {
         while (true) {
+          // Follow-up review M3: a stopped command (--command_timeout) takes no new item, so no new request starts.
+          if (commandStopReason() !== null) break;
           const myIdx = idx++;
           if (myIdx >= total) break;
           await fn(items[myIdx]!);

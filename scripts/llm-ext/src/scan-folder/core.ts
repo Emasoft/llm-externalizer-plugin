@@ -33,6 +33,7 @@ import {
   type RegexRedactOpts,
 } from "../scan-pipeline.js";
 import { autoGroupByHeuristic } from "../grouping.js";
+import { abortReasonText, isCommandStopped, unfinishedFileLines } from "../command-stop.js";
 import { rateLimitedParallel, type ProgressFn } from "../rate-limiter.js";
 import { type HighQualityRequest } from "../config.js";
 
@@ -358,11 +359,12 @@ export async function runScanFolder(
             `Batch UUID: ${batchId}`,
             `MERGED REPORT: ${mergedPath}`,
           ];
-          if (failed.length > 0) {
+          if (failed.length > 0 && !isCommandStopped()) {
             summary.push("", "FAILED:");
             for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
           }
-          if (aborted) summary.push("", `ABORTED: ${abortReason}`);
+          summary.push(...unfinishedFileLines(batchResults));
+          if (aborted) summary.push("", `ABORTED: ${abortReasonText(abortReason)}`);
           return {
             content: [{ type: "text", text: summary.join("\n") }],
             isError: aborted,
@@ -419,11 +421,12 @@ export async function runScanFolder(
             summary.push("", `GROUP REPORTS (${sfGroupReportPaths.length}):`);
             for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
           }
-          if (failed.length > 0) {
+          if (failed.length > 0 && !isCommandStopped()) {
             summary.push("", "FAILED:");
             for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
           }
-          if (aborted) summary.push("", `ABORTED: ${abortReason}`);
+          summary.push(...unfinishedFileLines(batchResults));
+          if (aborted) summary.push("", `ABORTED: ${abortReasonText(abortReason)}`);
           return {
             content: [{ type: "text", text: summary.join("\n") }],
             isError: aborted,
@@ -441,12 +444,14 @@ export async function runScanFolder(
           sfSummaryLines.push("REPORTS:");
           for (const r of succeeded) sfSummaryLines.push(`  ${r.reportPath}`);
         }
-        if (failed.length > 0) {
+        // Follow-up review M1: once stopped, every non-success file is listed (helper), instead of FAILED.
+        if (failed.length > 0 && !isCommandStopped()) {
           sfSummaryLines.push("", "FAILED:");
           for (const r of failed)
             sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
         }
-        if (aborted) sfSummaryLines.push("", `ABORTED: ${abortReason}`);
+        sfSummaryLines.push(...unfinishedFileLines(batchResults));
+        if (aborted) sfSummaryLines.push("", `ABORTED: ${abortReasonText(abortReason)}`);
         return {
           content: [{ type: "text", text: sfSummaryLines.join("\n") }],
           isError: aborted,

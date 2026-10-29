@@ -37,6 +37,7 @@ import { readFileSync } from "node:fs";
 import type { GlobalFetch } from "../classifiers/l0/transport.js";
 import { BROKER_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
+import { commandStopReason, stopCommand } from "../command-stop.js";
 import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
 
 /**
@@ -140,37 +141,56 @@ const BOOLEAN_LITERALS = new Set([
 
 function die(msg: string): never {
   process.stderr.write(`llm-ext: ${msg}\n`);
-  process.exit(1);
+  exitCommand(1);
 }
 
 
 /** Exit code of a command stopped by --command_timeout (the timeout(1) convention). */
 const COMMAND_TIMEOUT_EXIT = 124;
 
-/** Set once --command_timeout expired: the command is stopping and must exit COMMAND_TIMEOUT_EXIT. */
-let commandTimedOut = false;
 /** How long a stopping command may take to write its partial results before it is ended anyway. */
 const STOP_FLUSH_GRACE_MS = 30_000;
 
+/** True once --command_timeout expired (the shared command-stop flag). */
+function commandTimedOut(): boolean {
+  return commandStopReason() !== null;
+}
+
+/**
+ * Every explicit exit of the CLI goes through here (follow-up review m3): once
+ * the command timed out it exits COMMAND_TIMEOUT_EXIT whatever path ends it
+ * (an error, classify, estimate), never 0 or 1 after the stderr line said it
+ * was stopped. Review m4 (kept on purpose): a command whose work was already
+ * complete when the timer fired still exits 124; that is spec 15's letter.
+ */
+function exitCommand(code: number): never {
+  process.exit(commandTimedOut() ? COMMAND_TIMEOUT_EXIT : code);
+}
+
 /**
  * --command_timeout (USER ruling 2026-10-28, spec 15): when it expires the
- * command STOPS, it is not killed. No further broker job is submitted, every
- * job it still has at the local broker is cancelled (DELETE), and each call
- * waiting on one ends with a CommandStoppedError. So every unfinished file
- * fails with the timeout as its reason, and the command returns normally:
- * it writes the per-file results already complete and its summary lists the
- * unfinished files (review m3: a process.exit straight from this timer could
- * cut off a report being written). main() then exits COMMAND_TIMEOUT_EXIT.
- * A command that cannot stop in STOP_FLUSH_GRACE_MS (a remote request has no
- * broker job to cancel) is ended anyway. Both timers are unref'd: a command
+ * command STOPS, it is not killed. The shared command-stop flag is set, so no
+ * path starts a new request (broker, remote and the direct-fetch workers,
+ * follow-up review M3); every job it still has at the local broker is
+ * cancelled (DELETE); each call waiting ends with a CommandStoppedError. So
+ * every unfinished file fails with the timeout as its reason, and the command
+ * returns normally: it writes the per-file results already complete and its
+ * summary lists the unfinished files (review m3: a process.exit straight from
+ * this timer could cut off a report being written). process.exitCode is set
+ * to COMMAND_TIMEOUT_EXIT at once, so every path that ends normally exits 124.
+ * A command that cannot stop in STOP_FLUSH_GRACE_MS (an in-flight remote
+ * request is not aborted) is ended anyway. Both timers are unref'd: a command
  * that finishes first exits at once (no lingering handle, launcher-boot.test.ts).
  */
 function armCommandTimeout(seconds: number): void {
   setTimeout(() => {
-    commandTimedOut = true;
     const reason = `--command_timeout: the command ran longer than ${seconds} s and was stopped`;
-    void cancelAllBrokerJobs(reason).then((n) => {
-      process.stderr.write(`llm-ext: ${reason}; ${n} unfinished local job(s) cancelled; writing the results already complete\n`);
+    stopCommand(reason);
+    process.exitCode = COMMAND_TIMEOUT_EXIT;
+    void cancelAllBrokerJobs(reason).then(({ cancelled, failed }) => {
+      // Follow-up review m1: only confirmed DELETEs are counted; the rest are named.
+      const notCancelled = failed.length > 0 ? `; ${failed.length} job(s) could not be cancelled (left to the broker's abandon rule): ${failed.join(", ")}` : "";
+      process.stderr.write(`llm-ext: ${reason}; ${cancelled} unfinished local job(s) cancelled${notCancelled}; writing the results already complete\n`);
     });
     setTimeout(() => {
       process.stderr.write(`llm-ext: the stopped command did not finish writing within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
@@ -759,7 +779,7 @@ async function main(): Promise<void> {
             `  did you mean: ${resolved.suggestions.join(", ")}?\n`,
           );
         }
-        process.exit(1);
+        exitCommand(1);
         return;
       }
       case "dispatch":
@@ -789,7 +809,7 @@ async function main(): Promise<void> {
       const label = hint.kind === "group" ? "did you mean group" : "did you mean flat command";
       process.stderr.write(`  ${label}: ${hint.names.join(", ")}?\n`);
     }
-    process.exit(1);
+    exitCommand(1);
   }
 
   if (rest.includes("--help") || rest.includes("-h")) {
@@ -881,6 +901,8 @@ async function main(): Promise<void> {
       stdout: (text) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`),
       stderr: (line) => process.stderr.write(`${line}\n`),
     });
+    // Follow-up review m3: the runner's own code would overwrite the timeout's 124.
+    if (commandTimedOut()) process.exitCode = COMMAND_TIMEOUT_EXIT;
     return;
   }
 
@@ -900,7 +922,7 @@ async function main(): Promise<void> {
     );
     if (resolved.error) {
       process.stderr.write(`preview: ${resolved.error}\n`);
-      process.exit(1);
+      exitCommand(1);
     }
     process.stdout.write(
       `PREVIEW (dry-run — nothing was sent) — ${tool.name}\n` +
@@ -925,7 +947,7 @@ async function main(): Promise<void> {
     const gate = profileGateRefusal(tool.name);
     if (gate) {
       process.stderr.write(`${gate.message}\n`);
-      process.exit(1);
+      exitCommand(1);
     }
     await warmEstimatePricing();
     const estimate = estimateToolRun(tool.name, args, buildEstimateDeps());
@@ -939,7 +961,7 @@ async function main(): Promise<void> {
   const result = await dispatchCallTool(tool.name, args, { progress: verbose });
 
   const text = result.content.map((c) => c.text).join("\n");
-  if (commandTimedOut) {
+  if (commandTimedOut()) {
     // Spec 15: the stopped command's own result IS the partial report (the
     // per-file results already written, and the unfinished files listed as
     // failed with the timeout reason). exitCode, not exit: stdout is flushed.
@@ -949,7 +971,7 @@ async function main(): Promise<void> {
   }
   if (result.isError) {
     process.stderr.write(`${text}\n`);
-    process.exit(1);
+    exitCommand(1);
   }
   process.stdout.write(`${text}\n`);
 }
@@ -959,5 +981,5 @@ main().catch((error) => {
     `llm-ext: ${error instanceof Error ? error.message : String(error)}\n`,
   );
   // A command that failed while stopping (the timeout ended it) still exits as a timeout.
-  process.exit(commandTimedOut ? COMMAND_TIMEOUT_EXIT : 1);
+  exitCommand(1);
 });

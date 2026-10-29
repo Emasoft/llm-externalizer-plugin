@@ -13,7 +13,7 @@
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   ManagedServerError,
@@ -229,7 +229,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
       sched.recordLoad(key, Date.now() - loadStartedAt);
       sched.startRun(key, Date.now());
-      o.log(`main llama-server ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}`);
+      o.log(`main llama-server ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}; ${slotSizing(entry.argv, logFile)}`);
     } catch (err) {
       // A version handover: the OLD broker still owns the main slot while it
       // drains. Waiting is not an error (spec 6/11): keep the jobs queued and
@@ -564,4 +564,30 @@ export async function runBrokerMain(engine: string | undefined, version: string)
     log(`broker failed: ${(err as Error).stack ?? String(err)}`);
     process.exit(1);
   }
+}
+
+/**
+ * Follow-up review M4: what the slot sizing actually gave, for the ready log
+ * line. The computed -np and -c come from the spawned argv; llama.cpp's own
+ * verdict (n_slots, n_ctx_slot, kv_unified) and its KV buffer size come from
+ * the server's log. The KV figure is llama.cpp's reported one, never a
+ * formula of ours (a per-layer formula is wrong for GQA/MLA/SWA models, and a
+ * -hf model has no local file to read); at the default log verbosity
+ * llama-server does not report it, and the line says so. Slot-count
+ * calibration from these figures belongs to P6.
+ */
+function slotSizing(argv: readonly string[], logFile: string): string {
+  const flag = (name: string): string => {
+    const i = argv.indexOf(name);
+    return i >= 0 && i + 1 < argv.length ? argv[i + 1]! : "unset";
+  };
+  let log = "";
+  try {
+    log = readFileSync(logFile, "utf8");
+  } catch {
+    // An unreadable log only loses the llama.cpp figures; the argv ones still print.
+  }
+  const slots = /n_slots = \d+, n_ctx_slot = \d+(?:, kv_unified = '\w+')?/.exec(log)?.[0] ?? "llama.cpp slot line not in the log";
+  const kv = /KV (?:buffer|cache)[^\n]*?size\s*=\s*[\d.]+ MiB/i.exec(log)?.[0] ?? "KV size not reported by llama-server at this log verbosity";
+  return `-np ${flag("-np")} -c ${flag("-c")}; ${slots}; ${kv}`;
 }

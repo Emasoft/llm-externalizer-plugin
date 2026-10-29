@@ -32,6 +32,7 @@ import {
   type PreScanResult,
 } from "./prompt";
 import { runWithLimit } from "./concurrency";
+import { commandStopReason } from "../command-stop.js";
 import { recordRequest } from "../usage-history";
 import { appendModelEvent } from "../model-events";
 import {
@@ -260,7 +261,9 @@ export async function judgeGroups(
     },
   );
 
-  // Defensive: fill any holes (should never happen — runWithLimit visits all).
+  // Fill the holes: groups runWithLimit never started because --command_timeout
+  // stopped the command (follow-up review M3) get the fail-safe verdict. No
+  // hole is expected otherwise.
   for (let i = 0; i < groups.length; i++) {
     if (verdicts[i] === undefined) {
       const markers = preScanInjection(groups[i]!.content).markers;
@@ -269,6 +272,8 @@ export async function judgeGroups(
         markers,
         opts.defaultVerdictOnError,
       );
+      const stopWhy = commandStopReason();
+      if (stopWhy !== null) verdicts[i]!.payload.reason = `Fail-safe: never judged: ${stopWhy}.`;
       groupsFailSafe++;
     }
   }
@@ -372,6 +377,15 @@ async function judgeOneGroup(
       temperature: 0.1,
     };
 
+    // Follow-up review M3: a stopped command (--command_timeout) starts no new
+    // judge request. Not a throw: runWithLimit's contract is that this item
+    // never throws (one rejection would end the whole pool). The group gets
+    // the fail-safe verdict below, its reason naming the stop.
+    const stopWhy = commandStopReason();
+    if (stopWhy !== null) {
+      prevError = stopWhy;
+      break;
+    }
     const controller = new AbortController();
     const timeoutId = setTimeout(
       () => controller.abort(),

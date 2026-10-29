@@ -62,6 +62,7 @@ import {
   RETRY_DEADLINE_MS,
   retryWindowClosed,
   clockForCall,
+  throwIfStopped,
   startRetryClock,
   waitFitsClock,
   type RetryClock,
@@ -508,6 +509,8 @@ function sendChat(
   // recorded on it; undefined = no reuse and no queue-time exclusion (chatCompletionJSON).
   scope?: { brokerQueuedMs?: number },
 ): Promise<Response> {
+  // Follow-up review M3: a stopped command (--command_timeout) starts no new request, broker or remote.
+  throwIfStopped();
   if (conn.broker) {
     return brokerExchange(
       conn.broker,

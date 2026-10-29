@@ -7,6 +7,8 @@
  * no ProviderDeps and imports NOTHING from index.ts.
  */
 
+import { CommandStoppedError, commandStopReason } from "../command-stop.js";
+
 export const CONNECT_TIMEOUT_MS = 5000;
 
 /**
@@ -309,6 +311,8 @@ export async function fetchWithRetry429(
   let newestNetworkError: unknown;
 
   for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
+    // Follow-up review M3: a stopped command starts no new request (no first attempt, no retry), remote included.
+    throwIfStopped();
     const elapsed = Date.now() - startTime;
     const remaining = timeout - elapsed;
 
@@ -573,6 +577,20 @@ export interface FailureFields {
 export function attachFailure(err: Error, fields: FailureFields): void {
   // Non-enumerable so message, name, Object.keys and JSON.stringify stay byte-identical; configurable+writable because a later layer may re-attach newer fields, and a second plain defineProperty would throw inside error handling and replace the real error.
   Object.defineProperty(err, "failure", { value: fields, enumerable: false, configurable: true, writable: true });
+}
+
+
+/** A CommandStoppedError marked final "stop": never retried, never a breaker failure (follow-up review M3). */
+export function stoppedError(why: string): CommandStoppedError {
+  const err = new CommandStoppedError(why);
+  attachFailure(err, { final: "stop" });
+  return err;
+}
+
+/** Throw stoppedError when --command_timeout stopped the command: called before ANY request starts, on every profile. */
+export function throwIfStopped(): void {
+  const why = commandStopReason();
+  if (why !== null) throw stoppedError(why);
 }
 
 /** The fields attached to `err`, or to a RetryDeadlineError's cause. */

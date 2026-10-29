@@ -28,6 +28,7 @@ import {
 } from "./cost-estimate";
 import type { Registry, RegistryRow } from "./registry";
 import { recordRequest } from "../usage-history";
+import { commandStopReason } from "../command-stop.js";
 import { assertFreeOnlyModel, getActiveBillableForModel } from "../config";
 import { assertModelValidated } from "../benchmark/validated.js";
 
@@ -220,6 +221,8 @@ export async function runWithLimit<T>(
     workers.push(
       (async (): Promise<void> => {
         while (true) {
+          // Follow-up review M3: a stopped command (--command_timeout) takes no new item, so no new request starts.
+          if (commandStopReason() !== null) break;
           const myIdx = idx++;
           if (myIdx >= total) break;
           await fn(items[myIdx]!);
@@ -517,6 +520,14 @@ async function scoutOneFile(
     };
     // Per-call timeout — defaults to 90s. Cancels the fetch via AbortSignal
     // so a hung provider can't stall the whole worker pool.
+    // Follow-up review M3: a stopped command (--command_timeout) starts no new
+    // attempt; the file fails with the stop as its error (never a throw: the pool
+    // treats failures as the caller's concern).
+    const stopWhy = commandStopReason();
+    if (stopWhy !== null) {
+      prevError = stopWhy;
+      break;
+    }
     const perCallMs = opts.perCallTimeoutMs ?? 90_000;
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), perCallMs);

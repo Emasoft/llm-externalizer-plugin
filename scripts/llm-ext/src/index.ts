@@ -150,7 +150,8 @@ import {
 } from "./text-tools/core.js";
 
 import type { RetryClock } from "./provider/http.js";
-import { brokerClientVersion, brokerQueueTimeoutMs, CommandStoppedError, endpointFailureKind, ensureBroker } from "./broker/client.js";
+import { brokerClientVersion, brokerQueueTimeoutMs, endpointFailureKind, ensureBroker } from "./broker/client.js";
+import { abortReasonText, CommandStoppedError, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 
 /**
@@ -4751,6 +4752,8 @@ async function dispatchCallToolInner(
 
         // Process each group (or single unnamed group for backward compat)
         const allGroupReports: string[] = [];
+        /** Follow-up review M2: files of batches whose call threw, as "FAILED: <file> — <reason>" lines. */
+        const chatFailedLines: string[] = [];
         for (const fg of chatFileGroups) {
           const fgPaths = fg.files;
           if (fgPaths.length === 0) continue;
@@ -4769,30 +4772,45 @@ async function dispatchCallToolInner(
                 modelOverride, outputDir,
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
-              if (rpResult.failed.length > 0) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
-              if (rpResult.aborted) lines.push("", `ABORTED: ${rpResult.abortReason}`);
+              // Follow-up review M1/m2: once stopped, every non-success file (skipped ones too) is listed, and the abort reason is the stop.
+              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              lines.push(...unfinishedFileLines(rpResult.results));
+              if (rpResult.aborted) lines.push("", `ABORTED: ${abortReasonText(rpResult.abortReason)}`);
               return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
             }
             // Simple sequential path (max_retries=1, no retry)
+            // Follow-up review M2: a file whose call THROWS (a --command_timeout stop
+            // above all) is recorded as "FAILED: <file> — <reason>" and the loop goes
+            // on; before, the first throw dropped every finished report path.
             const perFileResults: string[] = [];
+            let threw = false;
             for (const fp of fgPaths) {
-              const result = await processFileCheck(fp, chatPrompt, {
-                maxTokens,
-                redact: chatRedact,
-                regexRedact: chatRegexRedact,
-                onProgress,
-                ensemble: useEnsemble,
-                maxBytes: chatBudgetBytes,
-                modelOverride, outputDir,
-              });
+              let result: Awaited<ReturnType<typeof processFileCheck>>;
+              try {
+                result = await processFileCheck(fp, chatPrompt, {
+                  maxTokens,
+                  redact: chatRedact,
+                  regexRedact: chatRegexRedact,
+                  onProgress,
+                  ensemble: useEnsemble,
+                  maxBytes: chatBudgetBytes,
+                  modelOverride, outputDir,
+                });
+              } catch (err) {
+                threw = true;
+                perFileResults.push(`FAILED: ${fp} — ${(err as Error).message}`);
+                continue;
+              }
               perFileResults.push(
                 result.success && result.reportPath
                   ? result.reportPath
                   : `FAILED: ${fp} — ${result.error}`,
               );
             }
+            // A thrown failure used to end the command as an error; it still does, now with the finished paths listed.
             return {
               content: [{ type: "text", text: perFileResults.join("\n") }],
+              isError: threw,
             };
           }
 
@@ -4826,11 +4844,20 @@ async function dispatchCallToolInner(
             const messages: ChatMessage[] = [];
             messages.push({ role: "system", content: (system || "") + FILE_FORMAT_EXAMPLE + BREVITY_RULES });
             messages.push({ role: "user", content: userContent });
-            const resp = await ensembleStreaming(
-              messages,
-              { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
-              useEnsemble,
-            );
+            // Follow-up review M2: a failed batch (a --command_timeout stop above all)
+            // is recorded per file and the loop goes on, so the batches and
+            // groups already answered are still written and reported.
+            let resp: Awaited<ReturnType<typeof ensembleStreaming>>;
+            try {
+              resp = await ensembleStreaming(
+                messages,
+                { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
+                useEnsemble,
+              );
+            } catch (err) {
+              for (const fd of group) chatFailedLines.push(`FAILED: ${fd.path} — ${(err as Error).message}`);
+              continue;
+            }
             const footer = formatFooter(resp, "chat", group[0]?.path);
             // Shared response gate (TRDD-P4ULUV1R): an echoed group answer is
             // dropped exactly like an empty one — including it would present
@@ -4864,18 +4891,18 @@ async function dispatchCallToolInner(
             allGroupReports.push(`[group:${labelId}] ${savedPath}`);
           } else {
             // Single unnamed group — return directly (mode 0/2 backward compat)
-            return { content: [{ type: "text", text: savedPath }] };
+            return { content: [{ type: "text", text: [savedPath, ...chatFailedLines].join("\n") }], isError: chatFailedLines.length > 0 };
           }
         }
 
         // Grouped mode: return all per-group report paths
         if (allGroupReports.length === 0) {
           return {
-            content: [{ type: "text", text: "FAILED: LLM returned empty response for all groups." }],
+            content: [{ type: "text", text: chatFailedLines.length > 0 ? chatFailedLines.join("\n") : "FAILED: LLM returned empty response for all groups." }],
             isError: true,
           };
         }
-        return { content: [{ type: "text", text: allGroupReports.join("\n") }] };
+        return { content: [{ type: "text", text: [...allGroupReports, ...chatFailedLines].join("\n") }], isError: chatFailedLines.length > 0 };
       }
 
       case "code_task": {
@@ -6384,22 +6411,23 @@ async function dispatchCallToolInner(
             summaryLines.push(`  ${r.reportPath}`);
           }
         }
-        if (failed.length > 0) {
+        // Follow-up review M1/m2: once stopped, every non-success file is named (skipped ones too), instead of FAILED and a SKIPPED count.
+        if (failed.length > 0 && !isCommandStopped()) {
           summaryLines.push("", "FAILED:");
           for (const r of failed) {
             summaryLines.push(`  ${r.filePath}: ${r.error}`);
           }
         }
-        if (skipped.length > 0) {
+        if (skipped.length > 0 && !isCommandStopped()) {
           summaryLines.push(
             "",
             `SKIPPED (batch aborted): ${skipped.length} file(s)`,
           );
         }
+        summaryLines.push(...unfinishedFileLines(batchResults));
         if (aborted) {
-          summaryLines.push("", `BATCH ABORTED: ${abortReason}`);
+          summaryLines.push("", `BATCH ABORTED: ${abortReasonText(abortReason)}`);
         }
-
         return {
           content: [{ type: "text", text: summaryLines.join("\n") }],
           isError: aborted,

@@ -22,7 +22,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { CTX_HEADER, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { BROKER_ARGV, CTX_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
 import { llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
@@ -95,7 +95,9 @@ function newDir(): string {
 /** Stop every process a test left: the broker (SIGTERM, then SIGKILL), every registry pgid, every process carrying this dir's marker. */
 async function cleanup(dir: string): Promise<void> {
   const st = readBrokerState(dir, "llama");
-  if (st) {
+  // Follow-up review m7: a state-file pid is signalled only while it is STILL a
+  // broker: the broker may have exited and its pid been reused by an unrelated process.
+  if (st && (await isBrokerProcess(st.pid))) {
     try {
       process.kill(st.pid, "SIGTERM");
     } catch {
@@ -109,19 +111,29 @@ async function cleanup(dir: string): Promise<void> {
       }
       await new Promise((r) => setTimeout(r, 100));
     }
-    try {
-      process.kill(st.pid, "SIGKILL");
-    } catch {
-      /* gone */
+    if (await isBrokerProcess(st.pid)) {
+      try {
+        process.kill(st.pid, "SIGKILL");
+      } catch {
+        /* gone */
+      }
     }
   }
   const rows = await processSnapshot();
   // NEVER signal this runner's own process group: a CLI child the test spawned
   // (not detached) shares it, and `kill(-pgid)` on such a child killed vitest
   // and the shell running it. Those children are killed by pid instead.
+  // Follow-up review m8: without our own pgid that guard is blind, so fail loudly.
   const ownPgid = rows.find((r) => r.pid === process.pid)?.pgid;
+  if (ownPgid === undefined) throw new Error(`cleanup: this test runner (pid ${process.pid}) is not in the process snapshot; refusing to signal any group`);
+  const registryPgids = new Set(readRegistry(dir, "llama").map((e) => e.pgid));
+  // Follow-up review m7: a registry pgid alone is not proof (pgids are reused):
+  // only a llama-server or a broker in it is signalled. A process carrying this
+  // test's unique dir in its argv is this test's own by construction.
+  const isServerOrBroker = (argv: readonly string[]): boolean => basename(argv[0] ?? "") === "llama-server" || argv.includes(BROKER_ARGV);
   for (const row of rows) {
-    if (row.argv.some((t) => t.startsWith(dir)) || readRegistry(dir, "llama").some((e) => e.pgid === row.pgid)) {
+    const ownsDir = row.argv.some((t) => t.startsWith(dir));
+    if (ownsDir || (registryPgids.has(row.pgid) && isServerOrBroker(row.argv))) {
       try {
         if (row.pgid === ownPgid || row.pgid <= 1) process.kill(row.pid, "SIGKILL");
         else process.kill(-row.pgid, "SIGKILL");
@@ -968,7 +980,7 @@ describe("client against a misbehaving broker (review m4, m1)", () => {
     }
   });
 
-  it("m1: --command_timeout cancels a job whose POST was still in flight", async () => {
+  it("m1: --command_timeout cancels a job whose POST was still in flight; follow-up m1: only confirmed DELETEs are counted, a refused one is named", async () => {
     const deleted: string[] = [];
     const s = await serve((rq, rs) => {
       if (rq.method === "POST") {
@@ -978,17 +990,138 @@ describe("client against a misbehaving broker (review m4, m1)", () => {
       if (rq.method === "DELETE") { deleted.push(rq.url ?? ""); rs.writeHead(204); rs.end(); return; }
       rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
     });
+    // A second broker endpoint that refuses the DELETE (500): its job must not be counted as cancelled.
+    const bad = await serve((rq, rs) => {
+      if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "stuck-job" })); return; }
+      if (rq.method === "DELETE") { rs.writeHead(500); rs.end("no"); return; }
+      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
+    });
     try {
       const call = brokerExchange(s.ep, req).catch((e: unknown) => e);
+      const stuck = brokerExchange(bad.ep, req).catch((e: unknown) => e);
       await new Promise((r) => setTimeout(r, 100));
-      const n = await cancelAllBrokerJobs("test stop");
-      expect(n).toBe(1);
+      const result = await cancelAllBrokerJobs("test stop");
+      expect(result).toEqual({ cancelled: 1, failed: ["stuck-job"] });
       expect(deleted).toContain("/v1/jobs/slow-job");
       expect(await call).toBeInstanceOf(Error);
+      expect(await stuck).toBeInstanceOf(Error);
     } finally {
       await s.close();
+      await bad.close();
     }
   });
+});
+
+/**
+ * Follow-up review M3 + M2: a --command_timeout stop on a profile with NO
+ * broker (a non-managed OpenAI-compatible endpoint, the transport every remote
+ * profile shares: sendChat -> fetchWithRetry429). The endpoint is a local fake
+ * HTTP server in this process, never a real or paid API; it answers each chat
+ * request after REPLY_MS. Asserted: no chat request reaches it after the stop,
+ * the command exits 124, and its output lists every finished report path and
+ * every unfinished file as "FAILED: <file> — <timeout>" (the per-file path and
+ * the grouped, one-batch-per-file path).
+ */
+describe("a stopped command on a non-broker profile starts no new request (follow-up review M3, M2)", () => {
+  const REPLY_MS = 2500;
+  const TIMEOUT_S = 8;
+  const N = 6;
+  const STOP_TEXT = `--command_timeout: the command ran longer than ${TIMEOUT_S} s and was stopped`;
+
+  const run = async (answerMode: "0" | "2"): Promise<{ code: number | null; out: string; stopSeenAt: number; chatAt: number[]; dir: string; files: string[] }> => {
+    const chatAt: number[] = [];
+    const srv = createServer((rq, rs) => {
+      rq.resume();
+      rq.on("end", () => {
+        if (rq.url?.startsWith("/v1/models")) {
+          rs.writeHead(200, { "content-type": "application/json" });
+          rs.end(JSON.stringify({ object: "list", data: [{ id: "fake-model", object: "model" }] }));
+          return;
+        }
+        if (rq.method === "POST" && rq.url?.startsWith("/v1/chat/completions")) {
+          chatAt.push(Date.now());
+          setTimeout(() => {
+            rs.writeHead(200, { "content-type": "application/json" });
+            rs.end(JSON.stringify({ id: "c", object: "chat.completion", created: 1, model: "fake-model", choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: "The file tells of a numbered cat." } }], usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } }));
+          }, REPLY_MS);
+          return;
+        }
+        rs.writeHead(404);
+        rs.end("{}");
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    try {
+      const cli = await cliBundle();
+      const dir = newDir();
+      const src = join(dir, "src");
+      mkdirSync(src);
+      // ~6 KB per file: with the 10 KB minimum payload budget, the grouped path makes one batch per file.
+      const files = Array.from({ length: N }, (_, i) => join(src, `f${i + 1}.txt`));
+      files.forEach((f, i) => writeFileSync(f, `Once upon a time there was cat number ${i + 1}. `.repeat(150)));
+      writeFileSync(join(dir, "settings.yaml"), ["active: fake", "profiles:", "  fake:", "    profile-type: local", "    mode: local", "    api: generic-local", `    url: http://127.0.0.1:${port}`, "    model: fake-model", "    context_window: 8192", ""].join("\n"));
+      let stopSeenAt = 0;
+      const { code, out } = await new Promise<{ code: number | null; out: string }>((resolve) => {
+        const child = spawn(process.execPath, [cli, `--command_timeout=${TIMEOUT_S}`, "llm", "ask", "--folder_path", src, "--instructions", "describe", "--answer_mode", answerMode, "--max_payload_kb", "10", "-o", join(dir, "out")], {
+          cwd: dir,
+          env: { ...process.env, HOME: dir, LLM_EXT_CONFIG_DIR: dir, LLM_EXT_INSTALL_RULE: "0" },
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        let text = "";
+        const take = (c: Buffer): void => {
+          text += c;
+          if (stopSeenAt === 0 && text.includes(STOP_TEXT)) stopSeenAt = Date.now();
+        };
+        child.stdout.on("data", take);
+        child.stderr.on("data", take);
+        const kill = setTimeout(() => child.kill("SIGKILL"), 120_000);
+        child.on("exit", (c) => {
+          clearTimeout(kill);
+          resolve({ code: c, out: text });
+        });
+      });
+      return { code, out, stopSeenAt, chatAt, dir: join(dir, "out"), files };
+    } finally {
+      srv.closeAllConnections();
+      await new Promise<void>((r) => srv.close(() => r()));
+    }
+  };
+
+  const failedLine = (f: string): RegExp => new RegExp(`FAILED: ${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} — ${STOP_TEXT}`);
+
+  it("per-file path (answer_mode 0): exit 124, no request after the stop, every finished report path printed, the rest FAILED with the timeout", async () => {
+    const r = await run("0");
+    expect(r.code, r.out).toBe(124);
+    expect(r.stopSeenAt, r.out).toBeGreaterThan(0);
+    expect(r.chatAt.length).toBeGreaterThanOrEqual(1);
+    expect(r.chatAt.length).toBeLessThan(N);
+    for (const at of r.chatAt) expect(at).toBeLessThan(r.stopSeenAt);
+    const written = readdirSync(r.dir).filter((f) => f.endsWith(".md"));
+    expect(written.length).toBeGreaterThanOrEqual(1);
+    for (const f of written) expect(r.out).toContain(join(r.dir, f));
+    const unfinished = r.files.filter((f) => !written.some((w) => w.includes(`-${basename(f)}-`)));
+    expect(unfinished.length).toBe(N - written.length);
+    for (const f of unfinished) expect(r.out).toMatch(failedLine(f));
+  }, 180_000);
+
+  it("grouped path (answer_mode 2, one batch per file): exit 124, no request after the stop, the merged report holds the answered batches, the rest FAILED with the timeout", async () => {
+    const r = await run("2");
+    expect(r.code, r.out).toBe(124);
+    expect(r.stopSeenAt, r.out).toBeGreaterThan(0);
+    expect(r.chatAt.length).toBeGreaterThanOrEqual(1);
+    expect(r.chatAt.length).toBeLessThan(N);
+    for (const at of r.chatAt) expect(at).toBeLessThan(r.stopSeenAt);
+    const written = readdirSync(r.dir).filter((f) => f.endsWith(".md"));
+    expect(written).toHaveLength(1);
+    expect(r.out).toContain(join(r.dir, written[0]));
+    const merged = readFileSync(join(r.dir, written[0]), "utf8");
+    const answered = r.files.filter((f) => merged.includes(`Files: ${f}\n`));
+    expect(answered.length).toBeGreaterThanOrEqual(1);
+    const unfinished = r.files.filter((f) => !answered.includes(f));
+    expect(unfinished.length).toBeGreaterThanOrEqual(1);
+    for (const f of unfinished) expect(r.out).toMatch(failedLine(f));
+  }, 180_000);
 });
 
 /**
@@ -1056,11 +1189,11 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
   };
 
   /** One real CLI command, in its own process; resolves with its exit code and output. */
-  const runCli = (cfg: string, args: string[], cwd: string): Promise<{ code: number | null; out: string }> =>
+  const runCli = (cfg: string, args: string[], cwd: string, env: Record<string, string> = {}): Promise<{ code: number | null; out: string }> =>
     new Promise((resolve) => {
       const child = spawn(process.execPath, [cli, ...args], {
         cwd,
-        env: { ...process.env, HOME: cfg, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0", LLAMA_CACHE },
+        env: { ...process.env, HOME: cfg, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0", LLAMA_CACHE, ...env },
         stdio: ["ignore", "pipe", "pipe"],
       });
       let out = "";
@@ -1074,10 +1207,13 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     });
 
   const brokerLog = (cfg: string): string[] => readFileSync(join(cfg, "broker-llama.log"), "utf8").split("\n");
-  const dispatches = (cfg: string): Array<{ model: string; command: string }> =>
+  /** Every dispatch in the broker log: model, command, dispatch time, and submit time (dispatch time minus its queue time), in ms. */
+  const dispatches = (cfg: string): Array<{ model: string; command: string; at: number; submitted: number }> =>
     brokerLog(cfg).flatMap((l) => {
-      const m = /dispatch job \S+ model '([^']+)' command (\S+)/.exec(l);
-      return m ? [{ model: m[1], command: m[2] }] : [];
+      const m = /^(\S+) dispatch job \S+ model '([^']+)' command (\S+) queued (\d+) ms/.exec(l);
+      if (!m) return [];
+      const at = Date.parse(m[1]);
+      return [{ model: m[2], command: m[3], at, submitted: at - Number(m[4]) }];
     });
   const brokerHealth = async (cfg: string): Promise<{ queued: number; running: number }> => {
     const st = readBrokerState(cfg, "llama")!;
@@ -1112,6 +1248,15 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(d.filter((x) => x.model === modelB()).length).toBeGreaterThanOrEqual(1);
     expect(d.filter((x) => x.model === modelA()).length).toBeGreaterThanOrEqual(3);
     expect(new Set(d.map((x) => x.command)).size).toBe(2);
+    // Follow-up review m9: REAL overlap, from the broker's own timestamps: each
+    // command's span at the broker (first submit to last dispatch) intersects the
+    // other's, so both commands had jobs at the broker at the same time.
+    const span = (cmd: string): [number, number] => {
+      const mine = d.filter((x) => x.command === cmd);
+      return [Math.min(...mine.map((x) => x.submitted)), Math.max(...mine.map((x) => x.at))];
+    };
+    const [s1, s2] = [...new Set(d.map((x) => x.command))].map(span);
+    expect(s1[0] < s2[1] && s2[0] < s1[1], JSON.stringify({ s1, s2 })).toBe(true);
     expect(spawnLines(cfg).some((l) => l.includes(modelA()))).toBe(true);
     expect(spawnLines(cfg).some((l) => l.includes(modelB()))).toBe(true);
     expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
@@ -1136,14 +1281,24 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(full.length).toBeGreaterThanOrEqual(2 * MAIN_SLOTS);
   }, 600_000);
 
-  it("--command_timeout on a multi-file command (spec 15, review m3): finished reports are written, unfinished files are listed, exit 124, nothing left queued", async () => {
+  it("--command_timeout on a multi-file command (spec 15, review m3, follow-up M1): finished reports are written, EVERY unfinished file is named (those that never started too), exit 124, nothing left queued", async () => {
     const cfg = newDir();
     writeSettings(cfg);
-    const w = workDir(6);
+    // Follow-up review M1: more files (10) than the submission window (W = 2 x
+    // LLM_EXT_BROKER_BATCH = 4), so some files never start before the stop.
+    const env = { LLM_EXT_BROKER_BATCH: "2" };
+    const n = 10;
+    const w = workDir(n);
+    // Follow-up review m10: load the model first (a warm-up command), and leave
+    // wide limits, so a slow model load can never eat the timeout before the
+    // first report: the test is about the stop, not about load time.
+    const warm = await runCli(cfg, ["llm", "ask", w.files[0], "--instructions", "go on", "-o", join(w.dir, "warm")], w.dir, env);
+    expect(warm.code, warm.out).toBe(0);
+    const warmDispatches = dispatches(cfg).length;
     const out = join(w.dir, "scan");
-    const scanP = runCli(cfg, ["--command_timeout=20", "scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", out], w.dir);
+    const scanP = runCli(cfg, ["--command_timeout=90", "scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", out], w.dir, env);
     // Freeze the server once the first report is on disk: the rest can then never finish before the timeout.
-    for (let i = 0; i < 300 && reports(out).length < 1; i++) await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 1200 && reports(out).length < 1; i++) await new Promise((r) => setTimeout(r, 50));
     expect(reports(out).length).toBeGreaterThanOrEqual(1);
     const main = readRegistry(cfg, "llama").find((e) => e.role === "main")!.pid;
     process.kill(main, "SIGSTOP");
@@ -1156,12 +1311,17 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(scan.code, scan.out).toBe(124);
     const done = reports(out);
     expect(done.length).toBeGreaterThanOrEqual(1);
-    expect(done.length).toBeLessThan(6);
-    // Every file is either finished (a report) or listed as unfinished, with the timeout as its reason.
+    expect(done.length).toBeLessThan(n);
+    // Some files never started: the frozen server got only the files dispatched before the freeze.
+    expect(dispatches(cfg).length - warmDispatches).toBeLessThan(n);
+    // Every file is either finished (a report) or named as unfinished, with the timeout as its reason.
     const unfinished = w.files.filter((f) => !done.some((r) => r.includes(`-${basename(f)}-`)));
-    expect(unfinished.length).toBe(6 - done.length);
+    expect(unfinished.length).toBe(n - done.length);
+    expect(scan.out).toContain(`UNFINISHED (${unfinished.length}, stopped by --command_timeout):`);
     for (const f of unfinished) expect(scan.out).toMatch(new RegExp(`${f.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}: --command_timeout`));
-    expect(scan.out).toMatch(/--command_timeout: the command ran longer than 20 s and was stopped/);
+    // Follow-up review m2: the abort reason is the timeout, never a "3 of the last 3 failed" outage text.
+    expect(scan.out).not.toMatch(/ABORTED: 3 /);
+    expect(scan.out).toMatch(/--command_timeout: the command ran longer than 90 s and was stopped/);
     expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
   }, 600_000);
   it("chatCompletionJSON goes through the broker (check imports, whose extract step is a JSON-schema call)", async () => {

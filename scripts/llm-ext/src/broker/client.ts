@@ -12,7 +12,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { spawnDetachedChild } from "../bench-spawn.js";
 import { fileURLToPath } from "node:url";
-import { attachFailure } from "../provider/http.js";
+import { attachFailure, stoppedError, throwIfStopped } from "../provider/http.js";
+import { commandStopReason, stopCommand } from "../command-stop.js";
 import { ManagedServerError, pidState, withAsyncLock } from "../local-llama-server.js";
 import {
   BROKER_ARGV,
@@ -102,23 +103,6 @@ export class BrokerUnavailableError extends ManagedServerError {
     this.name = "BrokerUnavailableError";
   }
 }
-
-
-/**
- * The command is being stopped by --command_timeout (spec 15): its broker
- * jobs were cancelled and no new one is submitted. Final "stop": never
- * retried, never a breaker failure, and the walker rethrows it at once (no
- * other model is tried), so the command ends quickly, every unfinished file
- * failing with this reason, and writes what it already has.
- */
-export class CommandStoppedError extends Error {
-  constructor(reason: string) {
-    super(reason);
-    this.name = "CommandStoppedError";
-    attachFailure(this, { final: "stop" });
-  }
-}
-
 
 /**
  * The walker's endpoint verdict for a failed chain entry (spec 5):
@@ -266,30 +250,42 @@ const pendingByScope = new WeakMap<object, Map<string, string>>();
 
 /** Every job this process has at a broker and not yet seen finish, by id (for --command_timeout). */
 const active = new Map<string, BrokerEndpoint>();
-/** Set once the command is being stopped: no further job is submitted. */
-let stopped: string | null = null;
 /** Job submissions (POST /v1/jobs) still in flight (review m1). */
 const submitting = new Set<Promise<string>>();
 /** How long a --command_timeout waits for in-flight submissions before it cancels what it has. */
 const SUBMIT_DRAIN_MS = 5000;
 
+/** Calls cancelling their own job (the finally of brokerExchange), and the job ids whose DELETE failed once the command was stopping (follow-up review m1). */
+const selfCancels = new Set<Promise<void>>();
+const uncancelled: string[] = [];
+
 /**
- * --command_timeout expiry (USER ruling 2026-10-28): stop submitting and
- * cancel (DELETE) every job this command still has queued or polling, so none
- * of them is left in the broker queue. Returns how many were cancelled.
+ * --command_timeout expiry (USER ruling 2026-10-28): stop submitting (the
+ * shared command-stop flag) and cancel (DELETE) every job this command still
+ * has queued or polling, so none of them is left in the broker queue.
+ * Follow-up review m1: `cancelled` counts only DELETEs the broker confirmed;
+ * `failed` names every job whose DELETE it did not (broker down or slow),
+ * including those a stopping call tried to cancel itself; they are left to
+ * the broker's abandon rule. Never a silent "N cancelled".
  */
-export async function cancelAllBrokerJobs(reason: string): Promise<number> {
-  stopped = reason;
+export async function cancelAllBrokerJobs(reason: string): Promise<{ cancelled: number; failed: string[] }> {
+  stopCommand(reason);
   // Review m1: wait (bounded) for submissions still in flight, so their jobs are in `active` before the snapshot.
   await Promise.race([Promise.allSettled([...submitting]), new Promise((r) => setTimeout(r, SUBMIT_DRAIN_MS).unref())]);
   const jobs = [...active.entries()];
   active.clear();
-  await Promise.all(jobs.map(([id, ep]) => cancel(ep, id)));
-  return jobs.length;
+  const ok = await Promise.all(jobs.map(([id, ep]) => cancel(ep, id)));
+  // Each own-cancel DELETE is bounded (3 s), so this wait is too.
+  await Promise.allSettled([...selfCancels]);
+  return { cancelled: ok.filter(Boolean).length, failed: [...jobs.filter((_, i) => !ok[i]).map(([id]) => id), ...uncancelled] };
 }
 
-async function cancel(ep: BrokerEndpoint, id: string): Promise<void> {
-  await fetch(`${ep.url}/v1/jobs/${id}`, { method: "DELETE", headers: { [TOKEN_HEADER]: ep.token }, signal: AbortSignal.timeout(3000) }).catch(() => undefined);
+/** DELETE one job; true when the broker no longer holds it (2xx, or 404 = already gone). */
+async function cancel(ep: BrokerEndpoint, id: string): Promise<boolean> {
+  const res = await fetch(`${ep.url}/v1/jobs/${id}`, { method: "DELETE", headers: { [TOKEN_HEADER]: ep.token }, signal: AbortSignal.timeout(3000) }).catch(() => null);
+  if (res === null) return false;
+  await res.text().catch(() => undefined);
+  return res.ok || res.status === 404;
 }
 
 /**
@@ -317,7 +313,7 @@ export async function brokerExchange(
   try {
     for (let resubmits = 0; ; ) {
       opts.signal?.throwIfAborted();
-      if (stopped !== null) throw new CommandStoppedError(stopped);
+      throwIfStopped();
       if (id === undefined) {
         const h: Record<string, string> = {
           ...headers,
@@ -387,7 +383,8 @@ export async function brokerExchange(
       // Queue time (dispatch - submit, broker clock) goes to the caller's CALL, never to a shared clock (review M10).
       opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt);
       // A job cancelled by --command_timeout ends this call as a command stop, not as a model failure.
-      if (stopped !== null && reply.state === "cancelled") throw new CommandStoppedError(stopped);
+      const stopWhy = commandStopReason();
+      if (stopWhy !== null && reply.state === "cancelled") throw stoppedError(stopWhy);
       if (reply.state === "done") {
         return new Response(reply.body ?? "", { status: reply.status ?? 502, headers: { "content-type": reply.contentType ?? "application/json" } });
       }
@@ -397,7 +394,16 @@ export async function brokerExchange(
     if (id !== undefined && !networkFailure) {
       pending.delete(reuseKey);
       active.delete(id);
-      await cancel(ep, id);
+      // Follow-up review m1: a call that ends because of the stop cancels its own
+      // job here, possibly before cancelAllBrokerJobs takes its snapshot; a
+      // DELETE the broker did not confirm is recorded for its report.
+      const jobId = id;
+      const own = cancel(ep, jobId).then((ok) => {
+        if (!ok && commandStopReason() !== null) uncancelled.push(jobId);
+      });
+      selfCancels.add(own);
+      await own;
+      selfCancels.delete(own);
     }
   }
 }
