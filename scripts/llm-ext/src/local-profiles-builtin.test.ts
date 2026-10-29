@@ -147,16 +147,22 @@ describe("built-in local profiles: added once (P5)", () => {
     ["linux", "arm64"],
     ["win32", "x64"],
     ["darwin", "x64"],
-  ])("on %s/%s locals-mlx is not written but its step is recorded (not retried); local_llama is still added", (platform, arch) => {
+  ])("on %s/%s locals-mlx is not written and its step is NOT recorded; local_llama is still added; a later Mac run adds locals-mlx", (platform, arch) => {
     writeFileSync(getSettingsPath(), BASE);
     run({ platform, arch });
     expect(profiles()["locals-mlx"]).toBeUndefined();
     expect(profiles().local_llama).toBeDefined();
-    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}locals-mlx`)).toBe(true);
-    // The Mac run that follows finds the step recorded and writes nothing.
-    const before = readFileSync(getSettingsPath(), "utf-8");
+    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}locals-mlx`)).toBe(false);
     run(MAC);
-    expect(readFileSync(getSettingsPath(), "utf-8")).toBe(before);
+    expect(profiles()["locals-mlx"]).toEqual(builtinLocalProfiles().find((b) => b.name === "locals-mlx")!.profile);
+    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}locals-mlx`)).toBe(true);
+  });
+
+  it("with no injected platform the host gets exactly what localsPlatformSupported() says (production default)", () => {
+    writeFileSync(getSettingsPath(), BASE);
+    run();
+    expect(profiles()["locals-mlx"] !== undefined).toBe(localsPlatformSupported());
+    expect(profiles().local_llama).toBeDefined();
   });
 
   it("the step-id list is pinned: a new built-in local profile step must be added here on purpose", () => {

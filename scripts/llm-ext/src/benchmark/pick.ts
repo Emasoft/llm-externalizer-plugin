@@ -2321,12 +2321,11 @@ export function localProfileStepIds(): string[] {
  *    active; the step is recorded, so a profile the user deletes later is
  *    not added again;
  *  - not runnable on this machine (locals-mlx needs macOS on Apple silicon):
- *    nothing is written, but the step IS recorded (skipped by platform), so it
- *    is not retried on every command; the file never carries a profile that
- *    cannot run there, and a settings.yaml later moved to a Mac does not get it
- *    from this step. (An
- *    unselected profile is only type- and field-checked at load, so it would
- *    not stop settings.yaml from loading: the gate is about usefulness.)
+ *    nothing is written and the step is NOT recorded, so a settings.yaml later
+ *    used on a Mac gets it on its first run there; the platform check is a
+ *    cheap in-memory test, repeated on every command. (An unselected profile
+ *    is only type- and field-checked at load, so it would not stop
+ *    settings.yaml from loading: the gate is about usefulness.)
  * Limit (P5 review m1, as for or-jev-section-added): "not added again" lasts
  * as long as the record in dynamic-profiles-state.json. If that file is lost
  * or reset, or settings.yaml is copied to a machine without it, a deleted
@@ -2343,11 +2342,8 @@ function runLocalProfileSteps(
     const step = `${LOCAL_PROFILE_STEP_PREFIX}${builtin.name}`;
     try {
       if (opts.isApplied(step)) continue;
-      // WHY recorded, not just skipped: locals-mlx runs only on macOS on Apple silicon (darwin, arm64). Elsewhere nothing is written, and the step is recorded so the check is not repeated on every command. local_llama stays on every platform (llama.cpp runs everywhere).
-      if (!builtin.supported(opts.platform?.platform, opts.platform?.arch)) {
-        recordApplied(step);
-        continue;
-      }
+      // WHY not recorded: so a settings file later used on a Mac still gets it; the check is a cheap in-memory test. local_llama stays on every platform (llama.cpp runs everywhere).
+      if (!builtin.supported(opts.platform?.platform, opts.platform?.arch)) continue;
       const doc = parseDocument(readFileSync(settingsPath, "utf-8"));
       if (doc.errors.length > 0) return; // the ordinary load path reports the real parse failure
       let added = false;

@@ -28,6 +28,8 @@ import { parseManagedModel } from "./local-llama-server.js";
 // PT-02: cyclic with default-profiles-state (it imports getConfigDir); safe because both sides only call the other inside functions.
 import { isMigrationStepApplied } from "./default-profiles-state.js";
 
+import { execFileSync } from "node:child_process";
+
 // ── Types ────────────────────────────────────────────────────────────
 
 export type ApiProtocol = "lmstudio_api" | "openai_api" | "openrouter_api";
@@ -669,8 +671,26 @@ export interface ValidationResult {
 // Names use -local / -remote suffix to prevent mode/preset mismatches.
 
 /** TRDD-ZGSGGHQG: Locals (MLX) runs on macOS on Apple silicon only; the first darwin check in llm-ext. */
-export function localsPlatformSupported(platform: string = process.platform, arch: string = process.arch): boolean {
-  return platform === "darwin" && arch === "arm64";
+// WHY the probe: an x64 Node under Rosetta on an M-series Mac reports arch x64, yet the Locals server is a separate arm64 process that runs there. hw.optional.arm64 reports the hardware. Cached (the hardware cannot change); a probe error means not Apple silicon. stderr is discarded so an old macOS's 'unknown oid' never reaches the user's terminal.
+let rosettaArm64Probe: boolean | undefined;
+function hostIsAppleSiliconUnderRosetta(): boolean {
+  if (rosettaArm64Probe === undefined) {
+    try {
+      rosettaArm64Probe = execFileSync("sysctl", ["-n", "hw.optional.arm64"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim() === "1";
+    } catch {
+      rosettaArm64Probe = false;
+    }
+  }
+  return rosettaArm64Probe;
+}
+export function localsPlatformSupported(platform?: string, arch?: string): boolean {
+  // An injected pair is taken literally; the probe runs only when both come from the defaults.
+  const injected = platform !== undefined || arch !== undefined;
+  const p = platform ?? process.platform;
+  const a = arch ?? process.arch;
+  if (p !== "darwin") return false;
+  if (a === "arm64") return true;
+  return !injected && a === "x64" && hostIsAppleSiliconUnderRosetta();
 }
 /**
  * The model-id errors of a locals-local profile or binding. Always refused: a
