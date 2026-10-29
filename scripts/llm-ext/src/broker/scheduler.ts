@@ -75,7 +75,13 @@ export function timingsFromEnv(env: NodeJS.ProcessEnv): BrokerTimings {
   return out;
 }
 
-export type JobState = "queued" | "running" | "done" | "failed" | "cancelled";
+/**
+ * P6 (spec section 2): `held` = a job for a managed local model with no
+ * complete calibration record. It is never in the scheduler's queues, so it
+ * has no deadline, takes no part in rotation, and never starts a main server;
+ * the broker moves it to `queued` once the record says `status: ok`.
+ */
+export type JobState = "queued" | "held" | "running" | "done" | "failed" | "cancelled";
 
 export interface Job {
   id: string;
@@ -92,6 +98,8 @@ export interface Job {
   /** This job's queue timeout (--queue_timeout, else T): once its deadline nears, its model is rotated in after the current minimum slice (spec 6). Waiting is never an error. */
   queueTimeoutMs: number;
   submittedAt: number;
+  /** P6: time spent held for calibration before release (excluded from the retry clock like queue time); submittedAt restarts at release. */
+  heldMs?: number;
   lastPolledAt: number;
   /** Long-polls currently waiting on this job; a job with one is never abandoned. */
   pollers: number;

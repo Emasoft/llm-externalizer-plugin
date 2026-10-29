@@ -23,9 +23,10 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { BROKER_ARGV, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
-import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer } from "./registry.js";
-import { freePort, isLocalsServerArgv, isPythonPath, llamaServerEnv, MAIN_SLOTS, ManagedServerError, processSnapshot, readCommandLine, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
+import { BROKER_ARGV, CALIBRATE_ARGV, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, readBrokerState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
+import { recordPath } from "../calibration/record.js";
+import { freePort, isLocalsServerArgv, isPythonPath, llamaServerEnv, MAIN_SLOTS, ManagedServerError, parseManagedModel, processSnapshot, readCommandLine, spawnLlamaServer, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
 import { buildLocalsArgv, hasLocalsMarker, LOCALS_MAIN_SLOTS, localsOutgoingModel, localsPython, parseLocalsModel, waitLocalsReady } from "../local-locals-server.js";
 import { localsModelErrors, localsPlatformSupported } from "../config.js";
@@ -43,7 +44,7 @@ const REQUIRE_SHIM = `import { createRequire as __cjsCreateRequire } from "node:
 // in production.
 const ENTRY = `
 import { runBrokerMain } from "./server.ts";
-import { setBrokerClientVersion, ensureBroker, brokerExchange } from "./client.ts";
+import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
 if (mode === "__broker") {
   await runBrokerMain(process.env.TEST_BROKER_VERSION ?? "t1");
@@ -51,6 +52,9 @@ if (mode === "__broker") {
   const spec = JSON.parse(arg);
   setBrokerClientVersion(spec.version);
   const ep = await ensureBroker({ dir: spec.dir, version: spec.version });
+  // P6: stopAfterMs plays --command_timeout (the same cancelAllBrokerJobs the CLI runs on expiry).
+  let stopped = null;
+  if (spec.stopAfterMs) setTimeout(() => void cancelAllBrokerJobs("--command_timeout (test)").then((s) => (stopped = s)), spec.stopAfterMs);
   const results = await Promise.all(spec.jobs.map(async (j, i) => {
     await new Promise((r) => setTimeout(r, j.delayMs ?? 0));
     const body = JSON.stringify({ model: j.model, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: j.maxTokens ?? 4 });
@@ -62,7 +66,8 @@ if (mode === "__broker") {
       return { i, model: j.model, error: String(e.message), at: Date.now() };
     }
   }));
-  process.stdout.write(JSON.stringify({ pid: ep.pid, results }) + "\\n");
+  await new Promise((r) => setTimeout(r, spec.stopAfterMs ? 500 : 0));
+  process.stdout.write(JSON.stringify({ pid: ep.pid, results, stopped }) + "\\n");
 }
 `;
 
@@ -89,9 +94,23 @@ afterAll(() => {
   rmSync(workDir, { recursive: true, force: true });
 });
 
+/**
+ * P6 (spec section 2): the broker HOLDS a job for a managed model with no
+ * complete calibration record. Tests that need the model served write a real
+ * record for it (there is no bypass switch).
+ */
+function markCalibrated(dir: string, engine: "llama" | "locals", model: string): void {
+  const p = recordPath(dir, engine, model);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify({ status: "ok" }), { mode: 0o600 });
+}
+
+/** A config dir whose test models (A, B, LOCALS_MODEL) are calibrated; cleaned up in afterEach. */
 function newDir(): string {
   const d = mkdtempSync(join(tmpdir(), "llm-ext-broker-cfg-"));
   dirs.push(d);
+  for (const m of [A, B]) markCalibrated(d, "llama", m);
+  markCalibrated(d, "locals", LOCALS_MODEL);
   return d;
 }
 
@@ -160,11 +179,13 @@ afterEach(async () => {
 interface ClientResult {
   pid: number;
   results: Array<{ i: number; model: string; status?: number; error?: string; at: number }>;
+  /** P6: what cancelAllBrokerJobs reported when stopAfterMs fired (null when it did not). */
+  stopped?: { cancelled: number; failed: string[] } | null;
 }
 
-function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1"): Promise<ClientResult> {
+function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1", extra: { stopAfterMs?: number } = {}): Promise<ClientResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [bundle, "client", JSON.stringify({ dir, version, jobs })], {
+    const child = spawn(process.execPath, [bundle, "client", JSON.stringify({ dir, version, jobs, ...extra })], {
       env: { ...process.env, LLAMA_CACHE, LLM_EXT_CONFIG_DIR: dir, TEST_BROKER_VERSION: version, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -413,6 +434,8 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
   it("a model that fails to start does not skip the next model", async () => {
     const dir = newDir();
     const bad = "ggml-org/llm-ext-no-such-repo-zz/none.gguf";
+    // P6: calibrated on paper, so the job is queued and its start failure is what is tested (uncalibrated, it would be held).
+    markCalibrated(dir, "llama", bad);
     const r = await runClient(dir, [{ model: bad }, { model: A, delayMs: 50 }]);
     expect(r.results[0].error).toMatch(/BrokerJobError|failed|exited/);
     expect(r.results[1].status).toBe(200);
@@ -734,6 +757,139 @@ describe("a dead server never hangs its model's jobs (review C2)", () => {
   }, 300_000);
 });
 
+/**
+ * P6 (design/specs/local-calibration-design.md section 2): a job for a managed
+ * model with no complete calibration record is HELD. Real broker, real
+ * llama-server, real records on disk: B starts uncalibrated, A is calibrated.
+ */
+describe("jobs held for calibration (P6)", () => {
+  const uncalibrate = (dir: string, model: string): void => rmSync(recordPath(dir, "llama", model));
+  const health = async (dir: string): Promise<{ queued: number; running: number; held: number; models: Array<{ engine: string; model: string; queued: number; running: number; held: number }> }> => {
+    const st = readBrokerState(dir)!;
+    return (await (await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } })).json()) as never;
+  };
+
+  it("a held job never starts a main server, ignores deadline and starvation rotation, and is served once its record appears", async () => {
+    const dir = newDir();
+    uncalibrate(dir, B);
+    // Deadlines of 300 ms and a starvation T of 300 ms: a QUEUED B would be rotated in within a second.
+    const env = { LLM_EXT_BROKER_STARVE_MS: "300", LLM_EXT_BROKER_ABANDON_MS: "600000", LLM_EXT_BROKER_LINGER_MS: "1" };
+    await runClient(dir, jobsOf(A, 1), env);
+    const st = readBrokerState(dir)!;
+    const h = { [TOKEN_HEADER]: st.token, [ENGINE_HEADER]: "llama", [CTX_HEADER]: "1024", "content-type": "application/json", "x-llm-ext-queue-timeout-ms": "300" };
+    const res = await fetch(`http://127.0.0.1:${st.port}/v1/jobs`, { method: "POST", headers: h, body: JSON.stringify({ model: B, messages: [{ role: "user", content: "x" }], max_tokens: 2 }) });
+    const id = ((await res.json()) as { job: string }).job;
+    // A keeps working meanwhile: its jobs are served while B waits.
+    const a = await runClient(dir, jobsOf(A, 3), env);
+    expect(a.results.filter((x) => x.status !== 200)).toEqual([]);
+    await new Promise((r) => setTimeout(r, 4000));
+    const poll = await fetch(`http://127.0.0.1:${st.port}/v1/jobs/${id}?wait=1`, { headers: h });
+    expect(poll.status).toBe(204);
+    expect(poll.headers.get(STATE_HEADER)).toBe("held");
+    expect(poll.headers.get("x-llm-ext-held")).toMatch(/waiting for calibration of/);
+    const hb = await health(dir);
+    expect(hb.held).toBe(1);
+    expect(hb.queued).toBe(0);
+    expect(hb.models.find((m) => m.model === B)).toEqual({ engine: "llama", model: B, queued: 0, running: 0, held: 1 });
+    // Never started: no spawn of B, after well over its 300 ms deadline and T.
+    expect(spawnLines(dir).filter((l) => l.includes(`model '${B}'`))).toEqual([]);
+    markCalibrated(dir, "llama", B);
+    let reply: { state: string; heldMs?: number; status?: number } | null = null;
+    for (let i = 0; i < 60 && reply === null; i++) {
+      const r = await fetch(`http://127.0.0.1:${st.port}/v1/jobs/${id}?wait=1`, { headers: h });
+      if (r.status === 200) reply = (await r.json()) as { state: string; heldMs?: number; status?: number };
+      else await r.text();
+    }
+    expect(reply?.state).toBe("done");
+    expect(reply?.status).toBe(200);
+    expect(reply!.heldMs!).toBeGreaterThan(4000);
+    expect(spawnLines(dir).filter((l) => l.includes(`model '${B}'`))).toHaveLength(1);
+    expect((await health(dir)).held).toBe(0);
+  }, 300_000);
+
+  it("a held job is bounded by --command_timeout: the stop cancels it, and nothing starts", async () => {
+    const dir = newDir();
+    uncalibrate(dir, B);
+    const env = { LLM_EXT_BROKER_STARVE_MS: "300", LLM_EXT_BROKER_ABANDON_MS: "600000" };
+    await runClient(dir, jobsOf(A, 1), env);
+    const r = await runClient(dir, jobsOf(B, 2), env, "t1", { stopAfterMs: 3000 });
+    expect(r.stopped).toEqual({ cancelled: 2, failed: [] });
+    expect(r.results.every((x) => x.error !== undefined)).toBe(true);
+    const hb = await health(dir);
+    expect(hb.held).toBe(0);
+    expect(hb.models.find((m) => m.model === B)).toBeUndefined();
+    expect(spawnLines(dir).filter((l) => l.includes(`model '${B}'`))).toEqual([]);
+  }, 300_000);
+
+  it("a failed calibration record fails the job at once with the record's message (a model error, so the client falls back)", async () => {
+    const dir = newDir();
+    const p = recordPath(dir, "llama", B);
+    writeFileSync(p, JSON.stringify({ status: "calibration-failed", failed_step: "phase-a/thinking-off", message: "thinking cannot be turned off" }));
+    await runClient(dir, jobsOf(A, 1));
+    const r = await runClient(dir, jobsOf(B, 1));
+    expect(r.results[0].error).toMatch(/calibration-failed at phase-a\/thinking-off: thinking cannot be turned off/);
+    expect(spawnLines(dir).filter((l) => l.includes(`model '${B}'`))).toEqual([]);
+  }, 300_000);
+});
+
+/** P6 (round-1 review F20): a cal server whose owner is not a live calibration runner is swept like an orphaned main. */
+describe("the cal-server orphan sweep (P6)", () => {
+  const spawnCal = async (dir: string, ownerPid: number): Promise<number> => {
+    const parsed = parseManagedModel(A);
+    if ("error" in parsed) throw new Error(parsed.error);
+    const target = { port: await freePort(), model: A, ctx: 1024 };
+    const saved = process.env.LLAMA_CACHE;
+    process.env.LLAMA_CACHE = LLAMA_CACHE;
+    try {
+      const e = await claimAndSpawn({
+        dir,
+        engine: "llama",
+        role: "cal",
+        ownerPid,
+        spawn: async () => {
+          const s = await spawnLlamaServer(target, parsed.argv, roleLogFile(dir, "cal", "llama"), "k");
+          return { pid: s.pid, pgid: s.pid, port: target.port, argv: s.argv, model: A, ctx: 1024 };
+        },
+      });
+      return e.pid;
+    } finally {
+      if (saved === undefined) delete process.env.LLAMA_CACHE;
+      else process.env.LLAMA_CACHE = saved;
+    }
+  };
+
+  it("a cal server owned by a dead or non-calibrator process is stopped; one owned by a live __calibrate is kept and blocks a second", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1)); // the GGUF is in LLAMA_CACHE from here on
+    const notRunner = foreignProcess();
+    const runner = foreignProcess([CALIBRATE_ARGV]);
+    const runner2 = foreignProcess([CALIBRATE_ARGV]);
+    try {
+      await new Promise((r) => setTimeout(r, 200));
+      const orphan = await spawnCal(dir, notRunner);
+      expect(alive(orphan)).toBe(true);
+      const log: string[] = [];
+      // The broker's own main (from the warm-up client) is kept: only the cal role is judged here.
+      expect((await sweepEngine(dir, "llama", "cal", (m) => log.push(m))).filter((e) => e.role === "cal")).toEqual([]);
+      expect(log.join("\n")).toMatch(/stopped orphaned cal llama-server pid \d+ .*is not a live calibration runner/);
+      expect(alive(orphan)).toBe(false);
+      const kept = await spawnCal(dir, runner);
+      await expect(spawnCal(dir, runner)).rejects.toBeInstanceOf(SlotBusyError);
+      expect(alive(kept)).toBe(true);
+      // The runner dies (SIGKILL): the next claim sweeps its server and starts a new one.
+      killQuietly(runner);
+      await new Promise((r) => setTimeout(r, 200));
+      const fresh = await spawnCal(dir, runner2);
+      expect(alive(kept)).toBe(false);
+      expect(alive(fresh)).toBe(true);
+    } finally {
+      killQuietly(notRunner);
+      killQuietly(runner);
+      killQuietly(runner2);
+    }
+  }, 300_000);
+});
+
 describe("retry clock and walker classification (review M10, M11)", () => {
   it("M10: a call's broker queue time extends ITS deadline only; the shared clock is never changed", () => {
     const shared: RetryClock = {};
@@ -1001,6 +1157,7 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
   it("m6: with a space in the config dir, the sweep still finds and stops an unrecorded main server", async () => {
     const parent = newDir();
     const dir = join(parent, "with space");
+    markCalibrated(dir, "llama", A);
     dirs.push(dir);
     await runClient(dir, jobsOf(A, 1));
     const st = readBrokerState(dir)!;
@@ -1265,6 +1422,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
       "    server: managed",
     ];
     writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), 1024), "  tinyb:", ...profile(modelB(), 2048), ""].join("\n"));
+    for (const m of [modelA(), modelB()]) markCalibrated(cfg, "llama", m);
   };
 
   /** One real CLI command, in its own process; resolves with its exit code and output. */
@@ -1841,6 +1999,7 @@ describe.skipIf(process.env.RUN_REAL_LOCAL_MODELS !== "1")("real models of the b
     it(`llm ask on '${c.profile}' runs through the broker on its main model ${c.main}`, async () => {
       const cli = await cliBundle();
       const cfg = newDir();
+      markCalibrated(cfg, c.engine as "llama" | "locals", c.main);
       const work = newDir();
       const file = join(work, "story.txt");
       writeFileSync(file, "Once upon a time a cat named Tom lived in a red house by the sea.\n");

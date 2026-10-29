@@ -23,6 +23,7 @@ import {
   DISPATCHED_HEADER,
   QUEUE_TIMEOUT_HEADER,
   STATE_HEADER,
+  HELD_HEADER,
   TIMEOUT_HEADER,
   TOKEN_HEADER,
   brokerLogPath,
@@ -250,6 +251,9 @@ const active = new Map<string, BrokerEndpoint>();
 const submitting = new Set<Promise<string>>();
 /** How long a --command_timeout waits for in-flight submissions before it cancels what it has. */
 const SUBMIT_DRAIN_MS = 5000;
+/** P6: the held-for-calibration line is printed at most this often per process. */
+const HELD_PRINT_MS = 60_000;
+let heldPrintedAt = 0;
 
 /** Calls cancelling their own job (the finally of brokerExchange), and the job ids whose DELETE failed once the command was stopping (follow-up review m1). */
 const selfCancels = new Set<Promise<void>>();
@@ -350,6 +354,12 @@ export async function brokerExchange(
       if (res.status === 204) {
         const at = res.headers.get(DISPATCHED_HEADER);
         if (at !== null && res.headers.get(STATE_HEADER) === "running") opts.onDispatched?.(Number(at));
+        // P6: a job held for calibration waits (never an error, bounded only by --command_timeout); say so once a minute.
+        const heldLine = res.headers.get(HELD_HEADER);
+        if (heldLine !== null && Date.now() - heldPrintedAt >= HELD_PRINT_MS) {
+          heldPrintedAt = Date.now();
+          process.stderr.write(`llm-ext: ${heldLine}\n`);
+        }
         continue;
       }
       if (res.status === 404) {
@@ -378,7 +388,8 @@ export async function brokerExchange(
       active.delete(id);
       id = undefined;
       // Queue time (dispatch - submit, broker clock) goes to the caller's CALL, never to a shared clock (review M10).
-      opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt);
+      // P6: time held for calibration counts as queue time too (submittedAt restarted at release).
+      opts.onQueued?.((reply.dispatchedAt ?? reply.finishedAt ?? reply.submittedAt) - reply.submittedAt + (reply.heldMs ?? 0));
       // A job cancelled by --command_timeout ends this call as a command stop, not as a model failure.
       const stopWhy = commandStopReason();
       if (stopWhy !== null && reply.state === "cancelled") throw stoppedError(stopWhy);

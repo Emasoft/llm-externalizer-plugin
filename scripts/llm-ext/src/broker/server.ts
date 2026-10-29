@@ -39,11 +39,13 @@ import {
 import { claimAndSpawn, releaseEntry, roleLogFile, serverLabel, SlotBusyError, stopOwnServer, sweepEngine, type RegistryEntry } from "./registry.js";
 import { queueKey, Scheduler, timingsFromEnv, type BrokerTimings, type Job } from "./scheduler.js";
 import { getConfigDir } from "../config.js";
+import { readRecordStatus, type RecordStatus } from "../calibration/record.js";
 import {
   BROKER_ENGINES,
   COMMAND_HEADER,
   CTX_HEADER,
   DISPATCHED_HEADER,
+  HELD_HEADER,
   ENGINE_HEADER,
   QUEUE_TIMEOUT_HEADER,
   STATE_HEADER,
@@ -69,6 +71,8 @@ export interface BrokerOptions {
 const DEFAULT_EXEC_TIMEOUT_MS = 300_000;
 /** How often the broker re-evaluates abandon, rotation and idle rules between events. */
 const TICK_MS = 1000;
+/** P6: how often the records of models with held jobs are re-read (spec section 2). */
+const HELD_CHECK_MS = 5000;
 /** How long a finished job's result stays readable after it finished or was last polled. */
 const FINISHED_KEEP_MS = 600_000;
 /** A request body above this is refused: a local model's context bounds a real request far below it. */
@@ -155,6 +159,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const t = o.timings;
   const sched = new Scheduler();
   const jobs = new Map<string, Job>();
+  /** P6: jobs held for calibration, by id. Never in `sched`: no deadline, no rotation, no main server start. */
+  const held = new Map<string, Job>();
   const running = new Map<string, AbortController>();
   const waiters = new Map<string, Set<() => void>>();
   let server: RunningServer | null = null;
@@ -293,6 +299,65 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     for (const j of sched.allQueued(key)) {
       sched.remove(j);
       finish(j, "failed", error);
+    }
+  };
+
+  /**
+   * P6: may a job for this model be queued now? A model id the engine cannot
+   * parse is "ok" here (its start fails with the parse error); otherwise the
+   * model's calibration record decides (calibration/record.ts).
+   */
+  const calibrationVerdict = (engine: BrokerEngine, model: string): RecordStatus => {
+    const parsed = engine === "llama" ? parseManagedModel(model) : parseLocalsModel(model);
+    if ("error" in parsed) return { state: "ok" };
+    return readRecordStatus(o.dir, engine, model);
+  };
+
+  /** P6: per-model queued/running/held counts for /v1/health (the calibration runner pauses only for OTHER models' work). */
+  const modelCounts = (): Array<{ engine: BrokerEngine; model: string; queued: number; running: number; held: number }> => {
+    const by = new Map<string, { engine: BrokerEngine; model: string; queued: number; running: number; held: number }>();
+    const row = (j: Job) => {
+      const k = `${j.engine}\u0000${j.model}`;
+      let r = by.get(k);
+      if (!r) by.set(k, (r = { engine: j.engine, model: j.model, queued: 0, running: 0, held: 0 }));
+      return r;
+    };
+    for (const j of sched.allQueued()) row(j).queued++;
+    for (const id of running.keys()) {
+      const j = jobs.get(id);
+      if (j) row(j).running++;
+    }
+    for (const j of held.values()) row(j).held++;
+    return [...by.values()];
+  };
+
+  /**
+   * P6: re-read the record of every model with held jobs. `ok` moves them to
+   * the queue, with submittedAt restarted so the queue deadline counts from
+   * release (the held time is kept in heldMs, outside the retry clock); a
+   * failed calibration fails them with the record's message, a model error
+   * the client's normal fallback handles. Missing: they stay held.
+   */
+  const releaseHeld = (): void => {
+    const verdicts = new Map<string, RecordStatus>();
+    const now = Date.now();
+    for (const j of [...held.values()]) {
+      const k = `${j.engine}\u0000${j.model}`;
+      let v = verdicts.get(k);
+      if (!v) verdicts.set(k, (v = calibrationVerdict(j.engine, j.model)));
+      if (v.state === "missing") continue;
+      held.delete(j.id);
+      if (v.state === "failed") {
+        finish(j, "failed", v.message);
+        continue;
+      }
+      j.heldMs = now - j.submittedAt;
+      j.submittedAt = now;
+      j.state = "queued";
+      sched.enqueue(j);
+      if (j.key === sched.current) sched.touch(now);
+      lastRequestAt = now;
+      o.log(`released held job ${j.id}: model '${j.model}' (${j.engine}) is calibrated (held ${j.heldMs} ms)`);
     }
   };
 
@@ -490,6 +555,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     o.log(`broker exiting: ${why}`);
     for (const ac of running.values()) ac.abort();
     for (const j of sched.allQueued()) finish(j, "failed", `broker exiting: ${why}`);
+    // P6: a held job cannot move to another broker; the command reports it and is run again.
+    for (const j of held.values()) finish(j, "failed", `broker exiting while the job was held for calibration: ${why}; run the command again`);
+    held.clear();
     if (stopping) await stopping.catch(() => undefined);
     await stopServer(`broker exit: ${why}`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
     // Review M5: a server spawned but not yet ready (swapTo inside waitReady)
@@ -512,6 +580,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     for (const j of sched.dropAbandoned(now, t.abandonMs)) {
       finish(j, "cancelled", "abandoned: not polled");
       o.log(`dropped abandoned job ${j.id} (model '${j.model}', not polled for ${t.abandonMs} ms)`);
+    }
+    // P6: a held job whose client stopped polling is dropped by the same rule.
+    for (const j of [...held.values()]) {
+      if (j.pollers > 0 || now - j.lastPolledAt <= t.abandonMs) continue;
+      held.delete(j.id);
+      finish(j, "cancelled", "abandoned: not polled");
+      o.log(`dropped abandoned held job ${j.id} (model '${j.model}', not polled for ${t.abandonMs} ms)`);
     }
     // Forget finished jobs nobody came back for. Kept FINISHED_KEEP_MS after
     // they finished (not abandonMs): a client whose poll reply was lost, or
@@ -570,7 +645,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (idle && server && now - lastRequestAt > t.idleServerMs) {
       void stopServer(`no request for ${t.idleServerMs} ms`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
       sched.current = null;
-    } else if (idle && !server && now - Math.max(lastRequestAt, lastServerStopAt) > t.idleExitMs) {
+    } else if (idle && !server && held.size === 0 && now - Math.max(lastRequestAt, lastServerStopAt) > t.idleExitMs) {
+      // P6: a broker holding jobs for calibration stays up: its exit would fail them.
       void shutdown(`no server and no request for ${t.idleExitMs} ms`);
     }
   }
@@ -587,6 +663,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     contentType: j.result?.contentType,
     error: j.error,
     submittedAt: j.submittedAt,
+    heldMs: j.heldMs,
     dispatchedAt: j.dispatchedAt,
     finishedAt: j.finishedAt,
   });
@@ -602,7 +679,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     const m = /^\/v1\/jobs\/([A-Za-z0-9-]+)$/.exec(url.pathname);
     // queued/running: what this broker still holds (tests and --command_timeout checks read "no job left queued" here).
     if (req.method === "GET" && url.pathname === "/v1/health") {
-      return reply(res, 200, { pid: process.pid, version: o.version, draining, queued: sched.allQueued().length, running: running.size });
+      return reply(res, 200, { pid: process.pid, version: o.version, draining, queued: sched.allQueued().length, running: running.size, held: held.size, models: modelCounts() });
     }
     if (req.method === "POST" && url.pathname === "/v1/shutdown") {
       draining = true;
@@ -642,9 +719,28 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         state: "queued",
       };
       jobs.set(job.id, job);
+      lastRequestAt = now;
+      // P6 (spec section 2): a managed model with no complete calibration record
+      // is HELD, not queued: outside the scheduler, so no deadline or starvation
+      // rotation can start its main server before calibration finished (user
+      // ruling "No, wait"). A model id no engine accepts is queued as before:
+      // its start fails with the parse error, it never waits for a calibration
+      // that cannot run.
+      const verdict = calibrationVerdict(engine, model);
+      if (verdict.state === "missing") {
+        job.state = "held";
+        held.set(job.id, job);
+        o.log(`held job ${job.id}: model '${model}' (${engine}) has no complete calibration record`);
+        reply(res, 202, { job: job.id });
+        return;
+      }
+      if (verdict.state === "failed") {
+        finish(job, "failed", verdict.message);
+        reply(res, 202, { job: job.id });
+        return;
+      }
       sched.enqueue(job);
       if (job.key === sched.current) sched.touch(now);
-      lastRequestAt = now;
       reply(res, 202, { job: job.id });
       pump();
       return;
@@ -658,7 +754,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       job.pollers++;
       job.lastPolledAt = Date.now();
       try {
-        if (job.state === "queued" || job.state === "running") {
+        if (job.state === "queued" || job.state === "held" || job.state === "running") {
           await new Promise<void>((resolve) => {
             const timer = setTimeout(done, waitMs);
             function done(): void {
@@ -678,9 +774,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         job.pollers--;
         job.lastPolledAt = Date.now();
       }
-      if (job.state === "queued" || job.state === "running") {
+      if (job.state === "queued" || job.state === "held" || job.state === "running") {
         const h: Record<string, string> = { [STATE_HEADER]: job.state };
         if (job.dispatchedAt !== undefined) h[DISPATCHED_HEADER] = String(job.dispatchedAt);
+        if (job.state === "held") h[HELD_HEADER] = `waiting for calibration of '${job.model}' (${job.engine}); llm-ext models calibration-status shows its progress`;
         return reply(res, 204, undefined, h);
       }
       // Review m5: once the result reached its caller, forget the job and its bodies
@@ -693,7 +790,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (m && req.method === "DELETE") {
       const job = jobs.get(m[1]);
       if (!job) return reply(res, 404, { error: "no such job" });
-      if (job.state === "queued") {
+      if (job.state === "held") {
+        held.delete(job.id);
+        finish(job, "cancelled", "cancelled by the client");
+      } else if (job.state === "queued") {
         sched.remove(job);
         finish(job, "cancelled", "cancelled by the client");
       } else if (job.state === "running") {
@@ -722,7 +822,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   writeBrokerState(o.dir, { pid: process.pid, port, token, version: o.version, startedAt: new Date().toISOString() });
   o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
   // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
+  let heldCheckedAt = 0;
   const tick = setInterval(() => {
+    // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
+    if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
+      heldCheckedAt = Date.now();
+      releaseHeld();
+    }
     void checkLegacy().finally(pump);
   }, TICK_MS);
   const onSignal = (sig: string): void => void shutdown(`signal ${sig}`);

@@ -34,8 +34,12 @@ export const QUEUE_TIMEOUT_HEADER = "x-llm-ext-queue-timeout-ms";
 /** On a 204 poll reply: the job's state and, once dispatched, its dispatch time (ms epoch, broker clock). */
 export const STATE_HEADER = "x-llm-ext-job-state";
 export const DISPATCHED_HEADER = "x-llm-ext-dispatched-at";
+/** P6: on a 204 poll reply of a held job, the line the client prints (once a minute) while it waits for calibration. */
+export const HELD_HEADER = "x-llm-ext-held";
 /** argv[2] that turns an llm-ext process into a broker (cli/main.ts, before anything else loads). */
 export const BROKER_ARGV = "__broker";
+/** argv[2] of the detached calibration runner (P6); a cal server whose owner does not carry it is an orphan. */
+export const CALIBRATE_ARGV = "__calibrate";
 
 export interface BrokerState {
   pid: number;
@@ -53,6 +57,8 @@ export interface JobReply {
   contentType?: string;
   error?: string;
   submittedAt: number;
+  /** P6: ms the job was held for calibration (the client adds it to its queue time). */
+  heldMs?: number;
   dispatchedAt?: number;
   finishedAt?: number;
 }
@@ -122,4 +128,10 @@ export function removeBrokerStateIfOwn(dir: string, pid: number): void {
 export async function isBrokerProcess(pid: number): Promise<boolean> {
   const argv = await readCommandLine(pid);
   return argv !== null && argv.includes(BROKER_ARGV);
+}
+
+/** Is `pid` a live calibration runner (argv carries __calibrate)? The owner check of a cal server (spec section 2, orphan sweep). */
+export async function isCalibratorProcess(pid: number): Promise<boolean> {
+  const argv = await readCommandLine(pid);
+  return argv !== null && argv.includes(CALIBRATE_ARGV);
 }
