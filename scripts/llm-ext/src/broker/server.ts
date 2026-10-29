@@ -316,6 +316,20 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
   };
 
+  /** P6 (review C1): fail every queued and held job of a model with `error` (a model error: the client falls back). */
+  const failModel = (engine: BrokerEngine, model: string, error: string): void => {
+    for (const j of sched.allQueued()) {
+      if (j.engine !== engine || j.model !== model) continue;
+      sched.remove(j);
+      finish(j, "failed", error);
+    }
+    for (const j of [...held.values()]) {
+      if (j.engine !== engine || j.model !== model) continue;
+      held.delete(j.id);
+      finish(j, "failed", error);
+    }
+  };
+
   /**
    * P6: may a job for this model be queued now? A model id the engine cannot
    * parse is "ok" here (its start fails with the parse error); otherwise the
@@ -327,8 +341,14 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
    * record still parses as "ok", but it stays "missing" (jobs held) until the
    * runner rewrites it; without this the 5 s release check would reload the
    * model, find it stale again, and loop.
+   *
+   * Review C1: the mark also expires after STALE_MARK_MS, so it never blocks a
+   * model on the record alone; the expired model is loaded and checked again,
+   * and `staleLoads` fails its jobs after MAX_STALE_LOADS disagreeing loads.
    */
-  const staleRecords = new Map<string, string>();
+  const staleRecords = new Map<string, { stamp: string; at: number }>();
+  /** Consecutive loads of a model whose record did not match the server (reset by a matching load). */
+  const staleLoads = new Map<string, number>();
   const recordStamp = (engine: BrokerEngine, model: string): string => {
     try {
       const s = statSync(recordPath(o.dir, engine, model));
@@ -342,9 +362,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if ("error" in parsed) return { state: "ok" };
     const v = readRecordStatus(o.dir, engine, model, o.log);
     const k = `${engine}\u0000${model}`;
-    const stamp = staleRecords.get(k);
-    if (stamp !== undefined) {
-      if (v.state === "ok" && stamp === recordStamp(engine, model)) return { state: "missing" };
+    const mark = staleRecords.get(k);
+    if (mark !== undefined) {
+      if (v.state === "ok" && mark.stamp === recordStamp(engine, model) && Date.now() - mark.at < STALE_MARK_MS) return { state: "missing" };
       staleRecords.delete(k);
     }
     return v;
@@ -382,7 +402,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   };
   const requestCalibration = (engine: BrokerEngine, model: string, reason: "first-use" | "stale"): void => {
     try {
-      const done = withStateLock(o.dir, 5000, () => {
+      // Review m2: the state lock spins on this event loop, so the broker waits only briefly;
+      // review M1: a model not queued now is queued by the tick's re-check (enqueueHeldModels).
+      const done = withStateLock(o.dir, BROKER_LOCK_WAIT_MS, () => {
         enqueueUnlocked(o.dir, { engine, model, reason });
         return true;
       });
@@ -392,8 +414,35 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
     ensureRunner();
   };
+  /**
+   * Review M1: every model with held jobs is (re)queued on each runner re-check,
+   * so a failed enqueue (a busy or stale state lock) is really retried.
+   * `enqueueUnlocked` keeps one entry per model.
+   */
+  const enqueueHeldModels = (): void => {
+    const models = new Map<string, { engine: BrokerEngine; model: string }>();
+    for (const j of held.values()) models.set(`${j.engine}\u0000${j.model}`, { engine: j.engine, model: j.model });
+    if (models.size === 0) return;
+    try {
+      const done = withStateLock(o.dir, BROKER_LOCK_WAIT_MS, () => {
+        for (const m of models.values()) enqueueUnlocked(o.dir, { ...m, reason: "first-use" });
+        return true;
+      });
+      if (done === undefined) o.log("could not queue the held models for calibration: the calibration state lock is busy; retried on the next check");
+    } catch (e) {
+      o.log(`could not queue the held models for calibration: ${(e as Error).message}`);
+    }
+  };
+  /** Review m2: how long the broker's event loop may wait for the state lock. */
+  const BROKER_LOCK_WAIT_MS = 200;
   /** While jobs are held, the runner is re-ensured at most this often (a crashed or handed-over runner is replaced). */
   const RUNNER_RECHECK_MS = 60_000;
+  /** Review C1: attempts at reading a loaded server's identity, and the wait between them. */
+  const IDENTITY_TRIES = 3;
+  const IDENTITY_RETRY_MS = 2000;
+  /** Review C1: loads with a record that does not match before the model's jobs fail, and how long a stale mark holds at most. */
+  const MAX_STALE_LOADS = 3;
+  const STALE_MARK_MS = 10 * 60_000;
 
   /**
    * P6: re-read the record of every model with held jobs. `ok` moves them to
@@ -521,26 +570,61 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // server loaded (weights blob, RAM, engine build). A stale or removed record
       // re-holds the model's queued jobs and queues it for calibration; the
       // server is stopped before it serves anything.
+      // Review M7: the load time is measured before the identity check (hashing a plain GGUF is not loading).
+      const loadMs = Date.now() - loadStartedAt;
+      const mk = `${engine}\u0000${first.model}`;
       const rec = readRecord(o.dir, engine, first.model, o.log);
       let stale: string | null = rec === null || rec.status !== "ok" ? "it has no complete record any more" : null;
+      let unreadable: string | null = null;
       if (stale === null && rec !== null) {
-        try {
-          const why = staleness(rec, await loadedIdentity(engine, `http://127.0.0.1:${port}`, apiKey, first.model));
-          if (why !== null) stale = why === "weights" ? "its weights or the machine's RAM changed" : "the engine build changed";
-        } catch (e) {
-          stale = `its loaded identity could not be read (${(e as Error).message})`;
+        // Review C1: an identity read that fails is retried a few times; if it still fails, the jobs fail with the error.
+        // It is never treated as staleness: that held the model until the record changed, which nothing did.
+        for (let attempt = 1; ; attempt++) {
+          try {
+            const why = staleness(rec, await loadedIdentity(engine, `http://127.0.0.1:${port}`, apiKey, first.model, o.dir));
+            if (why !== null) stale = why === "weights" ? "its weights, the machine's RAM or the calibration method changed" : "the engine build changed";
+            break;
+          } catch (e) {
+            if (attempt >= IDENTITY_TRIES) {
+              unreadable = (e as Error).message;
+              break;
+            }
+            await new Promise((r) => setTimeout(r, IDENTITY_RETRY_MS));
+          }
         }
       }
+      if (unreadable !== null) {
+        o.log(`model '${first.model}' (${engine}): what the server loaded could not be read after ${IDENTITY_TRIES} attempts (${unreadable}); its jobs fail`);
+        await stopServer("identity unreadable");
+        failModel(engine, first.model, `model '${first.model}' (${engine}): the broker could not read what its server loaded (${unreadable}), so its calibration record cannot be checked; run the command again`);
+        return;
+      }
       if (stale !== null) {
-        o.log(`model '${first.model}' (${engine}): ${stale}; its queued jobs are held again until it is calibrated`);
-        staleRecords.set(`${engine}\u0000${first.model}`, recordStamp(engine, first.model));
+        const n = (staleLoads.get(mk) ?? 0) + 1;
+        staleLoads.set(mk, n);
         await stopServer("record stale");
+        if (n > MAX_STALE_LOADS) {
+          // Review C1: the exit that does not depend on the record being rewritten. The record and the
+          // loaded server disagreed on every load: fail the jobs with the reason instead of holding forever.
+          staleLoads.delete(mk);
+          staleRecords.delete(mk);
+          o.log(`model '${first.model}' (${engine}): its record did not match the loaded server ${n} times in a row (${stale}); its jobs fail`);
+          failModel(
+            engine,
+            first.model,
+            `model '${first.model}' (${engine}): its calibration record does not match what the server loads (${stale}), even after recalibration was requested ${n - 1} times; run llm-ext models calibrate --model ${first.model} --force`,
+          );
+          return;
+        }
+        o.log(`model '${first.model}' (${engine}): ${stale}; its queued jobs are held again until it is calibrated`);
+        staleRecords.set(mk, { stamp: recordStamp(engine, first.model), at: Date.now() });
         holdQueued(key);
         requestCalibration(engine, first.model, "stale");
         return;
       }
+      staleLoads.delete(mk);
       // Measured load time: rotation (b) counts a waiting model's deadline as near once it falls within its load time.
-      sched.recordLoad(key, Date.now() - loadStartedAt);
+      sched.recordLoad(key, loadMs);
       sched.startRun(key, Date.now());
       const sizing = engine === "llama" ? `; ${slotSizing(entry.argv, logFile)}` : `; ids ${server.modelIds.join(", ")}`;
       o.log(`main ${serverLabel(engine)} ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}${sizing}`);
@@ -915,12 +999,22 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
   // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
   let heldCheckedAt = 0;
+  let calSweptAt = Date.now();
   const tick = setInterval(() => {
     // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();
       releaseHeld();
-      if (held.size > 0 && Date.now() - calibratorEnsuredAt >= RUNNER_RECHECK_MS) ensureRunner();
+      if (held.size > 0 && Date.now() - calibratorEnsuredAt >= RUNNER_RECHECK_MS) {
+        enqueueHeldModels();
+        ensureRunner();
+      }
+    }
+    // Review M3: a cal server whose runner died (SIGKILL, or a signal during its start-up) is stopped
+    // within a minute, not only when the next cal server is claimed. Live runners' servers are kept.
+    if (Date.now() - calSweptAt >= RUNNER_RECHECK_MS) {
+      calSweptAt = Date.now();
+      for (const e of ["llama", "locals"] as const) void sweepEngine(o.dir, e, "cal", o.log).catch((err: Error) => o.log(`cal sweep (${e}) failed: ${err.message}`));
     }
     void checkLegacy().finally(pump);
   }, TICK_MS);

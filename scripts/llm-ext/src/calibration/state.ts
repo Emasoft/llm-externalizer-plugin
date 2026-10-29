@@ -15,7 +15,7 @@
 import { mkdirSync, readFileSync, renameSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pidState } from "../local-llama-server.js";
-import { isCalibratorProcess, type BrokerEngine } from "../broker/protocol.js";
+import { isRunnerOf, type BrokerEngine } from "../broker/protocol.js";
 import { calibrationDir, FIXTURE_VERSION, HARNESS_VERSION, recordSlug, type Fingerprint } from "./record.js";
 
 export interface QueueItem {
@@ -58,24 +58,51 @@ function readJson(path: string): unknown {
 const STATE_LOCK_STALE_MS = 30_000;
 
 /**
+ * Take a stale lock directory away atomically (review m1): rename it to a
+ * unique name, so of two waiters that both judged it stale only one wins,
+ * and the loser can never remove the winner's fresh lock. Then remove the
+ * renamed copy (its files, then the directory).
+ */
+function takeAway(lock: string): void {
+  const gone = `${lock}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync(lock, gone);
+  } catch {
+    return; // someone else took it (or it was released): the caller retries
+  }
+  for (const f of ["owner", "pid"]) {
+    try {
+      unlinkSync(join(gone, f));
+    } catch {
+      /* not there */
+    }
+  }
+  rmdirSync(gone);
+}
+
+/**
  * Run `fn` under `calibration/state.lock`, waiting at most `waitMs`. Returns
  * undefined when the lock could not be taken in time: the boot trigger waits
  * only briefly and skips itself for that run (it must never block or fail a
- * command); the runner and models calibrate wait longer.
+ * command); the runner and models calibrate wait longer. The lock holds an
+ * `owner` token, so a holder whose lock was taken over as stale never
+ * removes the new holder's lock on release (review m1).
  */
 export function withStateLock<T>(dir: string, waitMs: number, fn: () => T): T | undefined {
   mkdirSync(root(dir), { recursive: true });
   const lock = stateLockPath(dir);
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const deadline = Date.now() + waitMs;
   for (;;) {
     try {
       mkdirSync(lock);
+      writeFileSync(join(lock, "owner"), token);
       break;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
       try {
         if (Date.now() - statSync(lock).mtimeMs > STATE_LOCK_STALE_MS) {
-          rmdirSync(lock);
+          takeAway(lock);
           continue;
         }
       } catch {
@@ -88,10 +115,18 @@ export function withStateLock<T>(dir: string, waitMs: number, fn: () => T): T | 
   try {
     return fn();
   } finally {
-    rmdirSync(lock);
+    let owner: string | null = null;
+    try {
+      owner = readFileSync(join(lock, "owner"), "utf8");
+    } catch {
+      /* taken over and released by another process */
+    }
+    if (owner === token) {
+      unlinkSync(join(lock, "owner"));
+      rmdirSync(lock);
+    }
   }
 }
-
 export function readQueue(dir: string): QueueItem[] {
   const raw = readJson(queuePath(dir)) as { items?: unknown } | null;
   if (!raw || !Array.isArray(raw.items)) return [];
@@ -133,32 +168,46 @@ export const modelLockPath = (dir: string, engine: BrokerEngine, model: string):
 /**
  * Take the model's lock for this process (a directory holding a `pid` file).
  * It has no time limit: calibration holds it for hours. A lock whose pid is
- * dead or is no longer a calibration runner is taken over (the broker's
- * identity rule). Returns false when a live runner holds it.
+ * dead or is not this config dir's calibration runner is taken over
+ * (`isRunnerOf`, review m1: a runner of another config dir that reused the
+ * pid is no holder). Returns false when the live runner holds it.
+ *
+ * Review m1: the pid file is written under a temp name and renamed, so a
+ * reader never sees a half-written one; a lock with no pid file yet that is
+ * younger than a few seconds is being created and is left alone; a takeover
+ * renames the old lock away atomically, so two takers cannot both win.
  */
-export async function acquireModelLock(dir: string, engine: BrokerEngine, model: string, self: (pid: number) => Promise<boolean> = isCalibratorProcess): Promise<boolean> {
+export async function acquireModelLock(dir: string, engine: BrokerEngine, model: string, self: (pid: number) => Promise<boolean> = (pid) => isRunnerOf(dir, pid)): Promise<boolean> {
   const lock = modelLockPath(dir, engine, model);
   mkdirSync(calibrationDir(dir, engine), { recursive: true });
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
       mkdirSync(lock);
-      writeFileSync(join(lock, "pid"), String(process.pid));
+      const tmp = join(lock, `pid.${process.pid}.tmp`);
+      writeFileSync(tmp, String(process.pid));
+      renameSync(tmp, join(lock, "pid"));
       return true;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     }
     const pid = Number(readJson(join(lock, "pid")) ?? NaN);
-    if (Number.isInteger(pid) && pid > 1 && pid !== process.pid && pidState(pid) === "alive" && (await self(pid))) return false;
-    // Dead holder, a reused pid, or a lock this process left: remove it (one file, one directory) and retry once.
-    try {
-      unlinkSync(join(lock, "pid"));
-    } catch {
-      /* written by a holder that died before its pid file */
-    }
-    rmdirSync(lock);
+    if (!Number.isInteger(pid)) {
+      let age: number;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue; // released meanwhile
+      }
+      if (age < MODEL_LOCK_CREATING_MS) return false;
+    } else if (pid > 1 && pid !== process.pid && pidState(pid) === "alive" && (await self(pid))) return false;
+    // Dead holder, a reused pid, or a lock this process left: take it away and retry.
+    takeAway(lock);
   }
   return false;
 }
+
+/** A model lock without its pid file this young is still being created by its taker. */
+const MODEL_LOCK_CREATING_MS = 5000;
 
 export function releaseModelLock(dir: string, engine: BrokerEngine, model: string): void {
   const lock = modelLockPath(dir, engine, model);
@@ -167,7 +216,6 @@ export function releaseModelLock(dir: string, engine: BrokerEngine, model: strin
   unlinkSync(join(lock, "pid"));
   rmdirSync(lock);
 }
-
 // ── Progress (resume) ───────────────────────────────────────────────────
 
 export interface TrialRecord {
@@ -188,6 +236,8 @@ export interface Progress {
   trials: TrialRecord[];
   /** Phases finished, with their outcome. */
   phases: Record<string, "passed" | "failed">;
+  /** Review M2: calibration runs of this model that ended in an exception (reset when a record is written). */
+  crashes?: number;
 }
 
 export const progressPath = (dir: string, engine: BrokerEngine, model: string): string => join(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
@@ -206,7 +256,7 @@ export function loadProgress(dir: string, engine: BrokerEngine, model: string, f
   }
   const old = raw.fingerprint ?? null;
   if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint };
-  return { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: fingerprint ?? old, trials: raw.trials, phases: raw.phases };
+  return { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: fingerprint ?? old, trials: raw.trials, phases: raw.phases, crashes: typeof raw.crashes === "number" ? raw.crashes : 0 };
 }
 
 export function saveProgress(dir: string, engine: BrokerEngine, model: string, p: Progress): void {

@@ -189,7 +189,7 @@ export async function spawnLocalsServer(
 }
 
 /** The Hugging Face hub cache in huggingface_hub's lookup order (Locals downloads through snapshot_download). */
-function hubCacheDir(env: NodeJS.ProcessEnv = process.env): string {
+export function hubCacheDir(env: NodeJS.ProcessEnv = process.env): string {
   if (env.HF_HUB_CACHE) return env.HF_HUB_CACHE;
   if (env.HUGGINGFACE_HUB_CACHE) return env.HUGGINGFACE_HUB_CACHE;
   if (env.HF_HOME) return join(env.HF_HOME, "hub");

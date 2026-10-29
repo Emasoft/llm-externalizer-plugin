@@ -15,15 +15,16 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { totalmem } from "node:os";
 import type { ChildProcess } from "node:child_process";
 import { spawnDetachedChild } from "../bench-spawn.js";
-import { CALIBRATE_ARGV, calibratorStatePath, isCalibratorProcess, readCalibratorState, type BrokerEngine, type CalibratorState } from "../broker/protocol.js";
+import { CALIBRATE_ARGV, calibratorStatePath, isCalibratorProcess, readBrokerState, readCalibratorState, TOKEN_HEADER, type BrokerEngine, type CalibratorState } from "../broker/protocol.js";
 import { claimAndSpawn, roleLogFile, serverLabel, stopOwnServer, type RegistryEntry } from "../broker/registry.js";
 import { freePort, parseManagedModel, pidState, spawnLlamaServer, waitReady, withAsyncLock } from "../local-llama-server.js";
 import { parseLocalsModel, spawnLocalsServer, waitLocalsReady } from "../local-locals-server.js";
 import { getConfigDir } from "../config.js";
 import { loadedIdentity, staleness, type LoadedIdentity } from "./fingerprint.js";
-import { readRecord, type CalibrationRecord } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
 import { acquireModelLock, dequeueUnlocked, loadProgress, readQueue, releaseModelLock, saveProgress, withStateLock, type Progress, type QueueItem } from "./state.js";
 
 /** The phases of the full method, in order (spec section 4). A record is written only once all of them passed. */
@@ -51,9 +52,13 @@ export interface PhaseContext {
   server: CalServer;
   /** What the cal server loaded: the record is written with exactly this (spec section 3). */
   identity: LoadedIdentity;
+  /** How long the cal server took to load and become ready (reported by Phase A). */
+  loadMs: number;
   progress: Progress;
   /** Append a finished trial and save progress atomically. */
   record: (t: Progress["trials"][number]) => void;
+  /** Wait while the broker serves another model (spec section 2, review m5); throws after 5 minutes of pausing. */
+  waitForTurn: () => Promise<void>;
   log: (msg: string) => void;
 }
 
@@ -101,8 +106,12 @@ export async function ensureCalibrator(o: { dir: string; version: string; entry:
   return "started";
 }
 
-/** Start the cal server for one model (one slot, context `ctx`) under the registry's role "cal". */
-export async function startCalServer(dir: string, engine: BrokerEngine, model: string, ctx: number, slots: number, log: (m: string) => void): Promise<CalServer> {
+/**
+ * Start the cal server for one model (one slot, context `ctx`) under the registry's role "cal".
+ * Review M3: `onClaimed` receives the stop handle as soon as the server is spawned and registered,
+ * before it is ready (a load can take minutes), so a signal in that window stops it too.
+ */
+export async function startCalServer(dir: string, engine: BrokerEngine, model: string, ctx: number, slots: number, log: (m: string) => void, onClaimed?: (s: { stop: (why: string) => Promise<void> }) => void): Promise<CalServer> {
   let llamaArgv: string[] = [];
   if (engine === "llama") {
     const parsed = parseManagedModel(model);
@@ -144,7 +153,8 @@ export async function startCalServer(dir: string, engine: BrokerEngine, model: s
     log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
     // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
     if (cwd !== undefined) {
-      try {
+  onClaimed?.({ stop });
+  try {
         rmdirSync(cwd);
       } catch (e) {
         log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
@@ -174,7 +184,7 @@ export interface RunnerOptions {
  * model is attempted at most once per run, so a model whose phases are not
  * all implemented (or whose lock another runner holds) cannot spin.
  */
-export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handover" | "another-runner" | "stopped"> {
+export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handover" | "another-runner" | "stopped" | "paused"> {
   // One runner per config dir: checked and claimed under the runner lock, so racing starters leave exactly one.
   const claimed = await withAsyncLock(runnerLockPath(o.dir), async () => {
     const live = await liveCalibrator(o.dir);
@@ -188,7 +198,7 @@ export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handove
     o.log("another calibration runner is working on this config dir; exiting");
     return "another-runner";
   }
-  let current: CalServer | null = null;
+  let current: { stop: (why: string) => Promise<void> } | null = null;
   let stopping = false;
   const onSignal = (sig: string): void => {
     stopping = true;
@@ -210,9 +220,11 @@ export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handove
       }
       const item = readQueue(o.dir).find((i) => !attempted.has(`${i.engine}\u0000${i.model}`));
       if (!item) return "done";
-      attempted.add(`${item.engine}\u0000${item.model}`);
-      await calibrateOne(o, item, (s) => (current = s));
+      const r = await calibrateOne(o, item, (s) => (current = s));
       current = null;
+      if (r === "paused") return "paused";
+      // A crash is retried at once; the model's crash counter (progress) bounds it, then a failure record ends it.
+      if (r !== "crashed") attempted.add(`${item.engine}\u0000${item.model}`);
     }
   } finally {
     removeOwnState(o.dir);
@@ -234,67 +246,185 @@ function removeOwnState(dir: string): void {
   if (existsSync(handoverPath(dir))) unlinkSync(handoverPath(dir));
 }
 
-async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: CalServer | null) => void): Promise<void> {
+/** Review M2: a model whose calibration crashes (an exception, not a phase verdict) this many times gets a calibration-failed record. */
+export const MAX_CRASHES = 3;
+
+/** Review m5: the runner gave way to the broker's work for too long; the model stays queued (not a crash). */
+class PausedError extends Error {}
+
+/** How the runner waits for the broker's other work (spec section 2, review m5). */
+const TURN_POLL_MS = 2000;
+const TURN_MAX_PAUSE_MS = 5 * 60_000;
+
+/**
+ * Wait until the broker of `dir` (if any) has no queued or running work for
+ * another model (spec section 2: calibration pauses for real requests; held
+ * jobs of THIS model do not pause it). Throws PausedError after 5 minutes of
+ * pausing, so the cal server is stopped and the model is retried later.
+ */
+export async function waitForTurn(dir: string, engine: BrokerEngine, model: string, log: (m: string) => void): Promise<void> {
+  const started = Date.now();
+  let said = false;
+  for (;;) {
+    const st = readBrokerState(dir);
+    let busy = false;
+    if (st && pidState(st.pid) === "alive") {
+      try {
+        const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token }, signal: AbortSignal.timeout(5000) });
+        const h = (await res.json()) as { models?: Array<{ engine?: string; model?: string; queued?: number; running?: number }> };
+        busy = (h.models ?? []).some((m) => !(m.engine === engine && m.model === model) && (m.queued ?? 0) + (m.running ?? 0) > 0);
+      } catch {
+        busy = false; // no answering broker: nothing to give way to
+      }
+    }
+    if (!busy) return;
+    if (!said) log("pausing: the broker is serving another model");
+    said = true;
+    if (Date.now() - started > TURN_MAX_PAUSE_MS) throw new PausedError("paused for the broker's work for 5 minutes");
+    await new Promise((r) => setTimeout(r, TURN_POLL_MS));
+  }
+}
+
+async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: { stop: (why: string) => Promise<void> } | null) => void): Promise<"done" | "crashed" | "paused"> {
   const name = `${item.engine} '${item.model}'`;
   if (!(await acquireModelLock(o.dir, item.engine, item.model))) {
     o.log(`${name}: another runner holds its lock; skipped`);
-    return;
+    return "done";
   }
   let server: CalServer | null = null;
+  let identity: LoadedIdentity | null = null;
+  let existing: CalibrationRecord | null = null;
+  let engineCheck = false;
+  const startedAt = Date.now();
+  const dequeue = (): void => {
+    withStateLock(o.dir, 60_000, () => {
+      dequeueUnlocked(o.dir, item.engine, item.model);
+      return true;
+    });
+  };
+  const failedRecord = (step: string, message: string): CalibrationRecord =>
+    engineCheck && existing
+      ? // The record keeps its measured body; only the status says the new build failed the quick check.
+        { ...existing, status: "engine-check-failed", failed_step: step, message }
+      : {
+          schema: 1,
+          harness_version: HARNESS_VERSION,
+          fixture_version: FIXTURE_VERSION,
+          engine: item.engine,
+          model: item.model,
+          // Review M2: a model that never loaded has no blobs to name; the record still ends the wait with the reason.
+          fingerprint: identity?.fingerprint ?? { blobs: [], ram_bytes: totalmem() },
+          engine_version: identity?.engineVersion ?? "unknown",
+          engine_version_checked: identity?.engineVersion ?? "unknown",
+          status: "calibration-failed",
+          failed_step: step,
+          message,
+          calibrated_at: new Date().toISOString(),
+          duration_s: Math.round((Date.now() - startedAt) / 1000),
+        };
   try {
-    server = await startCalServer(o.dir, item.engine, item.model, PHASE_A_CTX, 1, o.log);
+    await waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`));
+    server = await startCalServer(o.dir, item.engine, item.model, PHASE_A_CTX, 1, o.log, (s) => setCurrent(s));
+    const loadMs = Date.now() - startedAt;
     setCurrent(server);
-    const identity = await loadedIdentity(item.engine, server.baseUrl, server.apiKey, item.model);
-    // A valid record that still matches what is loaded (weights, RAM, engine build) needs nothing, unless --force (spec section 3).
-    const existing: CalibrationRecord | null = readRecord(o.dir, item.engine, item.model, o.log);
+    identity = await loadedIdentity(item.engine, server.baseUrl, server.apiKey, item.model, o.dir);
+    // A valid record that still matches what is loaded (weights, RAM, engine build, method version) needs nothing, unless --force (spec section 3).
+    existing = readRecord(o.dir, item.engine, item.model, o.log);
     const stale = existing ? staleness(existing, identity) : null;
     if (existing && !item.force && stale === null) {
+      // Review C1: rewrite it, so a broker that marked the record stale (mtime and size) sees a change and checks again.
+      writeRecord(o.dir, existing);
       o.log(`${name}: already has a valid, current record (${existing.status}); removed from the queue`);
-      withStateLock(o.dir, 60_000, () => {
-        dequeueUnlocked(o.dir, item.engine, item.model);
-        return true;
-      });
-      return;
+      dequeue();
+      return "done";
     }
-    if (stale !== null) o.log(`${name}: its record is stale (${stale === "weights" ? "the weights or the RAM changed" : `the engine build changed to ${identity.engineVersion}`})`);
+    if (stale !== null) o.log(`${name}: its record is stale (${stale === "weights" ? "the weights, the RAM or the calibration method changed" : `the engine build changed to ${identity.engineVersion}`})`);
+    // Spec section 3, "Quick check only": a new engine build re-runs Phase A on a record that is otherwise valid;
+    // a calibration-failed record, new weights or --force recalibrate from scratch.
+    engineCheck = existing !== null && stale === "engine" && !item.force && existing.status !== "calibration-failed";
     const fingerprint = identity.fingerprint;
     const progress = loadProgress(o.dir, item.engine, item.model, fingerprint);
+    if (item.force) {
+      // --force re-runs everything (spec section 3): no finished trial is reused.
+      progress.trials = [];
+      progress.phases = {};
+      progress.crashes = 0;
+    }
+    if (engineCheck) {
+      // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
+      progress.trials = progress.trials.filter((t) => !t.step.startsWith("A/"));
+      delete progress.phases.A;
+    }
     saveProgress(o.dir, item.engine, item.model, progress);
     const ctx: PhaseContext = {
       dir: o.dir,
       item,
       server,
       identity,
+      loadMs,
       progress,
       record: (t) => {
         progress.trials.push(t);
         saveProgress(o.dir, item.engine, item.model, progress);
       },
+      waitForTurn: () => waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`)),
       log: (m) => o.log(`${name}: ${m}`),
     };
-    for (const phase of o.phases) {
+    const finish = (r: CalibrationRecord, line: string): "done" => {
+      writeRecord(o.dir, r);
+      progress.crashes = 0;
+      saveProgress(o.dir, item.engine, item.model, progress);
+      o.log(`${name}: ${line}`);
+      dequeue();
+      return "done";
+    };
+    for (const phase of engineCheck ? o.phases.filter((p) => p.name === "A") : o.phases) {
       if (progress.phases[phase.name] === "passed") continue;
       const r = await phase.run(ctx);
       progress.phases[phase.name] = r.passed ? "passed" : "failed";
       saveProgress(o.dir, item.engine, item.model, progress);
-      if (!r.passed) {
-        o.log(`${name}: phase ${phase.name} failed at ${r.step}: ${r.message}`);
-        return;
-      }
+      // Spec 4.2: a failed phase ends this model with a record that says why; held jobs then fail at once with it.
+      if (!r.passed) return finish(failedRecord(r.step, r.message), `phase ${phase.name} failed at ${r.step}: ${r.message}`);
       o.log(`${name}: phase ${phase.name} passed`);
+    }
+    if (engineCheck && existing) {
+      if (progress.phases.A !== "passed") {
+        o.log(`${name}: the engine quick check needs Phase A, which this runner does not have; no record change, the model stays queued`);
+        return "done";
+      }
+      // The quick check passed: the record now vouches for this build too (the broker's stale stamp changes, held jobs are released).
+      // An earlier failed check (engine-check-failed) is cleared by a pass on this build.
+      return finish({ ...existing, status: "ok", failed_step: null, message: undefined, engine_version_checked: identity.engineVersion }, `the engine quick check passed on ${identity.engineVersion}; record updated`);
     }
     const missing = METHOD_PHASES.filter((p) => progress.phases[p] !== "passed");
     // Never a record without every phase: a partial record would make the model usable (round-2 review, F13).
     if (missing.length > 0) o.log(`${name}: phases ${missing.join(", ")} are not implemented yet; no record written, the model stays queued`);
+    return "done";
   } catch (err) {
-    o.log(`${name}: calibration stopped: ${(err as Error).message}`);
+    const msg = (err as Error).message;
+    if (err instanceof PausedError) {
+      o.log(`${name}: ${msg}; the model stays queued`);
+      return "paused";
+    }
+    // Review M2: an exception is counted per model; at MAX_CRASHES the model gets a record with the error, so held
+    // jobs fail with it instead of waiting while the runner reloads the model every minute.
+    const p = loadProgress(o.dir, item.engine, item.model, null);
+    p.crashes = (p.crashes ?? 0) + 1;
+    saveProgress(o.dir, item.engine, item.model, p);
+    o.log(`${name}: calibration stopped (${p.crashes} of ${MAX_CRASHES}): ${msg}`);
+    if (p.crashes < MAX_CRASHES) return "crashed";
+    writeRecord(o.dir, failedRecord("runner/error", `calibration stopped ${p.crashes} times; the last error: ${msg}`));
+    p.crashes = 0;
+    saveProgress(o.dir, item.engine, item.model, p);
+    o.log(`${name}: ${MAX_CRASHES} crashes: wrote a ${engineCheck ? "engine-check-failed" : "calibration-failed"} record`);
+    dequeue();
+    return "done";
   } finally {
     if (server) await server.stop("model finished");
     setCurrent(null);
     releaseModelLock(o.dir, item.engine, item.model);
   }
 }
-
 /** `llm-ext __calibrate` (cli/main.ts): run the runner, then end the process explicitly (like the broker). */
 export async function runCalibratorMain(version: string, phases: readonly Phase[] = []): Promise<never> {
   const log = (msg: string): void => {

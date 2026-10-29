@@ -448,7 +448,9 @@ setAllowPaidModels(activeSettings.allow_paid_models === true);
 // a runner is started. Never fails or blocks a command: a busy state lock
 // skips the check for this run, and the runner is spawned detached.
 try {
-  const changed = checkModelChanges(getConfigDir(), activeSettings.profiles);
+  // Review m3: with settings.yaml unreadable, activeSettings are the defaults; comparing those would record
+  // them as "seen" and later queue every model of each used profile as changed. Skip the check for this run.
+  const changed = settingsError ? [] : checkModelChanges(getConfigDir(), activeSettings.profiles);
   if (changed.length > 0) {
     process.stderr.write(`[llm-externalizer] queued for calibration (model changed in a used local profile): ${changed.map((c) => c.model).join(", ")}\n`);
     void ensureCalibrator({ dir: getConfigDir(), version: brokerClientVersion(), entry: defaultBrokerEntry() }).catch((e: Error) =>

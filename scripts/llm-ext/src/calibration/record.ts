@@ -10,7 +10,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { BrokerEngine } from "../broker/protocol.js";
 
@@ -189,7 +189,14 @@ export function writeRecord(dir: string, record: CalibrationRecord): void {
   const p = recordPath(dir, record.engine, record.model);
   mkdirSync(dirname(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+  // Review m4: flushed to disk before the rename, so a power loss never leaves an empty record in place.
+  const fd = openSync(tmp, "w", 0o600);
+  try {
+    writeSync(fd, `${JSON.stringify(record, null, 2)}\n`);
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
   renameSync(tmp, p);
 }
 
@@ -199,6 +206,8 @@ export type RecordStatus = { state: "ok" } | { state: "failed"; message: string 
 export function readRecordStatus(dir: string, engine: BrokerEngine, model: string, log?: (msg: string) => void): RecordStatus {
   const r = readRecord(dir, engine, model, log);
   if (r === null) return { state: "missing" };
+  // Review M5: a record of another harness or fixture version describes another method: the model is calibrated again.
+  if (r.harness_version !== HARNESS_VERSION || r.fixture_version !== FIXTURE_VERSION) return { state: "missing" };
   if (r.status === "ok") return { state: "ok" };
   const step = r.failed_step !== null ? ` at ${r.failed_step}` : "";
   const why = r.message !== undefined ? `: ${r.message}` : "";

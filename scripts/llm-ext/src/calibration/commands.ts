@@ -54,6 +54,10 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         const phases = prog ? METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ") : "not started";
         const queued = queue.some((q) => q.engine === p.engine && q.model === model);
         state = `not calibrated (${phases}; ${prog ? prog.trials.length : 0} trials${queued ? "; queued" : ""})`;
+        // Spec 4.2 (F16): a model whose thinking cannot be turned on is reported, never silently.
+        const a = prog?.trials.find((t) => t.step === "A/summary")?.data;
+        if (a) state += `; Phase A: thinking off ${a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
+        if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }

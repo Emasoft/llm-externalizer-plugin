@@ -25,11 +25,11 @@ import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, isCalibratorProcess, readBrokerState, readCalibratorState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
-import { recordPath, writeRecord } from "../calibration/record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, recordPath, writeRecord } from "../calibration/record.js";
 import { recordFixture } from "../calibration/record-fixture.js";
 import { loadedIdentity, type LoadedIdentity } from "../calibration/fingerprint.js";
 import { calibratorLogPath, startCalServer } from "../calibration/runner.js";
-import { enqueueUnlocked, loadProgress, progressPath, readQueue, withStateLock } from "../calibration/state.js";
+import { enqueueUnlocked, loadProgress, progressPath, readQueue, saveProgress, withStateLock, type TrialRecord } from "../calibration/state.js";
 import { freePort, isLocalsServerArgv, isPythonPath, llamaServerEnv, MAIN_SLOTS, ManagedServerError, parseManagedModel, processSnapshot, readCommandLine, spawnLlamaServer, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
 import { buildLocalsArgv, hasLocalsMarker, LOCALS_MAIN_SLOTS, localsOutgoingModel, localsPython, parseLocalsModel, waitLocalsReady } from "../local-locals-server.js";
@@ -49,13 +49,17 @@ const REQUIRE_SHIM = `import { createRequire as __cjsCreateRequire } from "node:
 const ENTRY = `
 import { runBrokerMain } from "./server.ts";
 import { runCalibratorMain } from "../calibration/runner.ts";
+import { phaseA } from "../calibration/phase-a.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
 if (mode === "__broker") {
   await runBrokerMain(process.env.TEST_BROKER_VERSION ?? "t1");
 } else if (mode === "__calibrate") {
+  // The phase list a test selects by env (the runner inherits the broker's env):
   // TEST_SLOW_PHASE: a phase "A" that records one trial and then waits, so a test can SIGKILL the runner mid-model; resumed, it passes.
-  const slow = process.env.TEST_SLOW_PHASE === "1"
+  // TEST_PHASE_A: the real Phase A. TEST_PASS_PHASE_A: a phase "A" that records one trial and passes.
+  const env = process.env;
+  const phases = env.TEST_SLOW_PHASE === "1"
     ? [{ name: "A", run: async (ctx) => {
         if (ctx.progress.trials.length === 0) {
           ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
@@ -63,8 +67,15 @@ if (mode === "__broker") {
         }
         return { passed: true };
       } }]
-    : [];
-  await runCalibratorMain(process.env.TEST_BROKER_VERSION ?? "t1", slow);
+    : env.TEST_PHASE_A === "1"
+      ? [phaseA]
+      : env.TEST_PASS_PHASE_A === "1"
+        ? [{ name: "A", run: async (ctx) => {
+            ctx.record({ step: "A/stub", seed: 1, outcome: "pass", at: new Date().toISOString() });
+            return { passed: true };
+          } }]
+        : [];
+  await runCalibratorMain(env.TEST_BROKER_VERSION ?? "t1", phases);
 } else {
   const spec = JSON.parse(arg);
   setBrokerClientVersion(spec.version);
@@ -144,7 +155,7 @@ async function measure(engine: "llama" | "locals", model: string): Promise<Loade
   try {
     const s = await startCalServer(scratch, engine, model, 1024, 1, () => undefined);
     try {
-      const id = await loadedIdentity(engine, s.baseUrl, s.apiKey, model);
+      const id = await loadedIdentity(engine, s.baseUrl, s.apiKey, model, scratch);
       identities.set(key, id);
       return id;
     } finally {
@@ -257,17 +268,28 @@ interface ClientResult {
   stopped?: { cancelled: number; failed: string[] } | null;
 }
 
-function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1", extra: { stopAfterMs?: number } = {}): Promise<ClientResult> {
+/**
+ * Every client run is bounded (default 240 s; `limitMs` raises it): a hang (a
+ * job held with nothing to release it) fails the test with the client's
+ * output instead of blocking the whole run. The client is SIGKILLed.
+ */
+function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1", extra: { stopAfterMs?: number; limitMs?: number } = {}): Promise<ClientResult> {
+  const { limitMs = 240_000, ...spec } = extra;
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [bundle, "client", JSON.stringify({ dir, version, jobs, ...extra })], {
+    const child = spawn(process.execPath, [bundle, "client", JSON.stringify({ dir, version, jobs, ...spec })], {
       env: { ...process.env, LLAMA_CACHE, LLM_EXT_CONFIG_DIR: dir, TEST_BROKER_VERSION: version, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
     let err = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`client still running after ${limitMs} ms (killed): ${err}`));
+    }, limitMs);
     child.stdout.on("data", (c: Buffer) => (out += c));
     child.stderr.on("data", (c: Buffer) => (err += c));
     child.on("exit", (code) => {
+      clearTimeout(timer);
       if (code !== 0) reject(new Error(`client exited ${code}: ${err}`));
       else resolve(JSON.parse(out.trim().split("\n").pop()!) as ClientResult);
     });
@@ -980,7 +1002,7 @@ describe("jobs held for calibration (P6)", () => {
   it("review F3: a record naming other weights, or another engine build, re-holds the jobs and queues the model; a rewritten record releases them", async () => {
     const id = identities.get(`llama\u0000${B}`)!;
     const cases = [
-      { why: "its weights or the machine's RAM changed", rec: { ...recordFixture("llama", B), engine_version: id.engineVersion, engine_version_checked: id.engineVersion } },
+      { why: "its weights, the machine's RAM or the calibration method changed", rec: { ...recordFixture("llama", B), engine_version: id.engineVersion, engine_version_checked: id.engineVersion } },
       { why: "the engine build changed", rec: { ...recordFixture("llama", B), fingerprint: id.fingerprint, engine_version: "b1-old", engine_version_checked: "b1-old" } },
     ];
     for (const c of cases) {
@@ -1097,6 +1119,139 @@ describe("calibration runner (P6 step 2)", () => {
     expect(readCalibratorState(dir)).toBeNull();
   }, 300_000);
 
+  const runnerLogOf = (dir: string): string => (existsSync(calibratorLogPath(dir)) ? readFileSync(calibratorLogPath(dir), "utf8") : "");
+  const queueB = (dir: string): void => {
+    withStateLock(dir, 5000, () => {
+      enqueueUnlocked(dir, { engine: "llama", model: B, reason: "manual" });
+      return true;
+    });
+  };
+
+  it("step 3: the real Phase A on a tiny GGUF fails at its context check with the reason, and the calibration-failed record fails a request at once", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    rmSync(recordPath(dir, "llama", B));
+    queueB(dir);
+    const pid = spawnRunner(dir, { TEST_PHASE_A: "1" });
+    await waitFor("the runner to finish", () => !alive(pid), 180_000);
+    const log = runnerLogOf(dir);
+    // The tiny GGUFs are trained on 128 tokens and llama-server caps -c there: Phase A cannot run its 8k prompt.
+    expect(log, log).toMatch(/Phase A FAIL: the server's context is 128 tokens; Phase A needs 16384/);
+    const rec = readRecord(dir, "llama", B);
+    expect(rec?.status).toBe("calibration-failed");
+    expect(rec?.failed_step).toBe("phase-a/context");
+    expect(loadProgress(dir, "llama", B, null).trials.map((t) => t.step)).toEqual(["A/capabilities"]);
+    expect(readQueue(dir)).toEqual([]);
+    expect(readRegistry(dir, "llama").filter((e) => e.role === "cal")).toEqual([]);
+    const r = await runClient(dir, jobsOf(B, 1));
+    expect(r.results[0].error).toMatch(/calibration-failed at phase-a\/context/);
+  }, 300_000);
+
+  /** A record of B calibrated on an older engine build, with progress from that build (A and B passed). */
+  const oldBuild = (dir: string): LoadedIdentity => {
+    const id = identities.get(`llama\u0000${B}`)!;
+    writeRecord(dir, { ...recordFixture("llama", B), fingerprint: id.fingerprint, engine_version: "b1-old", engine_version_checked: "b1-old" });
+    const t = (step: string): TrialRecord => ({ step, seed: 0, outcome: "pass", at: new Date().toISOString() });
+    saveProgress(dir, "llama", B, { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: id.fingerprint, trials: [t("A/old"), t("B/old")], phases: { A: "passed", B: "passed" } });
+    return id;
+  };
+
+  it("an engine build change re-runs only Phase A (step 3): on a pass the record vouches for the new build and the held request is served", async () => {
+    const dir = newDir();
+    const env = { TEST_PASS_PHASE_A: "1" };
+    await runClient(dir, jobsOf(A, 1), env);
+    const id = oldBuild(dir);
+    const r = await runClient(dir, jobsOf(B, 1), env);
+    expect(r.results[0].error).toBeUndefined();
+    expect(r.results[0].status).toBe(200);
+    const rec = readRecord(dir, "llama", B)!;
+    expect(rec.status).toBe("ok");
+    expect(rec.engine_version_checked).toBe(id.engineVersion);
+    expect(rec.engine_version).toBe("b1-old");
+    const prog = loadProgress(dir, "llama", B, null);
+    // The old build's Phase A trial is dropped; B's results stay.
+    expect(prog.trials.map((x) => x.step)).toEqual(["B/old", "A/stub"]);
+    expect(prog.phases).toEqual({ A: "passed", B: "passed" });
+    expect(runnerLogOf(dir)).toMatch(/the engine quick check passed on /);
+    expect(readQueue(dir)).toEqual([]);
+  }, 300_000);
+
+  it("an engine build change whose Phase A fails gives engine-check-failed: the record keeps its body and the held request fails with the reason", async () => {
+    const dir = newDir();
+    const env = { TEST_PHASE_A: "1" };
+    await runClient(dir, jobsOf(A, 1), env);
+    oldBuild(dir);
+    const r = await runClient(dir, jobsOf(B, 1), env);
+    expect(r.results[0].error).toMatch(/engine-check-failed at phase-a\/context/);
+    const rec = readRecord(dir, "llama", B)!;
+    expect(rec.status).toBe("engine-check-failed");
+    expect(rec.engine_version_checked).toBe("b1-old");
+    expect(rec.main).toEqual(recordFixture("llama", B).main);
+  }, 300_000);
+
+  // ── Review of ea8e3869: C1, M1, M2, M3 through a real broker and runner ──
+  const brokerLogOf = (dir: string): string => (existsSync(join(dir, "broker-local.log")) ? readFileSync(join(dir, "broker-local.log"), "utf8") : "");
+  const copy260K = (dir: string, name: string): string => {
+    const repo = join(LLAMA_CACHE, "models--ggml-org--tiny-llamas", "snapshots");
+    const rev = readdirSync(repo).find((r) => existsSync(join(repo, r, "stories260K.gguf")))!;
+    const to = join(dir, name);
+    writeFileSync(to, readFileSync(realpathSync(join(repo, rev, "stories260K.gguf"))));
+    return to;
+  };
+
+  it("review C1: a loaded server whose identity cannot be read fails its jobs with the reason after bounded retries; they never wait", async () => {
+    const dir = newDir();
+    const model = copy260K(dir, "m.gguf");
+    writeRecord(dir, recordFixture("llama", model));
+    // The digest cache path is a directory: hashing the plain GGUF cannot store its digest, so every identity read throws.
+    mkdirSync(join(dir, "calibration", "digests.json"), { recursive: true });
+    const t0 = Date.now();
+    const r = await runClient(dir, jobsOf(model, 1), {}, "t1", { limitMs: 120_000 });
+    expect(r.results[0].error).toMatch(/could not read what its server loaded/);
+    expect(Date.now() - t0).toBeLessThan(60_000);
+    expect(brokerLogOf(dir)).toMatch(/could not be read after 3 attempts/);
+  }, 180_000);
+
+  it("review M1: a held model whose enqueue failed (state lock busy) is queued by the next runner re-check", async () => {
+    const dir = newDir();
+    rmSync(recordPath(dir, "llama", B));
+    await runClient(dir, jobsOf(A, 1));
+    const lock = join(dir, "calibration", "state.lock");
+    mkdirSync(lock, { recursive: true });
+    const client = runClient(dir, jobsOf(B, 1), {}, "t1", { stopAfterMs: 80_000, limitMs: 150_000 });
+    await waitFor("the failed enqueue", () => brokerLogOf(dir).includes(`could not queue '${B}' for calibration`), 30_000);
+    rmdirSync(lock);
+    expect(readQueue(dir)).toEqual([]);
+    await waitFor("the re-check to queue B", () => readQueue(dir).some((q) => q.model === B), 90_000);
+    const r = await client;
+    expect(r.stopped).toEqual({ cancelled: 1, failed: [] });
+  }, 240_000);
+
+  it("review M2: a model whose cal server cannot start gets a calibration-failed record after 3 crashes, and its held request fails with the error", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    const bad = join(dir, "bad.gguf");
+    writeFileSync(bad, "not a gguf");
+    const r = await runClient(dir, jobsOf(bad, 1), {}, "t1", { limitMs: 180_000 });
+    expect(r.results[0].error).toMatch(/calibration-failed at runner\/error: calibration stopped 3 times/);
+    expect(readRecord(dir, "llama", bad)?.status).toBe("calibration-failed");
+    const log = runnerLogOf(dir);
+    for (const n of [1, 2, 3]) expect(log).toContain(`calibration stopped (${n} of 3)`);
+  }, 240_000);
+
+  it("review M3: the broker's periodic sweep stops a cal server whose runner was SIGKILLed, with no new runner", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1)); // a broker is running from here on
+    rmSync(recordPath(dir, "llama", B));
+    queueB(dir);
+    const first = spawnRunner(dir, { TEST_SLOW_PHASE: "1" });
+    await waitFor("the first trial", () => existsSync(progressPath(dir, "llama", B)) && loadProgress(dir, "llama", B, null).trials.length === 1);
+    const cal = readRegistry(dir, "llama").find((e) => e.role === "cal")!;
+    process.kill(first, "SIGKILL");
+    // The log line is written after the stop completes: wait for it, then the server is gone.
+    await waitFor("the broker's sweep to stop the orphaned cal server", () => /stopped orphaned cal llama-server/.test(brokerLogOf(dir)), 90_000);
+    expect(alive(cal.pid)).toBe(false);
+  }, 180_000);
   it("trigger 3: `models calibrate` queues a profile model and starts the runner; `models calibration-status` reports it; an unknown model is refused", async () => {
     const cli = await cliBundle();
     const cfg = newDir();
@@ -1127,7 +1282,8 @@ describe("calibration runner (P6 step 2)", () => {
     const s = run(["models", "calibration-status"]);
     expect(s.code, s.out).toBe(0);
     expect(s.out).toMatch(/calibration runner: not running/);
-    expect(s.out).toMatch(/tiny llama '.*m\.gguf': not calibrated \(A pending, B pending, C pending; 0 trials; queued\)/);
+    // Step 3: the runner runs the real Phase A, and the tiny GGUF fails its context check (128 tokens).
+    expect(s.out).toMatch(/tiny llama '.*m\.gguf': calibration-failed at phase-a\/context: the model's context is 128 tokens/);
   }, 300_000);
 });
 

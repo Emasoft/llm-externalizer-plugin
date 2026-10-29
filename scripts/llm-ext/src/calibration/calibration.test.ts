@@ -10,10 +10,10 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import type { Profile } from "../config.js";
-import { CALIBRATE_ARGV } from "../broker/protocol.js";
+import { CALIBRATE_ARGV, calibratorStatePath } from "../broker/protocol.js";
 import { recordFixture } from "./record-fixture.js";
-import { readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord } from "./record.js";
-import { blobSha256, fingerprintOf, snapshotWeightFiles } from "./fingerprint.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord } from "./record.js";
+import { blobSha256, fingerprintOf, ggufShards, snapshotWeightFiles, staleness } from "./fingerprint.js";
 import { acquireModelLock, dequeueUnlocked, enqueueUnlocked, loadProgress, modelLockPath, readQueue, readSeenModels, releaseModelLock, saveProgress, withStateLock } from "./state.js";
 import { checkModelChanges, managedProfileModels, markProfileUsed } from "./triggers.js";
 import { engineOf, queueManual } from "./commands.js";
@@ -98,6 +98,57 @@ describe("fingerprint: blob sha256 of the weights (spec section 3, review N7)", 
   });
 });
 
+describe("review fixes of ea8e3869: fingerprint, versions, queue pruning", () => {
+  it("M4: the snapshot lookup uses the Locals resolver, so XDG_CACHE_HOME is honoured", () => {
+    const repo = join(dir, "xdg", "huggingface", "hub", "models--org--m");
+    mkdirSync(join(repo, "snapshots", "r1"), { recursive: true });
+    mkdirSync(join(repo, "refs"));
+    writeFileSync(join(repo, "refs", "main"), "r1");
+    writeFileSync(join(repo, "snapshots", "r1", "w.safetensors"), "x");
+    expect(snapshotWeightFiles("org/m", { XDG_CACHE_HOME: join(dir, "xdg") })).toEqual([join(repo, "snapshots", "r1", "w.safetensors")]);
+  });
+
+  it("M7: a plain GGUF is hashed once and its digest reused until the file changes; every shard of a split GGUF counts", async () => {
+    const f = join(dir, "m.gguf");
+    writeFileSync(f, "v1");
+    const sha1 = await blobSha256(f, dir);
+    const cache = JSON.parse(readFileSync(join(dir, "calibration", "digests.json"), "utf8")) as Record<string, { sha256: string }>;
+    expect(Object.values(cache).map((c) => c.sha256)).toEqual([sha1]);
+    // A cached digest is what is returned: planting a fake one proves the file was not read again.
+    const real = Object.keys(cache)[0];
+    writeFileSync(join(dir, "calibration", "digests.json"), JSON.stringify({ [real]: { ...cache[real], sha256: "f".repeat(64) } }));
+    expect(await blobSha256(f, dir)).toBe("f".repeat(64));
+    // A changed file (size and mtime) is hashed again.
+    writeFileSync(f, "version 2");
+    expect(await blobSha256(f, dir)).toBe(createHash("sha256").update("version 2").digest("hex"));
+    expect(ggufShards("/m/x-00001-of-00003.gguf")).toEqual(["/m/x-00001-of-00003.gguf", "/m/x-00002-of-00003.gguf", "/m/x-00003-of-00003.gguf"]);
+    expect(ggufShards("/m/x.gguf")).toEqual(["/m/x.gguf"]);
+  });
+
+  it("M5: a record of another harness or fixture version is missing for the broker and stale for the runner", () => {
+    const old = { ...recordFixture("llama", "a/b:Q4"), harness_version: HARNESS_VERSION + 1 };
+    writeRecord(dir, old);
+    expect(readRecordStatus(dir, "llama", "a/b:Q4")).toEqual({ state: "missing" });
+    const id = { fingerprint: old.fingerprint, engineVersion: old.engine_version_checked };
+    expect(staleness(old, id)).toBe("weights");
+    expect(staleness({ ...old, harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION + 1 }, id)).toBe("weights");
+    expect(staleness({ ...old, harness_version: HARNESS_VERSION }, id)).toBeNull();
+  });
+
+  it("M6: the boot check drops a queued model no managed profile names any more, but keeps a manual item", () => {
+    const profiles: Record<string, Profile> = { p: managed("org/a:Q4", { second_model: "org/b:Q4" }) };
+    checkModelChanges(dir, profiles);
+    withStateLock(dir, 1000, () => {
+      enqueueUnlocked(dir, { engine: "llama", model: "org/b:Q4", reason: "model-change" });
+      enqueueUnlocked(dir, { engine: "llama", model: "org/gone:Q4", reason: "first-use" });
+      enqueueUnlocked(dir, { engine: "llama", model: "org/manual:Q4", reason: "manual" });
+      return true;
+    });
+    delete profiles.p.second_model;
+    checkModelChanges(dir, profiles);
+    expect(readQueue(dir).map((q) => q.model)).toEqual(["org/manual:Q4"]);
+  });
+});
 describe("per-model lock (spec section 3)", () => {
   it("is taken over from a dead or non-runner holder, refused while a live __calibrate holds it, and released only by its owner", async () => {
     const lock = modelLockPath(dir, "llama", "a/b:Q4");
@@ -112,9 +163,18 @@ describe("per-model lock (spec section 3)", () => {
       await new Promise((r) => setTimeout(r, 300));
       mkdirSync(lock, { recursive: true });
       writeFileSync(join(lock, "pid"), String(runner.pid));
+      // Review m1: a live __calibrate that is not THIS dir's runner (another config dir's) is no holder.
+      expect(await acquireModelLock(dir, "llama", "a/b:Q4")).toBe(true);
+      releaseModelLock(dir, "llama", "a/b:Q4");
+      mkdirSync(lock, { recursive: true });
+      writeFileSync(join(lock, "pid"), String(runner.pid));
+      writeFileSync(calibratorStatePath(dir), JSON.stringify({ pid: runner.pid, version: "t", startedAt: new Date().toISOString() }));
       expect(await acquireModelLock(dir, "llama", "a/b:Q4")).toBe(false);
       releaseModelLock(dir, "llama", "a/b:Q4"); // not ours: left alone
       expect(readFileSync(join(lock, "pid"), "utf8")).toBe(String(runner.pid));
+      // A lock being created (no pid file yet, fresh) is left alone.
+      rmSync(join(lock, "pid"));
+      expect(await acquireModelLock(dir, "llama", "a/b:Q4")).toBe(false);
     } finally {
       runner.kill("SIGKILL");
     }

@@ -8,7 +8,7 @@
 
 import type { BrokerEngine } from "../broker/protocol.js";
 import type { Profile } from "../config.js";
-import { enqueueUnlocked, readSeenModels, withStateLock, writeSeenModelsUnlocked, type QueueItem } from "./state.js";
+import { dequeueUnlocked, enqueueUnlocked, readQueue, readSeenModels, withStateLock, writeSeenModelsUnlocked, type QueueItem } from "./state.js";
 
 /** The boot check waits this long for the state lock, then skips itself for this run: it must never block or fail a command. */
 const BOOT_LOCK_WAIT_MS = 1500;
@@ -57,6 +57,10 @@ export function checkModelChanges(dir: string, profiles: Readonly<Record<string,
         }
       }
       if (JSON.stringify(seen.profiles) !== JSON.stringify(ids)) writeSeenModelsUnlocked(dir, { profiles: ids, used_profiles: seen.used_profiles });
+      // Review M6: a queued model no managed profile names any more (its profile was deleted or edited) is dropped,
+      // so the runner never spends hours on it. A manual item was checked against the profiles when it was queued.
+      const named = new Set(Object.values(current).flatMap((p) => p.models.map((m) => `${p.engine}\u0000${m}`)));
+      for (const q of readQueue(dir)) if (q.reason !== "manual" && !named.has(`${q.engine}\u0000${q.model}`)) dequeueUnlocked(dir, q.engine, q.model);
       return out;
     }) ?? [];
   return queued;
