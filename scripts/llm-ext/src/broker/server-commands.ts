@@ -14,7 +14,8 @@
  * one only when work arrives (server-stop says so when work is queued). The
  * broker process itself is left alone. A cal server under a live calibration
  * runner is stopped by SIGTERM to that runner, so the stop never counts as a
- * calibration crash.
+ * calibration crash (a runner still alive after 60 s is named instead), and
+ * held requests for the model mean the broker starts calibration again.
  */
 
 import { pidState } from "../local-llama-server.js";
@@ -55,16 +56,17 @@ export async function serverStatusText(dir: string): Promise<string> {
 const RUNNER_STOP_WAIT_MS = 60_000;
 
 /**
- * The broker's queued requests for one model, from its /v1/health; null when no broker of this dir is alive. A
- * broker that does not answer is an error: the caller says so instead of guessing there is no work.
+ * The broker's queued and held requests for one model, from its /v1/health; null when no broker of this dir is alive.
+ * A broker that does not answer is an error: the caller says so instead of guessing there is no work.
  */
-async function brokerQueued(dir: string, engine: BrokerEngine, model: string): Promise<number | null> {
+async function brokerCounts(dir: string, engine: BrokerEngine, model: string): Promise<{ queued: number; held: number } | null> {
   const st = readBrokerState(dir);
   if (!st || pidState(st.pid) === "dead") return null;
   const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token }, signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`the broker's /v1/health answered HTTP ${res.status}`);
-  const h = (await res.json()) as { models?: Array<{ engine?: string; model?: string; queued?: number }> };
-  return (h.models ?? []).filter((m) => m.engine === engine && m.model === model).reduce((n, m) => n + (m.queued ?? 0), 0);
+  const h = (await res.json()) as { models?: Array<{ engine?: string; model?: string; queued?: number; held?: number }> };
+  const rows = (h.models ?? []).filter((m) => m.engine === engine && m.model === model);
+  return { queued: rows.reduce((n, m) => n + (m.queued ?? 0), 0), held: rows.reduce((n, m) => n + (m.held ?? 0), 0) };
 }
 
 /** Stop the selected registered servers (default: all engines, all roles); one line per server stopped, or per failure. */
@@ -79,21 +81,24 @@ export async function serverStopText(dir: string, opts: ServerStopOptions): Prom
       try {
         // A cal server is stopped through its runner (review of 2a3ac697): killed under a live runner, the server's
         // death would count as a calibration crash (three fail the model). On SIGTERM the runner stops the server
-        // itself, records nothing more and exits, so the model keeps its finished trials and stays queued.
+        // itself, records nothing more and exits, so the model keeps its finished trials and stays queued. The wait is
+        // on the RUNNER's exit (review of 2411e6dc, finding D): only a runner that is gone can no longer count a crash,
+        // so one still alive after RUNNER_STOP_WAIT_MS is named, never reported as stopped.
         if (e.role === "cal" && (await isRunnerOf(dir, e.ownerPid))) {
           process.kill(e.ownerPid, "SIGTERM");
-          for (const end = Date.now() + RUNNER_STOP_WAIT_MS; pidState(e.pid) !== "dead" && Date.now() < end; ) await new Promise((r) => setTimeout(r, 200));
-          lines.push(`stopped the calibration runner pid ${e.ownerPid} first, so this stop is not counted as a calibration crash; '${e.model}' stays in the calibration queue and resumes from its finished trials when a runner starts again`);
+          for (const end = Date.now() + RUNNER_STOP_WAIT_MS; pidState(e.ownerPid) !== "dead" && Date.now() < end; ) await new Promise((r) => setTimeout(r, 200));
+          if (pidState(e.ownerPid) === "dead") lines.push(`stopped the calibration runner pid ${e.ownerPid} first, so this stop is not counted as a calibration crash; '${e.model}' stays in the calibration queue and resumes from its finished trials when a runner starts again`);
+          else lines.push(`the calibration runner pid ${e.ownerPid} did not stop within ${RUNNER_STOP_WAIT_MS / 1000} s of SIGTERM; its cal server is stopped directly, and the runner may count this stop as a calibration crash`);
         }
         const how = await stopOwnServer(dir, engine, e, (m) => lines.push(m));
         lines.push(`stopped ${e.role} ${serverLabel(engine)} pid ${e.pid} (port ${e.port}, model '${e.model}'): ${how}`);
-        if (e.role === "main") {
-          try {
-            const queued = await brokerQueued(dir, engine, e.model);
-            if (queued !== null && queued > 0) lines.push(`the broker still has ${queued} queued request(s) for '${e.model}': it will start the server again to serve them`);
-          } catch (err) {
-            lines.push(`could not ask the broker about queued work for '${e.model}': ${(err as Error).message}`);
-          }
+        try {
+          const counts = await brokerCounts(dir, engine, e.model);
+          if (e.role === "main" && counts !== null && counts.queued > 0) lines.push(`the broker still has ${counts.queued} queued request(s) for '${e.model}': it will start the server again to serve them`);
+          // Review of 2411e6dc, finding E: held requests make the broker re-ensure a runner every RUNNER_RECHECK_MS (60 s).
+          if (e.role === "cal" && counts !== null && counts.held > 0) lines.push(`the broker holds ${counts.held} request(s) for '${e.model}' until it is calibrated: it will start calibration again within about a minute`);
+        } catch (err) {
+          lines.push(`could not ask the broker about queued work for '${e.model}': ${(err as Error).message}`);
         }
       } catch (err) {
         failed = true;

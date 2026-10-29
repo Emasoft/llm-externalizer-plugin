@@ -145,6 +145,8 @@ export interface Phase {
 export const calibratorLogPath = (dir: string): string => join(dir, "calibrator-local.log");
 const handoverPath = (dir: string): string => join(dir, "calibrator-handover.json");
 const runnerLockPath = (dir: string): string => join(dir, "calibrator.lock");
+/** How long a stop signal waits for the model in flight to record its outcome before the runner exits anyway. */
+const STOP_SETTLE_MS = 10_000;
 
 /** A live runner of this config dir, or null. */
 export async function liveCalibrator(dir: string): Promise<CalibratorState | null> {
@@ -277,13 +279,19 @@ export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handove
   }
   let current: { stop: (why: string) => Promise<void> } | null = null;
   let stopping = false;
+  // Review of 2411e6dc, finding F: the model being calibrated when a signal arrives must log and save its "not counted
+  // as a crash" outcome before the process exits, so onSignal waits for it (bounded: a phase stuck past the server
+  // stop must not keep a stopped runner alive).
+  let inflight: Promise<unknown> | null = null;
   const onSignal = (sig: string): void => {
     stopping = true;
     o.log(`signal ${sig}: stopping after cleanup`);
-    void (current?.stop(`runner ${sig}`) ?? Promise.resolve()).finally(() => {
-      removeOwnState(o.dir);
-      process.exit(0);
-    });
+    void (current?.stop(`runner ${sig}`) ?? Promise.resolve())
+      .then(() => Promise.race([(inflight ?? Promise.resolve()).catch(() => undefined), new Promise((r) => setTimeout(r, STOP_SETTLE_MS))]))
+      .finally(() => {
+        removeOwnState(o.dir);
+        process.exit(0);
+      });
   };
   process.once("SIGTERM", onSignal);
   process.once("SIGINT", onSignal);
@@ -297,8 +305,10 @@ export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handove
       }
       const item = readQueue(o.dir).find((i) => !attempted.has(`${i.engine}\u0000${i.model}`));
       if (!item) return "done";
-      const r = await calibrateOne(o, item, (s) => (current = s), () => stopping);
-      current = null;
+      const one = calibrateOne(o, item, (s) => (current = s), () => stopping);
+      inflight = one;
+      const r = await one;
+      inflight = null;
       if (r === "paused") return "paused";
       // A crash is retried at once; the model's crash counter (progress) bounds it, then a failure record ends it.
       if (r !== "crashed") attempted.add(`${item.engine}\u0000${item.model}`);

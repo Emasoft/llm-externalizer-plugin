@@ -61,10 +61,12 @@ if (mode === "__broker") {
   // TEST_PHASE_A: the real Phase A. TEST_PASS_PHASE_A: a phase "A" that records one trial and passes.
   const env = process.env;
   // TEST_STOP_PHASE: a phase "A" that records one trial, then fails the way a request does when its cal server dies.
+  // It notices the death only on a 2 s poll (review of 2411e6dc, finding F): a runner that exits as soon as its server
+  // is stopped, without waiting for the model in flight, never writes the "not counted as a crash" line.
   const phases = env.TEST_STOP_PHASE === "1"
     ? [{ name: "A", run: async (ctx) => {
         if (ctx.progress.trials.length === 0) ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
-        while (ctx.server.alive()) await new Promise((r) => setTimeout(r, 100));
+        while (ctx.server.alive()) await new Promise((r) => setTimeout(r, 2000));
         throw new Error("the cal server died during a request");
       } }]
     : env.TEST_SLOW_PHASE === "1"

@@ -9,12 +9,12 @@
 import { spawn } from "node:child_process";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { pidState } from "../local-llama-server.js";
-import { TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { calibratorStatePath, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { readRegistry, registryPath, type RegistryEntry, type ServerRole } from "./registry.js";
 import { serverStatusText, serverStopText } from "./server-commands.js";
 
@@ -155,4 +155,51 @@ describe("server-status and server-stop", () => {
       await new Promise((r) => srv.close(() => r(undefined)));
     }
   });
+
+  /**
+   * A fake calibration runner of this dir: __calibrate in its argv and named in its state file; `onTerm` is its SIGTERM
+   * handler. It writes `ready` once the handler is installed, and the caller waits for that: a SIGTERM sent before
+   * would end it by default and the test would see a runner that stopped.
+   */
+  async function startRunner(onTerm: string): Promise<number> {
+    const ready = join(dir, `runner-ready-${started.length}`);
+    const script = `process.on("SIGTERM",()=>{${onTerm}});require("node:fs").writeFileSync(${JSON.stringify(ready)},"");setInterval(()=>{},1e9)`;
+    const child = spawn(process.execPath, ["-e", script, "__calibrate"], { detached: true, stdio: "ignore" });
+    child.unref();
+    started.push(child.pid as number);
+    writeFileSync(calibratorStatePath(dir), JSON.stringify({ pid: child.pid, version: "t", startedAt: new Date().toISOString() }));
+    await waitFor(() => existsSync(ready));
+    expect(existsSync(ready)).toBe(true);
+    return child.pid as number;
+  }
+
+  it("a cal stop goes through its live runner, waits for the runner to exit, and with requests held says the broker starts calibration again", async () => {
+    const cal = startFake();
+    // Like the real runner: on SIGTERM it stops its cal server, then exits.
+    const runner = await startRunner(`try{process.kill(-${cal},"SIGKILL")}catch{};process.exit(0)`);
+    await waitFor(() => pidState(cal) === "alive" && pidState(runner) === "alive");
+    register([{ ...entryFor(cal, "cal", 45686), ownerPid: runner }]);
+    const srv = await fakeBrokerHealth([{ engine: "llama", model: "model-cal", queued: 0, running: 0, held: 2 }]);
+    try {
+      const r = await serverStopText(dir, { role: "cal" });
+      expect(r.isError).toBe(false);
+      expect(r.text).toContain(`stopped the calibration runner pid ${runner} first, so this stop is not counted as a calibration crash`);
+      expect(r.text.split("\n").filter((l) => l.includes("calibration again"))).toEqual(["the broker holds 2 request(s) for 'model-cal' until it is calibrated: it will start calibration again within about a minute"]);
+      expect(pidState(runner)).toBe("dead");
+    } finally {
+      await new Promise((r) => srv.close(() => r(undefined)));
+    }
+  });
+
+  it("a runner still alive 60 s after SIGTERM is named with its pid, never reported as stopped (review of 2411e6dc, finding D)", async () => {
+    const cal = startFake();
+    const runner = await startRunner("");
+    await waitFor(() => pidState(cal) === "alive" && pidState(runner) === "alive");
+    register([{ ...entryFor(cal, "cal", 45687), ownerPid: runner }]);
+    const r = await serverStopText(dir, { role: "cal" });
+    expect(r.text).toContain(`the calibration runner pid ${runner} did not stop within 60 s of SIGTERM; its cal server is stopped directly`);
+    expect(r.text).not.toContain("stopped the calibration runner");
+    expect(r.text).toContain(`stopped cal llama-server pid ${cal}`);
+    expect(pidState(runner)).toBe("alive");
+  }, 90_000);
 });

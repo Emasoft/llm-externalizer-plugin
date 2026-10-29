@@ -22,7 +22,10 @@ import type { BrokerEngine } from "../broker/protocol.js";
 // 3 (review of a3862052, coordinator decision): the Phase C method changed (wall-time throughput, per-kind slot
 // context, non-terminal skips) and Phase B resumes on the hard W, with the same harness JSON: a progress file of
 // fb861fab (version 2) mixes the old measurements in, so it is discarded.
-export const HARNESS_VERSION = 3;
+// 4 (coordinator decisions 2026-10-29): scouting with every candidate over total RAM is no longer a calibration
+// failure, and a scouting timeout becomes terminal after 3 passes. A version-3 calibration-failed record from the old
+// scouting rule would otherwise stay "valid and current" forever, so every version-3 record and progress is redone.
+export const HARNESS_VERSION = 4;
 /**
  * The `harness` id of a record made with the production harness (D4, main-agent
  * decision 2026-10-29). A custom LLM_EXT_CALIBRATION_HARNESS writes
@@ -109,6 +112,12 @@ export interface CalibrationRecord {
    * in settings.yaml needs no new calibration. No candidate passing the threshold means scouting is unfit.
    */
   scouting_candidates?: ScoutCandidate[];
+  /**
+   * Why no scouting candidate was scored (coordinator decision 2026-10-29): "over total RAM", "timed out on 3 passes",
+   * or both. Present only with an empty scouting_candidates; scouting is then unfit at any threshold, and the model is
+   * usable for everything else. Absent means unfit, if at all, by accuracy.
+   */
+  scouting_unfit_reason?: string;
   speed?: { prefill_tps: number; decode_tps: number; aggregate_decode_tps: number; load_avg: number };
 }
 
@@ -191,6 +200,9 @@ export function recordSchemaErrors(raw: unknown): string[] {
   need(isObj(main) && isNum(main.slots) && main.slots >= 1 && isNum(main.slot_ctx) && main.slot_ctx >= 256, "main");
   const sc = raw.scouting_candidates;
   need(Array.isArray(sc) && sc.every((c) => isObj(c) && SCOUT_CANDIDATE_KEYS.every((k) => isNonNeg(c[k]))), "scouting_candidates");
+  // A reason only where no candidate was scored: with candidates, unfit is decided by the threshold at read time.
+  const sr = raw.scouting_unfit_reason;
+  need(sr === undefined || (isStr(sr) && sr !== "" && Array.isArray(sc) && sc.length === 0), "scouting_unfit_reason");
   const sp = raw.speed;
   need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_decode_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
   return e;
@@ -260,6 +272,7 @@ export function okRecordFrom(base: RecordBase, trials: ReadonlyArray<{ step: str
     structured_output: { off: a.json_off === true, on: a.json_on === true, array40: a.array40 === true, ...(typeof a.json_error === "string" ? { error: a.json_error } : {}) },
     main: { slots: n(c.main_slots), slot_ctx: n(c.main_slot_ctx) },
     scouting_candidates: JSON.parse(String(c.scout_candidates)) as ScoutCandidate[],
+    ...(typeof c.scouting_unfit_reason === "string" ? { scouting_unfit_reason: c.scouting_unfit_reason } : {}),
     speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_decode_tps: n(c.aggregate_decode_tps), load_avg: n(c.load_avg) },
   };
 }

@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { loadSettings, scoutAccuracyThreshold, type Profile } from "../config.js";
 import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, scoutingFor, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
 import { liveCalibrator, METHOD_PHASES } from "./runner.js";
-import { MEMORY_WAIT_MAX_MS } from "./phase-c.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, pendingCause } from "./phase-c.js";
 import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
 import type { BrokerEngine } from "../broker/protocol.js";
@@ -59,7 +59,9 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (r.status === "ok" && r.scouting_candidates) {
           const threshold = scoutAccuracyThreshold(loadSettings());
           const sc = scoutingFor(r.scouting_candidates, threshold);
-          state += sc === "unfit" ? `; scouting unfit at threshold ${threshold} (${r.scouting_candidates.length} candidate(s) measured)` : `; scouting share ${sc.share_tokens} at ${sc.slots} slots (accuracy ${sc.accuracy} at threshold ${threshold})`;
+          // A recorded reason (over total RAM, timed out on 3 passes) is not an accuracy failure: it is printed as such.
+          if (r.scouting_unfit_reason !== undefined) state += `; scouting unfit: ${r.scouting_unfit_reason} (no candidate scored; the model is usable for everything else)`;
+          else state += sc === "unfit" ? `; scouting unfit at threshold ${threshold}: no candidate reached the accuracy (${r.scouting_candidates.length} measured)` : `; scouting share ${sc.share_tokens} at ${sc.slots} slots (accuracy ${sc.accuracy} at threshold ${threshold})`;
         }
       }
       else {
@@ -76,10 +78,11 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
         // Phase C memory waits are shown, never silent (review of fb861fab): the candidate is skipped after MEMORY_WAIT_MAX_MS.
         for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped for this pass after ${MEMORY_WAIT_MAX_MS / 60_000} min)`;
-        // Review of a3862052: a Phase C candidate skipped for now (memory wait, timeouts) is measured again; say so.
-        const latest = new Map<string, { outcome: string; skipped: unknown }>();
-        for (const t of prog?.trials ?? []) if (t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped });
-        for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") state += `; ${step} skipped for now (${t.skipped === "timeout" ? "its runs timed out" : "it waited too long for free memory"}): measured again on a resume`;
+        // Rule A (coordinator decision 2026-10-29): a Phase C candidate pending after a memory wait or a timeout is
+        // measured again on the next pass, and given up after INCONCLUSIVE_PASSES passes; show the cause and the count.
+        const latest = new Map<string, { outcome: string; skipped: unknown; passes: unknown }>();
+        for (const t of prog?.trials ?? []) if (t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped, passes: t.data?.passes });
+        for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") state += `; ${step} pending: ${pendingCause(t.skipped)}, pass ${String(t.passes)} of ${INCONCLUSIVE_PASSES}; measured again on the next pass`;
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }
