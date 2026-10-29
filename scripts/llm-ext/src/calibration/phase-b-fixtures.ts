@@ -340,12 +340,15 @@ export function outputFloor(completions: readonly number[]): number {
 
 
 /**
- * D1 (main-agent decision 2026-10-29): what a reply cut at max_tokens counts as. The first cut of a trial is
- * rerun on a new document (inconclusive, not counted); a second cut is a FAIL in the sequential rule, so the
- * step fails like any other and the grid steps down to unfit. A cut never fails the model.
+ * D1 (main-agent decision 2026-10-29): what a reply cut at max_tokens counts as. A cut at the kind's nominal cap
+ * (CAP_ON 8192 with thinking on, CAP_OFF 2048 with thinking off) means the answer does not fit the cap: the first is
+ * rerun on a new document (inconclusive), a second is a FAIL in the sequential rule, so the step fails like any other
+ * and the grid steps down to unfit. A cut at a smaller cap, squeezed by W - step - 64, says nothing about the model:
+ * it stays inconclusive and counts towards the pause bound (review of a72827f9). A cut never fails the model.
  */
-export function cutOutcome(earlierCuts: number): Outcome {
-  return earlierCuts === 0 ? "inconclusive" : "fail";
+export function cutOutcome(earlierFullCuts: number, cap: number, nominalCap: number): Outcome {
+  if (cap < nominalCap) return "inconclusive";
+  return earlierFullCuts === 0 ? "inconclusive" : "fail";
 }
 
 /**

@@ -231,6 +231,8 @@ export interface TrialRecord {
 export interface Progress {
   harness_version: number;
   fixture_version: number;
+  /** The harness id of the run that made these trials (D4: "production" or "custom:<sha256>"); null only for a fresh, unclaimed file. */
+  harness: string | null;
   /** null until the cal server was loaded and the weights fingerprinted. */
   fingerprint: Fingerprint | null;
   trials: TrialRecord[];
@@ -246,24 +248,31 @@ export interface Progress {
 
 export const progressPath = (dir: string, engine: BrokerEngine, model: string): string => join(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
 
-const emptyProgress = (): Progress => ({ harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: null, trials: [], phases: {} });
+const emptyProgress = (): Progress => ({ harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: null, fingerprint: null, trials: [], phases: {} });
 
 /**
- * The model's progress, kept only while the harness and fixture versions and
- * (once known) the fingerprint still match (spec section 3: resume reuses
- * exactly those trials). Anything else starts fresh.
+ * The model's progress, kept only while the harness and fixture versions, the
+ * harness id and (once known) the fingerprint still match (spec section 3:
+ * resume reuses exactly those trials). Anything else starts fresh.
+ * `harness` null (a reader: calibration-status, a crash count) never resets and
+ * keeps the stored id; the runner passes its harness id.
  */
-export function loadProgress(dir: string, engine: BrokerEngine, model: string, fingerprint: Fingerprint | null): Progress {
+export function loadProgress(dir: string, engine: BrokerEngine, model: string, fingerprint: Fingerprint | null, harness: string | null = null): Progress {
   const raw = readJson(progressPath(dir, engine, model)) as Partial<Progress> | null;
   if (!raw || raw.harness_version !== HARNESS_VERSION || raw.fixture_version !== FIXTURE_VERSION || !Array.isArray(raw.trials) || typeof raw.phases !== "object" || raw.phases === null) {
-    return { ...emptyProgress(), fingerprint };
+    return { ...emptyProgress(), fingerprint, harness };
   }
+  // D4 (main-agent decision 2026-10-29): trials of another harness measured another method (another window cap,
+  // grid or trial count), so a production run never resumes a custom-harness run, nor the reverse. A file with
+  // no id (written before the field existed) cannot prove its harness and also starts fresh.
+  if (harness !== null && raw.harness !== harness) return { ...emptyProgress(), fingerprint, harness };
   const old = raw.fingerprint ?? null;
-  if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint };
+  if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint, harness };
   const counts = (v: unknown): Record<string, number> => (typeof v === "object" && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) : {});
   return {
     harness_version: HARNESS_VERSION,
     fixture_version: FIXTURE_VERSION,
+    harness: harness ?? (typeof raw.harness === "string" ? raw.harness : null),
     fingerprint: fingerprint ?? old,
     trials: raw.trials,
     phases: raw.phases,

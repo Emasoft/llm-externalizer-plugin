@@ -5,7 +5,7 @@
 
 import { existsSync } from "node:fs";
 import type { Profile } from "../config.js";
-import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, TASK_KINDS, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
+import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, TASK_KINDS, type GridEntry, type PerKind, type RecordStatus } from "./record.js";
 import { liveCalibrator, METHOD_PHASES } from "./runner.js";
 import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
@@ -53,6 +53,7 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (r.harness !== PRODUCTION_HARNESS_ID) state += `; made with a custom harness (${r.harness}): never used for requests`;
         // D5: a leaky thinking-off model is reported, never silently.
         if (r.thinking_works?.off === "leaky") state += `; thinking off is leaky (it reasons in its visible answer)`;
+        if (r.status === "ok" && r.fill_tokens && r.grid) for (const why of unfitExplanations(r.fill_tokens, r.grid)) state += `; ${why}`;
       }
       else {
         const prog = existsSync(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
@@ -61,8 +62,10 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         state = `not calibrated (${phases}; ${prog ? prog.trials.length : 0} trials${queued ? "; queued" : ""})`;
         // Spec 4.2 (F16): a model whose thinking cannot be turned on is reported, never silently.
         const a = prog?.trials.find((t) => t.step === "A/summary")?.data;
-        if (a) state += `; Phase A: thinking off ${a.thinking_off_mode ?? a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
-        if (a?.thinking_off_mode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
+        // D5: Phase B re-judges thinking off with its own short answers; its value is the final one.
+        const offMode = prog?.trials.find((t) => t.step === "B/summary")?.data?.thinking_off_mode ?? a?.thinking_off_mode;
+        if (a) state += `; Phase A: thinking off ${offMode ?? a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
+        if (offMode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
@@ -72,18 +75,37 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
   // D1 (main-agent decision 2026-10-29): a profile none of whose models is fit for a kind says so.
   for (const [name, p] of Object.entries(managedProfileModels(profiles))) {
     const models = p.models.map((m) => ({ status: readRecordStatus(dir, p.engine, m).state, fill: readRecord(dir, p.engine, m)?.fill_tokens }));
-    for (const kind of profileUnfitKinds(models)) lines.push(`no model of profile ${name} is fit for ${kind}`);
+    lines.push(...profileUnfitLines(name, models));
   }
   return lines.join("\n");
 }
 
 
 /**
- * The task kinds no model of a profile is fit for (D1; spec section 6): a model is fit for a kind when its
- * record is usable (`ok`, production harness) with fill_tokens above 0. Reported only once every model of the
- * profile has a verdict (ok or failed); while one is still uncalibrated, nothing is said yet.
+ * The lines saying which task kinds no model of a profile is fit for (D1; spec sections 6 and 8): a model is fit
+ * for a kind when its record is usable (`ok`, production harness) with fill_tokens above 0. Once every model has a
+ * verdict (ok or failed) the line is final; while some are still calibrating it is provisional ("so far; N still
+ * calibrating"), from the models with a verdict; with no verdict at all nothing is said yet (review of a72827f9).
  */
-export function profileUnfitKinds(models: ReadonlyArray<{ status: RecordStatus["state"]; fill?: PerKind }>): TaskKind[] {
-  if (models.length === 0 || models.some((m) => m.status === "missing")) return [];
-  return TASK_KINDS.filter((k) => !models.some((m) => m.status === "ok" && (m.fill?.[k] ?? 0) > 0));
+export function profileUnfitLines(profile: string, models: ReadonlyArray<{ status: RecordStatus["state"]; fill?: PerKind }>): string[] {
+  const decided = models.filter((m) => m.status !== "missing");
+  if (decided.length === 0) return [];
+  const pending = models.length - decided.length;
+  const kinds = TASK_KINDS.filter((k) => !decided.some((m) => m.status === "ok" && (m.fill?.[k] ?? 0) > 0));
+  return kinds.map((k) => `no model of profile ${profile} is fit for ${k}${pending > 0 ? ` so far; ${pending} still calibrating` : ""}`);
+}
+
+/**
+ * Why an ok record is unfit for each kind with fill_tokens 0 (D1, review of a72827f9): "cut at N tokens" when every
+ * fail of that kind's grid was a reply cut at the nominal cap (N = the cap the cuts hit), so the user sees that the
+ * answers did not fit the cap, not that they were wrong.
+ */
+export function unfitExplanations(fill: PerKind, grid: readonly GridEntry[]): string[] {
+  return TASK_KINDS.filter((k) => fill[k] === 0).map((k) => {
+    const g = grid.filter((e) => e.kind === k);
+    const fails = g.reduce((n, e) => n + e.trials - e.passed, 0);
+    const cutFails = g.reduce((n, e) => n + e.cut_fails, 0);
+    const caps = g.map((e) => e.cut_cap).filter((c): c is number => c !== null);
+    return fails > 0 && cutFails === fails && caps.length > 0 ? `unfit for ${k} (cut at ${Math.max(...caps)} tokens)` : `unfit for ${k}`;
+  });
 }

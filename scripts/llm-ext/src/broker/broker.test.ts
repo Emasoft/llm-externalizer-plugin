@@ -25,7 +25,7 @@ import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
 import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, isCalibratorProcess, readBrokerState, readCalibratorState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, recordPath, writeRecord } from "../calibration/record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, recordPath, writeRecord } from "../calibration/record.js";
 import { recordFixture } from "../calibration/record-fixture.js";
 import { loadedIdentity, type LoadedIdentity } from "../calibration/fingerprint.js";
 import { calibratorLogPath, startCalServer } from "../calibration/runner.js";
@@ -1152,7 +1152,7 @@ describe("calibration runner (P6 step 2)", () => {
     const id = identities.get(`llama\u0000${B}`)!;
     writeRecord(dir, { ...recordFixture("llama", B), fingerprint: id.fingerprint, engine_version: "b1-old", engine_version_checked: "b1-old" });
     const t = (step: string): TrialRecord => ({ step, seed: 0, outcome: "pass", at: new Date().toISOString() });
-    saveProgress(dir, "llama", B, { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, fingerprint: id.fingerprint, trials: [t("A/old"), t("B/old")], phases: { A: "passed", B: "passed" } });
+    saveProgress(dir, "llama", B, { harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: PRODUCTION_HARNESS_ID, fingerprint: id.fingerprint, trials: [t("A/old"), t("B/old")], phases: { A: "passed", B: "passed" } });
     return id;
   };
 

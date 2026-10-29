@@ -43,6 +43,11 @@ export interface GridEntry {
   trials: number;
   passed: number;
   inconclusive: number;
+  /** Replies cut at max_tokens (D1), conclusive or not; cut_fails = the fails that were cuts at the nominal cap. */
+  cuts: number;
+  cut_fails: number;
+  /** The largest cap a cut hit, or null when no reply was cut. */
+  cut_cap: number | null;
 }
 
 export interface Fingerprint {
@@ -146,7 +151,11 @@ export function recordSchemaErrors(raw: unknown): string[] {
     Array.isArray(raw.grid) &&
       raw.grid.every(
         (g: unknown) =>
-          isObj(g) && TASK_KINDS.includes(g.kind as TaskKind) && (g.counter === "main" || g.counter === "bug" || g.counter === "control") && [g.tokens, g.trials, g.passed, g.inconclusive].every(isNonNeg),
+          isObj(g) &&
+          TASK_KINDS.includes(g.kind as TaskKind) &&
+          (g.counter === "main" || g.counter === "bug" || g.counter === "control") &&
+          [g.tokens, g.trials, g.passed, g.inconclusive, g.cuts, g.cut_fails].every(isNonNeg) &&
+          (g.cut_cap === null || isNonNeg(g.cut_cap)),
       ),
     "grid",
   );

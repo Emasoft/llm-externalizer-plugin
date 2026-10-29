@@ -406,7 +406,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     // a calibration-failed record, new weights or --force recalibrate from scratch.
     engineCheck = existing !== null && stale === "engine" && !item.force && existing.status !== "calibration-failed";
     const fingerprint = identity.fingerprint;
-    const progress = loadProgress(o.dir, item.engine, item.model, fingerprint);
+    const progress = loadProgress(o.dir, item.engine, item.model, fingerprint, harness.id);
     if (item.force) {
       // --force re-runs everything (spec section 3): no finished trial is reused.
       progress.trials = [];

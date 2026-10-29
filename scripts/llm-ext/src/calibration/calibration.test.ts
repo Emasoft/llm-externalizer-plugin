@@ -12,12 +12,12 @@ import { tmpdir } from "../test-tmp-root.js";
 import type { Profile } from "../config.js";
 import { CALIBRATE_ARGV, calibratorStatePath } from "../broker/protocol.js";
 import { recordFixture } from "./record-fixture.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord } from "./record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord, type GridEntry } from "./record.js";
 import { blobSha256, fingerprintOf, ggufShards, snapshotWeightFiles, staleness } from "./fingerprint.js";
 import { acquireModelLock, dequeueUnlocked, enqueueUnlocked, loadProgress, modelLockPath, readQueue, readSeenModels, releaseModelLock, saveProgress, withStateLock } from "./state.js";
 import { checkModelChanges, managedProfileModels, markProfileUsed } from "./triggers.js";
-import { engineOf, profileUnfitKinds, queueManual } from "./commands.js";
-import { harnessFromEnv } from "./runner.js";
+import { engineOf, profileUnfitLines, queueManual, unfitExplanations } from "./commands.js";
+import { harnessFromEnv, PRODUCTION_HARNESS } from "./runner.js";
 
 let dir: string;
 beforeEach(() => {
@@ -186,12 +186,27 @@ describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), le
     writeFileSync(recordPath(dir, "llama", "old/m"), JSON.stringify({ ...recordFixture("llama", "old/m"), schema: 1 }));
     expect(readRecordStatus(dir, "llama", "old/m").state).toBe("missing");
   });
-  it("D1: a profile is unfit for a kind only when every model has a verdict and none is fit for it", () => {
+  it("D1: a profile is unfit for a kind when no model with a verdict is fit for it; provisional while models still calibrate", () => {
     const fill = (fact: number, aggregate: number, bug: number) => ({ fact, aggregate, bug });
-    expect(profileUnfitKinds([{ status: "ok", fill: fill(2048, 0, 0) }, { status: "failed" }])).toEqual(["aggregate", "bug"]);
-    expect(profileUnfitKinds([{ status: "ok", fill: fill(2048, 0, 0) }, { status: "ok", fill: fill(0, 0, 4096) }])).toEqual(["aggregate"]);
-    expect(profileUnfitKinds([{ status: "ok", fill: fill(0, 0, 0) }, { status: "missing" }])).toEqual([]);
-    expect(profileUnfitKinds([{ status: "failed" }])).toEqual(["fact", "aggregate", "bug"]);
+    expect(profileUnfitLines("p", [{ status: "ok", fill: fill(2048, 0, 0) }, { status: "failed" }])).toEqual(["no model of profile p is fit for aggregate", "no model of profile p is fit for bug"]);
+    expect(profileUnfitLines("p", [{ status: "ok", fill: fill(2048, 0, 0) }, { status: "ok", fill: fill(0, 0, 4096) }])).toEqual(["no model of profile p is fit for aggregate"]);
+    expect(profileUnfitLines("p", [{ status: "ok", fill: fill(0, 0, 4096) }, { status: "missing" }, { status: "missing" }])).toEqual([
+      "no model of profile p is fit for fact so far; 2 still calibrating",
+      "no model of profile p is fit for aggregate so far; 2 still calibrating",
+    ]);
+    expect(profileUnfitLines("p", [{ status: "missing" }])).toEqual([]);
+    expect(profileUnfitLines("p", [{ status: "failed" }])).toEqual(["fact", "aggregate", "bug"].map((k) => `no model of profile p is fit for ${k}`));
+  });
+  it("D1: an unfit kind says \"cut at N tokens\" only when every fail of its grid was a cut at the nominal cap", () => {
+    const g = (kind: "fact" | "aggregate" | "bug", trials: number, passed: number, cutFails: number, cutCap: number | null): GridEntry => ({ kind, counter: kind === "bug" ? "bug" : "main", tokens: 2048, trials, passed, inconclusive: cutFails, cuts: 2 * cutFails, cut_fails: cutFails, cut_cap: cutCap });
+    expect(unfitExplanations({ fact: 2048, aggregate: 0, bug: 0 }, [g("aggregate", 3, 0, 3, 2048), g("bug", 3, 0, 1, 8192)])).toEqual(["unfit for aggregate (cut at 2048 tokens)", "unfit for bug"]);
+    expect(unfitExplanations({ fact: 4096, aggregate: 4096, bug: 4096 }, [g("aggregate", 3, 0, 3, 2048)])).toEqual([]);
+    expect(unfitExplanations({ fact: 0, aggregate: 4096, bug: 4096 }, [])).toEqual(["unfit for fact"]);
+  });
+  it("PRODUCTION_HARNESS is pinned to HARNESS_VERSION: an edit to the harness without a version bump fails here (D4)", () => {
+    // A new harness needs HARNESS_VERSION + 1 and a new entry here: records are compared by id and version only.
+    const PINNED: Record<number, string> = { 1: "f8d99b34b756039733fe9622a06c551b13481270d0807c74c45902d44869e2d0" };
+    expect(createHash("sha256").update(JSON.stringify(PRODUCTION_HARNESS)).digest("hex")).toBe(PINNED[HARNESS_VERSION]);
   });
 });
 
@@ -243,6 +258,32 @@ describe("shared state: queue, state lock, progress", () => {
     const inner = withStateLock(dir, 1000, () => withStateLock(dir, 100, () => "ran"));
     expect(inner).toBeUndefined();
     expect(withStateLock(dir, 100, () => "ran")).toBe("ran");
+  });
+
+  it("D4: a run of another harness id never resumes progress; a reader (harness null) keeps the stored id", () => {
+    const fp = { blobs: ["b".repeat(64)], ram_bytes: 64 };
+    const custom = `custom:${"a".repeat(64)}`;
+    const p = loadProgress(dir, "llama", "h/m:Q4", fp, custom);
+    expect(p.harness).toBe(custom);
+    p.trials.push({ step: "B/window", seed: 0, outcome: "pass", at: "t", data: { window: 8192 } });
+    saveProgress(dir, "llama", "h/m:Q4", p);
+    expect(loadProgress(dir, "llama", "h/m:Q4", fp, custom).trials).toHaveLength(1);
+    // A reader neither resets nor forgets the id, so a crash count it saves keeps the progress tied to its harness.
+    const read = loadProgress(dir, "llama", "h/m:Q4", null);
+    expect(read.trials).toHaveLength(1);
+    expect(read.harness).toBe(custom);
+    saveProgress(dir, "llama", "h/m:Q4", { ...read, crashes: 1 });
+    expect(loadProgress(dir, "llama", "h/m:Q4", fp, custom).trials).toHaveLength(1);
+    // The production run starts fresh and claims the file with its own id.
+    const prod = loadProgress(dir, "llama", "h/m:Q4", fp, "production");
+    expect(prod.trials).toEqual([]);
+    expect(prod.harness).toBe("production");
+    // A file written before the field existed cannot prove its harness: the runner starts fresh.
+    const legacy = { ...p };
+    delete (legacy as { harness?: string | null }).harness;
+    saveProgress(dir, "llama", "old/m:Q4", legacy);
+    expect(loadProgress(dir, "llama", "old/m:Q4", fp, "production").trials).toEqual([]);
+    expect(loadProgress(dir, "llama", "old/m:Q4", null).trials).toHaveLength(1);
   });
 
   it("progress is kept while versions and fingerprint match, and dropped when the weights change", () => {

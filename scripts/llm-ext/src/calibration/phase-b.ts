@@ -16,7 +16,7 @@ import { timingsFromEnv } from "../broker/scheduler.js";
 import { memoryFreePercent } from "../local-locals-server.js";
 import { pidState } from "../local-llama-server.js";
 import { chooseWindow, freeMemory, kvBytes, modelKvLayers, weightBytes } from "./memory.js";
-import { CAP_OFF, CAP_ON, makeSender, trialTimeoutMs, type Outcome, type Reply, type Sender, type Thinking } from "./phase-a.js";
+import { CAP_OFF, CAP_ON, LEAKY_LIMIT, makeSender, shortOffCompletions, thinkingOffMode, trialTimeoutMs, type Outcome, type Reply, type Sender, type Thinking } from "./phase-a.js";
 import {
   AGGREGATE_COUNT_QUESTION,
   AGGREGATE_LIST_QUESTION,
@@ -87,6 +87,8 @@ interface Built {
   /** Characters of the document part (what the size is tuned on). */
   docChars: number;
   score: (r: Reply) => Outcome;
+  /** The expected answer is under 20 tokens (a fact code, an aggregate count): its length shows a leaky thinking off (D5). */
+  short?: boolean;
 }
 
 /**
@@ -141,7 +143,7 @@ async function sized(run: Run, kind: TaskKind, tokens: number, build: (chars: nu
  * real prompt tokens (more than 3 % off: rebuilt, never scored), with cal
  * server crashes counted per step (the third fails the model; spec 2).
  */
-async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thinking, json: boolean, build: (chars: number) => Built): Promise<{ outcome: Outcome; reply: Reply; promptTokens: number }> {
+async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thinking, json: boolean, build: (chars: number) => Built): Promise<{ outcome: Outcome; reply: Reply; promptTokens: number; cap: number; short: boolean }> {
   const { ctx } = run;
   const key = stepKey(kind, tokens);
   for (let rebuild = 0; ; rebuild++) {
@@ -167,7 +169,7 @@ async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thin
       rebuild--;
       continue;
     }
-    if (verdict === "inconclusive") return { outcome: "inconclusive", reply: r, promptTokens: r.promptTokens ?? 0 };
+    if (verdict === "inconclusive") return { outcome: "inconclusive", reply: r, promptTokens: r.promptTokens ?? 0, cap, short: b.short === true };
     const p = r.promptTokens;
     if (r.status === 200 && p !== null && p > 0) {
       // Learn the size of this kind's text from the real count (spec 4.3), whatever the verdict.
@@ -179,7 +181,7 @@ async function oneTrial(run: Run, kind: TaskKind, tokens: number, thinking: Thin
         continue;
       }
     }
-    return { outcome: b.score(r), reply: r, promptTokens: p ?? 0 };
+    return { outcome: b.score(r), reply: r, promptTokens: p ?? 0, cap, short: b.short === true };
   }
 }
 
@@ -197,17 +199,21 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
   if (done) return done.outcome;
   const pauses = ctx.progress.paused?.[key] ?? 0;
   const allowed = 2 * (pauses + 1);
-  // Only timeouts and network errors count towards the pause (D2, D3); a cap cut is settled by cutOutcome (D1).
-  const waits = (): number => mine().filter((t) => t.outcome === "inconclusive" && t.data?.cut !== true).length;
+  // Timeouts, network errors and cuts at a squeezed cap count towards the pause (D2, D3); a cut at the nominal cap
+  // is settled by cutOutcome (D1).
+  const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
+  const fullCut = (t: TrialRecord): boolean => t.data?.cut === true && Number(t.data.cap) >= nominal;
+  const waits = (): number => mine().filter((t) => t.outcome === "inconclusive" && !fullCut(t)).length;
   while (waits() < allowed) {
     // A rerun gets a new document variant (variantSeed): at temperature 0 the same input repeats the same cut reply.
     const attempt = mine().filter((x) => x.outcome === "inconclusive").length;
     const t = await oneTrial(run, kind, tokens, thinking, json, (chars) => build(chars, attempt));
     const r = t.reply;
-    // D1 (main-agent decision 2026-10-29): a reply cut at max_tokens is rerun once on a new document; cut again,
-    // it is a FAIL, so a kind whose answers do not fit the cap ends unfit instead of failing the whole model.
+    // D1 (main-agent decision 2026-10-29): a reply cut at the nominal cap is rerun once on a new document; cut again,
+    // it is a FAIL, so a kind whose answers do not fit the cap ends unfit instead of failing the whole model. The cap
+    // is stored with the cut: a cut at a cap squeezed by the window is not the model's fault (review of a72827f9).
     const cut = r.finishReason === "length";
-    const outcome = cut ? cutOutcome(mine().filter((x) => x.data?.cut === true).length) : t.outcome;
+    const outcome = cut ? cutOutcome(mine().filter(fullCut).length, t.cap, nominal) : t.outcome;
     ctx.record({
       step: key,
       seed: index,
@@ -218,6 +224,9 @@ async function trialOutcome(run: Run, kind: TaskKind, tokens: number, counter: C
         status: r.status,
         finish: r.finishReason,
         cut,
+        cap: t.cap,
+        thinking,
+        short: t.short,
         prompt_tokens: t.promptTokens,
         completion_tokens: r.completionTokens,
         reasoning: r.reasoning.trim() !== "",
@@ -273,7 +282,7 @@ async function stepPasses(run: Run, kind: TaskKind, tokens: number, bugThinking:
         const { doc } = cached;
         const needle = doc.needles[i % 5];
         const all = [...doc.needles, ...doc.decoys].map((x) => x.code);
-        return { content: `${doc.text}\n\n${factQuestion(needle.vault)}`, docChars: doc.text.length, score: (r) => factOutcome(r, needle.code, all) };
+        return { content: `${doc.text}\n\n${factQuestion(needle.vault)}`, docChars: doc.text.length, score: (r) => factOutcome(r, needle.code, all), short: true };
       }),
     );
     return v === "pass";
@@ -287,6 +296,7 @@ async function stepPasses(run: Run, kind: TaskKind, tokens: number, bugThinking:
           content: `${doc.text}\n\n${count ? AGGREGATE_COUNT_QUESTION : AGGREGATE_LIST_QUESTION}`,
           docChars: doc.text.length,
           score: (r) => (count ? aggregateCountOutcome(r, doc.vaults.length) : aggregateListOutcome(r, doc.vaults)),
+          short: count,
         };
       }),
     );
@@ -323,6 +333,9 @@ function gridOf(ctx: PhaseContext, kind: TaskKind, tokens: number): GridEntry[] 
         trials: ts.filter((t) => t.outcome !== "inconclusive").length,
         passed: ts.filter((t) => t.outcome === "pass").length,
         inconclusive: ts.filter((t) => t.outcome === "inconclusive").length,
+        cuts: ts.filter((t) => t.data?.cut === true).length,
+        cut_fails: ts.filter((t) => t.data?.cut === true && t.outcome === "fail").length,
+        cut_cap: ts.some((t) => t.data?.cut === true) ? Math.max(...ts.filter((t) => t.data?.cut === true).map((t) => Number(t.data?.cap ?? 0))) : null,
       };
     })
     .filter((g) => g.trials + g.inconclusive > 0);
@@ -444,6 +457,9 @@ export const phaseB: Phase = {
           outputFloor(ctx.progress.trials.filter((t) => t.step.startsWith(`B/${k}/`) && t.outcome === "pass" && t.data?.finish === "stop" && typeof t.data.completion_tokens === "number").map((t) => Number(t.data?.completion_tokens))),
         ]),
       ) as Record<TaskKind, number>;
+      const offTokens = shortOffCompletions(ctx.progress.trials);
+      const offMode = thinkingOffMode(a.thinking_off === true, offTokens);
+      if (offMode === "leaky") ctx.log(`thinking off is leaky: ${offTokens.length} short thinking-off answers have a median over ${LEAKY_LIMIT} completion tokens (thinking_works.off: "leaky", not a failure)`);
       const summary = {
         window_tokens: window,
         free_ram_bytes: w.free,
@@ -455,6 +471,8 @@ export const phaseB: Phase = {
         min_out_bug: floors.bug,
         bug_thinking: bugThinking,
         bug_json: bugJson,
+        // D5 (review of a72827f9): the final thinking_works.off, re-judged with Phase B's short thinking-off answers.
+        thinking_off_mode: offMode,
         grid: JSON.stringify(grid),
       };
       ctx.record({ step: "B/summary", seed: 0, outcome: "pass", data: summary, at: now() });

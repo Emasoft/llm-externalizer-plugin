@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { BUG_CORPUS, BUG_CORPUS_SHA256 } from "./bug-corpus.js";
 import { BUG_PLANTS, plantLines } from "./bug-plants.js";
 import { chooseWindow, configKvLayers, ggufKvLayers, kvBytes, readGgufMetadata, WINDOW_HEADROOM_BYTES } from "./memory.js";
-import type { Outcome, Reply } from "./phase-a.js";
+import { CAP_OFF, CAP_ON, type Outcome, type Reply } from "./phase-a.js";
 import {
   aggregateCountOutcome,
   aggregateDocument,
@@ -240,24 +240,35 @@ describe("Phase B fixtures", () => {
 });
 
 /**
- * Trial i of a counter as the phase runs it under D1: each attempt gets a reply; a cut reply (finish "length")
- * is rerun on a new document once, and a second cut is a fail. `replyFor(i, attempt)` plays the model.
+ * Trial i of a counter as the phase runs it under D1: each attempt gets a reply; a reply cut at the nominal cap
+ * (finish "length", cap 2048 with thinking off) is rerun on a new document once, and a second cut is a fail.
+ * `replyFor(i, attempt)` plays the model; `cap` is the max_tokens the trial ran with.
  */
-function trialWithCuts(i: number, replyFor: (i: number, attempt: number) => Reply, score: (r: Reply) => Outcome): Outcome {
-  let cuts = 0;
-  for (let attempt = 0; ; attempt++) {
+function trialWithCuts(i: number, replyFor: (i: number, attempt: number) => Reply, score: (r: Reply) => Outcome, cap = CAP_OFF): Outcome {
+  let fullCuts = 0;
+  for (let attempt = 0; attempt < 6; attempt++) {
     const r = replyFor(i, attempt);
     if (r.finishReason !== "length") return score(r);
-    const o = cutOutcome(cuts++);
+    const o = cutOutcome(fullCuts, cap, CAP_OFF);
+    if (cap >= CAP_OFF) fullCuts++;
     if (o !== "inconclusive") return o;
   }
+  return "inconclusive";
 }
 
-describe("D1: a reply cut at max_tokens (main-agent decision 2026-10-29)", () => {
-  it("is rerun once, then a fail; the scorers alone still call it not scored", () => {
-    expect(cutOutcome(0)).toBe("inconclusive");
-    expect(cutOutcome(1)).toBe("fail");
+describe("D1: a reply cut at max_tokens (main-agent decision 2026-10-29; cap provenance: review of a72827f9)", () => {
+  it("at the nominal cap: rerun once, then a fail; the scorers alone still call it not scored", () => {
+    expect(cutOutcome(0, CAP_OFF, CAP_OFF)).toBe("inconclusive");
+    expect(cutOutcome(1, CAP_OFF, CAP_OFF)).toBe("fail");
+    expect(cutOutcome(1, CAP_ON, CAP_ON)).toBe("fail");
     expect(factOutcome(reply("ABCD", { finishReason: "length" }), "ABCD2345", ["ABCD2345"])).toBe("inconclusive");
+  });
+  it("at a cap squeezed by W - step - 64: always inconclusive (the pause bound decides), never a fail", () => {
+    expect(cutOutcome(0, 4032, CAP_ON)).toBe("inconclusive");
+    expect(cutOutcome(5, 4032, CAP_ON)).toBe("inconclusive");
+    expect(cutOutcome(3, CAP_OFF - 1, CAP_OFF)).toBe("inconclusive");
+    expect(trialWithCuts(0, () => reply("", { finishReason: "length" }), (r) => aggregateCountOutcome(r, 7), 1984)).toBe("inconclusive");
+    expect(trialWithCuts(0, () => reply("", { finishReason: "length" }), (r) => aggregateCountOutcome(r, 7))).toBe("fail");
   });
   it("a cap cut at the top step with a pass at a lower step gives fill_tokens = the lower step", async () => {
     const steps = gridSteps(32768, null);

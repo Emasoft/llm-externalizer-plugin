@@ -2,6 +2,7 @@
 // (spec section 9, coordinator decision 16): each must FAIL the scorer it
 // targets; a reply cut at max_tokens is inconclusive, never a fail.
 import { describe, expect, it } from "vitest";
+import type { TrialRecord } from "./state.js";
 import {
   checkArray40,
   checkSmall,
@@ -16,6 +17,7 @@ import {
   proseOf,
   stripThinking,
   thinkingOffOutcome,
+  shortOffCompletions,
   thinkingOffMode,
   thinkingOnOutcome,
   LEAKY_LIMIT,
@@ -103,15 +105,31 @@ describe("Phase A scorers: cut replies are inconclusive, never a fail", () => {
   });
 });
 
-describe("D5: leaky thinking off (main-agent decision 2026-10-29)", () => {
-  it("true only when the thinking-off known-answer reply ends by itself within 256 tokens; else leaky; false when thinking cannot be turned off", () => {
+describe("D5: leaky thinking off (main-agent decision 2026-10-29; review of a72827f9)", () => {
+  it("leaky when the median short thinking-off answer exceeds 256 tokens; one brief answer does not hide a leak; false when thinking cannot be turned off", () => {
     expect(LEAKY_LIMIT).toBe(256);
-    expect(thinkingOffMode(true, "stop", 12)).toBe(true);
-    expect(thinkingOffMode(true, "stop", 256)).toBe(true);
-    expect(thinkingOffMode(true, "stop", 257)).toBe("leaky");
-    expect(thinkingOffMode(true, "length", 40)).toBe("leaky");
-    expect(thinkingOffMode(true, "stop", null)).toBe("leaky");
-    expect(thinkingOffMode(false, "stop", 12)).toBe(false);
+    expect(thinkingOffMode(true, [12, 30, 6])).toBe(true);
+    expect(thinkingOffMode(true, [200, 256, 312])).toBe(true);
+    expect(thinkingOffMode(true, [200, 257, 312])).toBe("leaky");
+    // The LFM3 shape: a brief known answer, ~700-token fact answers.
+    expect(thinkingOffMode(true, [12, 700, 690, 720])).toBe("leaky");
+    expect(thinkingOffMode(true, [])).toBe(true);
+    expect(thinkingOffMode(false, [12])).toBe(false);
+  });
+  it("reads the known answer, both thinking-off trials and Phase B short thinking-off answers; never long answers, thinking-on or failed requests", () => {
+    const t = (step: string, data: Record<string, unknown>): TrialRecord => ({ step, seed: 0, outcome: "pass", at: "t", data: { status: 200, ...data } as TrialRecord["data"] });
+    const trials = [
+      t("A/known-answer", { completion_tokens: 5 }),
+      t("A/thinking-off", { completion_tokens: 7 }),
+      t("A/thinking-off", { completion_tokens: 9 }),
+      t("A/thinking-on", { completion_tokens: 3000 }),
+      t("B/fact/4096", { completion_tokens: 700, short: true, thinking: "off" }),
+      t("B/aggregate/4096", { completion_tokens: 2048, short: true, thinking: "off", cut: true }),
+      t("B/aggregate/4096", { completion_tokens: 900, short: false, thinking: "off" }),
+      t("B/bug/4096", { completion_tokens: 4000, short: false, thinking: "on" }),
+      t("B/fact/4096", { completion_tokens: 0, short: true, thinking: "off", status: 0 }),
+    ];
+    expect(shortOffCompletions(trials)).toEqual([5, 7, 9, 700, 2048]);
   });
 });
 
