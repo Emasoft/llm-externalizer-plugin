@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-29T02:40:59+0100
+updated: 2026-10-29T03:47:43+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -71,3 +71,4 @@ USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces
 ## Progress 2026-10-28
 
 - 2026-10-29 02:40 resume point: llama broker complete (c77d9453..fd7c3862: core, 4 review-fix groups, e2e tests, -np 2 with ctx x 2, cooperative --command_timeout, follow-up fixes, dist rebuilt). Locals engine committed 268cca29: ONE broker for both engines (broker-local.*), locals-local profile type, server: managed; review of 268cca29 running. CI decision: Locals tests are macOS-only and gated by scripts/publish.py npm test (option B). Next: P2 review fixes, then P5 profile shape (3 models each, add-once local-llama and locals-mlx profiles), P6 calibration (slot count, KV estimate, thinking), P7 input sizing, P8 local ensemble (see TRDD-7H5MGN34), P9 local mass-scouting with reduced context, P10 command matrix. Open user questions: 8-min worst-case wait; --stop_on_errors on ensemble members and remote profiles.
+- 2026-10-29 03:50 resume point: Locals fixes 246e332b, dist 7048ec4b, P5 profiles b942e608 (local_llama + locals-mlx, 3 models each, add-once, NOT in dist yet). P5 review reports/llama-cpp-profile/20261029_033738+0100-p5-review.md (major: settings.yaml mode/symlink) being fixed by smart-worker ad7febbf6cb1ff07c, which also drops context_window 8192 from the built-ins. Calibration design draft caf120d3; its review reports/llama-cpp-profile/20261029_033854+0100-calibration-design-review.md (22 findings) - coordinator decisions sent to the worker: calibrate only on first request/model change/explicit command, three phases (A works-at-all, B fixed W 32768 adaptive grid with multi-needle and line-numbered bug+control, C slots and scouting), thinking per user ruling, provisional ctx 8192, calibrating model requests WAIT, cal orphan sweep, KV estimate before load. Then second design review, then implement. Open user questions: name local_llama vs local-llama; wait during calibration; W 32k enough; 8-min worst-case queue wait; --stop_on_errors on ensemble members and remote profiles. Rule breach to remember: the worker sent one POST to the user Locals on 8321 (404, no change).
