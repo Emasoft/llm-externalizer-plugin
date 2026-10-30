@@ -1310,6 +1310,33 @@ describe("calibration runner (P6 step 2)", () => {
     expect(readQueue(dir)).toEqual([]);
   }, 300_000);
 
+  it("coordinator decision 2026-10-30: a stale forced_at stamp is dropped by a non-forced pass that ends early on a valid record, so a later --force resets", async () => {
+    const dir = newDir(); // B has an ok record naming the weights and engine build really loaded
+    const stale = loadProgress(dir, "llama", B, null);
+    const old: TrialRecord = { step: "OLD/trial", seed: 0, outcome: "pass", at: new Date().toISOString(), data: {} };
+    // A forced queue entry removed by hand before its record was written leaves the stamp and the progress behind.
+    saveProgress(dir, "llama", B, { ...stale, harness: PRODUCTION_HARNESS_ID, trials: [old], forced_at: new Date().toISOString() });
+    expect(loadProgress(dir, "llama", B, null).forced_at).toEqual(expect.any(String));
+    queueB(dir); // not forced
+    const first = spawnRunner(dir, { TEST_WAIT_PHASE: "1" });
+    await waitFor("the non-forced pass", () => !alive(first), 180_000);
+    expect(runnerLogOf(dir)).toMatch(/already has a valid, current record/);
+    expect(readQueue(dir)).toEqual([]);
+    const after = loadProgress(dir, "llama", B, null);
+    expect(after.forced_at).toBeUndefined();
+    expect(after.trials.map((x) => x.step)).toEqual(["OLD/trial"]);
+    // The later --force finds no stamp, so it resets: the old trial is gone, the forced pass records its own.
+    withStateLock(dir, 5000, () => {
+      enqueueUnlocked(dir, { engine: "llama", model: B, reason: "manual", force: true });
+      return true;
+    });
+    const second = spawnRunner(dir, { TEST_WAIT_PHASE: "1" });
+    await waitFor("the forced pass", () => !alive(second), 180_000);
+    const forced = loadProgress(dir, "llama", B, null);
+    expect(forced.trials.map((x) => x.step)).toEqual(["A/test"]);
+    expect(forced.forced_at).toEqual(expect.any(String));
+  }, 300_000);
+
   it("rule 1 (coordinator decision 2026-10-29): a too-big record stores what it was judged against; it stands under the same floor and is judged again under another", async () => {
     const dir = newDir();
     // The broker judges under this floor whatever the shell sets.

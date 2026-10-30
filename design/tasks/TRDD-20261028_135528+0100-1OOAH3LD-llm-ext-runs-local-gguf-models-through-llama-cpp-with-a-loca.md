@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-30T05:22:35+0100
+updated: 2026-10-30T07:48:23+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -27,7 +27,7 @@ implementation-commits: [f105c646]
 - Plans: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md (rev 4), design/specs/TRDD-ZGSGGHQG-locals-mlx-design.md.
 - Not on the critical path: 2b, 2c, 2d, 2e, the --stop_on_errors TRDD.
 - NEXT ACTION: implement the per-engine request broker per design/specs/local-engine-broker-design.md (revision 2, two review rounds done), starting from the paused P1 tree (backup reports/llama-cpp-profile/20261028_202138+0100-p1-wip.patch). Open user question: longest acceptable queue wait per request X (default 15 min). Then the Locals engine in the broker, then the program plan P3-P10.
-- 2026-10-30 resume point: the four reported units of 2026-10-29 (N0S2UL0K fix, open review findings, Python timeout cleanup, Phase B memory wait) and the five coordinator decisions of 2026-10-29 17:50 (interrupted by a reboot at 18:19, finished 2026-10-30) are committed: subjects 'fix(llm-ext): model tools work on a managed local profile', 'fix(llm-ext): classify honours --command_timeout', 'fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir', 'fix(scripts): bound local git and installer subprocesses, name the file in JSON errors'. The decisions are recorded verbatim on TRDD-1OOAH3LD under the heading Coordinator decisions 2026-10-29. NEXT: the WBZJRSQB release steps.
+- 2026-10-30 resume point: the four reported units of 2026-10-29 (N0S2UL0K fix, open review findings, Python timeout cleanup, Phase B memory wait) and the five coordinator decisions of 2026-10-29 17:50 (interrupted by a reboot at 18:19, finished 2026-10-30) are committed: subjects 'fix(llm-ext): model tools work on a managed local profile', 'fix(llm-ext): classify honours --command_timeout', 'fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir', 'fix(scripts): bound local git and installer subprocesses, name the file in JSON errors'. The decisions are recorded verbatim on TRDD-1OOAH3LD under the headings Coordinator decisions 2026-10-29 (verbatim) and Coordinator decisions 2026-10-30. NEXT: the WBZJRSQB release steps.
 
 ## User directive (verbatim, 2026-10-28)
 
@@ -123,3 +123,12 @@ Sent by the coordinator to the calibration worker on 2026-10-29 at 17:50 +0100; 
 3. A kind whose fill is above 0 but whose higher steps were given up because of a memory wait: the status line adds "(fill limited by free memory during calibration; `models calibrate --force` measures it again)".
 4. A broker whose config dir no longer exists: on its next tick it stops its servers, releases held jobs with an error, and exits. Put the check in the tick, add a spec line to local-engine-broker-design.md, and add a real test (delete the dir, then assert the broker and its llama-server are gone within a bounded time).
 5. Your new Phase B memory tests must not depend on how much memory this machine has in use. A test that fails on an emptier machine is a flaky test. Derive the floor and the synthetic KV size from the real readings, so that each precondition always holds. If one cannot be made deterministic, restructure it until it can; never skip it.
+
+## Coordinator decisions 2026-10-30
+
+- Review M1: a Phase B memory wait stores what a fresh unloaded reading must show (windowWaitNeed): short already unloaded, the bytes of the step rounded up to the 256-token window step; cut by the post-load halving, this pass's free memory plus the shortage the halving saw. The 5-minute gap rule is unchanged; a waiting pass costs one memory reading.
+- A step cut only by the server's own context is a window skip, not a memory wait (no free memory clears it).
+- --force resets the progress once and stamps forced_at in the progress file; the record write clears it; a pass without force drops a stale stamp. Clearing force on the queue item was rejected (the next pass would dequeue the model as already calibrated).
+- A forced calibration that ends memory-limited keeps a current ok record.
+- The broker exits only after its config dir has been missing for 10 s continuously.
+- The memory floor has one source, the environment (LLM_EXT_BROKER_MEMORY_FLOOR).

@@ -438,7 +438,15 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     // requests are held). A forced run (--force) skips the check only on the pass that resets the progress (its waits
     // are dropped there); coordinator decision 2026-10-30: once the reset is stamped (Progress.forced_at), later passes
     // check like any other, so a forced run waiting for memory loads nothing and its wait accumulates.
-    const resetPending = item.force === true && loadProgress(o.dir, item.engine, item.model, null, harness.id).forced_at === undefined;
+    const firstRead = loadProgress(o.dir, item.engine, item.model, null, harness.id);
+    // A stamp with no forced item (its queue entry was removed by hand before a record was written) must not survive this
+    // pass: dropped later, in the reset block, a pass that ends early on a valid record (below) would leave it, and a later
+    // --force would find it, skip the reset and resume the old progress instead of re-measuring.
+    if (!item.force && firstRead.forced_at !== undefined) {
+      delete firstRead.forced_at;
+      saveProgress(o.dir, item.engine, item.model, firstRead);
+    }
+    const resetPending = item.force === true && firstRead.forced_at === undefined;
     const waiting = resetPending ? null : await memoryWaitPrecheck(o.dir, item.engine, item.model, harness.id);
     if (waiting !== null) {
       o.log(`${name}: ${waiting}; the model is not loaded on this pass and stays queued`);
@@ -482,9 +490,6 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       progress.stepCrashes = {};
       progress.memoryWait = {};
       progress.forced_at = new Date().toISOString();
-    } else if (!item.force) {
-      // A stamp with no forced item (its queue entry went without a record) must not block the reset of a later --force.
-      delete progress.forced_at;
     }
     if (engineCheck) {
       // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
