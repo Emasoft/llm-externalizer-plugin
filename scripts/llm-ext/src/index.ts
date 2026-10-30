@@ -1484,11 +1484,16 @@ function resolveModelOverride(
 export async function resolveMassScoutFreeModelOverride(
   requestedModel: string,
 ): Promise<string | undefined> {
-  return resolveSubsystemFreeModel(
-    isFreeModeActive(),
-    activeFreePool(),
-    requestedModel,
-  );
+  // TRDD-N0S2UL0K: decide free mode FIRST and build the pool only when it is
+  // active. Passing activeFreePool() as an argument evaluated it eagerly, and it
+  // throws when the profile has no free pool -- so a profile that is NOT in free
+  // mode (a managed local profile is $0 and never forced free, see
+  // shouldForceFreeMode; a funded paid profile with allow_paid_models: true)
+  // failed every model tool with "free mode is active ..." even though it was
+  // not. Free mode off => the caller's model stands (this function's contract),
+  // so a local model is never swapped for a remote free id.
+  if (!isFreeModeActive()) return undefined;
+  return resolveSubsystemFreeModel(true, activeFreePool(), requestedModel);
 }
 
 // ── Active request tracking ─────────────────────────────────────────
@@ -4461,9 +4466,11 @@ async function dispatchCallToolInner(
       // under an explicit free_only profile.
       const scoutArgs = { ...((args ?? {}) as Record<string, unknown>) };
       // WHY skipped for scouting-only tools (PT-05, D34): their model comes from the scouting-type profile; an injected
-      // free-pool id would override it, and activeFreePool() throws on a paid active profile with no pool.
+      // free-pool id would override it.
       // P6: calibrate_model's `model` names the LOCAL model to calibrate, and calibration_status sends no request;
-      // a free-pool id injected here would queue a remote id for calibration (and activeFreePool() throws with no pool).
+      // on a remote profile in free mode a free-pool id injected here would queue a remote id for calibration.
+      // Free mode off (every local profile; a funded paid one) => the override returns undefined and the caller's
+      // model stands; it never builds the free pool, which throws when the profile has none (TRDD-N0S2UL0K).
       const inject = isScoutingOnlyTool(name) || name === "calibrate_model" || name === "calibration_status"
         ? undefined
         : await resolveMassScoutFreeModelOverride(

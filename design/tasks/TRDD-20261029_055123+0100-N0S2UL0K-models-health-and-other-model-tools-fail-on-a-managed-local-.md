@@ -4,7 +4,7 @@ title: models health and other model tools fail on a managed local profile in de
 column: todo
 status: tasked
 created: 2026-10-29T05:51:23+0100
-updated: 2026-10-29T05:51:23+0100
+updated: 2026-10-29T16:15:32+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -24,3 +24,7 @@ Symptom: with a fresh temp HOME and LLM_EXT_CONFIG_DIR, and settings.yaml whose 
 ## Approval log
 
 - 2026-10-29T05:51:23+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Fix
+
+resolveMassScoutFreeModelOverride (src/index.ts) now returns undefined when free mode is off and builds the free pool only when it is on: free mode was never active on a local profile, but activeFreePool() was evaluated eagerly as an argument and threw; also stops the same false throw on a funded remote profile (allow_paid_models true); tests in src/auto-free.test.ts (TRDD-N0S2UL0K describe)

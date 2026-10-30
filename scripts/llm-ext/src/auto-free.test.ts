@@ -1,5 +1,6 @@
-// Auto-free pure helpers (TRDD-542bdbef).
-// Pure, offline, free. Importing ./index is safe — the entry-point guard
+// Auto-free pure helpers (TRDD-542bdbef), plus the TRDD-N0S2UL0K describe at the
+// end, which boots index.ts against real settings and fetches the live
+// OpenRouter catalog. Importing ./index is safe — the entry-point guard
 // (TRDD-e82f2c49) stops it booting the server during tests.
 //
 // parseFreeBelowUsd / resolveFreeModelId (env-override + cost-safety check)
@@ -12,7 +13,10 @@
 // describe blocks are removed rather than inverted: there is nothing left
 // to call.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "./test-tmp-root.js";
 import {
   resolveAutoFreePool,
   resolveSubsystemFreeModel,
@@ -129,5 +133,90 @@ describe("getEnsembleModels auto-free pool selection — selectFreeEnsembleModel
 
   it("FREE_FLOOR is the lenient context floor (sanity)", () => {
     expect(FREE_FLOOR_MIN_CONTEXT_TOKENS).toBe(32_000);
+  });
+});
+
+// TRDD-N0S2UL0K: every `llm-ext models ...` tool reaches dispatchCallToolInner's
+// MASS_SCOUT_TOOL_NAMES branch, which called activeFreePool() even when free mode
+// was NOT active. A managed local profile (profile-type local, mode local,
+// server: managed) is never in free mode and has no free pool, so that eager call
+// threw "free mode is active but the active profile defines no free models" and
+// every model tool failed. Real boot + dispatch against a real settings.yaml in a
+// throwaway config dir, HOME and output dir; no mocks.
+describe("model tools on a managed local profile (TRDD-N0S2UL0K)", () => {
+  const FREE_MODE_ERROR = "free mode is active but the active profile defines no free models";
+  /** The built-in managed local profiles (builtinLocalProfiles), allow_paid_models
+   *  left at its fresh-install default (false). */
+  const PROFILES = [
+    { name: "local_llama", api: "llamacpp-local", url: "http://127.0.0.1:8181", model: "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K" },
+    { name: "locals-mlx", api: "locals-local", url: "http://127.0.0.1:9090", model: "LiquidAI/LFM3-1.7B-MLX-4bit" },
+  ];
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    for (const c of cleanups.splice(0)) c();
+  });
+
+  /** index.ts reads settings once at import: re-import it fresh per scenario
+   *  (the dispatch-reload.test.ts recipe) against its own config dir + HOME. */
+  async function bootOn(settingsYaml: string) {
+    const root = mkdtempSync(join(tmpdir(), "llm-ext-n0s2-"));
+    const dirs = { LLM_EXT_CONFIG_DIR: join(root, "cfg"), HOME: join(root, "home"), LLM_EXT_OUTPUT_DIR: join(root, "out") };
+    for (const d of Object.values(dirs)) mkdirSync(d, { recursive: true });
+    writeFileSync(join(dirs.LLM_EXT_CONFIG_DIR, "settings.yaml"), settingsYaml, "utf-8");
+    const prev = { ...process.env };
+    Object.assign(process.env, dirs, { LLM_EXT_INSTALL_RULE: "0" });
+    cleanups.push(() => {
+      for (const k of [...Object.keys(dirs), "LLM_EXT_INSTALL_RULE"]) {
+        if (prev[k] === undefined) delete process.env[k];
+        else process.env[k] = prev[k];
+      }
+      rmSync(root, { recursive: true, force: true });
+    });
+    vi.resetModules();
+    const idx = await import("./index.js");
+    await idx.boot();
+    return idx;
+  }
+  const localYaml = (p: (typeof PROFILES)[number]): string =>
+    [`active: ${p.name}`, "profiles:", `  ${p.name}:`, "    profile-type: local", "    mode: local", `    api: ${p.api}`, `    url: ${p.url}`, "    server: managed", `    model: ${p.model}`, ""].join("\n");
+  const textOf = (r: { content: Array<{ text?: string }> }): string => r.content.map((c) => c.text ?? "").join("\n");
+
+  for (const p of PROFILES) {
+    it(`${p.name}: the free-model override never throws and never swaps the local model for a remote id`, async () => {
+      const idx = await bootOn(localYaml(p));
+      await expect(idx.resolveMassScoutFreeModelOverride(p.model)).resolves.toBeUndefined();
+      await expect(idx.resolveMassScoutFreeModelOverride("")).resolves.toBeUndefined();
+    });
+
+    // LIVE: check_model_health, discover_new_models and assess_model fetch the public OpenRouter catalog.
+    it(`${p.name}: models health, discover, assess and replacements run (live catalog fetch)`, async () => {
+      const idx = await bootOn(localYaml(p));
+      // Each tool's own success line, so a failure for any other reason is not mistaken for a pass.
+      // check_model_health flags the local id as missing from the OpenRouter catalog (isError), and assess_model
+      // reports it not found: both are their real output for a local id, after the dispatch got through.
+      for (const [tool, args, marker] of [
+        ["check_model_health", {}, `Model health — profile '${p.name}'`],
+        ["discover_new_models", {}, "New model arrivals"],
+        // The model it was given, not a free-pool substitute.
+        ["assess_model", { model: p.model }, `Model '${p.model}'`],
+        ["check_tool_replacements", {}, "tool(s) checked"],
+      ] as const) {
+        const text = textOf(await idx.dispatchCallTool(tool, { ...args }));
+        expect(text, tool).not.toContain(FREE_MODE_ERROR);
+        expect(text, tool).toContain(marker);
+      }
+    }, 120_000);
+  }
+
+  // Controls: remote profiles keep their behaviour. In free mode with no pool the refusal still fires (Rule 5).
+  const REMOTE = (allowPaid: boolean): string =>
+    [`active: bare`, `allow_paid_models: ${allowPaid}`, "profiles:", "  bare:", "    mode: remote", "    api: openrouter-remote", "    model: vendor/whatever", '    api_key: "sk-test-fake-openrouter-key"', ""].join("\n");
+  it("a remote profile forced free with no pool still refuses", async () => {
+    const idx = await bootOn(REMOTE(false));
+    await expect(idx.resolveMassScoutFreeModelOverride("")).rejects.toThrow(FREE_MODE_ERROR);
+  });
+  it("a funded remote profile (allow_paid_models: true, not free mode) keeps the caller's model", async () => {
+    const idx = await bootOn(REMOTE(true));
+    await expect(idx.resolveMassScoutFreeModelOverride("vendor/whatever")).resolves.toBeUndefined();
   });
 });
