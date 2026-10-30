@@ -186,11 +186,12 @@ def test_coding_score_weights_benchmarks_and_ranks_stronger_model_higher():
     strong_score = rm.coding_score(strong, normalized)
     weak_score = rm.coding_score(weak, normalized)
     # Min-max normalization puts the leader at 100 and the laggard at 0 per column.
-    assert strong_score == 100.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
-    assert weak_score == 0.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
+    # coding_score is an unclamped weighted average of normalized columns, so compare with a tolerance (review m7).
+    assert abs(strong_score - 100.0) < 1e-9
+    assert abs(weak_score - 0.0) < 1e-9
     # A model with no benchmark data at all scores zero (no pieces to weight).
     blank = _model(name="Blank-7B")
-    assert rm.coding_score(blank, rm.normalized_benchmark_values([blank])) == 0.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
+    assert abs(rm.coding_score(blank, rm.normalized_benchmark_values([blank])) - 0.0) < 1e-9
 
 
 def test_parse_params_b_from_model_name_uses_last_size_token():

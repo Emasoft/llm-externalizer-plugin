@@ -48,6 +48,9 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+# WHY a named constant: the wrapper hang path (review m5) must be testable with a short timeout.
+WRAPPER_TIMEOUT_S = 120
+
 
 def _timestamp() -> str:
     """Local time with GMT offset, filesystem-safe — matches install.sh."""
@@ -230,10 +233,17 @@ def main() -> None:
     # when a wrap was already there — installing capture the user never asked for
     # is not this installer's call.
     if wrapper and was_wrapped:
-        rc = subprocess.run(
-            # timeout: agentlenspro's installer is a local backup+rewrite of settings.json; a hang must not block this installer forever.
-            [wrapper, "--install-statusline"], capture_output=True, text=True, timeout=120
-        ).returncode
+        # WHY try/except: a hung wrapper raised TimeoutExpired AFTER the plain command was
+        # already written, skipping the "capture wrap LOST" warning and leaving a traceback
+        # (review m5). A timeout is handled exactly like a non-zero exit: the post-condition
+        # check below reports the lost wrap.
+        try:
+            rc = subprocess.run(
+                # timeout: agentlenspro's installer is a local backup+rewrite of settings.json; a hang must not block this installer forever.
+                [wrapper, "--install-statusline"], capture_output=True, text=True, timeout=WRAPPER_TIMEOUT_S
+            ).returncode
+        except subprocess.TimeoutExpired:
+            rc = f"timeout after {WRAPPER_TIMEOUT_S}s"
         # Fail fast naming the file: the wrapper rewrites settings.json, so a bare
         # JSONDecodeError here would not say which file it left corrupt.
         try:
@@ -248,7 +258,7 @@ def main() -> None:
         )
         if not restored:
             print(
-                f"Warning: `{wrapper} --install-statusline` exited {rc} and the "
+                f"Warning: `{wrapper} --install-statusline` ended with {rc} and the "
                 "agentlenspro capture wrap is NOT in settings.json. Your bar still "
                 "works (plain command); re-run that command to restore capture.",
                 file=sys.stderr,

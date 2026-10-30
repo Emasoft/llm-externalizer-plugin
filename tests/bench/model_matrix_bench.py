@@ -76,8 +76,9 @@ def repo_root() -> Path:
         for line in out.stdout.splitlines():
             if line.startswith("worktree "):
                 return Path(line[len("worktree "):])
-    except Exception:
-        pass
+    except Exception as exc:
+        # WHY print: the 30 s git timeout used to vanish into a bare pass (review m6); say which root is used.
+        print(f"  ! git worktree lookup failed ({exc!r}); using PROJECT_ROOT {PROJECT_ROOT}", flush=True)
     return PROJECT_ROOT
 
 

@@ -37,6 +37,11 @@ SAMPLE_INPUT = json.dumps({
 })
 
 
+# WHY these two: the installer runs the agentlenspro wrapper with its own 120 s timeout
+# (install_statusline.WRAPPER_TIMEOUT_S); the outer timeout must exceed it plus slack, or it
+# fires first (review m4). INSTALLER is a constant so a test can point it at a fake.
+INSTALLER = Path(__file__).resolve().parent.parent / "install_statusline.py"
+INSTALLER_TIMEOUT_S = 150
 def find_settings() -> Path:
     return Path.home() / ".claude" / "settings.json"
 
@@ -108,9 +113,13 @@ def main() -> int:
             print(f"stderr: {proc.stderr[:500]}", file=sys.stderr)
         if args.fix:
             print("Re-running install_statusline.py per --fix ...", file=sys.stderr)
-            installer = Path(__file__).resolve().parent.parent / "install_statusline.py"
             # timeout: the installer only rewrites settings.json; a hang here would block the diagnostic forever.
-            subprocess.run([sys.executable, str(installer)], check=False, timeout=60)
+            # WHY try/except: TimeoutExpired used to escape as a raw traceback; a timeout is a failed fix.
+            try:
+                subprocess.run([sys.executable, str(INSTALLER)], check=False, timeout=INSTALLER_TIMEOUT_S)
+            except subprocess.TimeoutExpired:
+                print(f"FAIL: --fix did not finish: {INSTALLER.name} timed out after {INSTALLER_TIMEOUT_S}s.",
+                      file=sys.stderr)
         return 1
     out = proc.stdout.strip()
     if not out:
