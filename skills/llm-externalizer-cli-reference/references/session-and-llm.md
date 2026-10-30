@@ -290,3 +290,43 @@ Example:
 ```bash
 llm-ext llm describe ./src/api.ts --max_chars 300
 ```
+
+## Flat command names (advanced)
+
+`llm-ext --help --all` also lists flat commands; the groups dispatch to them, so the flat names appear in older docs, reports and settings. Map them like this:
+
+| Flat command | Group form |
+|---|---|
+| `chat` | `llm ask` |
+| `code-task` | `llm code` |
+| `cluster-synonyms` | `llm cluster` |
+| `summarize`, `topics`, `sem-deduplicate`, `describe` | `llm <same name>` |
+| `session-summary` | `session compact` |
+| `scan-folder` | `scan folder` |
+| `security-scan` | `scan security` |
+| `high-quality-scan` | `scan quality` |
+| `search-existing-implementations` | `scan impl` |
+| `check-imports`, `check-references`, `check-against-specs` | `check imports`, `check refs`, `check specs` |
+| `rules-check`, `review-plan`, `compare-files` | `check rules`, `check plan`, `check diff` |
+| `mass-scout` | `scout run` |
+| `mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export` | `scout register`, `scout preclassify`, `scout estimate`, `scout search`, `scout search-xjob`, `scout get`, `scout export` |
+| `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-diff`, `mass-scout-chain` | `scout audit-sample`, `scout body-get`, `scout build-fieldset`, `scout propose-fieldset`, `scout diff`, `scout chain` |
+| `mass-scout-jobs-list` | `scout jobs` |
+| `mass-scout-list-bundled-fieldsets` | `scout list-fieldsets` |
+| `or-model-info` | `models info` (also `or-model-info-json`, `or-model-info-table`: flat only, same data as raw JSON or a Unicode table) |
+| `assess-model` | `models assess` |
+| `check-model-health` | `models health` |
+| `discover-new-models` | `models discover` |
+| `check-tool-replacements` | `models replacements` |
+| `get-settings` | `settings show` |
+| `profile` | `settings profile` |
+| `list-profiles` | `settings profiles` |
+| `reset` | `settings reset` |
+| `discover` | `settings status` |
+| `scan-local-llm-services` | `settings scan-local` |
+| `classify-verify`, `classify-screen`, `classify-filter`, `classify-label`, `classify-rank`, `classify-find`, `classify-decide` | `classify verify`, `classify screen`, `classify filter`, `classify label`, `classify rank`, `classify find`, `classify decide` |
+| `classify-compare`, `classify-extract`, `classify-audit`, `classify-review`, `classify-check`, `classify-findings`, `classify-test-output` | `classify compare`, `classify extract`, `classify audit`, `classify review`, `classify check`, `classify findings`, `classify test-output` |
+
+Flat-only commands with no group form: `batch-check` (DEPRECATED: use `llm ask` or `llm code` with `--answer_mode 0 --max_retries 3`), `search-existing-benchmark` and `security-triage-benchmark` (benchmark a model for `scan impl` or `scan security` against a labeled golden set), `or-model-info-json`, `or-model-info-table`. Run `llm-ext <flat-command> --help` before using them.
+
+Some descriptions still use underscore names (`scan_folder`, `mass_scout_search`, `search_existing_implementations`); these are the flat commands' old spellings of the group actions above.

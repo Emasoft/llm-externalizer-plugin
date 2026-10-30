@@ -236,3 +236,18 @@ Example:
 ```bash
 llm-ext settings scan-local
 ```
+
+## Managed local models
+
+Two local profiles are built in and added to `settings.yaml` once, never active by default: select one with `--profile local_llama` or `--profile locals-mlx`.
+
+| Profile | Engine | Models (`model`, `second_model`, `third_model`) |
+|---|---|---|
+| `local_llama` | GGUF models through llama.cpp's `llama-server` (api `llamacpp-local`) | `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K`, `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf`, `insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf` |
+| `locals-mlx` | MLX models through the Locals server (api `locals-local`; macOS on Apple silicon only) | `LiquidAI/LFM3-1.7B-MLX-4bit`, `mlx-community/Nanbeige4.2-3B-OptiQ-4bit`, `mlx-community/Qwen3.5-4B-MLX-4bit` |
+
+Both use `server: managed`: llm-ext starts and stops the model server itself. You do not run it. `local_llama` needs a llama.cpp build with LFM3 support.
+
+- **Request broker.** A local broker serves all managed profiles. It runs one local model server at a time for requests, whatever the engine (a llama-server and a Locals server never run together); the calibration runner may start its own short-lived server beside it for the model being calibrated, and pauses while the broker has work for another model. It groups the queued requests by model and rotates to the next model when the current one has had its minimum slice and another model's request is nearing `--queue_timeout`. If a model fails, the command falls back to the next model of the same profile.
+- **Calibration.** A model of a managed profile is calibrated once, automatically: on its first use, or when a model id changes in a profile that has been used (a profile nobody used is never calibrated on its own). Requests for it are held until its record is complete, which can take hours. Held requests are bounded only by `--command_timeout`. Check progress with `llm-ext models calibration-status`. Start or redo it by hand with `llm-ext models calibrate --model <id> [--force]`; `--force` is required when a record already exists.
+- Calibration runs when the machine is idle: it pauses while other local jobs run or the load is high.

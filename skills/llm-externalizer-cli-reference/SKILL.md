@@ -44,18 +44,7 @@ Scout and classify actions have their own output rules; see their reference file
 
 ## Managed local models
 
-Two local profiles are built in and added to `settings.yaml` once, never active by default: select one with `--profile local_llama` or `--profile locals-mlx`.
-
-| Profile | Engine | Models (`model`, `second_model`, `third_model`) |
-|---|---|---|
-| `local_llama` | GGUF models through llama.cpp's `llama-server` (api `llamacpp-local`) | `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K`, `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf`, `insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf` |
-| `locals-mlx` | MLX models through the Locals server (api `locals-local`; macOS on Apple silicon only) | `LiquidAI/LFM3-1.7B-MLX-4bit`, `mlx-community/Nanbeige4.2-3B-OptiQ-4bit`, `mlx-community/Qwen3.5-4B-MLX-4bit` |
-
-Both use `server: managed`: llm-ext starts and stops the model server itself. You do not run it. `local_llama` needs a llama.cpp build with LFM3 support.
-
-- **Request broker.** A local broker serves all managed profiles. It runs one local model server at a time for requests, whatever the engine (a llama-server and a Locals server never run together); the calibration runner may start its own short-lived server beside it for the model being calibrated, and pauses while the broker has work for another model. It groups the queued requests by model and rotates to the next model when the current one has had its minimum slice and another model's request is nearing `--queue_timeout`. If a model fails, the command falls back to the next model of the same profile.
-- **Calibration.** A model of a managed profile is calibrated once, automatically: on its first use, or when a model id changes in a profile that has been used (a profile nobody used is never calibrated on its own). Requests for it are held until its record is complete, which can take hours. Held requests are bounded only by `--command_timeout`. Check progress with `llm-ext models calibration-status`. Start or redo it by hand with `llm-ext models calibrate --model <id> [--force]`; `--force` is required when a record already exists.
-- Calibration runs when the machine is idle: it pauses while other local jobs run or the load is high.
+The built-in `local_llama` and `locals-mlx` profiles (managed servers, request broker, calibration) are described at the end of `references/models-and-settings.md`. Select one with `--profile local_llama` or `--profile locals-mlx`; calibration of a model can take hours and is checked with `llm-ext models calibration-status`.
 ## Cost rules
 
 - Default profile `free` costs nothing. Paid profiles (for example `scan quality` and `scan security` accept only `paid`) cost money.
@@ -112,50 +101,14 @@ When a task fits several rows, prefer the narrowest one (`scan impl` over `scan 
 
 ## Reference files (read the one you need)
 
-- `references/session-and-llm.md`: `session compact`, `llm ask|code|cluster|summarize|topics|sem-deduplicate|describe`.
+- `references/session-and-llm.md`: `session compact`, `llm ask|code|cluster|summarize|topics|sem-deduplicate|describe`, and the flat-to-group command name table.
 - `references/scan-and-check.md`: `scan folder|security|quality|impl`, `check imports|refs|specs|rules|plan|diff`.
 - `references/scout.md`: all 16 `scout` actions (the mass-scouting pipeline: register, preclassify, estimate, run, search, export and helpers).
-- `references/models-and-settings.md`: `models info|assess|health|discover|replacements|calibrate|calibration-status`, `settings show|profile|profiles|reset|status|scan-local`.
+- `references/models-and-settings.md`: `models info|assess|health|discover|replacements|calibrate|calibration-status`, `settings show|profile|profiles|reset|status|scan-local`, and the managed local models (`local_llama`, `locals-mlx`).
 - `references/classify.md`: the 14 `classify` decisions (`verify screen filter label rank find decide compare extract audit review check findings test-output`).
 
 Each entry has: usage line, bare-argument flag, accepted profile types, the full description, a table of every flag with type and (required) marker, and one example.
 
 ## Flat command names (advanced)
 
-`llm-ext --help --all` also lists flat commands; the groups dispatch to them, so the flat names appear in older docs, reports and settings. Map them like this:
-
-| Flat command | Group form |
-|---|---|
-| `chat` | `llm ask` |
-| `code-task` | `llm code` |
-| `cluster-synonyms` | `llm cluster` |
-| `summarize`, `topics`, `sem-deduplicate`, `describe` | `llm <same name>` |
-| `session-summary` | `session compact` |
-| `scan-folder` | `scan folder` |
-| `security-scan` | `scan security` |
-| `high-quality-scan` | `scan quality` |
-| `search-existing-implementations` | `scan impl` |
-| `check-imports`, `check-references`, `check-against-specs` | `check imports`, `check refs`, `check specs` |
-| `rules-check`, `review-plan`, `compare-files` | `check rules`, `check plan`, `check diff` |
-| `mass-scout` | `scout run` |
-| `mass-scout-register`, `mass-scout-preclassify`, `mass-scout-estimate`, `mass-scout-search`, `mass-scout-search-xjob`, `mass-scout-get`, `mass-scout-export` | `scout register`, `scout preclassify`, `scout estimate`, `scout search`, `scout search-xjob`, `scout get`, `scout export` |
-| `mass-scout-audit-sample`, `mass-scout-body-get`, `mass-scout-build-fieldset`, `mass-scout-propose-fieldset`, `mass-scout-diff`, `mass-scout-chain` | `scout audit-sample`, `scout body-get`, `scout build-fieldset`, `scout propose-fieldset`, `scout diff`, `scout chain` |
-| `mass-scout-jobs-list` | `scout jobs` |
-| `mass-scout-list-bundled-fieldsets` | `scout list-fieldsets` |
-| `or-model-info` | `models info` (also `or-model-info-json`, `or-model-info-table`: flat only, same data as raw JSON or a Unicode table) |
-| `assess-model` | `models assess` |
-| `check-model-health` | `models health` |
-| `discover-new-models` | `models discover` |
-| `check-tool-replacements` | `models replacements` |
-| `get-settings` | `settings show` |
-| `profile` | `settings profile` |
-| `list-profiles` | `settings profiles` |
-| `reset` | `settings reset` |
-| `discover` | `settings status` |
-| `scan-local-llm-services` | `settings scan-local` |
-| `classify-verify`, `classify-screen`, `classify-filter`, `classify-label`, `classify-rank`, `classify-find`, `classify-decide` | `classify verify`, `classify screen`, `classify filter`, `classify label`, `classify rank`, `classify find`, `classify decide` |
-| `classify-compare`, `classify-extract`, `classify-audit`, `classify-review`, `classify-check`, `classify-findings`, `classify-test-output` | `classify compare`, `classify extract`, `classify audit`, `classify review`, `classify check`, `classify findings`, `classify test-output` |
-
-Flat-only commands with no group form: `batch-check` (DEPRECATED: use `llm ask` or `llm code` with `--answer_mode 0 --max_retries 3`), `search-existing-benchmark` and `security-triage-benchmark` (benchmark a model for `scan impl` or `scan security` against a labeled golden set), `or-model-info-json`, `or-model-info-table`. Run `llm-ext <flat-command> --help` before using them.
-
-Some descriptions still use underscore names (`scan_folder`, `mass_scout_search`, `search_existing_implementations`); these are the flat commands' old spellings of the group actions above.
+The flat command names (`chat`, `mass-scout-*`, `classify-*`, `get-settings` and the rest) map to the group forms in the table at the end of `references/session-and-llm.md`.

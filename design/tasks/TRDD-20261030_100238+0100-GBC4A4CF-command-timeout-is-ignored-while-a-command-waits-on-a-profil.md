@@ -4,7 +4,7 @@ title: command_timeout is ignored while a command waits on a profile update, plu
 column: todo
 status: tasked
 created: 2026-10-30T10:02:38+0100
-updated: 2026-10-30T10:02:38+0100
+updated: 2026-10-31T00:41:37+0100
 current-owner: main-agent@llm-externalizer
 created-by: main-agent@llm-externalizer
 task-type: bugfix
@@ -15,15 +15,17 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer
 approval-datetime: 2026-10-30T10:02:38+0100
+implementation-commits: [faed02a0]
 ---
 
 # command_timeout is ignored while a command waits on a profile update, plus 14.2.0 e2e message fixes
 
 Found by a quality evaluation of the 14.2.0 end-to-end run. Nothing here is done.
 
-- command_timeout is ignored while a command waits on a profile update. waitForProfileUpdate (scripts/llm-ext/src/foreground-repair.ts:85-120) never checks commandStopReason(); it is called from scripts/llm-ext/src/index.ts:4310 and reached through the empty-pool path at index.ts:4417. On a fresh config with --command_timeout 3, llm ask ran 33 s and was ended by the hard-kill timer (scripts/llm-ext/src/cli/main.ts:193-196) with no summary. Fix: return once the stop is set.
+- command_timeout is ignored while a command waits on a profile update. waitForProfileUpdate (scripts/llm-ext/src/foreground-repair.ts:85-120) never checks commandStopReason(); it is called from scripts/llm-ext/src/index.ts:4310 and reached through the empty-pool path at index.ts:4417. On a fresh config with --command_timeout 3, llm ask ran 33 s and was ended by the hard-kill timer (scripts/llm-ext/src/cli/main.ts:193-196) with no summary. FIXED by commit faed02a0: the wait returns once the stop is set.
 - Misleading hard-kill messages: "the stopped command did not finish writing within 30 s" (cli/main.ts:194) and "0 unfinished local job(s) cancelled; writing the results already complete" (cli/main.ts:191) are wrong when the command was waiting, not writing.
 - Decide whether the detached benchmark.js --populate-default-profile free updater should keep running after the command is stopped.
+- Still open after commit faed02a0: sleeps in the request path that ignore the stop: provider/http.ts:391 and :486 (retry backoff; the stop is checked only when the next attempt starts), provider/completion.ts:1254 (circuit-breaker backoff 60/120/350 s) and :1965 (empty-response retry delay), index.ts:2615, :6261 and :6405 (per-file retry backoff 1-3 s), index.ts:6022 (--until-done retry backoff, long), classifiers/l0/transport.ts:189 (deadline.sleep; the stop is checked at :169 before the sleep only), local-llama-server.ts:281 (server start poll sleep helper). Lock-claim retries and classify model resolution were not traced. Two test gaps: the empty-pool gate change (index.ts:4435-4439, falls through when stopped) is not exercised end to end, and no offline spawn test reaches the wait (it needs a provider key set and the first dispatch makes a real OpenRouter call).
 - Missing tests: a CLI-spawn test of the 30 s hard-kill path (STOP_FLUSH_GRACE_MS appears only in cli/main.ts:150,179,194,196), a stop during the profile-update wait, and classify exiting 124.
 - models calibration-status prints phase letters ("A pending, B pending, C pending", scripts/llm-ext/src/calibration/commands.ts:105) that a new user cannot decode.
 - models server-stop prints "stopped cal llama-server pid N: already exited" (scripts/llm-ext/src/broker/registry.ts:244), which reads as a contradiction, and waits 10-60 s with no progress line (RUNNER_STOP_WAIT_MS, scripts/llm-ext/src/broker/server-commands.ts:56).
