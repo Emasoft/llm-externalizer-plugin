@@ -15,7 +15,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
-import { homedir, tmpdir as osTmpdir } from "node:os";
+import { homedir, tmpdir as osTmpdir, totalmem } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -27,9 +27,10 @@ import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HE
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
 import { serverStopText } from "./server-commands.js";
 import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, recordPath, writeRecord } from "../calibration/record.js";
-import { recordFixture } from "../calibration/record-fixture.js";
+import { recordFixture } from "../calibration/test-record.js";
 import { loadedIdentity, type LoadedIdentity } from "../calibration/fingerprint.js";
 import { calibratorLogPath, startCalServer } from "../calibration/runner.js";
+import { queueManual } from "../calibration/commands.js";
 import { enqueueUnlocked, loadProgress, progressPath, readQueue, saveProgress, withStateLock, type TrialRecord } from "../calibration/state.js";
 import { freePort, isLocalsServerArgv, isPythonPath, llamaServerEnv, MAIN_SLOTS, ManagedServerError, parseManagedModel, processSnapshot, readCommandLine, spawnLlamaServer, SPAWN_MARKER, stopProcessGroup, withAsyncLock } from "../local-llama-server.js";
 import { brokerExchange, BrokerJobError, BrokerUnavailableError, cancelAllBrokerJobs, endpointFailureKind, type BrokerEndpoint } from "./client.js";
@@ -51,6 +52,8 @@ const ENTRY = `
 import { runBrokerMain } from "./server.ts";
 import { runCalibratorMain } from "../calibration/runner.ts";
 import { phaseA } from "../calibration/phase-a.ts";
+import { totalmem } from "node:os";
+import { timingsFromEnv } from "./scheduler.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
 if (mode === "__broker") {
@@ -63,7 +66,13 @@ if (mode === "__broker") {
   // TEST_STOP_PHASE: a phase "A" that records one trial, then fails the way a request does when its cal server dies.
   // It notices the death only on a 2 s poll (review of 2411e6dc, finding F): a runner that exits as soon as its server
   // is stopped, without waiting for the model in flight, never writes the "not counted as a crash" line.
-  const phases = env.TEST_STOP_PHASE === "1"
+  // TEST_MEMORY_PHASE (coordinator decision 2026-10-29): a phase "A" that ends with a memory outcome, "limited" (rule 2)
+  // or "too-big" (rule 1, judged against this runner's total RAM and memory floor).
+  const phases = env.TEST_MEMORY_PHASE
+    ? [{ name: "A", run: async () => env.TEST_MEMORY_PHASE === "too-big"
+        ? { passed: false, step: "A/memory", message: "the model is too big for this machine's memory (test)", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: timingsFromEnv(env).memoryFloorPct, n_ctx_train: 128 } } }
+        : { passed: false, step: "A/memory", message: "it only waited for free memory (test)", memory: { kind: "memory-limited" } } }]
+    : env.TEST_STOP_PHASE === "1"
     ? [{ name: "A", run: async (ctx) => {
         if (ctx.progress.trials.length === 0) ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
         while (ctx.server.alive()) await new Promise((r) => setTimeout(r, 2000));
@@ -644,6 +653,22 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect((await processSnapshot()).filter((p) => p.pgid === main.pgid)).toEqual([]);
     expect(readBrokerState(dir)).toBeNull();
   }, 300_000);
+
+  it("a broker whose config dir is deleted stops its server and exits on its next tick (coordinator decision 2026-10-29)", async () => {
+    const dir = newDir();
+    const r = await runClient(dir, jobsOf(A, 1));
+    expect(r.results[0].status).toBe(200);
+    const main = readRegistry(dir, "llama").find((e) => e.role === "main")!;
+    expect(alive(main.pid)).toBe(true);
+    // The default idle windows (2 h): only the missing dir can make this broker exit within the bound.
+    rmSync(dir, { recursive: true, force: true });
+    // Bound: the 1 s tick, the server stop (SIGTERM, then SIGKILL after 10 s) and a settle.
+    const deadline = Date.now() + 20_000;
+    while (Date.now() < deadline && (alive(r.pid) || (await processSnapshot()).some((p) => p.pgid === main.pgid))) await new Promise((res) => setTimeout(res, 200));
+    expect(alive(r.pid)).toBe(false);
+    expect((await processSnapshot()).filter((p) => p.pgid === main.pgid)).toEqual([]);
+    expect(existsSync(dir)).toBe(false);
+  }, 300_000);
 });
 
 /**
@@ -1155,6 +1180,68 @@ describe("calibration runner (P6 step 2)", () => {
     expect(readRegistry(dir, "llama").filter((e) => e.role === "cal")).toEqual([]);
     const r = await runClient(dir, jobsOf(B, 1));
     expect(r.results[0].error).toMatch(/calibration-failed at phase-a\/context/);
+  }, 300_000);
+
+  it("rule 2 (coordinator decision 2026-10-29): a memory-limited phase writes a memory-limited record with fresh pass counters; jobs fail at once; a queued model is calibrated again", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    rmSync(recordPath(dir, "llama", B));
+    const id = identities.get(`llama\u0000${B}`)!;
+    const t = (step: string, outcome: TrialRecord["outcome"], data: TrialRecord["data"]): TrialRecord => ({ step, seed: 0, outcome, at: new Date().toISOString(), data });
+    // An earlier pass left pass-counted skips (a timeout, a memory wait), an over-total-RAM judgment and a memory wait.
+    saveProgress(dir, "llama", B, {
+      harness_version: HARNESS_VERSION,
+      fixture_version: FIXTURE_VERSION,
+      harness: PRODUCTION_HARNESS_ID,
+      fingerprint: id.fingerprint,
+      trials: [t("C/scout/2048/4", "inconclusive", { skipped: "timeout", passes: 1 }), t("C/main/2", "pass", { skipped: "memory-wait", passes: 3 }), t("C/main/4", "pass", { skipped: "memory", floor_pct: 10 })],
+      phases: {},
+      memoryWait: { "C/main/1": { since: new Date().toISOString(), seen: new Date().toISOString(), waited_ms: 0, need: 1 } },
+    });
+    queueB(dir);
+    const pid = spawnRunner(dir, { TEST_MEMORY_PHASE: "limited" });
+    await waitFor("the runner to finish", () => !alive(pid), 180_000);
+    const rec = readRecord(dir, "llama", B)!;
+    expect([rec.status, rec.failed_step, rec.message]).toEqual(["memory-limited", "A/memory", "it only waited for free memory (test)"]);
+    const prog = loadProgress(dir, "llama", B, null);
+    expect(prog.trials.map((x) => x.step)).toEqual(["C/main/4"]);
+    expect(prog.memoryWait).toEqual({});
+    expect(prog.phases.A).toBeUndefined();
+    expect(readQueue(dir)).toEqual([]);
+    // Within the hour: the request fails at once with the reason and the fix, it is not held.
+    const r = await runClient(dir, jobsOf(B, 1));
+    expect(r.results[0].error).toMatch(/not enough free memory to calibrate it .*free memory, or run llm-ext models calibrate --model/);
+    // Queued again (no --force needed): the record is not final, the model is measured again.
+    expect(queueManual(dir, { p: { "profile-type": "local", mode: "local", api: "llamacpp-local", url: "http://127.0.0.1:8181", server: "managed", model: B } as never }, B, false)).not.toHaveProperty("error");
+    const again = spawnRunner(dir, { TEST_PASS_PHASE_A: "1" });
+    await waitFor("the runner to finish", () => !alive(again), 180_000);
+    expect(runnerLogOf(dir)).toMatch(/calibrated again: it only waited for free memory/);
+    expect(loadProgress(dir, "llama", B, null).phases.A).toBe("passed");
+  }, 300_000);
+
+  it("rule 1 (coordinator decision 2026-10-29): a too-big record stores what it was judged against; it stands under the same floor and is judged again under another", async () => {
+    const dir = newDir();
+    // The broker judges under this floor whatever the shell sets.
+    await runClient(dir, jobsOf(A, 1), { LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    rmSync(recordPath(dir, "llama", B));
+    queueB(dir);
+    const pid = spawnRunner(dir, { TEST_MEMORY_PHASE: "too-big", LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    await waitFor("the runner to finish", () => !alive(pid), 180_000);
+    const rec = readRecord(dir, "llama", B)!;
+    expect(rec.status).toBe("calibration-failed");
+    expect(rec.memory_judged).toEqual({ total_ram_bytes: totalmem(), floor_pct: 10, n_ctx_train: 128 });
+    // The same floor: the verdict stands (the request fails at once) and a queued model is not measured again.
+    const r = await runClient(dir, jobsOf(B, 1));
+    expect(r.results[0].error).toMatch(/too big for this machine's memory/);
+    queueB(dir);
+    const same = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    await waitFor("the runner to finish", () => !alive(same), 180_000);
+    expect(runnerLogOf(dir)).toMatch(/already has a valid, current record \(calibration-failed\)/);
+    // Another floor: the record no longer holds; the runner measures the model again.
+    queueB(dir);
+    const other = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_BROKER_MEMORY_FLOOR: "11" });
+    await waitFor("the runner to finish", () => !alive(other), 180_000);
+    expect(runnerLogOf(dir)).toMatch(/calibrated again: the memory floor changed from 10 % to 11 %/);
   }, 300_000);
 
   /** A record of B calibrated on an older engine build, with progress from that build (A and B passed). */

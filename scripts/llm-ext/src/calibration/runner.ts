@@ -24,7 +24,8 @@ import { freePort, parseManagedModel, pidState, spawnLlamaServer, waitReady, wit
 import { parseLocalsModel, spawnLocalsServer, waitLocalsReady } from "../local-locals-server.js";
 import { getConfigDir } from "../config.js";
 import { loadedIdentity, staleness, type LoadedIdentity } from "./fingerprint.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, okRecordFrom, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord } from "./record.js";
+import { memoryWaitPrecheck } from "./memory-wait.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, memoryVerdictStale, okRecordFrom, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord, type MemoryJudged } from "./record.js";
 import { acquireModelLock, dequeueUnlocked, loadProgress, readQueue, releaseModelLock, saveProgress, withStateLock, type Progress, type QueueItem } from "./state.js";
 
 /** The phases of the full method, in order (spec section 4). A record is written only once all of them passed. */
@@ -138,9 +139,20 @@ export interface Phase {
   /**
    * "passed"; a failure that ends this model with `status: calibration-failed`; or a paused step
    * (spec section 2: two inconclusive runs in a row), which leaves the model queued for the runner's next pass.
+   * `memory` marks the two memory outcomes (coordinator decision 2026-10-29): "too-big" is a calibration-failed record
+   * that stores what it was judged against (rule 1); "memory-limited" is its own record status, never a failure (rule 2).
    */
-  run: (ctx: PhaseContext) => Promise<{ passed: true } | { passed: false; step: string; message: string; paused?: boolean }>;
+  run: (ctx: PhaseContext) => Promise<{ passed: true } | { passed: false; step: string; message: string; paused?: boolean; memory?: MemoryOutcome }>;
 }
+
+/** The two memory outcomes of a phase (coordinator decision 2026-10-29, rules 1 and 2). */
+export type MemoryOutcome = { kind: "too-big"; judged: MemoryJudged } | { kind: "memory-limited" };
+
+/**
+ * Rule 2: the skips a memory-limited calibration starts again from (fresh pass counters): every inconclusive or given-up
+ * skip counted by rule A. An over-total-RAM skip ("memory") is a judgment, not a pass count, and is kept.
+ */
+const PASS_COUNTED_SKIPS: readonly string[] = ["memory-wait", "timeout", "transport"];
 
 export const calibratorLogPath = (dir: string): string => join(dir, "calibrator-local.log");
 const handoverPath = (dir: string): string => join(dir, "calibrator-handover.json");
@@ -399,8 +411,8 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       return true;
     });
   };
-  const failedRecord = (step: string, message: string): CalibrationRecord =>
-    engineCheck && existing
+  const failedRecord = (step: string, message: string, status: "calibration-failed" | "memory-limited" = "calibration-failed"): CalibrationRecord =>
+    engineCheck && existing && status === "calibration-failed"
       ? // The record keeps its measured body; only the status says the new build failed the quick check.
         { ...existing, status: "engine-check-failed", failed_step: step, message }
       : {
@@ -414,13 +426,21 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
           fingerprint: identity?.fingerprint ?? { blobs: [], ram_bytes: totalmem() },
           engine_version: identity?.engineVersion ?? "unknown",
           engine_version_checked: identity?.engineVersion ?? "unknown",
-          status: "calibration-failed",
+          status,
           failed_step: step,
           message,
           calibrated_at: new Date().toISOString(),
           duration_s: Math.round((Date.now() - startedAt) / 1000),
         };
   try {
+    // Review of 2411e6dc, finding 2: a Phase C candidate still waiting for free memory is re-checked with the model
+    // unloaded, so a pass does not load the model only for Phase C to unload it again (about every minute while
+    // requests are held). --force drops the waits, so it skips the check.
+    const waiting = item.force ? null : await memoryWaitPrecheck(o.dir, item.engine, item.model, harness.id);
+    if (waiting !== null) {
+      o.log(`${name}: ${waiting}; the model is not loaded on this pass and stays queued`);
+      return "done";
+    }
     await waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`));
     server = await startCalServer(o.dir, item.engine, item.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s));
     const loadMs = Date.now() - startedAt;
@@ -429,13 +449,17 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     // A valid record that still matches what is loaded (weights, RAM, engine build, method version) needs nothing, unless --force (spec section 3).
     existing = readRecord(o.dir, item.engine, item.model, o.log);
     const stale = existing ? staleness(existing, identity, harness.id) : null;
-    if (existing && !item.force && stale === null) {
+    // Coordinator decision 2026-10-29: a memory-limited record is never final (whoever queued it wants it measured), and a
+    // "too big for this machine's memory" record whose total RAM or memory floor changed is judged again (rules 1, 2).
+    const memoryRedo = existing === null ? null : existing.status === "memory-limited" ? "it only waited for free memory" : memoryVerdictStale(existing);
+    if (existing && !item.force && stale === null && memoryRedo === null) {
       // Review C1: rewrite it, so a broker that marked the record stale (mtime and size) sees a change and checks again.
       writeRecord(o.dir, existing);
       o.log(`${name}: already has a valid, current record (${existing.status}); removed from the queue`);
       dequeue();
       return "done";
     }
+    if (memoryRedo !== null) o.log(`${name}: calibrated again: ${memoryRedo}`);
     if (stale !== null) o.log(`${name}: its record is stale (${stale === "weights" ? "the weights, the RAM or the calibration method changed" : `the engine build changed to ${identity.engineVersion}`})`);
     // Spec section 3, "Quick check only": a new engine build re-runs Phase A on a record that is otherwise valid;
     // a calibration-failed record, new weights or --force recalibrate from scratch.
@@ -518,10 +542,22 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         o.log(`${name}: step ${r.step} paused (${r.message}); the model stays queued`);
         return "done";
       }
+      if (!r.passed && r.memory?.kind === "memory-limited") {
+        // Rule 2 (coordinator decision 2026-10-29): no verdict. The phase stays unfinished, and the next calibration
+        // starts with fresh pass counters: the pass-counted skips and the memory waits are dropped now.
+        progress.trials = progress.trials.filter((t) => !(typeof t.data?.skipped === "string" && PASS_COUNTED_SKIPS.includes(t.data.skipped)));
+        progress.memoryWait = {};
+        saveProgress(o.dir, item.engine, item.model, progress);
+        return finish(failedRecord(r.step, r.message, "memory-limited"), `phase ${phase.name} memory-limited at ${r.step}: ${r.message}`);
+      }
       progress.phases[phase.name] = r.passed ? "passed" : "failed";
       saveProgress(o.dir, item.engine, item.model, progress);
       // Spec 4.2: a failed phase ends this model with a record that says why; held jobs then fail at once with it.
-      if (!r.passed) return finish(failedRecord(r.step, r.message), `phase ${phase.name} failed at ${r.step}: ${r.message}`);
+      // Rule 1: a model too big for this machine's memory keeps what it was judged against, so a change re-checks it.
+      if (!r.passed) {
+        const rec = failedRecord(r.step, r.message);
+        return finish(r.memory?.kind === "too-big" ? { ...rec, memory_judged: r.memory.judged } : rec, `phase ${phase.name} failed at ${r.step}: ${r.message}`);
+      }
       o.log(`${name}: phase ${phase.name} passed`);
     }
     if (engineCheck && existing) {

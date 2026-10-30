@@ -57,16 +57,18 @@ const RUNNER_STOP_WAIT_MS = 60_000;
 
 /**
  * The broker's queued and held requests for one model, from its /v1/health; null when no broker of this dir is alive.
- * A broker that does not answer is an error: the caller says so instead of guessing there is no work.
+ * `queued` counts running jobs too (review of 4856f009): a job running on the server just stopped is requeued a moment
+ * later, so a check made right after the stop would miss it. A broker that does not answer is an error: the caller
+ * says so instead of guessing there is no work.
  */
 async function brokerCounts(dir: string, engine: BrokerEngine, model: string): Promise<{ queued: number; held: number } | null> {
   const st = readBrokerState(dir);
   if (!st || pidState(st.pid) === "dead") return null;
   const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token }, signal: AbortSignal.timeout(5000) });
   if (!res.ok) throw new Error(`the broker's /v1/health answered HTTP ${res.status}`);
-  const h = (await res.json()) as { models?: Array<{ engine?: string; model?: string; queued?: number; held?: number }> };
+  const h = (await res.json()) as { models?: Array<{ engine?: string; model?: string; queued?: number; running?: number; held?: number }> };
   const rows = (h.models ?? []).filter((m) => m.engine === engine && m.model === model);
-  return { queued: rows.reduce((n, m) => n + (m.queued ?? 0), 0), held: rows.reduce((n, m) => n + (m.held ?? 0), 0) };
+  return { queued: rows.reduce((n, m) => n + (m.queued ?? 0) + (m.running ?? 0), 0), held: rows.reduce((n, m) => n + (m.held ?? 0), 0) };
 }
 
 /** Stop the selected registered servers (default: all engines, all roles); one line per server stopped, or per failure. */
@@ -94,7 +96,7 @@ export async function serverStopText(dir: string, opts: ServerStopOptions): Prom
         lines.push(`stopped ${e.role} ${serverLabel(engine)} pid ${e.pid} (port ${e.port}, model '${e.model}'): ${how}`);
         try {
           const counts = await brokerCounts(dir, engine, e.model);
-          if (e.role === "main" && counts !== null && counts.queued > 0) lines.push(`the broker still has ${counts.queued} queued request(s) for '${e.model}': it will start the server again to serve them`);
+          if (e.role === "main" && counts !== null && counts.queued > 0) lines.push(`the broker still has ${counts.queued} queued or running request(s) for '${e.model}': it will start the server again to serve them`);
           // Review of 2411e6dc, finding E: held requests make the broker re-ensure a runner every RUNNER_RECHECK_MS (60 s).
           if (e.role === "cal" && counts !== null && counts.held > 0) lines.push(`the broker holds ${counts.held} request(s) for '${e.model}' until it is calibrated: it will start calibration again within about a minute`);
         } catch (err) {

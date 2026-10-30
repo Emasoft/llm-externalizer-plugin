@@ -356,7 +356,8 @@ export function cutOutcome(earlierCuts: number): Outcome {
  *  - "skip" when it does not fit the HARD W (weights + KV + 1 GB in total RAM minus the floor): window-limited, the
  *    step is not run and counts as "does not fit"; never a failure (the user's ruling: lack of memory never is);
  *  - "wait" when it fits the hard W but not the current soft W (free memory now): the model waits for memory, as the
- *    broker does; never an unfit verdict;
+ *    broker does, with the bound and rule A of memory-wait.ts: given up on its third pass, the step becomes a
+ *    "memory-wait" grid skip and the walk steps down; never a failure, and never a window-limited verdict;
  *  - "run" otherwise. Checked when each step runs, against the window the cal server has then.
  */
 export function stepFit(step: number, nominalCap: number, hardWindow: number, softWindow: number): "run" | "wait" | "skip" {

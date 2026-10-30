@@ -1,7 +1,9 @@
 /**
- * calibration/gguf-fixture.ts — a hand-written GGUF v3 file with only metadata, for tests (P6). The memory and window
+ * calibration/test-gguf.ts — a hand-written GGUF v3 file with only metadata, for tests (P6). The memory and window
  * code reads real GGUF metadata from it (block count, heads, KV heads), so a test runs the real arithmetic on a model
- * small enough to write in a temp dir.
+ * small enough to write in a temp dir. Named test-*.ts like test-helpers.ts and classifiers/l0/test-fetch.ts (review
+ * of 2411e6dc, finding 12): a test-only helper, imported by no production module, so the esbuild entry graph that
+ * builds dist/ never reaches it.
  */
 
 import { writeFileSync } from "node:fs";

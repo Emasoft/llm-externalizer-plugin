@@ -6,17 +6,18 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import type { Profile } from "../config.js";
 import { CALIBRATE_ARGV, calibratorStatePath } from "../broker/protocol.js";
-import { recordFixture } from "./record-fixture.js";
-import { FIXTURE_VERSION, HARNESS_VERSION, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord, type GridEntry, type GridSkip } from "./record.js";
+import { recordFixture } from "./test-record.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, MEMORY_LIMITED_RETRY_MS, memoryVerdictStale, readRecord, readRecordStatus, recordPath, recordSchemaErrors, writeRecord, type GridEntry, type GridSkip } from "./record.js";
 import { blobSha256, fingerprintOf, ggufShards, snapshotWeightFiles, staleness } from "./fingerprint.js";
 import { acquireModelLock, dequeueUnlocked, enqueueUnlocked, loadProgress, modelLockPath, readQueue, readSeenModels, releaseModelLock, saveProgress, withStateLock } from "./state.js";
 import { checkModelChanges, managedProfileModels, markProfileUsed } from "./triggers.js";
-import { engineOf, profileUnfitLines, queueManual, unfitExplanations } from "./commands.js";
+import { engineOf, fillMemoryNote, profileUnfitLines, queueManual, unfitExplanations } from "./commands.js";
 import { harnessFromEnv, PRODUCTION_HARNESS } from "./runner.js";
 
 let dir: string;
@@ -67,6 +68,57 @@ describe("calibration record (spec section 7)", () => {
     const s = readRecordStatus(dir, "llama", "a/b:Q4");
     expect(s.state).toBe("failed");
     expect((s as { message: string }).message).toMatch(/calibration-failed at A\/thinking-off: thinking cannot be turned off.*models calibrate --model a\/b:Q4 --force/);
+  });
+});
+
+describe("memory outcomes of a record (coordinator decisions 2026-10-29: rules 1 and 2, item 3)", () => {
+  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  afterEach(() => {
+    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+  });
+  const profiles = { p: managed("a/b:Q4") };
+
+  it("rule 2: a memory-limited record fails jobs at once for an hour with the reason and the fix, then counts as missing; queueing it needs no --force", () => {
+    const at = Date.now();
+    const rec = { ...recordFixture("llama", "a/b:Q4", { step: "B/window", message: "free memory stayed below the smallest calibration window (5120 tokens) on 3 passes" }), status: "memory-limited" as const, calibrated_at: new Date(at).toISOString() };
+    expect(recordSchemaErrors(rec)).toEqual([]);
+    writeRecord(dir, rec);
+    const s = readRecordStatus(dir, "llama", "a/b:Q4", undefined, at + MEMORY_LIMITED_RETRY_MS - 1);
+    expect(s.state).toBe("failed");
+    expect((s as { message: string }).message).toMatch(/^model 'a\/b:Q4': not enough free memory to calibrate it \(B\/window: free memory stayed below .*\); free memory, or run llm-ext models calibrate --model a\/b:Q4 /);
+    expect(readRecordStatus(dir, "llama", "a/b:Q4", undefined, at + MEMORY_LIMITED_RETRY_MS)).toEqual({ state: "missing" });
+    expect(queueManual(dir, profiles, "a/b:Q4", false)).not.toHaveProperty("error");
+  });
+
+  it("rule 1: a too-big record stands while total RAM and the floor are those it was judged against; a change of either makes it missing (judged again)", () => {
+    const judged = { total_ram_bytes: totalmem(), floor_pct: 10, n_ctx_train: 4096 };
+    const rec = { ...recordFixture("llama", "a/b:Q4", { step: "B/window", message: "the model is too big for this machine's memory: x" }), memory_judged: judged };
+    expect(recordSchemaErrors(rec)).toEqual([]);
+    expect(recordSchemaErrors({ ...recordFixture("llama", "a/b:Q4"), memory_judged: judged })).toEqual(["memory_judged (a calibration-failed record only)"]);
+    writeRecord(dir, rec);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "10";
+    expect(readRecordStatus(dir, "llama", "a/b:Q4").state).toBe("failed");
+    expect(queueManual(dir, profiles, "a/b:Q4", false)).toHaveProperty("error");
+    expect(memoryVerdictStale(rec, 10, totalmem() + 1)).toBe(`the total RAM changed from ${totalmem()} to ${totalmem() + 1} bytes`);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "11";
+    expect(memoryVerdictStale(rec)).toBe("the memory floor changed from 10 % to 11 %");
+    expect(readRecordStatus(dir, "llama", "a/b:Q4")).toEqual({ state: "missing" });
+    expect(queueManual(dir, profiles, "a/b:Q4", false)).not.toHaveProperty("error");
+    // A calibration-failed record without a memory judgment never goes stale this way.
+    expect(memoryVerdictStale(recordFixture("llama", "a/b:Q4", { step: "A/x", message: "y" }), 11, 1)).toBeNull();
+  });
+
+  it("item 3: a fill above 0 whose higher steps were given up after memory waits carries the note; a window skip or a fill of 0 does not", () => {
+    const fill = { fact: 4096, aggregate: 0, bug: 4096 };
+    const grid: GridSkip[] = [
+      { kind: "fact", tokens: 8192, skipped: "memory-wait", W: 6144 },
+      { kind: "aggregate", tokens: 8192, skipped: "memory-wait", W: 6144 },
+      { kind: "bug", tokens: 8192, skipped: "window", W: 10000 },
+    ];
+    expect(fillMemoryNote("fact", fill, grid)).toBe(" (fill limited by free memory during calibration; `models calibrate --force` measures it again)");
+    expect(fillMemoryNote("aggregate", fill, grid)).toBe("");
+    expect(fillMemoryNote("bug", fill, grid)).toBe("");
   });
 });
 
@@ -223,6 +275,8 @@ describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), le
       3: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
       // 4: the scouting verdict rules changed (over total RAM and 3 timed-out passes make scouting unfit), same JSON.
       4: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
+      // 5: aggregate_tps rename, transport failures inconclusive, memory-wait entries as objects; same JSON.
+      5: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
     };
     expect(createHash("sha256").update(JSON.stringify(PRODUCTION_HARNESS)).digest("hex")).toBe(PINNED[HARNESS_VERSION]);
   });

@@ -3,13 +3,15 @@
 // step they target at every grid step, through the real sequential rule; a
 // reply cut at max_tokens is inconclusive, never a fail.
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, totalmem } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { BUG_CORPUS, BUG_CORPUS_SHA256 } from "./bug-corpus.js";
 import { BUG_PLANTS, plantLines } from "./bug-plants.js";
-import { chooseWindow, configKvLayers, ggufKvLayers, kvBytes, readGgufMetadata, WINDOW_HEADROOM_BYTES } from "./memory.js";
+import { chooseWindow, configKvLayers, freeMemory, ggufKvLayers, kvBytes, modelKvLayers, readGgufMetadata, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
 import { CAP_OFF, CAP_ON, type Outcome, type Reply } from "./phase-a.js";
 import {
   aggregateCountOutcome,
@@ -35,10 +37,12 @@ import {
   windowTooSmallReason,
   windowResume,
 } from "./phase-b-fixtures.js";
-import { measureWindow } from "./phase-b.js";
-import { writeGguf } from "./gguf-fixture.js";
+import { measureWindow, phaseB } from "./phase-b.js";
+import { writeGguf } from "./test-gguf.js";
 import type { PhaseContext } from "./runner.js";
-import type { TrialRecord } from "./state.js";
+import { saveProgress, type MemoryWait, type TrialRecord } from "./state.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, memoryWaitPrecheck, memoryWaitTick } from "./memory-wait.js";
+import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID } from "./record.js";
 
 const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
   status: 200,
@@ -498,4 +502,180 @@ describe("a resume keeps Phase B while the hard W is the same (main-agent decisi
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+/**
+ * Coordinator decisions 2026-10-29: Phase B waits for memory through the one mechanism Phase C uses (memory-wait.ts):
+ * the wait is saved with the bytes it needs, re-checked by memoryWaitPrecheck with the model unloaded, bounded at
+ * MEMORY_WAIT_MAX_MS of checks per pass, then skipped for the pass (rule A) and given up on its third pass. B/window
+ * given up is memory-limited (rule 2); a hard W under the smallest window is too big for this machine (rule 1). These
+ * drive the real phaseB.run on a synthetic GGUF against the machine's real memory readings. Each floor and KV size is
+ * derived from the readings themselves (item 5: no test may depend on how much memory is in use).
+ */
+describe("Phase B memory: the bound and rule A of Phase C; memory-limited and too-big outcomes (coordinator decisions 2026-10-29)", () => {
+  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  const cleanups: Array<() => void> = [];
+  afterEach(() => {
+    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+    while (cleanups.length) cleanups.pop()!();
+  });
+  const minWindow = Math.ceil(2048 / 0.4);
+
+  /** A synthetic GGUF with `blocks` layers of 8 KiB of KV per token each (16 KV heads of 128 dims, K and V, 2 bytes). */
+  const model = (blocks: number): { dir: string; gguf: string; need: (tokens: number) => number } => {
+    const dir = mkdtempSync(join(tmpdir(), "llm-ext-b-wait-"));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    const gguf = join(dir, "m.gguf");
+    writeGguf(gguf, [
+      ["general.architecture", "lfm3"],
+      ["lfm3.block_count", blocks],
+      ["lfm3.attention.head_count", 32],
+      ["lfm3.embedding_length", 4096],
+      ["lfm3.attention.head_count_kv", 16],
+    ]);
+    const layers = modelKvLayers("llama", [gguf]);
+    return { dir, gguf, need: (tokens) => weightBytes([gguf]) + kvBytes(layers, tokens) + WINDOW_HEADROOM_BYTES };
+  };
+
+  /** A cal server stand-in: only /props is asked before any trial; it reports the context the server "got". */
+  const props = async (nCtx: number): Promise<string> => {
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ default_generation_settings: { n_ctx: nCtx } }));
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
+    cleanups.push(() => server.close());
+    return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  };
+
+  const context = (dir: string, gguf: string, baseUrl: string): { ctx: PhaseContext; trials: TrialRecord[] } => {
+    const trials: TrialRecord[] = [
+      { step: "A/summary", seed: 0, outcome: "pass", at: "t", data: { passed: true, chars_per_token: 3.5, thinking_on: false, thinking_off: true, json_off: true, json_on: false } },
+      { step: "A/speed", seed: 0, outcome: "pass", at: "t", data: { prefill_tps_2k: 1000, prefill_tps_8k: 1000, decode_tps: 50 } },
+      { step: "A/capabilities", seed: 0, outcome: "pass", at: "t", data: { n_ctx_train: 0 } },
+    ];
+    const ctx = {
+      dir,
+      item: { engine: "llama", model: "m", reason: "manual" },
+      // ctx: the context of the loaded server, above every window here, so the soft W is what /props reports.
+      server: { engine: "llama", baseUrl, apiKey: "k", ctx: 1 << 20 },
+      harness: { id: PRODUCTION_HARNESS_ID, windowCap: 32768, steps: null, trials: 5 },
+      identity: { files: [gguf] },
+      progress: { trials, phases: { A: "passed" }, paused: {}, stepCrashes: {} },
+      record: (t: TrialRecord) => trials.push(t),
+      save: () => undefined,
+      waitForTurn: async () => undefined,
+      stopServer: async () => undefined,
+      restart: async () => undefined,
+      log: () => undefined,
+    } as unknown as PhaseContext;
+    return { ctx, trials };
+  };
+  /** A wait that has already counted MEMORY_WAIT_MAX_MS of checks: the next check skips the step for the pass. */
+  const expired = (need: number): MemoryWait => ({ ...memoryWaitTick(undefined, need, Date.now() - MEMORY_WAIT_MAX_MS), waited_ms: MEMORY_WAIT_MAX_MS, seen: new Date().toISOString() });
+  const skipsOf = (trials: TrialRecord[], step: string): Array<[string, unknown, unknown]> => trials.filter((t) => t.step === step && t.data?.skipped !== undefined).map((t) => [t.outcome, t.data?.skipped, t.data?.passes]);
+
+  it("B/window short of free memory: the wait is saved and re-checked unloaded; skipped for 2 passes, then memory-limited (no verdict, no summary)", async () => {
+    // Coordinator decision 5: no precondition may depend on how much memory is in use. The floor is fixed at 1 % and the
+    // synthetic KV is sized from this machine's own reading so that the smallest window needs the midpoint between free
+    // memory and total RAM, both above the floor: the soft W misses it and the hard W fits it, each by half the memory in
+    // use (less one KV block of rounding, 40 MiB), with no integer-percent floor rounding in the margin.
+    const total = totalmem();
+    const floorPct = 1;
+    const floor = Math.round((floorPct / 100) * total);
+    const { free } = await freeMemory(floorPct);
+    const one = model(1);
+    const perBlock = one.need(minWindow) - one.need(0);
+    const { dir, gguf, need } = model(Math.max(1, Math.round(((free + total) / 2 - floor - one.need(0)) / perBlock)));
+    const margin = Math.min(need(minWindow) - (free - floor), total - floor - need(minWindow));
+    expect(margin, `half the memory in use (${Math.round((total - free) / 2 ** 21)} MiB) less one KV block must keep the smallest window between free memory and total RAM above the floor`).toBeGreaterThan(0);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = String(floorPct);
+    const { ctx, trials } = context(dir, gguf, "http://127.0.0.1:1");
+
+    expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: "B/window" });
+    expect(ctx.progress.memoryWait?.["B/window"]?.need).toBe(need(minWindow));
+    // The runner's precheck sees the Phase B wait with the model unloaded, and the pass loads nothing.
+    saveProgress(dir, "llama", "m", { ...ctx.progress, harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: PRODUCTION_HARNESS_ID, fingerprint: null });
+    expect(await memoryWaitPrecheck(dir, "llama", "m", PRODUCTION_HARNESS_ID)).toMatch(/^B\/window still waits for free memory \(\d+ MiB needed/);
+
+    for (const pass of [1, 2]) {
+      ctx.progress.memoryWait = { "B/window": expired(need(minWindow)) };
+      const r = await phaseB.run(ctx);
+      expect(r).toMatchObject({ passed: false, paused: true, step: "B/window" });
+      expect((r as { message: string }).message).toContain(`pass ${pass} of ${INCONCLUSIVE_PASSES}`);
+      expect(ctx.progress.memoryWait).toEqual({});
+    }
+    ctx.progress.memoryWait = { "B/window": expired(need(minWindow)) };
+    const third = await phaseB.run(ctx);
+    expect(third).toEqual({ passed: false, step: "B/window", message: `free memory stayed below the smallest calibration window (${minWindow} tokens) on 3 passes`, memory: { kind: "memory-limited" } });
+    expect(skipsOf(trials, "B/window")).toEqual([
+      ["inconclusive", "memory-wait", 1],
+      ["inconclusive", "memory-wait", 2],
+      ["pass", "memory-wait", 3],
+    ]);
+    expect(trials.some((t) => t.step === "B/summary")).toBe(false);
+  }, 60_000);
+
+  it("a hard W under the smallest window: too big for this machine's memory at once, judged against total RAM, the floor and the trained context", async () => {
+    // KV sized from total RAM: the smallest window alone needs all of it, so it misses total RAM minus any floor.
+    const perBlock = kvBytes(modelKvLayers("llama", [model(1).gguf]), minWindow);
+    const { dir, gguf, need } = model(Math.ceil(totalmem() / perBlock));
+    expect(need(minWindow)).toBeGreaterThan(totalmem());
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    const { ctx } = context(dir, gguf, "http://127.0.0.1:1");
+    const r = await phaseB.run(ctx);
+    expect(r).toMatchObject({ passed: false, step: "B/window", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: 1, n_ctx_train: 0 } } });
+    expect((r as { message: string }).message).toMatch(/^the model is too big for this machine's memory: the calibration window cannot reach 5120 tokens/);
+    expect(r).not.toHaveProperty("paused");
+    expect(ctx.progress.memoryWait ?? {}).toEqual({});
+  }, 60_000);
+
+  it("a grid step over the soft W waits, is skipped for 2 passes while the other kinds go on, then is given up and the walk steps down", async () => {
+    // Coordinator decision 5: no precondition may depend on how much memory is in use. A tiny KV (1 block) and a 1 % floor:
+    // the hard W is the 32768 cap from total RAM alone; the server reports 6144 tokens of context, so the soft W is at
+    // most 6144 whatever free memory is, and the 13107 and 8192 steps (plus the 2112-token output) wait. The one
+    // reading-dependent precondition is the smallest window (5120 tokens, about 1 GiB with the headroom) fitting free
+    // memory above the floor: below it no Phase B step can run on the machine at all.
+    const { dir, gguf, need } = model(1);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    const url = await props(6144);
+    const probe = await measureWindow(context(dir, gguf, url).ctx, 0, minWindow);
+    expect(probe.hard).toBe(32768);
+    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the smallest window (${Math.round(need(minWindow) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(minWindow);
+    const steps = gridSteps(probe.hard, null);
+    expect(steps.slice(0, 2)).toEqual([13107, 8192]);
+    const top = (kind: string): string => `B/${kind}/${steps[0]}`;
+    const topNeed = need(steps[0]! + CAP_OFF + 64);
+    const { ctx, trials } = context(dir, gguf, url);
+
+    expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: top("fact") });
+    expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual([top("fact")]);
+    expect(ctx.progress.memoryWait?.[top("fact")]?.need).toBe(topNeed);
+
+    // Every kind's top step has waited 30 min: each is skipped for this pass (pass 1 of 3), the phase pauses, no summary.
+    ctx.progress.memoryWait = Object.fromEntries(["fact", "aggregate", "bug"].map((k) => [top(k), expired(topNeed)]));
+    const second = await phaseB.run(ctx);
+    expect(second).toMatchObject({ passed: false, paused: true, step: top("fact") });
+    expect((second as { message: string }).message).toContain(`pass 1 of ${INCONCLUSIVE_PASSES}`);
+    for (const k of ["fact", "aggregate", "bug"]) expect(skipsOf(trials, top(k))).toEqual([["inconclusive", "memory-wait", 1]]);
+    expect(ctx.progress.memoryWait).toEqual({});
+
+    for (const pass of [2, 3]) {
+      ctx.progress.memoryWait = { [top("fact")]: expired(topNeed) };
+      const r = await phaseB.run(ctx);
+      // Pass 2 skips fact's top step again; pass 3 gives it up, and fact steps down to its next step, which waits.
+      expect(r).toMatchObject({ passed: false, paused: true, step: pass === 2 ? top("aggregate") : `B/fact/${steps[1]}` });
+    }
+    expect(skipsOf(trials, top("fact"))).toEqual([
+      ["inconclusive", "memory-wait", 1],
+      ["inconclusive", "memory-wait", 2],
+      ["pass", "memory-wait", 3],
+    ]);
+    // A resume does not wait for the given-up step again: it goes straight to the next one.
+    ctx.progress.memoryWait = {};
+    expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: `B/fact/${steps[1]}` });
+    expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual([`B/fact/${steps[1]}`]);
+    expect(trials.some((t) => t.step === "B/summary")).toBe(false);
+  }, 60_000);
 });

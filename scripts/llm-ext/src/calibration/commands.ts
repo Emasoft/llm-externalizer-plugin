@@ -5,10 +5,11 @@
 
 import { existsSync } from "node:fs";
 import { loadSettings, scoutAccuracyThreshold, type Profile } from "../config.js";
-import { PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, scoutingFor, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
+import { MEMORY_LIMITED_RETRY_MS, memoryVerdictStale, PRODUCTION_HARNESS_ID, readRecord, readRecordStatus, scoutingFor, TASK_KINDS, type GridEntry, type GridSkip, type PerKind, type RecordStatus, type TaskKind } from "./record.js";
 import { liveCalibrator, METHOD_PHASES } from "./runner.js";
-import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, pendingCause } from "./phase-c.js";
-import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock } from "./state.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS } from "./memory-wait.js";
+import { pendingCause } from "./phase-c.js";
+import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock, type Progress } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
 import type { BrokerEngine } from "../broker/protocol.js";
 
@@ -26,7 +27,9 @@ export function queueManual(dir: string, profiles: Readonly<Record<string, Profi
   const e = engineOf(profiles, model);
   if ("error" in e) return e;
   const r = readRecord(dir, e.engine, model);
-  if (r && !force) return { error: `'${model}' already has a calibration record (${r.status}, ${r.calibrated_at}); pass --force to calibrate it again` };
+  // Coordinator decision 2026-10-29: a memory-limited record (rule 2) and a "too big" record whose RAM or floor changed
+  // (rule 1) are not final, so queueing them needs no --force.
+  if (r && !force && r.status !== "memory-limited" && memoryVerdictStale(r) === null) return { error: `'${model}' already has a calibration record (${r.status}, ${r.calibrated_at}); pass --force to calibrate it again` };
   const done = withStateLock(dir, 30_000, () => {
     enqueueUnlocked(dir, { engine: e.engine, model, reason: "manual", force });
     return true;
@@ -48,9 +51,15 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
       if (seen.has(key)) continue;
       seen.add(key);
       const r = readRecord(dir, p.engine, model);
+      const prog = existsSync(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
+      const queued = queue.some((q) => q.engine === p.engine && q.model === model);
       let state: string;
       if (r) {
-        state = r.status === "ok" ? `calibrated ${r.calibrated_at}${r.fill_tokens ? `; fill_tokens fact ${r.fill_tokens.fact}, aggregate ${r.fill_tokens.aggregate}, bug ${r.fill_tokens.bug}` : ""}` : `${r.status} at ${r.failed_step ?? "?"}: ${r.message ?? ""}`;
+        state = r.status === "ok" ? `calibrated ${r.calibrated_at}${r.fill_tokens ? `; fill_tokens ${TASK_KINDS.map((k) => `${k} ${r.fill_tokens![k]}${fillMemoryNote(k, r.fill_tokens!, r.grid ?? [])}`).join(", ")}` : ""}` : `${r.status} at ${r.failed_step ?? "?"}: ${r.message ?? ""}`;
+        // Rules 1 and 2 (coordinator decision 2026-10-29): when a memory outcome is measured again.
+        if (r.status === "memory-limited") state += `; calibrated again on the first request after ${new Date(Date.parse(r.calibrated_at) + MEMORY_LIMITED_RETRY_MS).toISOString()}, or now with llm-ext models calibrate --model ${model}`;
+        const restale = memoryVerdictStale(r);
+        if (restale !== null) state += `; judged again on the next request: ${restale}`;
         if (r.harness !== PRODUCTION_HARNESS_ID) state += `; made with a custom harness (${r.harness}): never used for requests`;
         // D5: a leaky thinking-off model is reported, never silently.
         if (r.thinking_works?.off === "leaky") state += `; thinking off is leaky (it reasons in its visible answer)`;
@@ -63,11 +72,12 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
           if (r.scouting_unfit_reason !== undefined) state += `; scouting unfit: ${r.scouting_unfit_reason} (no candidate scored; the model is usable for everything else)`;
           else state += sc === "unfit" ? `; scouting unfit at threshold ${threshold}: no candidate reached the accuracy (${r.scouting_candidates.length} measured)` : `; scouting share ${sc.share_tokens} at ${sc.slots} slots (accuracy ${sc.accuracy} at threshold ${threshold})`;
         }
+        // MINOR-7 (review of a3862052): a model being calibrated again under an older record shows its memory waits and
+        // pending candidates too, not only a model with no record.
+        if (queued && prog) state += `; being calibrated again (${phasesText(prog)})${progressNotes(prog)}`;
       }
       else {
-        const prog = existsSync(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
-        const phases = prog ? METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ") : "not started";
-        const queued = queue.some((q) => q.engine === p.engine && q.model === model);
+        const phases = prog ? phasesText(prog) : "not started";
         state = `not calibrated (${phases}; ${prog ? prog.trials.length : 0} trials${queued ? "; queued" : ""})`;
         // Spec 4.2 (F16): a model whose thinking cannot be turned on is reported, never silently.
         const a = prog?.trials.find((t) => t.step === "A/summary")?.data;
@@ -76,13 +86,7 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
         if (a) state += `; Phase A: thinking off ${offMode ?? a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
         if (offMode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
-        // Phase C memory waits are shown, never silent (review of fb861fab): the candidate is skipped after MEMORY_WAIT_MAX_MS.
-        for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped for this pass after ${MEMORY_WAIT_MAX_MS / 60_000} min)`;
-        // Rule A (coordinator decision 2026-10-29): a Phase C candidate pending after a memory wait or a timeout is
-        // measured again on the next pass, and given up after INCONCLUSIVE_PASSES passes; show the cause and the count.
-        const latest = new Map<string, { outcome: string; skipped: unknown; passes: unknown }>();
-        for (const t of prog?.trials ?? []) if (t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped, passes: t.data?.passes });
-        for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") state += `; ${step} pending: ${pendingCause(t.skipped)}, pass ${String(t.passes)} of ${INCONCLUSIVE_PASSES}; measured again on the next pass`;
+        if (prog) state += progressNotes(prog);
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }
@@ -96,6 +100,24 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
   return lines.join("\n");
 }
 
+
+function phasesText(prog: Progress): string {
+  return METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ");
+}
+
+/**
+ * The Phase B and C memory waits and pending steps of a calibration in progress, each as "; ..." (never silent; review
+ * of fb861fab). Rule A (coordinator decision 2026-10-29): a Phase B step or Phase C candidate pending after a memory wait, a timeout or a lost
+ * connection is measured again on the next pass and given up after INCONCLUSIVE_PASSES passes: its cause and count show.
+ */
+function progressNotes(prog: Progress): string {
+  let s = "";
+  for (const [step, w] of Object.entries(prog.memoryWait ?? {})) s += `; ${step} waiting for free memory since ${w.since} (${Math.round(w.waited_ms / 60_000)} of ${MEMORY_WAIT_MAX_MS / 60_000} min counted, then skipped for this pass)`;
+  const latest = new Map<string, { outcome: string; skipped: unknown; passes: unknown }>();
+  for (const t of prog.trials) if (t.step.startsWith("B/") || t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped, passes: t.data?.passes });
+  for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") s += `; ${step} pending: ${pendingCause(t.skipped)}, pass ${String(t.passes)} of ${INCONCLUSIVE_PASSES}; measured again on the next pass`;
+  return s;
+}
 
 /**
  * The lines saying which task kinds no model of a profile is fit for (D1; spec sections 6 and 8): a model is fit
@@ -112,15 +134,27 @@ export function profileUnfitLines(profile: string, models: ReadonlyArray<{ statu
 }
 
 /**
- * Why an ok record is unfit for each kind with fill_tokens 0. Window-limited (main-agent decision 2026-10-29, after
- * review): no step of the kind fit the hard W, so none ran. Quality-limited: steps ran and failed; "cut at N tokens"
- * when every fail was a reply cut at the nominal cap (D1, review of a72827f9), so the user sees that the answers did
- * not fit the cap, not that they were wrong.
+ * Coordinator decision 2026-10-29, item 3: a kind with fill_tokens above 0 whose higher grid steps were given up after
+ * their memory waits has a fill limited by the free memory of that calibration, not by the model: the status says so.
+ */
+export function fillMemoryNote(kind: TaskKind, fill: PerKind, grid: ReadonlyArray<GridEntry | GridSkip>): string {
+  const limited = fill[kind] > 0 && grid.some((e) => e.kind === kind && "skipped" in e && e.skipped === "memory-wait" && e.tokens > fill[kind]);
+  return limited ? " (fill limited by free memory during calibration; `models calibrate --force` measures it again)" : "";
+}
+
+/**
+ * Why an ok record is unfit for each kind with fill_tokens 0. Memory-limited (coordinator decision 2026-10-29): a step
+ * of the kind was given up after its memory waits, so a busy machine, not the model, stopped the walk. Window-limited
+ * (main-agent decision 2026-10-29, after review): no step of the kind fit the hard W, so none ran. Quality-limited:
+ * steps ran and failed; "cut at N tokens" when every fail was a reply cut at the nominal cap (D1, review of a72827f9),
+ * so the user sees that the answers did not fit the cap, not that they were wrong.
  */
 export function unfitExplanations(fill: PerKind, grid: ReadonlyArray<GridEntry | GridSkip>, reasons: Partial<Record<TaskKind, string>> = {}): string[] {
   return TASK_KINDS.filter((k) => fill[k] === 0).map((k) => {
+    const why = reasons[k] !== undefined ? ` (${reasons[k]})` : "";
+    if (grid.some((e) => e.kind === k && "skipped" in e && e.skipped === "memory-wait")) return `unfit for ${k}: memory-limited${why}`;
     const g = grid.filter((e): e is GridEntry => e.kind === k && !("skipped" in e));
-    if (g.length === 0) return `unfit for ${k}: window-limited${reasons[k] !== undefined ? ` (${reasons[k]})` : ""}`;
+    if (g.length === 0) return `unfit for ${k}: window-limited${why}`;
     const fails = g.reduce((n, e) => n + e.trials - e.passed, 0);
     const cutFails = g.reduce((n, e) => n + e.cut_fails, 0);
     const caps = g.map((e) => e.cut_cap).filter((c): c is number => c !== null);

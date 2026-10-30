@@ -16,7 +16,8 @@ import { totalmem } from "node:os";
 import { timingsFromEnv } from "../broker/scheduler.js";
 import { memoryFreePercent } from "../local-locals-server.js";
 import { pidState } from "../local-llama-server.js";
-import { chooseWindow, freeMemory, kvBytes, modelKvLayers, weightBytes } from "./memory.js";
+import { chooseWindow, freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP, memoryWaitCheck, memoryWaitClear, recordInconclusiveSkip, WaitForMemory } from "./memory-wait.js";
 import { CAP_OFF, CAP_ON, LEAKY_LIMIT, makeSender, shortOffCompletions, thinkingOffMode, trialTimeoutMs, type Outcome, type Reply, type Sender, type Thinking } from "./phase-a.js";
 import {
   AGGREGATE_COUNT_QUESTION,
@@ -74,8 +75,8 @@ class StepFailed extends Error {
     super(message);
   }
 }
-/** A step fits the hard W but not the free memory now: the model waits, as for B/window; no pause counted, no verdict. */
-class WaitForMemory extends Error {
+/** A step skipped for this pass after its memory wait (rule A): the kind has no verdict yet, the phase pauses after the other kinds. */
+class StepPending extends Error {
   constructor(
     readonly step: string,
     message: string,
@@ -372,9 +373,9 @@ function gridOf(ctx: PhaseContext, kind: TaskKind, tokens: number): GridEntry[] 
  * It does not depend on free memory, so a resume keeps every Phase B trial while the hard W is the same, however
  * free memory moved; only a different hard W starts Phase B again (a RAM change also invalidates the record through
  * the fingerprint). The soft W (free memory now) is what the cal server runs at; a step over it waits for memory.
- * Returns null when not even the smallest step fits the soft W: not a failure (ruling L86-87), the model waits.
+ * A soft W under minWindow is returned unrecorded: Phase B then waits for memory (not a failure, ruling L86-87), with the bound and rule A of Phase C.
  */
-export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number } | null> {
+export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number; floor: number }> {
   const floorPct = timingsFromEnv(process.env).memoryFloorPct;
   const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
   const weights = weightBytes(ctx.identity.files);
@@ -396,8 +397,9 @@ export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWin
     ctx.log(`hard window W = ${hard} tokens, as before: the Phase B trials are kept (free memory now ${Math.round(free / 2 ** 20)} MiB)`);
   }
   if (window < minWindow) {
-    ctx.log(`not enough free memory for calibration: W would be ${window} tokens (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB); the model waits`);
-    return null;
+    // No B/window record: Phase B decides (a memory wait shared with Phase C, or no window at all in total RAM).
+    ctx.log(`not enough free memory for calibration: W would be ${window} tokens, under ${minWindow} (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, hard W ${hard})`);
+    return { window, free, hard, floor };
   }
   ctx.record({
     step: "B/window",
@@ -407,7 +409,7 @@ export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWin
     at: now(),
   });
   ctx.log(`calibration window W = ${window} tokens, hard W ${hard} (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, KV ${Math.round(kvBytes(layers, window) / 2 ** 20)} MiB)`);
-  return { window, free, hard };
+  return { window, free, hard, floor };
 }
 
 export const phaseB: Phase = {
@@ -426,11 +428,43 @@ export const phaseB: Phase = {
     const bugJson = bugThinking === "on" ? a.json_on === true : a.json_off === true;
     try {
       const w = await measureWindow(ctx, Number(caps.n_ctx_train), minWindow);
-      if (w === null) return { passed: false, paused: true, step: "B/window", message: "not enough free memory for the calibration window; the model waits" };
+      // The grid comes from the hard W (main-agent decision 2026-10-29): a busy moment never changes which steps exist.
+      const steps = ctx.harness.steps !== null ? steps0 : gridSteps(w.hard, null);
+      const fill: Record<TaskKind, number> = { fact: 0, aggregate: 0, bug: 0 };
+      const grid: Array<GridEntry | GridSkip> = [];
+      const unfitReasons: Partial<Record<TaskKind, string>> = {};
+      const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
+      const weights = weightBytes(ctx.identity.files);
+      /** The bytes a window of `tokens` needs above the floor, as chooseWindow counts them (for the memory waits). */
+      const needBytes = (tokens: number): number => weights + kvBytes(layers, tokens) + WINDOW_HEADROOM_BYTES;
+      const floorPct = timingsFromEnv(process.env).memoryFloorPct;
+      // Coordinator decision 2026-10-29, rule 1: not even the smallest window fits total RAM minus the floor (or the
+      // trained context). No wait can help: the model is too big for this machine's memory, a calibration-failed record
+      // that stores what it was judged against, so a RAM or floor change judges it again.
+      if (w.hard < minWindow) {
+        memoryWaitClear(ctx, "B/window");
+        const nCtxTrain = Number(caps.n_ctx_train);
+        return {
+          passed: false,
+          step: "B/window",
+          message: `the model is too big for this machine's memory: the calibration window cannot reach ${minWindow} tokens (the hard W is ${w.hard}: total RAM ${Math.round(totalmem() / 2 ** 20)} MiB minus the ${floorPct} % floor${nCtxTrain > 0 ? `, at most the trained context ${nCtxTrain}` : ""})`,
+          memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: floorPct, n_ctx_train: nCtxTrain } },
+        };
+      }
       let window = w.window;
+      if (window < minWindow) {
+        // Coordinator decision 2026-10-29: Phase B waits for memory like Phase C, through the same mechanism: at most
+        // MEMORY_WAIT_MAX_MS of checks per pass (memoryWaitCheck throws WaitForMemory until then: paused, no verdict),
+        // then a skip for the pass (rule A). Given up on the INCONCLUSIVE_PASSES-th pass, nothing could be loaded: the
+        // calibration is memory-limited (rule 2), neither a pass nor a failure.
+        const skip = memoryWaitCheck(ctx, "B/window", needBytes(minWindow), w.free, w.floor);
+        const { passes, terminal } = recordInconclusiveSkip(ctx, "B/window", 0, { ...skip, soft_window: window, hard_window: w.hard, min_window: minWindow }, MEMORY_WAIT_CAUSE);
+        if (!terminal) return { passed: false, paused: true, step: "B/window", message: `free memory allows a window of ${window} tokens, under the ${minWindow} calibration needs: skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one` };
+        return { passed: false, step: "B/window", message: `free memory stayed below the smallest calibration window (${minWindow} tokens) on ${INCONCLUSIVE_PASSES} passes`, memory: { kind: "memory-limited" } };
+      }
+      memoryWaitClear(ctx, "B/window");
       await ctx.restart(window, 1);
       // Spec 4.1: the post-load check can still lower W (halving, at least 8192).
-      const floorPct = timingsFromEnv(process.env).memoryFloorPct;
       for (;;) {
         const pct = process.platform === "darwin" ? await memoryFreePercent() : null;
         const lower = Math.max(Math.min(MIN_HALVED_WINDOW, ctx.harness.windowCap), Math.floor(window / 2 / 256) * 256);
@@ -460,11 +494,9 @@ export const phaseB: Phase = {
         cpt: { fact: cpt, aggregate: cpt, bug: cpt },
         overhead: { fact: 0, aggregate: 0, bug: 0 },
       };
-      // The grid comes from the hard W (main-agent decision 2026-10-29): a busy moment never changes which steps exist.
-      const steps = ctx.harness.steps !== null ? steps0 : gridSteps(w.hard, null);
-      const fill: Record<TaskKind, number> = { fact: 0, aggregate: 0, bug: 0 };
-      const grid: Array<GridEntry | GridSkip> = [];
-      const unfitReasons: Partial<Record<TaskKind, string>> = {};
+      const pending: StepPending[] = [];
+      /** Whether `key` was given up after its memory waits (a terminal memory-wait skip trial). */
+      const givenUp = (key: string): boolean => ctx.progress.trials.some((t) => t.step === key && t.outcome === "pass" && t.data?.skipped === "memory-wait");
       for (const kind of kinds) {
         // Main-agent decision 2026-10-29, amended after review (the user may override): a step runs only with room for
         // the full output cap of the thinking mode that actually runs; checked as each step runs, against the window the
@@ -473,24 +505,51 @@ export const phaseB: Phase = {
         const thinking: Thinking = kind === "bug" ? bugThinking : "off";
         const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
         // Spec 4.3: start at the top step, step down only on failure; a kind failing at the floor is unfit (0).
-        fill[kind] = await walkGrid(steps, async (tokens) => {
-          const fit = stepFit(tokens, nominal, run.hardWindow, softWindow(run));
-          if (fit === "skip") {
-            grid.push({ kind, tokens, skipped: "window", W: run.hardWindow });
-            ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the hard window ${run.hardWindow}`);
-            return false;
-          }
-          if (fit === "wait") throw new WaitForMemory(stepKey(kind, tokens), `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory now allows ${softWindow(run)} (hard ${run.hardWindow}): the model waits for memory`);
-          const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
-          grid.push(...gridOf(ctx, kind, tokens));
-          ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
-          return ok;
-        });
-        if (fill[kind] === 0 && grid.filter((g) => g.kind === kind).every((g) => "skipped" in g)) {
-          unfitReasons[kind] = windowTooSmallReason(run.hardWindow, thinking);
+        // A step skipped for this pass (rule A) leaves the kind without a verdict: the other kinds go on, then the phase pauses.
+        try {
+          fill[kind] = await walkGrid(steps, async (tokens) => {
+            const key = stepKey(kind, tokens);
+            // A step given up after its memory waits stays given up on a resume (it is not waited for again).
+            if (givenUp(key)) {
+              grid.push({ kind, tokens, skipped: "memory-wait", W: softWindow(run) });
+              return false;
+            }
+            const fit = stepFit(tokens, nominal, run.hardWindow, softWindow(run));
+            if (fit === "skip") {
+              memoryWaitClear(ctx, key);
+              grid.push({ kind, tokens, skipped: "window", W: run.hardWindow });
+              ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the hard window ${run.hardWindow}`);
+              return false;
+            }
+            if (fit === "wait") {
+              // Coordinator decision 2026-10-29: the shared memory wait, against the reading measureWindow took with the
+              // model unloaded. Given up on its INCONCLUSIVE_PASSES-th pass, the step is a memory-wait grid skip and the
+              // walk steps down, as for a window skip: a step that only waited never fails.
+              const skip = memoryWaitCheck(ctx, key, needBytes(tokens + nominal + 64), w.free, w.floor);
+              const { passes, terminal } = recordInconclusiveSkip(ctx, key, 0, { ...skip, kind, tokens, soft_window: softWindow(run) }, MEMORY_WAIT_CAUSE);
+              if (!terminal) throw new StepPending(key, `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory allows ${softWindow(run)} (hard ${run.hardWindow}): skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one`);
+              grid.push({ kind, tokens, skipped: "memory-wait", W: softWindow(run) });
+              return false;
+            }
+            memoryWaitClear(ctx, key);
+            const ok = await stepPasses(run, kind, tokens, bugThinking, bugJson);
+            grid.push(...gridOf(ctx, kind, tokens));
+            ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
+            return ok;
+          });
+        } catch (e) {
+          if (!(e instanceof StepPending)) throw e;
+          pending.push(e);
+          continue;
+        }
+        const own = grid.filter((g) => g.kind === kind);
+        if (fill[kind] === 0 && own.every((g) => "skipped" in g)) {
+          // A step given up after its memory waits makes the kind memory-limited, never window-limited.
+          unfitReasons[kind] = own.some((g) => "skipped" in g && g.skipped === "memory-wait") ? `steps that fit total RAM ${MEMORY_WAIT_GIVEN_UP}` : windowTooSmallReason(run.hardWindow, thinking);
           ctx.log(`Phase B ${kind}: unfit, ${unfitReasons[kind]}`);
         }
       }
+      if (pending.length > 0) return { passed: false, paused: true, step: pending[0]!.step, message: pending.map((p) => p.message).join("; ") };
       // Output floors (spec 4.3, F15, N4): passing, non-truncated trials only.
       const floors = Object.fromEntries(
         kinds.map((k) => [
@@ -503,7 +562,7 @@ export const phaseB: Phase = {
       if (offMode === "leaky") ctx.log(`thinking off is leaky: ${offTokens.length} short thinking-off answers have a median over ${LEAKY_LIMIT} completion tokens (thinking_works.off: "leaky", not a failure)`);
       const summary = {
         window_tokens: window,
-        hard_window_tokens: run.hardWindow,
+        hard_window_tokens: w.hard,
         // Decision 2026-10-29 (after review): the record's window_tokens is the smallest W any counted trial ran under.
         window_tokens_min: Math.min(window, ...ctx.progress.trials.filter((t) => t.step.startsWith("B/") && t.outcome !== "inconclusive" && typeof t.data?.window === "number").map((t) => Number(t.data?.window))),
         free_ram_bytes: w.free,

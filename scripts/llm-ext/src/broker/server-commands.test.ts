@@ -139,7 +139,7 @@ describe("server-status and server-stop", () => {
     return srv;
   }
 
-  it("stopping a main server with work queued for its model says the broker will start it again; no queued work, no line", async () => {
+  it("stopping a main server with work queued or running for its model says (running ones are requeued) the broker will start it again; no queued work, no line", async () => {
     const pid = startFake();
     const other = startFake();
     await waitFor(() => pidState(pid) === "alive" && pidState(other) === "alive");
@@ -149,7 +149,7 @@ describe("server-status and server-stop", () => {
       const r = await serverStopText(dir, {});
       expect(r.isError).toBe(false);
       const lines = r.text.split("\n");
-      expect(lines.filter((l) => l.includes("will start the server again"))).toEqual(["the broker still has 3 queued request(s) for 'model-main': it will start the server again to serve them"]);
+      expect(lines.filter((l) => l.includes("will start the server again"))).toEqual(["the broker still has 4 queued or running request(s) for 'model-main': it will start the server again to serve them"]);
       expect(r.text).toContain(`stopped main llama-server pid ${other}`);
     } finally {
       await new Promise((r) => srv.close(() => r(undefined)));

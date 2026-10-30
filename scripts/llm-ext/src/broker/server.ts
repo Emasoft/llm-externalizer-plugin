@@ -15,7 +15,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import {
   ManagedServerError,
@@ -718,7 +718,12 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       });
   };
 
-  const shutdown = async (why: string): Promise<void> => {
+  /**
+   * `heldEnd` is how held jobs end: "requeued" makes their client submit them to the next broker; "failed" ends them with
+   * the reason, for an exit after which a new broker would be wrong (the config dir is gone: a new broker would create
+   * it again).
+   */
+  const shutdown = async (why: string, heldEnd: "requeued" | "failed" = "requeued"): Promise<void> => {
     if (exiting) return;
     exiting = true;
     clearInterval(tick);
@@ -728,7 +733,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     // P6 (review F1): a held job lost to this broker's exit is not a model error:
     // `requeued` makes the client find (or start) the current broker and submit it
     // again, where it is held again. Never a failure, so never a fallback.
-    for (const j of held.values()) finish(j, "requeued", `broker exiting while the job was held for calibration: ${why}`);
+    for (const j of held.values()) finish(j, heldEnd, `broker exiting while the job was held for calibration: ${why}`);
     held.clear();
     if (stopping) await stopping.catch(() => undefined);
     await stopServer(`broker exit: ${why}`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
@@ -1001,6 +1006,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let heldCheckedAt = 0;
   let calSweptAt = Date.now();
   const tick = setInterval(() => {
+    // Coordinator decision 2026-10-29 (spec local-engine-broker-design.md): a broker whose config dir is gone (a test's
+    // temp dir, a removed config) serves nothing any client can reach again: it stops its servers, fails its held jobs
+    // with the reason and exits, instead of living until its idle exit with a server holding RAM.
+    if (!existsSync(o.dir)) {
+      void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
+      return;
+    }
     // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();

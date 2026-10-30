@@ -245,10 +245,30 @@ export interface Progress {
   /** Spec section 2: cal server crashes counted per step (the third fails the model). */
   stepCrashes?: Record<string, number>;
   /**
-   * Phase C: when each slot or scouting candidate started waiting for free memory (ISO time; review of fb861fab). A
-   * candidate that has waited MEMORY_WAIT_MAX_MS is skipped, so a busy machine cannot hold a model forever.
+   * Phase B (B/window, a grid step) and Phase C (a slot or scouting candidate): each step waiting for free memory
+   * (review of fb861fab; Phase B since the coordinator decision of 2026-10-29). A step that has waited MEMORY_WAIT_MAX_MS
+   * is skipped for the pass (memory-wait.ts), so a busy machine cannot hold a model forever.
    */
-  memoryWait?: Record<string, string>;
+  memoryWait?: Record<string, MemoryWait>;
+}
+
+/**
+ * One memory wait (review of a3862052, MINOR-7; review of 2411e6dc, finding 2). `waited_ms` counts only time a runner
+ * was actually checking: a gap longer than MEMORY_WAIT_GAP_MS between two checks (the runner off, the machine asleep)
+ * adds nothing, so a wait cannot expire at the first check of the next day. `need` is the bytes the candidate needs
+ * above the floor, so the runner can re-check memory without loading the model.
+ */
+export interface MemoryWait {
+  since: string;
+  seen: string;
+  waited_ms: number;
+  need: number;
+}
+
+function isMemoryWait(v: unknown): v is MemoryWait {
+  if (typeof v !== "object" || v === null) return false;
+  const w = v as Record<string, unknown>;
+  return typeof w.since === "string" && typeof w.seen === "string" && typeof w.waited_ms === "number" && typeof w.need === "number";
 }
 
 export const progressPath = (dir: string, engine: BrokerEngine, model: string): string => join(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
@@ -284,7 +304,7 @@ export function loadProgress(dir: string, engine: BrokerEngine, model: string, f
     crashes: typeof raw.crashes === "number" ? raw.crashes : 0,
     paused: counts(raw.paused),
     stepCrashes: counts(raw.stepCrashes),
-    memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => typeof v === "string")) : {},
+    memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => isMemoryWait(v))) : {},
   };
 }
 

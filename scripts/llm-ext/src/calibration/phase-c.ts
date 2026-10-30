@@ -15,7 +15,9 @@
  * (inconclusive), like a scouting candidate whose runs keep timing out. Rule A (coordinator decision 2026-10-29): an
  * inconclusive candidate is measured again on later passes, and Phase C pauses (no verdict, no record) while any main
  * or scouting candidate is pending; after INCONCLUSIVE_PASSES passes it is given up. Then Phase C decides from the
- * scored candidates: no main slot scored fails the model; no scouting candidate scored makes scouting unfit with the
+ * scored candidates: no main slot scored, every one over total RAM, is a model too big for this machine's memory (a
+ * calibration-failed record, rule 1); no main slot scored with any one given up after its memory waits is memory-limited
+ * (rule 2, no verdict); no scouting candidate scored makes scouting unfit with the
  * reason, and the model stays usable. Every candidate's result is a trial, so a resume measures only what is missing.
  */
 
@@ -23,13 +25,14 @@ import { loadavg, totalmem } from "node:os";
 import { timingsFromEnv } from "../broker/scheduler.js";
 import { loadSettings, scoutAccuracyThreshold } from "../config.js";
 import { localsOutgoingModel } from "../local-locals-server.js";
-import { buildPositionalSchema, calibrationScoutFixture, classifyPositional, scoreAccuracy } from "../mass_scouting/scout-accuracy-fixture.js";
+import { buildPositionalSchema, calibrationScoutFixture, classifyPositional, scoreAccuracy, SCOUT_HTTP_PREFIX, SCOUT_NETWORK_PREFIX, SCOUT_TIMEOUT_PREFIX } from "../mass_scouting/scout-accuracy-fixture.js";
 import { freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
 import { CAP_OFF, CAP_ON, makeSender, trialTimeoutMs, type Reply, type Sender } from "./phase-a.js";
 import { factDocument } from "./phase-b-fixtures.js";
 import { dataOf, localsIds } from "./phase-b.js";
 import { scoutingFor, TASK_KINDS, type PerKind, type ScoutCandidate } from "./record.js";
 import type { Phase } from "./runner.js";
+import { budgetFit, INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP, memoryWaitCheck, memoryWaitClear, recordInconclusiveSkip, WaitForMemory } from "./memory-wait.js";
 
 /** Output tokens of each throughput request (spec 4.5). */
 export const THROUGHPUT_OUTPUT_TOKENS = 256;
@@ -41,29 +44,26 @@ const SLOT_OVERHEAD = 512;
 const SCOUT_RUNS = 3;
 /** Repeats of a scouting run whose request timed out, before the candidate is skipped (review of fb861fab). */
 export const SCOUT_TIMEOUT_RERUNS = 2;
-/**
- * Runner passes on which a main or scouting candidate stayed inconclusive (a memory-wait or timeout skip) before it is
- * given up (rule A, coordinator decision 2026-10-29). Counted per pass, never by wall time.
- */
-export const INCONCLUSIVE_PASSES = 3;
-/** How long a slot or scouting candidate may wait for free memory before it is skipped for the pass (review of fb861fab). */
-export const MEMORY_WAIT_MAX_MS = 30 * 60_000;
 
 /** Why a candidate is pending, for the log and `calibration-status` (rule A: shown with "pass k of 3"). */
 export function pendingCause(skipped: string): string {
-  return skipped === "timeout" ? "a scouting run timed out after its reruns" : `still short of free memory after ${MEMORY_WAIT_MAX_MS / 60_000} min`;
+  if (skipped === "timeout") return "a scouting run timed out after its reruns";
+  if (skipped === "transport") return "a scouting run lost its connection (reset, or HTTP 502/503/504) after its reruns";
+  if (skipped === "memory-wait") return MEMORY_WAIT_CAUSE;
+  throw new Error(`unknown pending Phase C skip '${skipped}'`);
 }
 /** What a terminal skip means, in the words of the failure message and the scouting unfit reason. */
 export function skipText(skipped: string): string {
   if (skipped === "memory") return "over total RAM";
-  if (skipped === "memory-wait") return `waited for free memory on ${INCONCLUSIVE_PASSES} passes`;
+  if (skipped === "memory-wait") return MEMORY_WAIT_GIVEN_UP;
   if (skipped === "timeout") return `timed out on ${INCONCLUSIVE_PASSES} passes`;
+  if (skipped === "transport") return `lost its connection on ${INCONCLUSIVE_PASSES} passes`;
   throw new Error(`unknown Phase C skip '${skipped}'`);
 }
 
 /**
  * Why scouting is unfit when every candidate ended unscored (coordinator decisions 2026-10-29): over total RAM, or
- * given up after INCONCLUSIVE_PASSES passes of memory waits or timeouts, joined by "or". Kept in the record so it
+ * given up after INCONCLUSIVE_PASSES passes of memory waits, timeouts or lost connections, joined by "or". Kept in the record so it
  * never reads as an accuracy failure.
  */
 export function scoutUnfitReason(skips: readonly string[]): string {
@@ -100,28 +100,11 @@ export function scoutSlotCtx(share: number): number {
   return roundup256(share + SCOUT_OUTPUT_CAP + SLOT_OVERHEAD);
 }
 
-/** Spec 4.5: the smallest slot count whose aggregate decode is at least 90 % of the best. */
+/** Spec 4.5: the smallest slot count whose parallel throughput (aggregate_tps) is at least 90 % of the best. */
 export function chooseSlots(results: ReadonlyArray<{ slots: number; tps: number }>): number {
   if (results.length === 0) throw new Error("no main-slot candidate was measured");
   const best = Math.max(...results.map((r) => r.tps));
   return Math.min(...results.filter((r) => r.tps >= 0.9 * best).map((r) => r.slots));
-}
-
-/** Whether a server shape fits memory: "skip" over the hard budget (total RAM), "wait" over the soft one (free now). */
-export function budgetFit(needBytes: number, hardBudget: number, softBudget: number): "run" | "wait" | "skip" {
-  if (needBytes > hardBudget) return "skip";
-  if (needBytes > softBudget) return "wait";
-  return "run";
-}
-
-/** A candidate fits the hard budget but not the free memory now: the model waits (no verdict, no pause counted). */
-class WaitForMemory extends Error {
-  constructor(
-    readonly step: string,
-    message: string,
-  ) {
-    super(message);
-  }
 }
 
 /**
@@ -137,17 +120,25 @@ export function batchThroughput(replies: ReadonlyArray<Pick<Reply, "completionTo
   }, 0);
   return tokens / Math.max(wallMs / 1000, 0.001);
 }
-
-/** Whether a candidate that started waiting for free memory at `since` has waited long enough to be skipped. */
-export function memoryWaitExpired(since: string, nowMs: number): boolean {
-  return nowMs - Date.parse(since) >= MEMORY_WAIT_MAX_MS;
-}
-
 /** A scouting request that hit its deadline: it says nothing about accuracy, so its run is repeated, never scored. */
 export function isScoutTimeout(error: string | null): boolean {
-  return error !== null && error.startsWith("timeout after");
+  return error !== null && error.startsWith(SCOUT_TIMEOUT_PREFIX);
 }
 
+/** HTTP statuses a loaded server or a proxy gives when it cannot take the request now: load, not the model. */
+const LOAD_HTTP_STATUSES: readonly number[] = [502, 503, 504];
+
+/**
+ * A scouting request lost to load, not answered by the model (review of a3862052, MINOR-6): a dropped connection (no
+ * reply at all: a reset, a socket hang up) or HTTP 502/503/504. Like a timeout it says nothing about accuracy, so its
+ * run is repeated and never scored all-wrong. A real error of the model (a bad reply, HTTP 400 or 500) is scored.
+ */
+export function isScoutTransportFailure(error: string | null): boolean {
+  if (error === null) return false;
+  if (error.startsWith(SCOUT_NETWORK_PREFIX)) return true;
+  if (!error.startsWith(SCOUT_HTTP_PREFIX)) return false;
+  return LOAD_HTTP_STATUSES.includes(Number.parseInt(error.slice(SCOUT_HTTP_PREFIX.length), 10));
+}
 export const phaseC: Phase = {
   name: "C",
   run: async (ctx) => {
@@ -164,7 +155,6 @@ export const phaseC: Phase = {
       const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
       const weights = weightBytes(ctx.identity.files);
       const floorPct = timingsFromEnv(process.env).memoryFloorPct;
-      const waits = (ctx.progress.memoryWait ??= {});
 
       /**
        * A candidate's terminal result: its latest trial with outcome pass, that is measured, skipped as over total RAM
@@ -179,26 +169,22 @@ export const phaseC: Phase = {
       };
       /**
        * Record a skip (rule A, coordinator decision 2026-10-29). Over total RAM is terminal, with the floor it was judged
-       * against. A memory-wait or timeout skip is inconclusive until the INCONCLUSIVE_PASSES-th runner pass on which the
-       * candidate stayed inconclusive, which makes it terminal. Passes are counted, never wall time: a sleeping machine
-       * uses up nothing, and a pass that paused on a memory wait before the 30 minutes were up records nothing.
+       * against. A memory-wait, timeout or transport skip is inconclusive until its INCONCLUSIVE_PASSES-th pass
+       * (recordInconclusiveSkip, shared with Phase B).
        */
       const recordSkip = (step: string, seed: number, base: Record<string, number>, skip: Record<string, string | number>): void => {
         if (skip.skipped === "memory") {
           ctx.record({ step, seed, outcome: "pass", data: { ...base, ...skip, floor_pct: floorPct }, at: now() });
           return;
         }
-        const passes = ctx.progress.trials.filter((t) => t.step === step && t.outcome === "inconclusive" && typeof t.data?.skipped === "string").length + 1;
-        const terminal = passes >= INCONCLUSIVE_PASSES;
-        ctx.record({ step, seed, outcome: terminal ? "pass" : "inconclusive", data: { ...base, ...skip, passes }, at: now() });
-        ctx.log(`${step}: ${pendingCause(String(skip.skipped))}, pass ${passes} of ${INCONCLUSIVE_PASSES}: ${terminal ? "given up, not scored" : "measured again on the next pass"}`);
+        recordInconclusiveSkip(ctx, step, seed, { ...base, ...skip }, pendingCause(String(skip.skipped)));
       };
 
       /**
        * Stop the cal server, then check the shape against memory (as measureWindow does, with the model unloaded).
        * Returns null when it fits, or why it is skipped: over total RAM, or (review of fb861fab) still short of free
-       * memory MEMORY_WAIT_MAX_MS after it first waited, so a busy machine cannot hold the model forever. Otherwise
-       * the model waits, and the wait start is saved so it survives the runner's passes.
+       * memory after MEMORY_WAIT_MAX_MS of checks, so a busy machine cannot hold the model forever. Otherwise the model
+       * waits (memoryWaitCheck throws WaitForMemory; the wait is saved for memoryWaitPrecheck).
        */
       const fits = async (step: string, slots: number, slotCtx: number): Promise<Record<string, string | number> | null> => {
         await ctx.stopServer(`measuring free memory for ${step}`);
@@ -206,39 +192,14 @@ export const phaseC: Phase = {
         const need = weights + kvBytes(layers, slots * slotCtx) + WINDOW_HEADROOM_BYTES;
         const mib = (x: number): number => Math.round(x / 2 ** 20);
         const fit = budgetFit(need, totalmem() - floor, free - floor);
-        if (fit === "run") {
-          if (waits[step] !== undefined) {
-            delete waits[step];
-            ctx.save();
-          }
-          return null;
-        }
+        // MINOR-8 (review of a3862052): a fit or a skip over total RAM ends an earlier wait of this candidate.
+        if (fit !== "wait") memoryWaitClear(ctx, step);
+        if (fit === "run") return null;
         if (fit === "skip") {
-          // MINOR-8 (review of a3862052): an earlier wait of this candidate ends here too.
-          if (waits[step] !== undefined) {
-            delete waits[step];
-            ctx.save();
-          }
           ctx.log(`${step}: skipped, ${mib(need)} MiB does not fit total RAM minus the floor (${mib(totalmem() - floor)} MiB)`);
           return { skipped: "memory" };
         }
-        const since = waits[step];
-        if (since !== undefined && memoryWaitExpired(since, Date.now())) {
-          const waited = Math.round((Date.now() - Date.parse(since)) / 60_000);
-          delete waits[step];
-          ctx.save();
-          ctx.log(`${step}: skipped for this pass after waiting ${waited} min for free memory (${mib(need)} MiB needed, ${mib(free - floor)} MiB free above the floor)`);
-          return { skipped: "memory-wait", waited_min: waited };
-        }
-        if (since === undefined) {
-          waits[step] = now();
-          ctx.save();
-        }
-        const start = waits[step]!;
-        throw new WaitForMemory(
-          step,
-          `${step} needs ${mib(need)} MiB; free memory now allows ${mib(free - floor)} MiB: the model waits for memory (since ${start}; the candidate is skipped at ${new Date(Date.parse(start) + MEMORY_WAIT_MAX_MS).toISOString()} if memory stays short)`,
-        );
+        return memoryWaitCheck(ctx, step, need, free, floor);
       };
 
       // Main slots (spec 4.5).
@@ -273,18 +234,32 @@ export const phaseC: Phase = {
           rates.push(batchThroughput(replies, wallMs));
         }
         const tps = Math.round((rates.reduce((s, x) => s + x, 0) / rates.length) * 10) / 10;
-        ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, aggregate_decode_tps: tps, load_avg: loadavg()[0] }, at: now() });
+        ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, aggregate_tps: tps, load_avg: loadavg()[0] }, at: now() });
         ctx.log(`Phase C main ${n} slot(s) of ${slotCtx}: parallel throughput ${tps} tok/s (completion tokens over wall time)`);
       }
       const mainSteps = ctx.harness.mainSlots.map((n) => `C/main/${n}`);
       const measured = mainSteps
         .map((s) => finished(s))
-        .filter((d): d is NonNullable<typeof d> => d !== null && typeof d.aggregate_decode_tps === "number")
-        .map((d) => ({ slots: Number(d.slots), tps: Number(d.aggregate_decode_tps), load: Number(d.load_avg) }));
-      // No main-slot candidate scored and none pending: every one is over total RAM or was given up, so the model fails
-      // (the only memory verdict on a model; coordinator decisions 2026-10-29). A pending one pauses below instead.
+        .filter((d): d is NonNullable<typeof d> => d !== null && typeof d.aggregate_tps === "number")
+        .map((d) => ({ slots: Number(d.slots), tps: Number(d.aggregate_tps), load: Number(d.load_avg) }));
+      // No main-slot candidate scored and none pending: every one is over total RAM or was given up (coordinator
+      // decisions 2026-10-29). Every one over total RAM: the model is too big for this machine's memory (rule 1), a
+      // calibration-failed record that stores what it was judged against. Any one given up after its memory waits could
+      // have fit: the calibration is memory-limited, no verdict (rule 2). A pending one pauses below instead.
       if (measured.length === 0 && mainSteps.every((s) => finished(s) !== null)) {
-        return { passed: false, step: "C/main", message: `no main-slot candidate could be measured: ${mainSteps.map((s) => `${s} ${skipText(String(finished(s)?.skipped))}`).join(", ")}` };
+        const skips = mainSteps.map((s) => String(finished(s)?.skipped));
+        const text = mainSteps.map((s, i) => `${s} ${skipText(skips[i]!)}`).join(", ");
+        if (skips.every((s) => s === "memory")) {
+          const nCtxTrain = Number(dataOf(ctx, "A/capabilities")?.n_ctx_train ?? 0);
+          return {
+            passed: false,
+            step: "C/main",
+            message: `the model is too big for this machine's memory: no main-slot candidate fits total RAM ${Math.round(totalmem() / 2 ** 20)} MiB minus the ${floorPct} % floor (${text})`,
+            memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: floorPct, n_ctx_train: nCtxTrain } },
+          };
+        }
+        if (skips.every((s) => s === "memory" || s === "memory-wait")) return { passed: false, step: "C/main", message: `no main-slot candidate could be measured for lack of free memory: ${text}`, memory: { kind: "memory-limited" } };
+        return { passed: false, step: "C/main", message: `no main-slot candidate could be measured: ${text}` };
       }
 
       // Scouting (spec 4.5, F7, A6): json_schema where Phase A proved the 40-item array, else the text path.
@@ -307,11 +282,14 @@ export const phaseC: Phase = {
           let total = 0;
           let errors = 0;
           let wallMs = 0;
-          let timedOutRuns = 0;
-          for (let run = 0; run < SCOUT_RUNS && timedOutRuns === 0; run++) {
+          // Why the candidate ended unscored on this pass: a run still timing out or losing its connection after its
+          // reruns, or a memory skip found by the re-check before a rerun. null while it can still be scored.
+          let unscored: Record<string, string | number> | null = null;
+          for (let run = 0; run < SCOUT_RUNS && unscored === null; run++) {
             const fixtures = Array.from({ length: n }, (_, i) => calibrationScoutFixture(seed + run * n + i, Math.floor(share * cpt)));
-            // A run with a timed-out request is repeated on the same copies (review of fb861fab): a deadline is not an
-            // accuracy verdict. After SCOUT_TIMEOUT_RERUNS repeats the candidate is skipped, never scored.
+            // A run with a request that timed out or was lost to load (a dropped connection, HTTP 502/503/504) is
+            // repeated on the same copies (review of fb861fab; review of a3862052, MINOR-6): neither is an accuracy
+            // verdict. After SCOUT_TIMEOUT_RERUNS repeats the candidate is skipped for this pass, never scored (rule A).
             for (let attempt = 0; ; attempt++) {
               await ctx.waitForTurn();
               const t0 = Date.now();
@@ -326,18 +304,27 @@ export const phaseC: Phase = {
                 ),
               );
               const timeouts = results.filter((r) => isScoutTimeout(r.error)).length;
-              if (timeouts > 0) {
+              const lost = results.filter((r) => isScoutTransportFailure(r.error)).length;
+              if (timeouts + lost > 0) {
                 if (attempt >= SCOUT_TIMEOUT_RERUNS) {
-                  timedOutRuns++;
+                  unscored = { skipped: timeouts > 0 ? "timeout" : "transport" };
                   break;
                 }
-                ctx.log(`${step}: run ${run + 1}: ${timeouts} of ${n} request(s) timed out; the run is repeated (${attempt + 1} of ${SCOUT_TIMEOUT_RERUNS})`);
+                ctx.log(`${step}: run ${run + 1}: ${timeouts} of ${n} request(s) timed out and ${lost} lost the connection; the run is repeated (${attempt + 1} of ${SCOUT_TIMEOUT_RERUNS})`);
+                // MINOR-6: a busy machine is the likely cause, so memory is checked again before the rerun, exactly as
+                // before the first run: over total RAM or a memory wait ends this candidate's pass the usual way.
+                const skip = await fits(step, n, sCtx);
+                if (skip !== null) {
+                  unscored = skip;
+                  break;
+                }
+                await ctx.restart(sCtx, n);
                 continue;
               }
               wallMs += Date.now() - t0;
               results.forEach((r, i) => {
                 const fx = fixtures[i]!;
-                // A failed request (not a timeout) scores every record of it as wrong (positions it never answered).
+                // A real error of the model (a bad reply, HTTP 400 or 500) scores every record of it as wrong.
                 if (r.error !== null) errors++;
                 correct += scoreAccuracy(fx.expected, r.predicted).correct;
                 total += fx.recordCount;
@@ -345,8 +332,8 @@ export const phaseC: Phase = {
               break;
             }
           }
-          if (timedOutRuns > 0) {
-            recordSkip(step, seed, { share, slots: n, slot_ctx: sCtx }, { skipped: "timeout" });
+          if (unscored !== null) {
+            recordSkip(step, seed, { share, slots: n, slot_ctx: sCtx }, unscored);
             continue;
           }
           const accuracy = Math.round((correct / total) * 1000) / 1000;
@@ -380,7 +367,7 @@ export const phaseC: Phase = {
       const summary = {
         main_slots: slots,
         main_slot_ctx: slotCtx,
-        aggregate_decode_tps: chosen.tps,
+        aggregate_tps: chosen.tps,
         load_avg: Math.round(chosen.load * 100) / 100,
         scout_candidates: JSON.stringify(candidates),
         ...(unfitReason !== null ? { scouting_unfit_reason: unfitReason } : {}),

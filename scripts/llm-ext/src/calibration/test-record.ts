@@ -1,8 +1,11 @@
 /**
- * calibration/record-fixture.ts — complete, schema-valid calibration records
+ * calibration/test-record.ts — complete, schema-valid calibration records
  * for tests (P6). A test that needs a managed model served writes a real
  * record through writeRecord; there is no switch that bypasses the hold
- * (design/specs/local-calibration-design.md section 2).
+ * (design/specs/local-calibration-design.md section 2). Named test-*.ts like
+ * test-helpers.ts, classifiers/l0/test-fetch.ts and test-gguf.ts: a test-only
+ * helper that no production module imports, so the esbuild entry graph that
+ * builds dist/ never reaches it.
  */
 
 import type { BrokerEngine } from "../broker/protocol.js";
@@ -39,6 +42,6 @@ export function recordFixture(engine: BrokerEngine, model: string, failed?: { st
     structured_output: { off: false, on: false, array40: false },
     main: { slots: 2, slot_ctx: 1024 },
     scouting_candidates: [],
-    speed: { prefill_tps: 1, decode_tps: 1, aggregate_decode_tps: 1, load_avg: 0 },
+    speed: { prefill_tps: 1, decode_tps: 1, aggregate_tps: 1, load_avg: 0 },
   };
 }

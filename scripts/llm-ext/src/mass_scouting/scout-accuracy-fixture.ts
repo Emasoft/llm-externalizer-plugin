@@ -371,6 +371,13 @@ export function parsePositionalText(content: string): { categories: string[] } |
 }
 // ── Direct-POST classifier (NO fieldset repair — positional semantics) ──
 
+/**
+ * The error prefixes classifyPositional writes (review of a3862052, MINOR-4). Calibration Phase C tells a deadline and
+ * a lost connection apart from a real model error by them, so the producer and the reader share these constants.
+ */
+export const SCOUT_TIMEOUT_PREFIX = "timeout after ";
+export const SCOUT_NETWORK_PREFIX = "network: ";
+export const SCOUT_HTTP_PREFIX = "HTTP ";
 export interface ClassifyPositionalResult {
   predicted: string[];
   promptTokens: number;
@@ -448,7 +455,9 @@ export async function classifyPositional(
     });
   } catch (e) {
     clearTimeout(timeoutId);
-    const err = e as Error;
+    const err = e as Error & { cause?: { code?: unknown } };
+    // Node's fetch reports a reset socket as "fetch failed" with the code on its cause: the code is kept in the text.
+    const code = typeof err.cause?.code === "string" ? ` (${err.cause.code})` : "";
     return {
       predicted: [],
       promptTokens: 0,
@@ -456,8 +465,8 @@ export async function classifyPositional(
       durationMs: Date.now() - startMs,
       error:
         err.name === "AbortError"
-          ? `timeout after ${PER_CALL_MS}ms`
-          : `network: ${err.message}`,
+          ? `${SCOUT_TIMEOUT_PREFIX}${PER_CALL_MS}ms`
+          : `${SCOUT_NETWORK_PREFIX}${err.message}${code}`,
     };
   }
   clearTimeout(timeoutId);
@@ -469,7 +478,7 @@ export async function classifyPositional(
       promptTokens: 0,
       completionTokens: 0,
       durationMs,
-      error: `HTTP ${res.status}: ${text.slice(0, 200)}`,
+      error: `${SCOUT_HTTP_PREFIX}${res.status}: ${text.slice(0, 200)}`,
     };
   }
   let payload: {
