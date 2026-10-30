@@ -42,6 +42,8 @@ SAMPLE_INPUT = json.dumps({
 # fires first (review m4). INSTALLER is a constant so a test can point it at a fake.
 INSTALLER = Path(__file__).resolve().parent.parent / "install_statusline.py"
 INSTALLER_TIMEOUT_S = 150
+
+
 def find_settings() -> Path:
     return Path.home() / ".claude" / "settings.json"
 

@@ -238,12 +238,13 @@ def main() -> None:
         # (review m5). A timeout is handled exactly like a non-zero exit: the post-condition
         # check below reports the lost wrap.
         try:
-            rc = subprocess.run(
+            code = subprocess.run(
                 # timeout: agentlenspro's installer is a local backup+rewrite of settings.json; a hang must not block this installer forever.
                 [wrapper, "--install-statusline"], capture_output=True, text=True, timeout=WRAPPER_TIMEOUT_S
             ).returncode
+            outcome = f"exited {code}"
         except subprocess.TimeoutExpired:
-            rc = f"timeout after {WRAPPER_TIMEOUT_S}s"
+            outcome = f"timed out after {WRAPPER_TIMEOUT_S}s"
         # Fail fast naming the file: the wrapper rewrites settings.json, so a bare
         # JSONDecodeError here would not say which file it left corrupt.
         try:
@@ -251,14 +252,14 @@ def main() -> None:
         except json.JSONDecodeError as exc:
             print(f"Error: {settings_path} is not valid JSON after the agentlenspro re-wrap ({exc}).", file=sys.stderr)
             sys.exit(2)
-        # Assert the POST-CONDITION, not the exit code: rc==0 does not prove the
+        # Assert the POST-CONDITION, not the exit code: exit 0 does not prove the
         # wrap is back. Read what actually landed in settings.json.
         restored = "agentlenspro" in str(
             (data.get("statusLine") or {}).get("command") or ""
         )
         if not restored:
             print(
-                f"Warning: `{wrapper} --install-statusline` ended with {rc} and the "
+                f"Warning: `{wrapper} --install-statusline` {outcome} and the "
                 "agentlenspro capture wrap is NOT in settings.json. Your bar still "
                 "works (plain command); re-run that command to restore capture.",
                 file=sys.stderr,
