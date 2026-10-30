@@ -821,39 +821,47 @@ def main() -> None:
     if usage_data and isinstance(usage_data, dict):
         bar_width = 6
 
-        def _pct_field(window: dict[str, Any]) -> int:
+        def _pct_field(window: dict[str, Any]) -> int | None:
             """Read percentage from spec field `used_percentage`, fall back to
             `utilization` (legacy CC API). Both are 0-100 floats per spec.
+            Returns None when neither is present: the window is absent.
             """
             raw = window.get("used_percentage")
             if raw is None:
-                raw = window.get("utilization", 0)
-            try:
-                return int(float(raw or 0))
-            except (TypeError, ValueError):
-                return 0
+                raw = window.get("utilization")
+            if raw is None:
+                return None
+            # A malformed value raises on purpose: the per-section except logs
+            # it and skips the section instead of printing a made-up number.
+            return int(float(raw))
 
+        # WHY absent windows render nothing: an absent window means the account
+        # has none (verified Ultra accounts have no 5-hour window) or it just
+        # reset (Claude Code drops a window once its resets_at passes). A
+        # printed 0% would be a false number. A real 0 still renders "0%".
         # 5-hour
         try:
             five = safe_jq(usage_data, "five_hour") or {}
-            five_pct = _pct_field(five) if isinstance(five, dict) else 0
-            five_reset = iso_to_local(five.get("resets_at") if isinstance(five, dict) else "", "time")
-            section = f"{sep}⏱️ {WHITE}5h{RESET} {build_bar(five_pct, bar_width)} {CYAN}{five_pct}%{RESET}"
-            if five_reset:
-                section += f" {DIM}@{five_reset}{RESET}"
-            out += section
+            five_pct = _pct_field(five) if isinstance(five, dict) else None
+            if five_pct is not None:
+                five_reset = iso_to_local(five.get("resets_at"), "time")
+                section = f"{sep}⏱️ {WHITE}5h{RESET} {build_bar(five_pct, bar_width)} {CYAN}{five_pct}%{RESET}"
+                if five_reset:
+                    section += f" {DIM}@{five_reset}{RESET}"
+                out += section
         except Exception as e:
             _log_exception("rate-limit-5h", e)
 
         # 7-day
         try:
             seven = safe_jq(usage_data, "seven_day") or {}
-            seven_pct = _pct_field(seven) if isinstance(seven, dict) else 0
-            seven_reset = iso_to_local(seven.get("resets_at") if isinstance(seven, dict) else "", "datetime")
-            section = f"{sep}📅 {WHITE}7d{RESET} {build_bar(seven_pct, bar_width)} {CYAN}{seven_pct}%{RESET}"
-            if seven_reset:
-                section += f" {DIM}@{seven_reset}{RESET}"
-            out += section
+            seven_pct = _pct_field(seven) if isinstance(seven, dict) else None
+            if seven_pct is not None:
+                seven_reset = iso_to_local(seven.get("resets_at"), "datetime")
+                section = f"{sep}📅 {WHITE}7d{RESET} {build_bar(seven_pct, bar_width)} {CYAN}{seven_pct}%{RESET}"
+                if seven_reset:
+                    section += f" {DIM}@{seven_reset}{RESET}"
+                out += section
         except Exception as e:
             _log_exception("rate-limit-7d", e)
 
@@ -982,17 +990,22 @@ def main() -> None:
                 print(segments[-1], end="")
             else:
                 head, rest = out.split(split_marker, 1)
-                rl_marker = f"{sep}⏱️"
-                if cols < 95 and rl_marker in rest:
+                # Tier 3 splits at the first rate-limit section present: an
+                # account with no 5-hour window (verified Ultra) has only 📅,
+                # and keying on ⏱️ alone would drop it to tier 2.
+                rl_candidates = [m for m in (f"{sep}⏱️", f"{sep}📅") if m in rest]
+                rl_marker = min(rl_candidates, key=rest.index) if rl_candidates else ""
+                if cols < 95 and rl_marker:
                     # Tier 3: 3 lines.
                     #   Line 1: header (model + version + effort + thinking + dir)
                     #   Line 2: 📊 token bar + 🔌 CLI + 🏦 OpenRouter
-                    #   Line 3: ⏱️ 5h (full @reset) + 📅 7d (full @reset)
+                    #   Line 3: ⏱️ 5h (full @reset) + 📅 7d (full @reset), or
+                    #           just the one that exists
                     tier_chosen = 3
                     middle, tail = rest.split(rl_marker, 1)
                     print(head)
                     print(f"📊{middle}")
-                    print(f"⏱️{tail}", end="")
+                    print(f"{rl_marker[len(sep):]}{tail}", end="")
                 else:
                     # Tier 2: 2 lines. Header on line 1, everything else on line 2.
                     tier_chosen = 2

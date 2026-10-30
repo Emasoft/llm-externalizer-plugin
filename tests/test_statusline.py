@@ -779,7 +779,7 @@ def test_get_git_info_never_rewrites_the_index(
 # ---------------------------------------------------------------------------
 
 
-def _run_statusline(envelope: dict, tmp_path: Path) -> str:
+def _run_statusline(envelope: dict, tmp_path: Path, cols: int | None = None) -> str:
     """Pipe an envelope through the statusline subprocess and return stdout."""
     payload = json.dumps(envelope).encode("utf-8")
     venv_python = PROJECT_ROOT / ".venv" / "bin" / "python"
@@ -789,6 +789,8 @@ def _run_statusline(envelope: dict, tmp_path: Path) -> str:
         "HOME": str(tmp_path),
         "LANG": "C.UTF-8",
     }
+    if cols is not None:
+        env["STATUSLINE_COLS"] = str(cols)
     r = subprocess.run(
         [python_bin, str(STATUSLINE_PATH)],
         input=payload,
@@ -852,6 +854,42 @@ def test_statusline_omits_new_rows_on_legacy_envelope(tmp_path: Path) -> None:
     }
     out = _run_statusline(envelope, tmp_path)
     assert "💳" not in out and "🧩" not in out, f"rows leaked on legacy envelope: {out!r}"
+
+
+_ENV_BASE = {"cwd": "/tmp", "model": {"display_name": "opus"}, "session_id": "x"}
+
+
+def test_statusline_omits_5h_when_only_seven_day(tmp_path: Path) -> None:
+    """An account with no five_hour window (verified Ultra) shows 7d, not a false 5h 0%."""
+    out = _run_statusline({**_ENV_BASE, "rate_limits": {"seven_day": {"used_percentage": 5.0}}}, tmp_path)
+    assert "7d" in out and "5h" not in out, f"unexpected rows in: {out!r}"
+
+
+def test_statusline_omits_5h_when_five_hour_null(tmp_path: Path) -> None:
+    """The usage API can return five_hour: null; that renders no 5h row."""
+    envelope = {**_ENV_BASE, "rate_limits": {"five_hour": None, "seven_day": {"used_percentage": 5.0}}}
+    out = _run_statusline(envelope, tmp_path)
+    assert "7d" in out and "5h" not in out, f"unexpected rows in: {out!r}"
+
+
+def test_statusline_renders_real_zero_percent_5h(tmp_path: Path) -> None:
+    """A genuine 0 used_percentage is data, not absence: 5h and 0% still render."""
+    out = _run_statusline({**_ENV_BASE, "rate_limits": {"five_hour": {"used_percentage": 0}}}, tmp_path)
+    assert "5h" in out and "0%" in out, f"real 0% missing from: {out!r}"
+
+
+def test_statusline_omits_7d_when_only_five_hour(tmp_path: Path) -> None:
+    """A rate_limits with only five_hour renders no false 7d 0% row."""
+    out = _run_statusline({**_ENV_BASE, "rate_limits": {"five_hour": {"used_percentage": 10.0}}}, tmp_path)
+    assert "5h" in out and "7d" not in out, f"unexpected rows in: {out!r}"
+
+
+def test_statusline_tier3_seven_day_only_gets_own_line(tmp_path: Path) -> None:
+    """At tier-3 width with only seven_day, the last line starts with the calendar emoji."""
+    out = _run_statusline({**_ENV_BASE, "rate_limits": {"seven_day": {"used_percentage": 5.0}}}, tmp_path, cols=80)
+    lines = out.split("\n")
+    assert len(lines) == 3, f"expected 3 lines at 80 cols: {out!r}"
+    assert lines[-1].startswith("📅"), f"last line should start with 📅: {out!r}"
 
 
 

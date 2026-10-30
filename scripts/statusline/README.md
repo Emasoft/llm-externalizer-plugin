@@ -59,8 +59,8 @@ affected, not the underlying accounts.
 | 📊 token bar | `context_window.used_percentage` (preferred) → manual sum | `current/size %` + 8-char bar |
 | 🔌 CLI | `/tmp/claude/llm-externalizer-stats.json` | tokens + cost |
 | 🏦 OpenRouter | OpenRouter `/credits` API | cached 5min |
-| ⏱️ 5h | `rate_limits.five_hour.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset time |
-| 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time |
+| ⏱️ 5h | `rate_limits.five_hour.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset time; row appears only when the account has a 5-hour window (verified Ultra accounts have none; Free, Pro and Max keep it) |
+| 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time; row appears only when the account has a 7-day window |
 | 💰 extra | `rate_limits.extra_usage` (when enabled) | bar + $used/$limit |
 
 ## Width tiering
@@ -72,7 +72,8 @@ affected, not the underlying accounts.
 | 3 | 65–94 cols | 3 | header / 📊+🔌+🏦 / ⏱️+📅 (full @resets) |
 | 4 | < 65 cols | 6 | model / dir / 📊 / 🔌+🏦 / ⏱️ 5h / 📅 7d |
 
-**Nothing dropped, nothing compacted** at any tier — just split across more
+**Nothing dropped, nothing compacted** at any tier (a missing 5h or 7d row is
+absent from the data, not dropped) — just split across more
 rows. Floor of usable width is ~33 cols (the model header line).
 
 Width detection precedence:
