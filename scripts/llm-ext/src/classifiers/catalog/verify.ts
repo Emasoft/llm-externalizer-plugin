@@ -27,7 +27,7 @@ export interface VerifyRow {
   probabilities: Record<string, number> | null;
   confidence: number | null;
   action: "auto" | "review";
-  /** Null on an answered row. On an invalid_response row: why the claim got no usable answer (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason). */
+  /** Null on an answered row. On an invalid_response row: why the claim got no usable answer (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason). */
   reason: string | null;
   supporting_evidence: string | null;
   same_subject: number | null;

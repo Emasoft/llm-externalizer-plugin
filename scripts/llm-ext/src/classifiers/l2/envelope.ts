@@ -22,8 +22,8 @@ export interface ResultEnvelope<R> {
   warnings: Warning[];
   // WHY records, not a boolean: D1 wants each fallback named (E96); empty array = not degraded.
   degraded: DegradedRecord[];
-  /** "budget" when --max-budget ended the run (E86); null otherwise. */
-  stopped: "budget" | null;
+  /** "budget" when --max-budget ended the run (E86), "timeout" when --command_timeout did (no new request was sent after it expired); null otherwise. */
+  stopped: "budget" | "timeout" | null;
   /** Present only when a run was answered by a model other than the profile's (TRDD-28BAL5ER): question key -> the model that answered it, so a mid-run switch is visible per item. A chunked item lists each distinct model. */
   answered_by?: Record<string, string>;
 }
@@ -33,7 +33,7 @@ export function buildEnvelope<R>(opts: {
   replies: EnvelopeReply[];
   warnings: Warning[];
   degraded: DegradedRecord[];
-  stopped: "budget" | null;
+  stopped: "budget" | "timeout" | null;
   answeredBy?: Record<string, string>;
 }): ResultEnvelope<R> {
   const { replies } = opts;

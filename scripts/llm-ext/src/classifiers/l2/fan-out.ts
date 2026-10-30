@@ -11,6 +11,7 @@ import type { BudgetTracker } from "./cost-cap.js";
 import type { EnvelopeReply } from "./envelope.js";
 import { chunkOf, type Plan, type PlannedRequest } from "./planner.js";
 import { warning, type Warning } from "./warnings.js";
+import { CommandStoppedError, commandStopReason } from "../../command-stop.js";
 
 /** What `exec` returns for one request: the billed reply as the envelope wants it, plus its raw answers. `exec` records the usage (before answer checks, plan §7) and reads the body with parseDecisionsReply. */
 export type ExecReply = EnvelopeReply & { answers: Record<string, unknown> };
@@ -54,7 +55,7 @@ export class BilledClassifierError extends ClassifierError {
 /** A request that produced no reply. "error": it failed on its own. "fatal": not finished because another request hit a run-wide failure. */
 export interface RequestFailure {
   requestIndex: number;
-  kind: "error" | "aborted" | "budget" | "fatal";
+  kind: "error" | "aborted" | "budget" | "stopped" | "fatal";
   message: string;
   error?: ClassifierError;
 }
@@ -84,7 +85,7 @@ export interface MergedReply {
   warnings: Warning[];
   failures: RequestFailure[];
   fatal: FatalFailure | null;
-  stopped: "budget" | null;
+  stopped: "budget" | "timeout" | null;
   /** True when the CALLER's signal (Ctrl-C) fired. */
   aborted: boolean;
   /** Question key (chunks folded under the item key) -> the model(s) that answered it; see ResultEnvelope.answered_by. */
@@ -165,9 +166,9 @@ function mergeChunkAnswers<U extends BuiltUnit>(plan: Plan<U>, answers: Answers,
 }
 
 // WHY a prefix per kind (owner ruling): "invalid_response" means the request failed on its own; a question that was never sent or was cut must say so.
-const REASON_PREFIX: Record<RequestFailure["kind"], string> = { error: "invalid_response", aborted: "aborted", budget: "not_sent_budget", fatal: "not_sent_fatal" };
+const REASON_PREFIX: Record<RequestFailure["kind"], string> = { error: "invalid_response", aborted: "aborted", budget: "not_sent_budget", stopped: "not_sent_timeout", fatal: "not_sent_fatal" };
 
-type Slot<U extends BuiltUnit> = { reply: ExecReply; request: PlannedRequest<U> } | { budgetStop: true };
+type Slot<U extends BuiltUnit> = { reply: ExecReply; request: PlannedRequest<U> } | { budgetStop: true } | { commandStop: true };
 
 /**
  * Fan-out over runCancellable (L2-18) with an AdaptiveRateLimiter, not rateLimitedParallel: that runner awaits
@@ -197,11 +198,16 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
         await limiter?.acquire();
         // WHY here, after the wait: the spend may have passed the cap while this request waited for a token (E86).
         if (opts.budget?.exceeded()) return { budgetStop: true };
+        // --command_timeout (spec 15; review of 4856f009, finding 4): once the command is stopping, no new request is
+        // sent, like every other request path; the finished answers are kept as a partial result.
+        if (commandStopReason() !== null) return { commandStop: true };
         const started = epoch;
         let reply: ExecReply;
         try {
           reply = await opts.exec(request, deadline);
         } catch (e) {
+          // The transport refuses a send or a retry once the command is stopping: not sent, not this request's failure.
+          if (e instanceof CommandStoppedError) return { commandStop: true };
           // WHY: a billed but refused reply spent money, so it counts against --max-budget like any other.
           if (e instanceof BilledClassifierError) {
             opts.budget?.add(e.billed.cost.costUsd);
@@ -250,6 +256,8 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
       // WHY fatal wins: the run aborted itself, so what it cut was not cut by Ctrl-C.
       if (fatal !== null) fail({ requestIndex, kind: "fatal", message: `the run stopped after a ${fatal.class} failure on request ${fatal.requestIndex}` });
       else fail({ requestIndex, kind: "aborted", message: "the run was aborted" });
+    } else if ("commandStop" in o.value) {
+      fail({ requestIndex, kind: "stopped", message: commandStopReason() ?? "--command_timeout stopped the run" });
     } else if ("budgetStop" in o.value) {
       fail({ requestIndex, kind: "budget", message: "--max-budget was passed before this request was sent" });
     } else {
@@ -275,10 +283,14 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
   // E47: the alias moved to a new build mid-run; the results are still kept, the reader is told.
   if (snapshots.length > 1) warnings.push(warning("snapshot-changed", `the served model changed during the run: ${snapshots.join(", ")}`, snapshots.length));
   // WHY from the skipped requests, not budget.stopped(): a last request that crosses the cap ended nothing, so the run is not "stopped".
+  // WHY from the skipped requests, not budget.stopped(): a last request that crosses the cap ended nothing, so the run is not "stopped".
   const notSent = failures.filter((f) => f.kind === "budget").length;
-  const stopped = notSent > 0 ? "budget" : null;
+  const notSentStop = failures.filter((f) => f.kind === "stopped").length;
+  // WHY budget first: either stop leaves the same partial result; the cap the user set is named before the timeout.
+  const stopped = notSent > 0 ? "budget" : notSentStop > 0 ? "timeout" : null;
   // WHY the numbers: requests already in flight can overshoot the cap, so the reader sees what was spent and what was never sent.
   if (opts.budget && notSent > 0) warnings.push(warning("budget-stop", `--max-budget stopped the run: ${notSent} of ${plan.requests.length} requests not sent, ${opts.budget.spent()} USD spent`, notSent));
+  if (notSentStop > 0) warnings.push(warning("command-timeout-stop", `--command_timeout stopped the run: ${notSentStop} of ${plan.requests.length} requests not sent; the answers already received are kept`, notSentStop));
   const status = fatal !== null || (failures.length > 0 && opts.split === "whole-result") ? "failed" : failures.length > 0 ? "partial" : "complete";
   // WHY the replies stay when failed: every billed reply is counted in usage and cost, whatever happens to the answers.
   const dropped = status === "failed" && opts.split === "whole-result";

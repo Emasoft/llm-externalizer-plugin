@@ -55,7 +55,7 @@ export interface FindingRow {
   reachable: number | null;
   already_handled: number | null;
   severity: { score: number; level: (typeof SEVERITY)[number]; confidence: number | null } | null;
-  /** Why the finding has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason); null otherwise. */
+  /** Why the finding has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason); null otherwise. */
   invalid: string | null;
 }
 export interface FindingsResult {

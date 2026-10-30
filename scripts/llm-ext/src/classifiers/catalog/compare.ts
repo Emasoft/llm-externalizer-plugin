@@ -45,7 +45,7 @@ export interface RelationRow {
   margin: number | null;
   /** auto only when the top probability reaches `auto` and the margin reaches `margin`; every refused or unanswered question is review. */
   decision: "auto" | "review";
-  /** Why the question has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason). */
+  /** Why the question has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason). */
   invalid: string | null;
 }
 export interface CompareResult {

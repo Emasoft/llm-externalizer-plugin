@@ -93,7 +93,7 @@ export interface UnitRow {
   regression: number | null;
   severity: { score: number; level: (typeof SEVERITY)[number] } | null;
   evidence_sufficient: number | null;
-  /** Why this part has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason); null otherwise. */
+  /** Why this part has no usable answer (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason); null otherwise. */
   invalid: string | null;
   /** True when the runner reports that the four answers of this part were decided by different chunks (the fan-out merges per question). */
   mixed_chunks: boolean;

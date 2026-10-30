@@ -30,9 +30,10 @@ import { warning, type Warning } from "./l2/warnings.js";
 import { assembleFileInput, overlaySpecFields, readSpecFlag } from "./input-args.js";
 import type { SelectionCheckOptions } from "./profile-checks.js";
 import { INPUT_FLAGS, SHARED_FLAGS, type BooleanFlag, type BooleanInputFlag } from "./shared-flags.js";
+import { COMMAND_TIMEOUT_EXIT } from "../command-stop.js";
 
-/** llm-ext's 0/1 (cli/main.ts), quicksilver's 3 key/credits, 4 request rejected, 5 failed after retries (attention.ts), and Ctrl-C. */
-export type ExitCode = 0 | 1 | 3 | 4 | 5 | typeof CTRL_C_EXIT_CODE;
+/** llm-ext's 0/1 (cli/main.ts), quicksilver's 3 key/credits, 4 request rejected, 5 failed after retries (attention.ts), Ctrl-C, and 124 when --command_timeout stopped the run. */
+export type ExitCode = 0 | 1 | 3 | 4 | 5 | typeof CTRL_C_EXIT_CODE | typeof COMMAND_TIMEOUT_EXIT;
 
 /** Everything one run needs besides the spec. `input` is the already-parsed object; reading it from --input or stdin is runDecisionArgv. */
 export interface RunRequest {
@@ -104,6 +105,8 @@ async function refusingAsync<T>(code: ExitCode, f: () => Promise<T>): Promise<T>
 function failureCode(m: MergedReply): ExitCode | undefined {
   if (m.aborted) return CTRL_C_EXIT_CODE;
   if (m.stopped === "budget") return BUDGET_EXIT_CODE as ExitCode;
+  // Review of 4856f009, finding 4: a run --command_timeout stopped exits 124 like every other stopped command, with the answers it has.
+  if (m.stopped === "timeout") return COMMAND_TIMEOUT_EXIT;
   // WHY a fixed order and not the first failure: which request failed first is a race; the most actionable class wins: 3 (key/credits) > 4 (rejected) > 5 (failed after retries).
   const codes = m.failures.flatMap((f) => (f.error === undefined ? [] : [exitCodeForError(f.error)]));
   const worst = ([3, 4, 5] as const).find((c) => codes.includes(c));

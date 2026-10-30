@@ -92,7 +92,7 @@ export interface ExtractResult {
   summary: Record<ExtractStatus, number>;
   document_truncated: boolean;
   thresholds: { auto: number; margin: number; candidate_cap: number };
-  /** Fields with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason). */
+  /** Fields with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason). */
   invalid: { id: string; reason: string }[];
 }
 

@@ -37,7 +37,7 @@ export interface FilterResult {
   sure: FilterRow[];
   /** Every answered item, best first: what --save writes. */
   rows: FilterRow[];
-  /** Items with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason). */
+  /** Items with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason). */
   invalid: { id: string; reason: string }[];
 }
 

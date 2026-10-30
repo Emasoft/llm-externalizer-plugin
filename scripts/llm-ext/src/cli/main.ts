@@ -38,7 +38,7 @@ import { readFileSync } from "node:fs";
 import type { GlobalFetch } from "../classifiers/l0/transport.js";
 import { BROKER_ARGV, CALIBRATE_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
-import { commandStopReason, stopCommand } from "../command-stop.js";
+import { COMMAND_TIMEOUT_EXIT, commandStopReason, stopCommand } from "../command-stop.js";
 import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
 
 /**
@@ -145,9 +145,6 @@ function die(msg: string): never {
   exitCommand(1);
 }
 
-
-/** Exit code of a command stopped by --command_timeout (the timeout(1) convention). */
-const COMMAND_TIMEOUT_EXIT = 124;
 
 /** How long a stopping command may take to write its partial results before it is ended anyway. */
 const STOP_FLUSH_GRACE_MS = 30_000;

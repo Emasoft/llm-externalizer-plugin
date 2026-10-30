@@ -5,12 +5,14 @@
  * WHY a module of its own: the stop must be seen by EVERY request path, not
  * only the local broker client. The remote/non-managed path (sendChat,
  * fetchWithRetry429) and the direct-fetch workers (security_scan/judge.ts,
- * mass_scouting/scout.ts) check it too, so a stopped command starts no new
+ * mass_scouting/scout.ts) and the classify decision runner (classifiers/l0/transport.ts, l2/fan-out.ts) check it too, so a stopped command starts no new
  * request on any profile (and spends no more money); before this, only
  * broker jobs honoured it and a remote command kept submitting for 30 s.
  * No imports: every layer can depend on it without a cycle.
  */
 
+/** Exit code of a command stopped by --command_timeout (the timeout(1) convention); cli/main.ts and classify use it. */
+export const COMMAND_TIMEOUT_EXIT = 124;
 let reason: string | null = null;
 
 /** Mark the command as stopping. Idempotent: the first reason wins. */

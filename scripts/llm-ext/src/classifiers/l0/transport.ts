@@ -5,6 +5,7 @@ import { safeReadText } from '../../safe-body.js';
 import { type Deadline } from './deadline.js';
 import { ClassifierError, badResponseError, classifyHttpError, networkError, timeoutError } from './errors.js';
 import type { DecisionsEndpoint } from '../../config.js';
+import { CommandStoppedError, commandStopReason } from '../../command-stop.js';
 
 export type GlobalFetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -163,6 +164,10 @@ export async function callDecisions(call: DecisionsCall, opts: CallOptions): Pro
   }
   const max = clampAttempts(opts.maxAttempts);
   for (let attempt = 0; ; attempt++) {
+    // --command_timeout (spec 15; review of 4856f009, finding 4): no send and no retry starts once the command is
+    // stopping, as in provider/http.ts and broker/client.ts; a request already in flight is not aborted.
+    const stopWhy = commandStopReason();
+    if (stopWhy !== null) throw new CommandStoppedError(stopWhy);
     const r = await sendOnce(call, body, opts);
     if (r.ok) return r.reply;
     // WHY the verdict is ClassifierError.retryable (set once in classifyHttpError): retry only what can heal, throw the rest on the first failure with no wait.

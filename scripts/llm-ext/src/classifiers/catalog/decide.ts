@@ -69,7 +69,7 @@ export interface DecideResult {
   contradicted_requirements: number[];
   checks: DecideCheck[];
   warnings: string[];
-  /** Questions with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, aborted, or the validation reason). */
+  /** Questions with no usable answer and why (invalid_response, not_sent_fatal, not_sent_budget, not_sent_timeout, aborted, or the validation reason). */
   invalid: { key: string; reason: string }[];
 }
 
