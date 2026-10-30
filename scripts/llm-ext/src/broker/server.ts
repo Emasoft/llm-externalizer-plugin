@@ -1005,14 +1005,22 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
   let heldCheckedAt = 0;
   let calSweptAt = Date.now();
+  /** Review m2: consecutive ticks that found the config dir missing (it exits on the second). */
+  let dirMissing = 0;
   const tick = setInterval(() => {
     // Coordinator decision 2026-10-29 (spec local-engine-broker-design.md): a broker whose config dir is gone (a test's
     // temp dir, a removed config) serves nothing any client can reach again: it stops its servers, fails its held jobs
     // with the reason and exits, instead of living until its idle exit with a server holding RAM.
+    // Review m2: only on two consecutive missing readings (two ticks, about 1 s apart): a volume that is briefly
+    // unavailable (an external disk remounting, a network home) must not end the broker and fail its held jobs.
+    // Failing (not requeueing) the held jobs on the exit stays as decided (coordinator decision 2026-10-29).
     if (!existsSync(o.dir)) {
-      void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
+      dirMissing++;
+      // The first missing reading skips this tick's work (it reads and writes files in that dir) and waits for the next.
+      if (dirMissing >= 2) void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
       return;
     }
+    dirMissing = 0;
     // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();

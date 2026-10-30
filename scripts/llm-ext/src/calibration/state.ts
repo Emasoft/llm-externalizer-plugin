@@ -255,8 +255,9 @@ export interface Progress {
 /**
  * One memory wait (review of a3862052, MINOR-7; review of 2411e6dc, finding 2). `waited_ms` counts only time a runner
  * was actually checking: a gap longer than MEMORY_WAIT_GAP_MS between two checks (the runner off, the machine asleep)
- * adds nothing, so a wait cannot expire at the first check of the next day. `need` is the bytes the candidate needs
- * above the floor, so the runner can re-check memory without loading the model.
+ * adds nothing, so a wait cannot expire at the first check of the next day. `need` is the bytes a fresh reading must show
+ * above the floor before the model is loaded again (Phase B: windowWaitNeed, review M1), so the runner can re-check
+ * memory without loading the model.
  */
 export interface MemoryWait {
   since: string;

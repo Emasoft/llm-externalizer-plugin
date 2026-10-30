@@ -349,12 +349,8 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
     return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, classify: () => classify };
   };
 
-  /** A Phase C context over a synthetic GGUF, with Phase A and B summaries already recorded. */
-  /** A Phase C context over a synthetic GGUF, with Phase A and B summaries already recorded. `stops` lists every stopServer reason. */
-  const context = (url: string, harness: { mainSlots: number[]; scoutShares: number[]; scoutSlots: number[] }, memoryWait: Record<string, MemoryWait> = {}, blocks = 2) => {
-    dir = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-run-"));
-    const gguf = join(dir, "m.gguf");
-    // `blocks` scales the KV cache: 128 bytes per token per block (1 KV head of 32 dims, 2 bytes, K and V).
+  /** The synthetic GGUF: `blocks` scales the KV cache, 128 bytes per token per block (1 KV head of 32 dims, 2 bytes, K and V). */
+  const writeModel = (gguf: string, blocks: number): void =>
     writeGguf(gguf, [
       ["general.architecture", "lfm3"],
       ["lfm3.block_count", blocks],
@@ -362,6 +358,11 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
       ["lfm3.embedding_length", 64],
       ["lfm3.attention.head_count_kv", 1],
     ]);
+  /** A Phase C context over a synthetic GGUF, with Phase A and B summaries already recorded. `stops` lists every stopServer reason. */
+  const context = (url: string, harness: { mainSlots: number[]; scoutShares: number[]; scoutSlots: number[] }, memoryWait: Record<string, MemoryWait> = {}, blocks = 2) => {
+    dir = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-run-"));
+    const gguf = join(dir, "m.gguf");
+    writeModel(gguf, blocks);
     const trials: TrialRecord[] = [
       { step: "A/summary", seed: 0, outcome: "pass", at: "t", data: { chars_per_token: 4, prefill_tps_2k: 100000, prefill_tps_8k: 100000, decode_tps: 100000, array40: true } },
       { step: "B/summary", seed: 0, outcome: "pass", at: "t", data: { fill_fact: fill.fact, fill_aggregate: fill.aggregate, fill_bug: fill.bug, min_out_fact: 256, min_out_aggregate: 256, min_out_bug: 256, bug_thinking: "off" } },
@@ -470,20 +471,41 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
 
   /**
    * Rule A tests: a 1 % memory floor and a slot count that fits total RAM minus the floor but not the free memory now
-   * (so the candidate waits), while one main slot and one scouting slot run. Read from the free memory now, with 2 GiB
-   * of margin each way so a machine whose memory moves a little does not change the verdict.
+   * (so the candidate waits), while one main slot and one scouting slot run. Review m8 (coordinator decision 5: no
+   * precondition may depend on how much memory is in use): the synthetic KV per token (`blocks`) is sized from this
+   * machine's own reading, as in phase-b.test.ts, so that n slots need the midpoint between free memory and total RAM
+   * (both above the floor and the headroom) and one slot of the largest context needs at most half the free memory.
+   * Each margin is then at least a quarter of the memory in use, never a fixed 2 GiB a busy machine lacks. The one
+   * reading-dependent precondition: the 1 GiB headroom fits free memory above the floor (nothing can run otherwise).
    */
-  const waitSlots = async (gguf: string, slotCtx: number): Promise<number> => {
+  const waitSlots = async (slotCtx: number): Promise<{ blocks: number; n: number }> => {
     process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    const total = totalmem();
     const { free, floor } = await freeMemory(1);
-    const layers = modelKvLayers("llama", [gguf]);
-    const need = (slots: number, ctxTokens: number): number => weightBytes([gguf]) + kvBytes(layers, slots * ctxTokens) + WINDOW_HEADROOM_BYTES;
-    const margin = 2 * 1024 ** 3;
-    expect(need(1, Math.max(mainSlotCtx(fill, minOut, "off"), scoutSlotCtx(2048)))).toBeLessThan(free - floor - margin);
-    let n = 1;
-    while (need(n, slotCtx) <= free - floor + margin) n++;
-    expect(need(n, slotCtx)).toBeLessThan(totalmem() - floor - margin);
-    return n;
+    const probe = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-probe-"));
+    let head: number;
+    let perToken: number;
+    try {
+      const gguf = join(probe, "m.gguf");
+      writeModel(gguf, 1);
+      head = weightBytes([gguf]) + WINDOW_HEADROOM_BYTES;
+      perToken = kvBytes(modelKvLayers("llama", [gguf]), 1);
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+    const runCtx = Math.max(mainSlotCtx(fill, minOut, "off"), scoutSlotCtx(2048));
+    // KV bytes available: F above the floor in free memory now, T in total RAM.
+    const F = free - floor - head;
+    const T = total - floor - head;
+    expect(F, `free memory above the 1 % floor (${Math.round((free - floor) / 2 ** 20)} MiB) must hold the 1 GiB headroom`).toBeGreaterThan(0);
+    const blocks = Math.max(1, Math.floor(Math.min((T - F) / 2 / (perToken * slotCtx), F / 2 / (perToken * runCtx))));
+    const slot = blocks * perToken * slotCtx;
+    const n = Math.round((F + T) / 2 / slot);
+    const inUse = `memory in use ${Math.round((total - free) / 2 ** 20)} MiB`;
+    expect(F - blocks * perToken * runCtx, `one slot of ${runCtx} tokens must fit free memory (${inUse})`).toBeGreaterThan(0);
+    expect(n * slot - F, `${n} slots must miss free memory (${inUse})`).toBeGreaterThan(0);
+    expect(T - n * slot, `${n} slots must fit total RAM minus the floor (${inUse})`).toBeGreaterThan(0);
+    return { blocks, n };
   };
   const statusProfiles = { p: { server: "managed", api: "llamacpp-local", model: "m" } } as unknown as Record<string, Profile>;
   const statusOf = async (ctx: PhaseContext): Promise<string> => {
@@ -493,8 +515,8 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
 
   it("rule A: an unscored scouting candidate pauses Phase C on passes 1 and 2 (status: cause and pass k of 3), a memory pause is not a pass, pass 3 makes scouting unfit", async () => {
     const { url } = await serve(0);
-    const { ctx, trials, gguf } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, 2048);
-    const n = await waitSlots(gguf, scoutSlotCtx(2048));
+    const { blocks, n } = await waitSlots(scoutSlotCtx(2048));
+    const { ctx, trials } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, blocks);
     ctx.harness.scoutSlots = [n];
     const step = `C/scout/2048/${n}`;
     const statuses: string[] = [];
@@ -526,8 +548,8 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
 
   it("rule A: a pending main candidate holds the record although another one is scored; given up on pass 3, the slot count comes from the scored ones", async () => {
     const { url } = await serve(0);
-    const { ctx, trials, gguf } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, 2048);
-    const n = await waitSlots(gguf, mainSlotCtx(fill, minOut, "off"));
+    const { blocks, n } = await waitSlots(mainSlotCtx(fill, minOut, "off"));
+    const { ctx, trials } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, blocks);
     ctx.harness.mainSlots = [1, n];
     const step = `C/main/${n}`;
     for (let pass = 1; pass <= 3; pass++) {
@@ -546,8 +568,8 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
 
   it("rule 2: every main candidate given up after its memory waits is memory-limited (no verdict), never a failure", async () => {
     const { url } = await serve(0);
-    const { ctx, trials, gguf } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, 2048);
-    const n = await waitSlots(gguf, mainSlotCtx(fill, minOut, "off"));
+    const { blocks, n } = await waitSlots(mainSlotCtx(fill, minOut, "off"));
+    const { ctx, trials } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [1] }, {}, blocks);
     ctx.harness.mainSlots = [n];
     const step = `C/main/${n}`;
     for (let pass = 1; pass <= 3; pass++) {

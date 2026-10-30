@@ -283,7 +283,6 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
   // E47: the alias moved to a new build mid-run; the results are still kept, the reader is told.
   if (snapshots.length > 1) warnings.push(warning("snapshot-changed", `the served model changed during the run: ${snapshots.join(", ")}`, snapshots.length));
   // WHY from the skipped requests, not budget.stopped(): a last request that crosses the cap ended nothing, so the run is not "stopped".
-  // WHY from the skipped requests, not budget.stopped(): a last request that crosses the cap ended nothing, so the run is not "stopped".
   const notSent = failures.filter((f) => f.kind === "budget").length;
   const notSentStop = failures.filter((f) => f.kind === "stopped").length;
   // WHY budget first: either stop leaves the same partial result; the cap the user set is named before the timeout.

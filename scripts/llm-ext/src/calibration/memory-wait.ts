@@ -2,7 +2,7 @@
  * calibration/memory-wait.ts — the one memory-wait mechanism of Phases B and C (P6; spec section 4.1 and 4.5).
  *
  * A step or candidate that fits total RAM minus the floor, but not the free memory now, makes the model wait (no
- * verdict). The wait is saved in the progress, with the bytes it needs, so it survives the runner's passes and the
+ * verdict). The wait is saved in the progress, with the bytes a fresh reading must show, so it survives the runner's passes and the
  * runner can re-check it with the model unloaded (memoryWaitPrecheck). Only time a runner was checking counts
  * (memoryWaitTick). After MEMORY_WAIT_MAX_MS of checks the step is skipped for that pass only (inconclusive), and
  * after INCONCLUSIVE_PASSES such passes it is given up (rule A, coordinator decision 2026-10-29). Phase B and Phase C
@@ -13,7 +13,7 @@
 
 import { timingsFromEnv } from "../broker/scheduler.js";
 import type { BrokerEngine } from "../broker/protocol.js";
-import { freeMemory } from "./memory.js";
+import { freeMemory, WINDOW_STEP } from "./memory.js";
 import type { PhaseContext } from "./runner.js";
 import { loadProgress, saveProgress, type MemoryWait } from "./state.js";
 
@@ -63,6 +63,29 @@ export function memoryWaitTick(prev: MemoryWait | undefined, need: number, nowMs
 /** Whether a step has waited long enough for free memory to be skipped for this pass. */
 export function memoryWaitExpired(w: MemoryWait): boolean {
   return w.waited_ms >= MEMORY_WAIT_MAX_MS;
+}
+
+/**
+ * Review M1 (code review of 2026-10-30, reports/code-review/20261030_052812+0100-*): the bytes above the floor that the runner's fresh, unloaded reading
+ * (memoryWaitPrecheck) must show before a pass loads the model for a Phase B wait on `tokens` of window. Phase B
+ * decides the wait on the window the cal server got, which passes three stages: the unloaded reading (`unloaded`,
+ * chooseWindow), the post-load halving (`halved`) and the server's own context cap. The precheck can only repeat the
+ * first, so each stage stores what a fresh unloaded reading must reach, and a pass that would only wait again loads
+ * nothing (before this, the bytes of the unrounded step were stored, the precheck found them free, and every pass
+ * loaded the model 2-3 times only to wait again):
+ *  - short already unloaded: the bytes chooseWindow counts for the step rounded up to its 256-token step, so
+ *    `need <= free - floor` exactly when chooseWindow would give a window of at least `tokens`;
+ *  - short only after loading (the halving found free memory under the floor): this pass's free memory above the floor
+ *    plus the shortage the halving saw (`deficit`): the load showed this reading is not enough, and the shortage is
+ *    also the margin that keeps a few MB of noise from loading it again;
+ *  - short only by the server's context cap: no free memory helps, so a need over total RAM minus the floor; the wait
+ *    is counted by the prechecks alone (about one a minute, never a load) until it is over.
+ * Waiting passes therefore cost one memory reading, so the 5-minute gap rule (MEMORY_WAIT_GAP_MS) is met unchanged.
+ */
+export function windowWaitNeed(tokens: number, w: { unloaded: number; halved: number; free: number; floor: number; deficit: number; total: number }, needBytes: (tokens: number) => number): number {
+  if (tokens > w.unloaded) return needBytes(Math.ceil(tokens / WINDOW_STEP) * WINDOW_STEP);
+  if (tokens > w.halved) return w.free - w.floor + w.deficit;
+  return w.total - w.floor + 1;
 }
 
 /**

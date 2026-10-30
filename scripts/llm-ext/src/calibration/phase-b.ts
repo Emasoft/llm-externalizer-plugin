@@ -17,7 +17,7 @@ import { timingsFromEnv } from "../broker/scheduler.js";
 import { memoryFreePercent } from "../local-locals-server.js";
 import { pidState } from "../local-llama-server.js";
 import { chooseWindow, freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
-import { INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP, memoryWaitCheck, memoryWaitClear, recordInconclusiveSkip, WaitForMemory } from "./memory-wait.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP, memoryWaitCheck, memoryWaitClear, recordInconclusiveSkip, WaitForMemory, windowWaitNeed } from "./memory-wait.js";
 import { CAP_OFF, CAP_ON, LEAKY_LIMIT, makeSender, shortOffCompletions, thinkingOffMode, trialTimeoutMs, type Outcome, type Reply, type Sender, type Thinking } from "./phase-a.js";
 import {
   AGGREGATE_COUNT_QUESTION,
@@ -457,23 +457,29 @@ export const phaseB: Phase = {
         // MEMORY_WAIT_MAX_MS of checks per pass (memoryWaitCheck throws WaitForMemory until then: paused, no verdict),
         // then a skip for the pass (rule A). Given up on the INCONCLUSIVE_PASSES-th pass, nothing could be loaded: the
         // calibration is memory-limited (rule 2), neither a pass nor a failure.
-        const skip = memoryWaitCheck(ctx, "B/window", needBytes(minWindow), w.free, w.floor);
+        // Review M1: rounded to the window step as chooseWindow counts it, so the precheck agrees with this decision.
+        const skip = memoryWaitCheck(ctx, "B/window", windowWaitNeed(minWindow, { unloaded: w.window, halved: w.window, free: w.free, floor: w.floor, deficit: 0, total: totalmem() }, needBytes), w.free, w.floor);
         const { passes, terminal } = recordInconclusiveSkip(ctx, "B/window", 0, { ...skip, soft_window: window, hard_window: w.hard, min_window: minWindow }, MEMORY_WAIT_CAUSE);
         if (!terminal) return { passed: false, paused: true, step: "B/window", message: `free memory allows a window of ${window} tokens, under the ${minWindow} calibration needs: skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one` };
         return { passed: false, step: "B/window", message: `free memory stayed below the smallest calibration window (${minWindow} tokens) on ${INCONCLUSIVE_PASSES} passes`, memory: { kind: "memory-limited" } };
       }
       memoryWaitClear(ctx, "B/window");
       await ctx.restart(window, 1);
+      // Review M1: the shortage the first post-load check saw (bytes under the floor), for windowWaitNeed.
+      let deficit = 0;
       // Spec 4.1: the post-load check can still lower W (halving, at least 8192).
       for (;;) {
         const pct = process.platform === "darwin" ? await memoryFreePercent() : null;
         const lower = Math.max(Math.min(MIN_HALVED_WINDOW, ctx.harness.windowCap), Math.floor(window / 2 / 256) * 256);
         if (pct === null || pct >= floorPct || lower >= window) break;
+        if (deficit === 0) deficit = Math.round(((floorPct - pct) / 100) * totalmem());
         ctx.log(`after loading at W = ${window}, free memory is ${pct} % (floor ${floorPct} %): W halved to ${lower}`);
         window = lower;
         ctx.record({ step: "B/window", seed: 1, outcome: "pass", data: { window_tokens: window, free_ram_bytes: w.free, halved: true }, at: now() });
         await ctx.restart(window, 1);
       }
+      // The window after the halving, before the server's own context cap (windowWaitNeed tells the two apart).
+      const halved = window;
       if (ctx.server.engine === "llama") {
         // llama-server caps a slot at the trained context: the window is what it really got.
         const props = (await (await fetch(`${ctx.server.baseUrl}/props`, { headers: { authorization: `Bearer ${ctx.server.apiKey}` }, signal: AbortSignal.timeout(10_000) })).json()) as { default_generation_settings?: { n_ctx?: unknown } };
@@ -525,7 +531,10 @@ export const phaseB: Phase = {
               // Coordinator decision 2026-10-29: the shared memory wait, against the reading measureWindow took with the
               // model unloaded. Given up on its INCONCLUSIVE_PASSES-th pass, the step is a memory-wait grid skip and the
               // walk steps down, as for a window skip: a step that only waited never fails.
-              const skip = memoryWaitCheck(ctx, key, needBytes(tokens + nominal + 64), w.free, w.floor);
+              // Review M1: the need is what the runner's unloaded precheck must see before it loads the model again
+              // (windowWaitNeed), so a pass on which this step would only wait again loads nothing.
+              const need = windowWaitNeed(tokens + nominal + 64, { unloaded: w.window, halved, free: w.free, floor: w.floor, deficit, total: totalmem() }, needBytes);
+              const skip = memoryWaitCheck(ctx, key, need, w.free, w.floor);
               const { passes, terminal } = recordInconclusiveSkip(ctx, key, 0, { ...skip, kind, tokens, soft_window: softWindow(run) }, MEMORY_WAIT_CAUSE);
               if (!terminal) throw new StepPending(key, `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory allows ${softWindow(run)} (hard ${run.hardWindow}): skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one`);
               grid.push({ kind, tokens, skipped: "memory-wait", W: softWindow(run) });

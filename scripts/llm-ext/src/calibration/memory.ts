@@ -28,7 +28,7 @@ const KV_ELEM_BYTES = 2;
 /** Headroom kept free beside the weights and the KV cache (spec 4.1). */
 export const WINDOW_HEADROOM_BYTES = 1024 ** 3;
 /** W is chosen in steps of this many tokens. */
-const WINDOW_STEP = 256;
+export const WINDOW_STEP = 256;
 
 // ── GGUF metadata (the header only; tensors are never read) ─────────────
 

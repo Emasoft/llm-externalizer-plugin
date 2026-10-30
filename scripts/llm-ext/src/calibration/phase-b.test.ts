@@ -40,8 +40,8 @@ import {
 import { measureWindow, phaseB } from "./phase-b.js";
 import { writeGguf } from "./test-gguf.js";
 import type { PhaseContext } from "./runner.js";
-import { saveProgress, type MemoryWait, type TrialRecord } from "./state.js";
-import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, memoryWaitPrecheck, memoryWaitTick } from "./memory-wait.js";
+import { loadProgress, saveProgress, type MemoryWait, type TrialRecord } from "./state.js";
+import { INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, memoryWaitPrecheck, memoryWaitTick, windowWaitNeed } from "./memory-wait.js";
 import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID } from "./record.js";
 
 const reply = (content: string, o: Partial<Reply> = {}): Reply => ({
@@ -646,7 +646,10 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     const steps = gridSteps(probe.hard, null);
     expect(steps.slice(0, 2)).toEqual([13107, 8192]);
     const top = (kind: string): string => `B/${kind}/${steps[0]}`;
-    const topNeed = need(steps[0]! + CAP_OFF + 64);
+    // Review M1: the soft W is short only by the server's context cap, which no free memory clears: the saved need is
+    // over total RAM minus the floor, so the runner's unloaded precheck never loads the model for it.
+    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the top step (${Math.round(need(steps[0]! + CAP_OFF + 64) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(steps[0]! + CAP_OFF + 64);
+    const topNeed = totalmem() - probe.floor + 1;
     const { ctx, trials } = context(dir, gguf, url);
 
     expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: top("fact") });
@@ -677,5 +680,77 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: `B/fact/${steps[1]}` });
     expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual([`B/fact/${steps[1]}`]);
     expect(trials.some((t) => t.step === "B/summary")).toBe(false);
+  }, 60_000);
+
+  it("review M1: windowWaitNeed asks the unloaded reading for what chooseWindow needs: short now, enough once that much is free", () => {
+    // The production shape of the synthetic model (1 block), every step and step + cap of the grid, budgets around them.
+    const { gguf, need } = model(1);
+    const layers = modelKvLayers("llama", [gguf]);
+    const weights = weightBytes([gguf]);
+    const free = 64 * 1024 ** 3;
+    for (const tokens of [5120, 5121, 6337, 8192 + CAP_OFF + 64, 13107 + CAP_ON + 64, 32704]) {
+      for (const budget of [need(tokens) - 1, need(tokens), need(tokens - 200), need(tokens) + 4096]) {
+        const unloaded = chooseWindow(layers, weights, budget, 32768);
+        if (unloaded >= tokens) continue; // the step would run: no wait
+        const n = windowWaitNeed(tokens, { unloaded, halved: unloaded, free: budget, floor: 0, deficit: 0, total: free }, need);
+        // The same reading that decided the wait keeps the precheck from loading the model...
+        expect(n, `tokens ${tokens}, budget ${budget}`).toBeGreaterThan(budget);
+        // ...and once that much is free, the next pass gets a window that holds the step.
+        expect(chooseWindow(layers, weights, n, 32768), `tokens ${tokens}, budget ${budget}`).toBeGreaterThanOrEqual(tokens);
+      }
+    }
+    // Short only after loading (the halving): more than this reading, by the shortage the halving saw.
+    expect(windowWaitNeed(9000, { unloaded: 16384, halved: 8192, free: 10e9, floor: 1e9, deficit: 5e8, total: 64e9 }, need)).toBe(10e9 - 1e9 + 5e8);
+    // Short only by the server's context cap: no reading reaches it, the prechecks alone count the wait.
+    expect(windowWaitNeed(9000, { unloaded: 16384, halved: 16384, free: 10e9, floor: 1e9, deficit: 0, total: 64e9 }, need)).toBeGreaterThan(64e9 - 1e9);
+  });
+
+  it("review M1: a grid-step wait keeps a runner pass from loading the model; the prechecks alone bring it to its bound (gaps under 5 min)", async () => {
+    // The scenario of the test above: the soft W is the 6144 the server reports, the unloaded bytes fit every step.
+    const { dir, gguf, need } = model(1);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    const url = await props(6144);
+    const { ctx, trials } = context(dir, gguf, url);
+    const top = "B/fact/13107";
+    const probe = await measureWindow(context(dir, gguf, url).ctx, 0, minWindow);
+    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the top step (${Math.round(need(13107 + CAP_OFF + 64) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(13107 + CAP_OFF + 64);
+    let loads = 0;
+    ctx.restart = async () => void loads++;
+    const save = (): void => saveProgress(dir, "llama", "m", { ...ctx.progress, harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: PRODUCTION_HARNESS_ID, fingerprint: null });
+    // One runner pass, in calibrateOne's order: the precheck with the model unloaded, then the load at the Phase A
+    // context (counted), then the phase over the progress the runner reads from disk.
+    const pass = async (): Promise<string | null> => {
+      const waiting = await memoryWaitPrecheck(dir, "llama", "m", PRODUCTION_HARNESS_ID);
+      if (waiting !== null) return waiting;
+      loads++;
+      ctx.progress.memoryWait = loadProgress(dir, "llama", "m", null, PRODUCTION_HARNESS_ID).memoryWait;
+      await phaseB.run(ctx);
+      save();
+      return null;
+    };
+    save();
+    expect(await pass()).toBeNull();
+    expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual([top]);
+    const loaded = loads;
+    expect(loaded).toBe(2);
+    // The churn of review M1: before the fix this pass loaded the model again only for the step to wait again.
+    expect(await pass()).toMatch(/^B\/fact\/13107 still waits for free memory/);
+    expect(loads).toBe(loaded);
+    // Passes 4 min apart (under MEMORY_WAIT_GAP_MS): each precheck counts its gap, none loads, until 30 min are counted.
+    let prechecks = 0;
+    for (;;) {
+      const p = loadProgress(dir, "llama", "m", null, PRODUCTION_HARNESS_ID);
+      const w = p.memoryWait![top]!;
+      p.memoryWait = { [top]: { ...w, seen: new Date(Date.parse(w.seen) - 4 * 60_000).toISOString() } };
+      saveProgress(dir, "llama", "m", p);
+      if ((await pass()) === null) break;
+      prechecks++;
+      expect(prechecks).toBeLessThan(MEMORY_WAIT_MAX_MS / (4 * 60_000) + 2);
+    }
+    expect(loads).toBe(loaded + 2);
+    expect(prechecks).toBeGreaterThanOrEqual(Math.ceil(MEMORY_WAIT_MAX_MS / (4 * 60_000)) - 2);
+    const skip = trials.find((t) => t.step === top && t.data?.skipped === "memory-wait");
+    expect(skip).toMatchObject({ outcome: "inconclusive", data: { passes: 1 } });
+    expect(Number(skip?.data?.waited_min)).toBeGreaterThanOrEqual(MEMORY_WAIT_MAX_MS / 60_000);
   }, 60_000);
 });

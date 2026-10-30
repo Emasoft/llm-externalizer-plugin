@@ -377,6 +377,13 @@ export const MEMORY_LIMITED_RETRY_MS = 3_600_000;
  * RAM or the memory floor it was judged against changed), or null while it does. Like Phase C's over-total-RAM skip,
  * which a different floor re-checks. The trained context it stores changes only with the weights; a weights change is
  * caught by the runner's fingerprint once the model is queued, never at read time (nothing is loaded here).
+ *
+ * Review m3: the floor is read from the environment of the reading process (LLM_EXT_BROKER_MEMORY_FLOOR, default 10)
+ * on purpose: the environment is the only place the floor is configured (broker/scheduler.ts TIMING_ENV; there is no
+ * settings field), and the broker gates memory with that same value. Every process of one config dir agrees when they
+ * share it: a runner the broker starts inherits the broker's environment (runner.ts ensureCalibrator). A shell with
+ * another value (models calibrate, calibration-status) can judge differently; the disagreement converges once a
+ * broker-started runner measures the model again under the broker's floor (spec 4.3, rule 1).
  */
 export function memoryVerdictStale(r: Pick<CalibrationRecord, "status" | "memory_judged">, floorPct = timingsFromEnv(process.env).memoryFloorPct, totalRam = totalmem()): string | null {
   const j = r.memory_judged;

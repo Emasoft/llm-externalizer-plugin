@@ -12,7 +12,7 @@
  */
 
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { builtinModules } from "node:module";
 import { homedir, tmpdir as osTmpdir, totalmem } from "node:os";
@@ -654,12 +654,28 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect(readBrokerState(dir)).toBeNull();
   }, 300_000);
 
-  it("a broker whose config dir is deleted stops its server and exits on its next tick (coordinator decision 2026-10-29)", async () => {
+  it("a broker whose config dir is deleted stops its server and exits within two ticks; a dir missing for one tick only is not an exit (coordinator decision 2026-10-29, review m2)", async () => {
     const dir = newDir();
     const r = await runClient(dir, jobsOf(A, 1));
     expect(r.results[0].status).toBe(200);
     const main = readRegistry(dir, "llama").find((e) => e.role === "main")!;
     expect(alive(main.pid)).toBe(true);
+    // Review m2: a volume briefly unavailable. Each 900 ms absence holds at most one 1 s tick (Node runs an interval no
+    // sooner than its period), and almost always exactly one, so one missing reading must not end the broker; 5 rounds
+    // make it near certain at least one tick falls inside an absence. The 1500 ms back in place resets the count.
+    for (let i = 0; i < 5; i++) {
+      renameSync(dir, `${dir}.away`);
+      try {
+        await new Promise((res) => setTimeout(res, 900));
+      } finally {
+        // Always back in place: a dir left away would leak past the test-dir cleanup.
+        renameSync(`${dir}.away`, dir);
+      }
+      await new Promise((res) => setTimeout(res, 1500));
+    }
+    expect(alive(r.pid)).toBe(true);
+    expect(alive(main.pid)).toBe(true);
+    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).not.toContain("no longer exists");
     // The default idle windows (2 h): only the missing dir can make this broker exit within the bound.
     rmSync(dir, { recursive: true, force: true });
     // Bound: the 1 s tick, the server stop (SIGTERM, then SIGKILL after 10 s) and a settle.
@@ -1217,6 +1233,22 @@ describe("calibration runner (P6 step 2)", () => {
     await waitFor("the runner to finish", () => !alive(again), 180_000);
     expect(runnerLogOf(dir)).toMatch(/calibrated again: it only waited for free memory/);
     expect(loadProgress(dir, "llama", B, null).phases.A).toBe("passed");
+  }, 300_000);
+
+  it("review m1: --force on a model with a valid ok record that ends memory-limited keeps the ok record and ends the forced run", async () => {
+    const dir = newDir(); // B has an ok record naming the weights and engine build really loaded
+    const before = readRecord(dir, "llama", B)!;
+    expect(before.status).toBe("ok");
+    withStateLock(dir, 5000, () => {
+      enqueueUnlocked(dir, { engine: "llama", model: B, reason: "manual", force: true });
+      return true;
+    });
+    const pid = spawnRunner(dir, { TEST_MEMORY_PHASE: "limited" });
+    await waitFor("the runner to finish", () => !alive(pid), 180_000);
+    const after = readRecord(dir, "llama", B)!;
+    expect([after.status, after.calibrated_at, after.failed_step]).toEqual(["ok", before.calibrated_at, null]);
+    expect(runnerLogOf(dir)).toMatch(/memory-limited at A\/memory \(it only waited for free memory \(test\)\); the existing ok record is kept/);
+    expect(readQueue(dir)).toEqual([]);
   }, 300_000);
 
   it("rule 1 (coordinator decision 2026-10-29): a too-big record stores what it was judged against; it stands under the same floor and is judged again under another", async () => {

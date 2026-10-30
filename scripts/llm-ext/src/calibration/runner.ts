@@ -548,6 +548,10 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         progress.trials = progress.trials.filter((t) => !(typeof t.data?.skipped === "string" && PASS_COUNTED_SKIPS.includes(t.data.skipped)));
         progress.memoryWait = {};
         saveProgress(o.dir, item.engine, item.model, progress);
+        // Review m1: a forced calibration (--force) of a model whose ok record still matches what is loaded only waited for
+        // free memory: no new verdict, so the valid measurement is kept (rewritten, so a broker that marked it stale checks
+        // again) and the forced run ends. A memory-limited record over it would fail the model's jobs for an hour.
+        if (existing?.status === "ok" && stale === null) return finish(existing, `phase ${phase.name} memory-limited at ${r.step} (${r.message}); the existing ok record is kept, run models calibrate --model ${item.model} --force again once memory is free`);
         return finish(failedRecord(r.step, r.message, "memory-limited"), `phase ${phase.name} memory-limited at ${r.step}: ${r.message}`);
       }
       progress.phases[phase.name] = r.passed ? "passed" : "failed";
