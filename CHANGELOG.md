@@ -1,6 +1,37 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+### Highlights
+
+Curated notes for 14.2.0; the generated entries are the sections above.
+
+**Added**
+
+- Feat(local): two built-in local profiles, `local_llama` (GGUF models through llama.cpp `llama-server`) and `locals-mlx` (MLX models through the Locals server; added only on Apple-silicon Macs), each with three models. They are written into `settings.yaml` once, never over a profile of the same name, never again after you delete one, and never made active: select them with `--profile`. With `server: managed`, llm-ext starts and stops the model server itself.
+- Feat(local): one local request broker serves every managed profile. Per engine it runs one model at a time, groups queued requests by model and rotates to the next model after a minimum slice once another request nears `--queue_timeout` (default 300 s; waiting is never an error).
+- Feat(local): automatic calibration of each managed-profile model, once: on its first use, or when a model id changes in a profile that has been used (a profile nobody used is never calibrated). Requests for that model are held until its record is complete, which can take hours. A busy machine or a temporary lack of free memory pauses calibration instead of recording a verdict. A record made by a different calibration harness version is measured again.
+- Feat(cli): `llm-ext models calibrate --model <id> [--force]` queues one model for calibration (a model that already has a record needs `--force`); `llm-ext models calibration-status` shows each model as calibrated, failed (with step and reason) or in progress, and whether the runner is running.
+- Feat(cli): `llm-ext models server-status` lists and `llm-ext models server-stop` stops the managed local servers in the server registry; a server you started yourself is never touched.
+- Feat(cli): `--command_timeout <s>` (aliases `--command-timeout`, `--timeout`) on every command: when it expires, a command that sends model requests (classify included) starts no new one, cancels its queued local jobs, writes the results already complete, lists the unfinished files and exits 124; any command still running 30 s later is ended with exit 124.
+- Feat(profiles): a local profile may set `request_options:`, a default block plus per-tool blocks (thinking on/off, `max_output_tokens`, `temperature`, `top_k`, `repeat_penalty`); with it in force, a reply cut at the output limit is reported as an OUTPUT LIMIT error.
+- Feat(classify): classifier commands fall back from Jev to another System One model, priced at or below the profile model, when Jev is not found, unavailable or times out.
+
+**Changed**
+
+- Fix(profiles): an invalid generated `free`/`paid` profile is repaired inline instead of leaving every command NOT CONFIGURED, and a command whose generated profile has no working model waits (up to 10 minutes) for the repair and retries once instead of answering "retry later".
+- Fix(profiles): a provider outage (two models failing on one provider and a failed reachability probe of it) is reported as an outage instead of starting a repair of healthy models.
+
+**Fixed**
+
+- Fix(models): `llm-ext models health`, `discover`, `assess` and `replacements` no longer exit 1 with "free mode is active but the active profile defines no free models" on a managed local profile or on a funded remote profile that is not in free mode.
+- Fix(profiles): two processes repairing the same generated profile no longer overwrite the backup of the original `settings.yaml`.
+- Fix(scripts): the statusline checker and installer end a hung child process with a clear message instead of hanging or printing a traceback.
+
+**Correction**
+
+- The commit `fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir` says each new test was shown to fail with its change reverted; that holds only for part of them.
+
 ## [14.1.2] - 2026-10-27
 
 ### Fixed

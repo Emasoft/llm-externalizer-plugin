@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-10-30T07:48:32+0100
+updated: 2026-10-30T08:01:48+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -26,7 +26,7 @@ approval-datetime: 2026-10-28T19:10:21+0100
 - Plans: design/specs/TRDD-1OOAH3LD-increment-2a-plan.md (rev 4), design/specs/TRDD-ZGSGGHQG-locals-mlx-design.md.
 - Not on the critical path: 2b, 2c, 2d, 2e, the --stop_on_errors TRDD.
 - NEXT ACTION: implement the per-engine request broker per design/specs/local-engine-broker-design.md (revision 2, two review rounds done), starting from the paused P1 tree (backup reports/llama-cpp-profile/20261028_202138+0100-p1-wip.patch). Open user question: longest acceptable queue wait per request X (default 15 min). Then the Locals engine in the broker, then the program plan P3-P10.
-- 2026-10-30 resume point: the four reported units of 2026-10-29 (N0S2UL0K fix, open review findings, Python timeout cleanup, Phase B memory wait) and the five coordinator decisions of 2026-10-29 17:50 (interrupted by a reboot at 18:19, finished 2026-10-30) are committed: subjects 'fix(llm-ext): model tools work on a managed local profile', 'fix(llm-ext): classify honours --command_timeout', 'fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir', 'fix(scripts): bound local git and installer subprocesses, name the file in JSON errors'. The decisions are recorded verbatim on TRDD-1OOAH3LD under the headings Coordinator decisions 2026-10-29 (verbatim) and Coordinator decisions 2026-10-30. NEXT: the WBZJRSQB release steps.
+- 2026-10-30 resume point: the four reported units of 2026-10-29 (N0S2UL0K fix, open review findings, Python timeout cleanup, Phase B memory wait) and the coordinator decisions of 2026-10-29 and 2026-10-30 are committed, by subject: 'fix(scripts): bound local git and installer subprocesses, name the file in JSON errors', 'fix(llm-ext): model tools work on a managed local profile', 'fix(llm-ext): classify honours --command_timeout', 'fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir', 'fix(scripts): statusline timeouts end with a clear message, not a traceback', 'style(scripts): statusline warning says exited N or timed out, PEP 8 blank lines', 'fix(llm-ext): a waiting Phase B step loads nothing, --force keeps a valid record, broker survives a one-tick dir gap', 'fix(llm-ext): --force resets once, a server-context cut is a window skip, broker tolerates 10 s without its dir', 'fix(llm-ext): a non-forced pass drops a stale forced_at stamp before any early return'. The 14.2.0 release is origin/main plus every commit made since v14.1.2, replayed onto it, and a dist rebuild. Remaining: final checks (tsc, eslint, full npm test, a real-model run), the USER ruling of 2026-10-08 (an e2e test plus a fork quality evaluation for each new command: models server-stop, server-status, calibrate, calibration-status, and the classify timeout path), privacy sweep, publish dry run, publish 14.2.0. The decisions are recorded verbatim on TRDD-1OOAH3LD under the headings Coordinator decisions 2026-10-29 (verbatim) and Coordinator decisions 2026-10-30. NEXT: the TRDD-WBZJRSQB release steps.
 
 ## Approval log
 
