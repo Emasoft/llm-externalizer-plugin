@@ -35,12 +35,8 @@ L1 (preset, profile, gates) first; L3 (parallel requests, memory floor, liveness
 - L3: speed-up ratio T(max_parallel 2) / T(max_parallel 1) < 0.75 on the same private server (--slots 2) in the same run; 6 requests at --slots 2 all complete with no error; memory floor forced high then lowered: waits then drains with no error (docstring: proves the waiting mechanism, not detection of real low memory); --slots 1 with a short liveness window and two long requests: both complete, no error; max_parallel 1 keeps the sequential order; output order and report names unchanged at max_parallel 2; fixtures are recorded real /stats and memory_pressure output, dated.
 - L2: start, reuse, both refusals, stop of our own server, a hand-restarted server not stopped.
 
-## Disclosed
-- ~/.locals/config.json was changed from port 8321 to 9090 by an earlier measurement that ran locals serve --port 9090 (inferred from logs, round-2 measure). Restoring it to 8321 needs the user's go-ahead (file outside the project).
-
 ## Pending user decisions
 1. L2 start method: A (locals start) or B (server module directly, recommended).
 2. Idle Locals server: killed after 2 hours without requests like local_llama, or kept running until server-stop.
 3. Locals tests on non-mac CI: skipped with a printed reason?
 4. Reuse a user-started Locals server serving the same model.
-5. Restore ~/.locals/config.json port to 8321.

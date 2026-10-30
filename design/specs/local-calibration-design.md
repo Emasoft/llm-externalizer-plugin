@@ -324,7 +324,7 @@ Plus the Nanbeige GGUF Phase A json_schema check only (known answer: unsupported
 - one SIGKILL of the runner, the orphan sweep, and a resume that reuses the finished trials;
 - one real `llm ask` on the LFM3 model during the run: held, no main server started, served after the record;
 - one real `llm ask` on another local model during the run that pauses calibration, with the pause and resume logged;
-- `~/.locals/config.json` checksum unchanged (it is still unverified whether `locals.server` writes it), port 8321 and the user's processes untouched.
+- calibration leaves `~/.locals/config.json` unchanged (it is still unverified whether `locals.server` writes it).
 
 Results go to `reports/llama-cpp-profile/<ts>-p6a-dry-run.md`, with the measured trial times that replace the assumed rates in section 5.
 
@@ -332,7 +332,6 @@ Results go to `reports/llama-cpp-profile/<ts>-p6a-dry-run.md`, with the measured
 1. **W beyond 32768** (F12). Calibrating at 32768 sizes inputs up to about 13k tokens. The user cited LFM3's 256k window. Extending W to 65536 adds the top step's trials at twice the size (several hours more per 4B model); 131072 more again. Option: offer `models calibrate --window 65536` per model later.
 2. **Held until calibrated, or provisional use** (F13). As designed, a request for a model without a complete record is held until the record exists: hours for a new profile (section 5). The alternative: once a model passes Phase A (about 10-15 min), it serves requests with conservative provisional settings (8192 context per slot, one slot, thinking per the ruling) while Phases B and C finish. That is using the model during calibration, which the earlier answer "No, wait" refused. Please confirm "held", or approve provisional use.
 3. **Scouting context** (F18). "Reduced context memory to make the models run faster" for mass-scouting is still the main agent's reading, to be confirmed; it costs a server reload on each switch.
-4. **`~/.locals/config.json`** (F22). Its port was changed from 8321 to 9090 earlier and has not been restored. Restoring it is the user's call; calibration never touches the file.
 
 ## 12. Review findings and what changed
 
