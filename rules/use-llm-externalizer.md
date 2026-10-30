@@ -8,7 +8,7 @@ Prefer it over a Haiku subagent, or any subagent, for bounded read-only work —
 
 `-o`/`--output` is shorthand for that command's `--output_dir`. Left out, reports go to `<project-root>/reports/llm-externalizer/<sub>/`, anchored on `$CLAUDE_PROJECT_DIR` — never a git root, because a linked worktree is ephemeral and reports written there are lost with it. Profile precedence is `--profile <name>` > `active: <name>` in settings.yaml > the built-in `free` profile; a fresh install writes `active: free`. A name picks a built-in profile (`free`, `paid`, `local`) or one listed under `profiles:` in `~/.llm-externalizer/settings.yaml` (that's `.yaml`; a legacy `settings.yml` is preserved on disk but not read). Once a command starts, it sticks to the selected profile for its whole run — on a model failure it falls back only to the next model of the SAME profile, never to another profile.
 
-Every llm-ext env var uses the `LLM_EXT_` prefix (USER 2026-09-18) — `LLM_EXT_OUTPUT_DIR` overrides the report-root default above, `LLM_EXT_CONFIG_DIR` overrides the settings directory.
+Every llm-ext env var uses the `LLM_EXT_` prefix — `LLM_EXT_OUTPUT_DIR` overrides the report-root default above, `LLM_EXT_CONFIG_DIR` overrides the settings directory.
 
 A few operating rules: pass file paths, never file contents; include a line or two of project context, since the remote model knows nothing about the repo; for a question spanning the whole codebase use `scan impl`; give `scout *`, `scan security`, and `scan quality` a 20-minute timeout, or run them in the background.
 
