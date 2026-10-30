@@ -15,10 +15,10 @@ def main() -> None:
         sys.exit(1)
 
     print("Installing dependencies...")
-    subprocess.run(["npm", "install", "--ignore-scripts"], cwd=str(mcp_dir), check=True)
+    subprocess.run(["npm", "install", "--ignore-scripts"], cwd=str(mcp_dir), check=True)  # ubs:ignore -- npm install is network-bound with no known upper bound; user runs this interactively and can Ctrl-C
 
     print("Building TypeScript...")
-    subprocess.run(["npm", "run", "build"], cwd=str(mcp_dir), check=True)
+    subprocess.run(["npm", "run", "build"], cwd=str(mcp_dir), check=True)  # ubs:ignore -- tsc/esbuild build time scales with the machine; interactive step with no known upper bound
 
     print()
     print("LLM Externalizer CLI built successfully.")

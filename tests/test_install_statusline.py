@@ -59,7 +59,7 @@ class TestAtomicWriteJson:
     def test_writes_readable_json(self, mod, tmp_path: Path) -> None:
         target = tmp_path / "settings.json"
         mod._atomic_write_json(target, {"statusLine": {"type": "command"}})
-        assert json.loads(target.read_text(encoding="utf-8"))["statusLine"]["type"] == "command"
+        assert json.loads(target.read_text(encoding="utf-8"))["statusLine"]["type"] == "command"  # ubs:ignore -- file was just written by the installer under test; a malformed file fails the assert loudly
 
     def test_ends_with_a_trailing_newline(self, mod, tmp_path: Path) -> None:
         # Not cosmetic: a file with no trailing newline is a diff-noise generator
@@ -75,7 +75,7 @@ class TestAtomicWriteJson:
         target = tmp_path / "settings.json"
         target.write_text(json.dumps({"old": "x" * 500}), encoding="utf-8")
         mod._atomic_write_json(target, {"new": 1})
-        assert json.loads(target.read_text(encoding="utf-8")) == {"new": 1}
+        assert json.loads(target.read_text(encoding="utf-8")) == {"new": 1}  # ubs:ignore -- file was just written by the installer under test; a malformed file fails the assert loudly
 
     def test_leaves_no_temp_file_behind_on_success(self, mod, tmp_path: Path) -> None:
         mod._atomic_write_json(tmp_path / "settings.json", {"a": 1})
@@ -131,7 +131,7 @@ class TestAtomicWriteJson:
         mod._atomic_write_json(target, {"cmd": "python3 ~/.claude/état.py"})
         raw = target.read_text(encoding="utf-8")
         assert "état" in raw
-        assert json.loads(raw)["cmd"].endswith("état.py")
+        assert json.loads(raw)["cmd"].endswith("état.py")  # ubs:ignore -- raw is the installer output under test; a malformed value fails the assert loudly
 
 
 class TestTimestamp:

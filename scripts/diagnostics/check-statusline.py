@@ -109,7 +109,8 @@ def main() -> int:
         if args.fix:
             print("Re-running install_statusline.py per --fix ...", file=sys.stderr)
             installer = Path(__file__).resolve().parent.parent / "install_statusline.py"
-            subprocess.run([sys.executable, str(installer)], check=False)
+            # timeout: the installer only rewrites settings.json; a hang here would block the diagnostic forever.
+            subprocess.run([sys.executable, str(installer)], check=False, timeout=60)
         return 1
     out = proc.stdout.strip()
     if not out:

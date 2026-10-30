@@ -225,7 +225,7 @@ def test_extract_cpv_json_strips_preamble() -> None:
     """_extract_cpv_json returns the trailing JSON object, dropping the preamble."""
     extracted = publish._extract_cpv_json(_cpv_json_with_preamble([_skillaudit("MAJOR")]))
     assert extracted is not None
-    assert json.loads(extracted)["results"][0]["level"] == "MAJOR"
+    assert json.loads(extracted)["results"][0]["level"] == "MAJOR"  # ubs:ignore -- extracted is the function output under test; a malformed value fails the assert loudly
 
 
 def test_extract_cpv_json_none_when_no_object() -> None:
@@ -306,6 +306,7 @@ def _tracked_entries(repo_root: Path) -> list[tuple[str, str]]:
         text=True,
         encoding="utf-8",
         check=True,
+        timeout=60,  # git ls-files on a local repo; a hang must fail the test, not stall the suite
     )
     entries: list[tuple[str, str]] = []
     for record in out.stdout.split("\0"):

@@ -231,9 +231,16 @@ def main() -> None:
     # is not this installer's call.
     if wrapper and was_wrapped:
         rc = subprocess.run(
-            [wrapper, "--install-statusline"], capture_output=True, text=True
+            # timeout: agentlenspro's installer is a local backup+rewrite of settings.json; a hang must not block this installer forever.
+            [wrapper, "--install-statusline"], capture_output=True, text=True, timeout=120
         ).returncode
-        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        # Fail fast naming the file: the wrapper rewrites settings.json, so a bare
+        # JSONDecodeError here would not say which file it left corrupt.
+        try:
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"Error: {settings_path} is not valid JSON after the agentlenspro re-wrap ({exc}).", file=sys.stderr)
+            sys.exit(2)
         # Assert the POST-CONDITION, not the exit code: rc==0 does not prove the
         # wrap is back. Read what actually landed in settings.json.
         restored = "agentlenspro" in str(

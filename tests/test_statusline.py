@@ -691,11 +691,11 @@ def _build_stale_mtime_repo(repo: Path) -> None:
     trigger a refresh on filesystems with 1s timestamp resolution."""
     repo.mkdir()
     git_env = ["-c", "user.name=t", "-c", "user.email=t@example.invalid"]
-    subprocess.run(["git", *git_env, "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", *git_env, "init", "-q", str(repo)], check=True, timeout=30)  # a hung git must fail the test, not stall the suite
     tracked = repo / "f.txt"
     tracked.write_text("hello\n")
-    subprocess.run(["git", "-C", str(repo), *git_env, "add", "f.txt"], check=True)
-    subprocess.run(["git", "-C", str(repo), *git_env, "commit", "-q", "-m", "init"], check=True)
+    subprocess.run(["git", "-C", str(repo), *git_env, "add", "f.txt"], check=True, timeout=30)  # a hung git must fail the test, not stall the suite
+    subprocess.run(["git", "-C", str(repo), *git_env, "commit", "-q", "-m", "init"], check=True, timeout=30)  # a hung git must fail the test, not stall the suite
     os.utime(tracked, (1_000_000_000, 1_000_000_000))
 
 
@@ -744,6 +744,7 @@ def test_get_git_info_never_rewrites_the_index(
         ["git", "-C", str(premise_repo), "status", "--porcelain=v1"],
         check=True,
         capture_output=True,
+        timeout=30,  # a hung git must fail the test, not stall the suite
     )
     assert premise_index.read_bytes() != premise_before, (
         "premise failed: a plain `git status` did not rewrite .git/index "

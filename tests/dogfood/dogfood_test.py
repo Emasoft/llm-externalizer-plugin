@@ -311,7 +311,7 @@ def run(
     # anywhere in this file can no longer escape LLM_EXT_CONFIG_DIR isolation.
     env = env if env is not None else ISOLATED_ENV
     try:
-        proc = subprocess.Popen(
+        proc = subprocess.Popen(  # ubs:ignore -- argv list with no shell; the test harness chooses the args, the timeout is enforced by communicate() plus killpg below
             args,
             cwd=str(cwd) if cwd else None,
             stdout=subprocess.PIPE,

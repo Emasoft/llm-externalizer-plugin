@@ -72,7 +72,7 @@ def repo_root() -> Path:
     """Main checkout, even when called from a linked worktree."""
     try:
         out = subprocess.run(["git", "worktree", "list", "--porcelain"],
-                             capture_output=True, text=True, cwd=PROJECT_ROOT)
+                             capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=30)
         for line in out.stdout.splitlines():
             if line.startswith("worktree "):
                 return Path(line[len("worktree "):])

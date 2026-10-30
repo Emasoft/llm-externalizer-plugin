@@ -434,7 +434,12 @@ def save_json(path: str | os.PathLike[str], value: Any) -> None:
 
 def load_json(path: str | os.PathLike[str]) -> Any:
     with expand_path(path).open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+        # Re-raise with the file name: a bare JSONDecodeError does not say which cache file is corrupt.
+        # Same exception type, so the callers that catch json.JSONDecodeError keep working.
+        try:
+            return json.load(handle)
+        except json.JSONDecodeError as exc:
+            raise json.JSONDecodeError(f"{path}: {exc.msg}", exc.doc, exc.pos) from exc
 
 
 def default_cache_dir() -> Path:
@@ -1943,7 +1948,7 @@ def recommend_models(
 
         required = estimate_required_memory_gb(model, context_tokens, safety_overhead_gb=1.25)
         license_multiplier = license_factor(model.license, allow_noncommercial)
-        if license_multiplier == 0.0:
+        if license_multiplier == 0.0:  # ubs:ignore -- license_factor() returns the literal 0.0 sentinel for excluded licences, never a computed value
             notes.append("excluded by non-commercial/license policy")
 
         if required is None:

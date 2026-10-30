@@ -114,7 +114,7 @@ def run(
     Look there first when a call site passes ``env``.
     """
     print(f"  $ {shlex.join(cmd)}")
-    return subprocess.run(
+    return subprocess.run(  # ubs:ignore -- generic runner for tests/git push/CPV publish steps with no known upper bound; a timeout would kill a legitimate long publish
         cmd,
         check=check,
         capture_output=capture,
@@ -904,7 +904,12 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     if not plugin_json.exists():
         print(f"ERROR: {plugin_json} not found", file=sys.stderr)
         sys.exit(1)
-    manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+    # Fail fast naming the file; a bare JSONDecodeError would not say which manifest is corrupt.
+    try:
+        manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: {plugin_json} is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
     current = manifest.get("version", "0.0.0")
     new_version = determine_next_version(args, current)
     tag = f"v{new_version}"
@@ -982,7 +987,12 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # Sync version to scripts/llm-ext/package.json
     pkg_json = repo_root / "scripts" / "llm-ext" / "package.json"
     if pkg_json.exists():
-        pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+        # Fail fast naming the file; a bare JSONDecodeError would not say which package.json is corrupt.
+        try:
+            pkg = json.loads(pkg_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            print(f"ERROR: {pkg_json} is not valid JSON: {exc}", file=sys.stderr)
+            sys.exit(1)
         pkg["version"] = new_version
         pkg_json.write_text(
             json.dumps(pkg, indent=2, ensure_ascii=False) + "\n",

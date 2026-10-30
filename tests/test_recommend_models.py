@@ -103,13 +103,13 @@ def _gpu_hw(vram_gb: float, ram_gb: float = 64.0):
 
 def test_fit_factor_tiers_by_headroom_ratio():
     """fit_factor maps the headroom ratio to its five discrete fit weights."""
-    assert rm.fit_factor(0.40, True) == 1.0  # >= 0.30 comfortable
-    assert rm.fit_factor(0.20, True) == 0.90  # >= 0.15
-    assert rm.fit_factor(0.08, True) == 0.72  # >= 0.05
-    assert rm.fit_factor(0.01, True) == 0.50  # positive but tiny
+    assert rm.fit_factor(0.40, True) == 1.0  # >= 0.30 comfortable  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
+    assert rm.fit_factor(0.20, True) == 0.90  # >= 0.15  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
+    assert rm.fit_factor(0.08, True) == 0.72  # >= 0.05  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
+    assert rm.fit_factor(0.01, True) == 0.50  # positive but tiny  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
     # Incompatible or unknown headroom collapses the fit weight to zero.
-    assert rm.fit_factor(0.40, False) == 0.0
-    assert rm.fit_factor(None, True) == 0.0
+    assert rm.fit_factor(0.40, False) == 0.0  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
+    assert rm.fit_factor(None, True) == 0.0  # ubs:ignore -- fit_factor returns table constants (1.0/0.90/0.72/0.50/0.0), exact by construction
 
 
 def test_run_status_labels_track_headroom_tiers():
@@ -124,20 +124,20 @@ def test_run_status_labels_track_headroom_tiers():
 
 def test_license_factor_branches_permissive_noncommercial_family_default():
     """license_factor returns 1.0 permissive, 0.0 blocked-NC, family/default discounts, 0.92 when unknown."""
-    assert rm.license_factor("Apache-2.0", allow_noncommercial=False) == 1.0
-    assert rm.license_factor("MIT", allow_noncommercial=False) == 1.0
+    assert rm.license_factor("Apache-2.0", allow_noncommercial=False) == 1.0  # ubs:ignore -- license_factor returns table constants, exact by construction
+    assert rm.license_factor("MIT", allow_noncommercial=False) == 1.0  # ubs:ignore -- license_factor returns table constants, exact by construction
     # Non-commercial license is fully excluded unless explicitly allowed.
-    assert rm.license_factor("CC-BY-NC-4.0", allow_noncommercial=False) == 0.0
+    assert rm.license_factor("CC-BY-NC-4.0", allow_noncommercial=False) == 0.0  # ubs:ignore -- license_factor returns table constants, exact by construction
     # Once NC is allowed, "CC-BY-NC" still contains the permissive "cc-by" keyword -> 1.0.
-    assert rm.license_factor("CC-BY-NC-4.0", allow_noncommercial=True) == 1.0
+    assert rm.license_factor("CC-BY-NC-4.0", allow_noncommercial=True) == 1.0  # ubs:ignore -- license_factor returns table constants, exact by construction
     # A research-only license has no permissive substring, so it stays fully blocked.
-    assert rm.license_factor("Research only license", allow_noncommercial=False) == 0.0
+    assert rm.license_factor("Research only license", allow_noncommercial=False) == 0.0  # ubs:ignore -- license_factor returns table constants, exact by construction
     # Family-branded licenses get a near-full multiplier.
-    assert rm.license_factor("Llama 3 Community License", allow_noncommercial=False) == 0.94
+    assert rm.license_factor("Llama 3 Community License", allow_noncommercial=False) == 0.94  # ubs:ignore -- license_factor returns table constants, exact by construction
     # A present-but-unrecognized license gets the conservative default.
-    assert rm.license_factor("Some Proprietary EULA", allow_noncommercial=False) == 0.90
+    assert rm.license_factor("Some Proprietary EULA", allow_noncommercial=False) == 0.90  # ubs:ignore -- license_factor returns table constants, exact by construction
     # An absent license is treated as mildly uncertain, not blocked.
-    assert rm.license_factor(None, allow_noncommercial=False) == 0.92
+    assert rm.license_factor(None, allow_noncommercial=False) == 0.92  # ubs:ignore -- license_factor returns table constants, exact by construction
 
 
 def test_recommendation_memory_budget_selects_gpu_apple_or_cpu_basis():
@@ -145,7 +145,7 @@ def test_recommendation_memory_budget_selects_gpu_apple_or_cpu_basis():
     # GPU present -> full single-GPU VRAM is the budget.
     basis, mem = rm.recommendation_memory_budget(_gpu_hw(24.0), 0.75, 0.50)
     assert basis == "largest single GPU VRAM"
-    assert mem == 24.0
+    assert mem == 24.0  # ubs:ignore -- memory figure is exact by construction (power-of-two inputs times fixed fractions)
     # No GPU but unified memory -> a fraction of system RAM.
     apple = rm.HardwareProfile(
         os_name="Darwin", machine="arm64", cpu="Apple M3", ram_gb=64.0,
@@ -154,12 +154,12 @@ def test_recommendation_memory_budget_selects_gpu_apple_or_cpu_basis():
     )
     basis, mem = rm.recommendation_memory_budget(apple, 0.75, 0.50)
     assert basis == "Apple unified memory budget"
-    assert mem == 48.0  # 64 * 0.75
+    assert mem == 48.0  # 64 * 0.75  # ubs:ignore -- memory figure is exact by construction (power-of-two inputs times fixed fractions)
     # No GPU, no unified memory -> conservative CPU fraction of RAM.
     cpu_only = rm.dataclasses.replace(apple, unified_memory=False, backend_hints=[])
     basis, mem = rm.recommendation_memory_budget(cpu_only, 0.75, 0.50)
     assert basis == "system RAM CPU budget"
-    assert mem == 32.0  # 64 * 0.50
+    assert mem == 32.0  # 64 * 0.50  # ubs:ignore -- memory figure is exact by construction (power-of-two inputs times fixed fractions)
 
 
 def test_estimate_required_memory_adds_context_overhead_and_handles_missing_int4():
@@ -167,7 +167,7 @@ def test_estimate_required_memory_adds_context_overhead_and_handles_missing_int4
     model = _model(params_b=7.0, context_tokens=131072, vram_int4_gb=4.0)
     # At 8K context there is zero context overhead, so required == int4 + safety.
     small_ctx = rm.estimate_required_memory_gb(model, context_tokens=8192, safety_overhead_gb=1.25)
-    assert small_ctx == 4.0 + 0.0 + 1.25
+    assert small_ctx == 4.0 + 0.0 + 1.25  # ubs:ignore -- sum of constants 4.0 + 0.0 + 1.25, all exactly representable
     # A larger context adds a positive, monotonically growing overhead.
     big_ctx = rm.estimate_required_memory_gb(model, context_tokens=32768, safety_overhead_gb=1.25)
     assert big_ctx is not None
@@ -186,20 +186,20 @@ def test_coding_score_weights_benchmarks_and_ranks_stronger_model_higher():
     strong_score = rm.coding_score(strong, normalized)
     weak_score = rm.coding_score(weak, normalized)
     # Min-max normalization puts the leader at 100 and the laggard at 0 per column.
-    assert strong_score == 100.0
-    assert weak_score == 0.0
+    assert strong_score == 100.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
+    assert weak_score == 0.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
     # A model with no benchmark data at all scores zero (no pieces to weight).
     blank = _model(name="Blank-7B")
-    assert rm.coding_score(blank, rm.normalized_benchmark_values([blank])) == 0.0
+    assert rm.coding_score(blank, rm.normalized_benchmark_values([blank])) == 0.0  # ubs:ignore -- score is clamped to the exact 0.0/100.0 bounds by the code under test
 
 
 def test_parse_params_b_from_model_name_uses_last_size_token():
     """parse_params_b_from_model_name takes the architecture-size token, not a version-number prefix."""
     # The regression case: a dotted version prefix must NOT become the size.
-    assert rm.parse_params_b_from_model_name("Qwen3.5-27B") == 27.0
-    assert rm.parse_params_b_from_model_name("Llama-3.1-8B-Instruct") == 8.0
+    assert rm.parse_params_b_from_model_name("Qwen3.5-27B") == 27.0  # ubs:ignore -- parsed parameter count is a whole-number literal from the model name
+    assert rm.parse_params_b_from_model_name("Llama-3.1-8B-Instruct") == 8.0  # ubs:ignore -- parsed parameter count is a whole-number literal from the model name
     # Architecture-annotated sizes (active-param MoE notation) are still recognized.
-    assert rm.parse_params_b_from_model_name("Mixtral-8x7B-A3B") == 3.0
+    assert rm.parse_params_b_from_model_name("Mixtral-8x7B-A3B") == 3.0  # ubs:ignore -- parsed parameter count is a whole-number literal from the model name
     # A name whose only number is a non-"B" suffix (e.g. trillion) has no size token -> None.
     assert rm.parse_params_b_from_model_name("Giant-1.5T") is None
     # A name with no parameter token yields None (no size to estimate from).

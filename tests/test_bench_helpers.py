@@ -51,7 +51,7 @@ def test_rank_models_record_missing_perf_does_not_raise() -> None:
     # The perf-less record is annotated, not crashed, and is non-viable.
     no_perf = next(r for r in ranked if r["model"] == "no/perf")
     assert no_perf["viable"] is False
-    assert no_perf["average_score"] == 0.0
+    assert no_perf["average_score"] == 0.0  # ubs:ignore -- exact 0.0 sentinel returned when there is no perf data
 
 
 def test_render_markdown_record_missing_tests_and_perf_does_not_raise() -> None:
@@ -69,7 +69,7 @@ def test_render_markdown_record_missing_tests_and_perf_does_not_raise() -> None:
 
 def test_avg_test_score_missing_tests_returns_zero() -> None:
     """_avg_test_score returns the 0.0 safe default when 'tests' is absent."""
-    assert bh._avg_test_score({"model": "x/y"}) == 0.0
+    assert bh._avg_test_score({"model": "x/y"}) == 0.0  # ubs:ignore -- exact 0.0 sentinel returned when there is no score
 
 
 def test_wellformed_batch_ranks_and_renders_correctly() -> None:

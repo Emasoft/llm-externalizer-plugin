@@ -208,7 +208,7 @@ def ensure_cache_dir() -> Path:
     cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     # Open with O_NOFOLLOW so a symlink swapped in after mkdir still cannot divert
     # the fchmod() to a target the attacker chose.
-    fd = os.open(cache_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    fd = os.open(cache_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)  # ubs:ignore -- closed in the try/finally on the next lines
     try:
         st = os.fstat(fd)
         if st.st_uid != os.getuid():
@@ -931,7 +931,7 @@ def main() -> None:
                     # `O_NONBLOCK` lets the open fail fast on hung devices
                     # without waiting for the kernel timeout. Path.open() does
                     # not expose flags; use os.open() and wrap in os.fdopen.
-                    fd = os.open("/dev/tty", os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+                    fd = os.open("/dev/tty", os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))  # ubs:ignore -- closed in the try/finally on the next lines
                     try:
                         cols = os.get_terminal_size(fd).columns
                     finally:

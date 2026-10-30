@@ -104,7 +104,7 @@ def run_inspect_vllm(
     print(f"Running: {' '.join(cmd)}")
 
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)  # ubs:ignore -- model evaluation run; duration scales with model and dataset, no known upper bound
         print("Evaluation complete.")
     except subprocess.CalledProcessError as exc:
         print(f"Evaluation failed with exit code {exc.returncode}", file=sys.stderr)
@@ -169,7 +169,7 @@ def run_inspect_hf(
     print(f"Running: {' '.join(cmd)}")
 
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True)  # ubs:ignore -- model evaluation run; duration scales with model and dataset, no known upper bound
         print("Evaluation complete.")
     except subprocess.CalledProcessError as exc:
         print(f"Evaluation failed with exit code {exc.returncode}", file=sys.stderr)

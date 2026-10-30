@@ -93,7 +93,7 @@ def main() -> None:
         cmd.extend(["--limit", str(args.limit)])
 
     try:
-        subprocess.run(cmd, check=True, cwd=tasks_root)
+        subprocess.run(cmd, check=True, cwd=tasks_root)  # ubs:ignore -- model evaluation run; duration scales with model and dataset, no known upper bound
         print("Evaluation complete.")
     except subprocess.CalledProcessError as exc:
         location = f" (cwd={tasks_root})" if tasks_root else ""

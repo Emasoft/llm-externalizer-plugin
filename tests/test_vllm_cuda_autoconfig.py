@@ -237,6 +237,6 @@ def test_main_print_vram_only_dry_run_emits_json(capsys):
     rc = vllm_autoconfig.main(["--print-vram-only", "--dry-run"])
     out = capsys.readouterr().out
     assert rc == 0
-    payload = json.loads(out)
+    payload = json.loads(out)  # ubs:ignore -- out is the CLI output under test; a malformed value fails the assert loudly
     assert payload["schema_version"] == vllm_autoconfig.SCHEMA_VERSION
     assert payload["tier"] == "ge24gb"  # synthetic 24 GB GPU

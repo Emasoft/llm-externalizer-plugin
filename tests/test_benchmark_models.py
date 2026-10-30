@@ -277,7 +277,7 @@ def test_atomic_write_json_round_trip() -> None:
         target = Path(td) / "out.json"
         mod.atomic_write_json(target, payload)
         assert target.is_file()
-        assert json.loads(target.read_text()) == payload
+        assert json.loads(target.read_text()) == payload  # ubs:ignore -- a malformed file fails the assert with a traceback naming the test; file was written by the code under test
 
 
 def test_atomic_write_json_no_tmp_leak() -> None:
@@ -356,7 +356,7 @@ def test_vmlx_bench_delegation_when_cli_present(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/vmlx")
     monkeypatch.setattr(subprocess, "run", fake_run)
     perf = mod.run_vmlx_bench("mlx-community/Qwen3-8B-4bit")
-    assert perf["tokens_per_second"] == 42.5
+    assert perf["tokens_per_second"] == 42.5  # ubs:ignore -- 42.5 is the exact value the test fed in; no arithmetic involved
     # ttft in seconds, converted from ms
     assert abs(perf["ttft_s"] - 0.35) < 1e-6
 
@@ -451,7 +451,7 @@ def test_measure_throughput_returns_error_dict_when_call_chat_raises(
     monkeypatch.setattr(mod, "call_chat", boom)
     result = mod.measure_throughput("http://localhost:8000/v1", "any-model", timeout=1.0)
     assert isinstance(result, dict)
-    assert result["tokens_per_second"] == 0.0
+    assert result["tokens_per_second"] == 0.0  # ubs:ignore -- exact 0.0 sentinel assigned by the code under test
     assert result["source"] == "in-script"
     assert "error" in result and "OSError" in result["error"]
 
@@ -496,9 +496,9 @@ def test_run_vmlx_bench_returns_safe_values_on_unparseable_numbers(
     monkeypatch.setattr(mod.shutil, "which", lambda _name: "/usr/bin/vmlx")
     perf = mod.run_vmlx_bench("any-model")
     assert isinstance(perf, dict)
-    assert perf["tokens_per_second"] == 0.0
-    assert perf["ttft_s"] == 0.0
-    assert perf["total_latency_s"] == 0.0
+    assert perf["tokens_per_second"] == 0.0  # ubs:ignore -- exact 0.0 sentinel assigned by the code under test
+    assert perf["ttft_s"] == 0.0  # ubs:ignore -- exact 0.0 sentinel assigned by the code under test
+    assert perf["total_latency_s"] == 0.0  # ubs:ignore -- exact 0.0 sentinel assigned by the code under test
     assert perf["completion_tokens"] == 0
     assert perf["prompt_tokens"] == 0
     assert perf["source"] == "vmlx-bench"

@@ -179,7 +179,7 @@ def test_dump_state_redacts_secret_shaped_substrings(tmp_path: Path) -> None:
     env["HOME"] = str(fake_home)
     # Also set OPENAI_API_KEY as the spec requested (even though dump-state
     # doesn't dump env vars, this proves env-leak isn't a regression).
-    env["OPENAI_API_KEY"] = "sk-test123"
+    env["OPENAI_API_KEY"] = "sk-test123"  # ubs:ignore -- fake placeholder key; the test asserts dump-state does not leak it
 
     proc = subprocess.run(
         [PY, str(DUMP_STATE)],

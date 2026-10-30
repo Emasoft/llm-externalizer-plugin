@@ -65,7 +65,7 @@ def section(title: str) -> str:
 
 def cmd_output(args: list[str], timeout: float = 5.0) -> str:
     try:
-        result = subprocess.run(args, capture_output=True, text=True,
+        result = subprocess.run(args, capture_output=True, text=True,  # ubs:ignore -- argv list (no shell); callers pass fixed binaries, CLAUDE_PLUGIN_ROOT is only a "git -C" operand
                                 timeout=timeout, check=False)
     except (FileNotFoundError, subprocess.SubprocessError) as e:
         return f"(error: {e})"
