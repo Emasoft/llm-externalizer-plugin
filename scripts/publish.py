@@ -2,7 +2,7 @@
 """Publish a new release: bump version, update changelog, tag, push, create GitHub release.
 
 Usage:
-    uv run scripts/publish.py              # bump patch (default)
+    uv run scripts/publish.py              # bump chosen by git-cliff from commit types
     uv run scripts/publish.py --patch      # 3.2.0 -> 3.2.1
     uv run scripts/publish.py --minor      # 3.2.0 -> 3.3.0
     uv run scripts/publish.py --major      # 3.2.0 -> 4.0.0
@@ -17,7 +17,7 @@ Push policy:
     a lock file, not an env var, nothing spoofable. Since subprocess.run
     spawns git as a child of this script's Python interpreter, publish.py
     will be the grandparent of the hook whenever the push comes from here.
-    No bypass exists.
+    Only `git push --no-verify` skips the hook; this script never passes it.
 
 Steps (in order — validate is FIRST, no skipping):
     1. Pre-flight: working tree clean + required tools present
@@ -812,7 +812,7 @@ def _cpv_strict_fail(report: Path, cpv_result: subprocess.CompletedProcess) -> b
 def main():
     parser = argparse.ArgumentParser(description="Publish a new release")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--patch", action="store_true", help="Bump patch version (default)")
+    group.add_argument("--patch", action="store_true", help="Bump patch version")
     group.add_argument("--minor", action="store_true", help="Bump minor version")
     group.add_argument("--major", action="store_true", help="Bump major version")
     group.add_argument("--set", type=str, metavar="VERSION", help="Set explicit version (x.y.z)")
