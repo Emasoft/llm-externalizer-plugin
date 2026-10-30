@@ -835,10 +835,11 @@ def main() -> None:
             # it and skips the section instead of printing a made-up number.
             return int(float(raw))
 
-        # WHY absent windows render nothing: an absent window means the account
-        # has none (verified Ultra accounts have no 5-hour window) or it just
-        # reset (Claude Code drops a window once its resets_at passes). A
-        # printed 0% would be a false number. A real 0 still renders "0%".
+        # WHY absent windows render nothing: an absent window means the data
+        # carries no such limit: verified Ultra accounts have no 5-hour window,
+        # and Claude Code drops a window once its resets_at passes (so the row
+        # can briefly vanish after a reset; that does not mean the limit is
+        # gone). A printed 0% would be a false number. A real 0 still renders "0%".
         # 5-hour
         try:
             five = safe_jq(usage_data, "five_hour") or {}
@@ -990,10 +991,11 @@ def main() -> None:
                 print(segments[-1], end="")
             else:
                 head, rest = out.split(split_marker, 1)
-                # Tier 3 splits at the first rate-limit section present: an
-                # account with no 5-hour window (verified Ultra) has only 📅,
-                # and keying on ⏱️ alone would drop it to tier 2.
-                rl_candidates = [m for m in (f"{sep}⏱️", f"{sep}📅") if m in rest]
+                # Tier 3 splits at the first rate-limit/spend section present: an
+                # account with no 5-hour window (verified Ultra) has only 📅, and
+                # keying on ⏱️ alone would drop it to tier 2; a spend-only
+                # envelope (💳) keeps its own line instead of joining the 📊 row.
+                rl_candidates = [m for m in (f"{sep}⏱️", f"{sep}📅", f"{sep}💳") if m in rest]
                 rl_marker = min(rl_candidates, key=rest.index) if rl_candidates else ""
                 if cols < 95 and rl_marker:
                     # Tier 3: 3 lines.

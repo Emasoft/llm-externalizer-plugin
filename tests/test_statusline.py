@@ -866,16 +866,55 @@ def test_statusline_omits_5h_when_only_seven_day(tmp_path: Path) -> None:
 
 
 def test_statusline_omits_5h_when_five_hour_null(tmp_path: Path) -> None:
-    """The usage API can return five_hour: null; that renders no 5h row."""
+    """A null window (the shape the usage API uses for its unused windows) renders no 5h row."""
     envelope = {**_ENV_BASE, "rate_limits": {"five_hour": None, "seven_day": {"used_percentage": 5.0}}}
     out = _run_statusline(envelope, tmp_path)
     assert "7d" in out and "5h" not in out, f"unexpected rows in: {out!r}"
 
 
 def test_statusline_renders_real_zero_percent_5h(tmp_path: Path) -> None:
-    """A genuine 0 used_percentage is data, not absence: 5h and 0% still render."""
+    """A genuine 0 used_percentage is data, not absence: the 5h section itself carries 0%."""
+    import re
+
     out = _run_statusline({**_ENV_BASE, "rate_limits": {"five_hour": {"used_percentage": 0}}}, tmp_path)
-    assert "5h" in out and "0%" in out, f"real 0% missing from: {out!r}"
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", out)
+    # bar glyphs sit between "5h" and the percentage; the context bar also shows 0%, so anchor on 5h.
+    assert re.search(r"5h \S+ 0%", plain), f"5h section lacks 0% in: {plain!r}"
+
+
+def test_statusline_malformed_5h_value_renders_no_row_and_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A malformed used_percentage renders no 5h row and is logged via _log_exception."""
+    mod = _load_statusline_module()
+    cache = tmp_path / "claude"
+    monkeypatch.setattr(mod, "_CACHE_DIR", cache)
+    envelope = {**_ENV_BASE, "rate_limits": {"five_hour": {"used_percentage": "abc"}, "seven_day": {"used_percentage": 5.0}}}
+    rendered = _render_bar(mod, monkeypatch, envelope)
+    assert "7d" in rendered and "5h" not in rendered, f"unexpected rows in: {rendered!r}"
+    log = (cache / "statusline-error.log").read_text(encoding="utf-8")
+    assert "[rate-limit-5h]" in log and "ValueError" in log, f"error log lacks the 5h entry: {log!r}"
+
+
+def test_statusline_non_dict_window_renders_no_row(tmp_path: Path) -> None:
+    """A window that is not an object renders no row (skipped silently by the isinstance check)."""
+    envelope = {**_ENV_BASE, "rate_limits": {"five_hour": "oops", "seven_day": {"used_percentage": 5.0}}}
+    out = _run_statusline(envelope, tmp_path)
+    assert "7d" in out and "5h" not in out, f"unexpected rows in: {out!r}"
+
+
+def test_statusline_tier4_seven_day_only_has_calendar_line(tmp_path: Path) -> None:
+    """Below 65 cols with only seven_day, one line starts with the calendar emoji."""
+    out = _run_statusline({**_ENV_BASE, "rate_limits": {"seven_day": {"used_percentage": 5.0}}}, tmp_path, cols=50)
+    assert any(line.startswith("📅") for line in out.split("\n")), f"no 📅 line in: {out!r}"
+
+
+def test_statusline_tier3_spend_only_keeps_own_line(tmp_path: Path) -> None:
+    """At tier-3 width with only spend_limit, the last line starts with the card emoji."""
+    envelope = {**_ENV_BASE, "rate_limits": {"spend_limit": {"used_usd": 12.5, "limit_usd": 100.0, "period": "monthly"}}}
+    out = _run_statusline(envelope, tmp_path, cols=80)
+    lines = out.split("\n")
+    assert len(lines) == 3 and lines[-1].startswith("💳"), f"spend row lost its own line: {out!r}"
 
 
 def test_statusline_omits_7d_when_only_five_hour(tmp_path: Path) -> None:
