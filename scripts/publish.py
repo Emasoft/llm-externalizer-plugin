@@ -17,7 +17,7 @@ Push policy:
     a lock file, not an env var, nothing spoofable. Since subprocess.run
     spawns git as a child of this script's Python interpreter, publish.py
     will be the grandparent of the hook whenever the push comes from here.
-    Only `git push --no-verify` skips the hook; this script never passes it.
+    The hook is local config (core.hooksPath .githooks); `git push --no-verify`, or a clone without that setting, skips it. This script never passes --no-verify.
 
 Steps (in order — validate is FIRST, no skipping):
     1. Pre-flight: working tree clean + required tools present

@@ -324,7 +324,7 @@ Plus the Nanbeige GGUF Phase A json_schema check only (known answer: unsupported
 - one SIGKILL of the runner, the orphan sweep, and a resume that reuses the finished trials;
 - one real `llm ask` on the LFM3 model during the run: held, no main server started, served after the record;
 - one real `llm ask` on another local model during the run that pauses calibration, with the pause and resume logged;
-- calibration leaves `~/.locals/config.json` unchanged (it is still unverified whether `locals.server` writes it).
+- calibration leaves `~/.locals/config.json` unchanged (checksum before and after; it is still unverified whether `locals.server` writes it) and leaves any user-started Locals server and its processes untouched.
 
 Results go to `reports/llama-cpp-profile/<ts>-p6a-dry-run.md`, with the measured trial times that replace the assumed rates in section 5.
 
@@ -360,7 +360,7 @@ Round 1:
 | F19 ensembles, re-calibration | Sections 3 and 6: blob, RAM and threshold triggers, `free_ram_bytes` and the hard-W resume rule (section 3), the ensemble rule. |
 | F20 orphaned cal server | Section 2: the sweep covers cal entries. |
 | F21 memory and crashes | 4.1: KV estimate before the first load; section 2: timeouts from the cap and decode rate, inconclusive trials, crash counter. |
-| F22 logs, inputs, marker, contention | Section 2: the log cap restarts the cal server; seeds instead of inputs; the Locals marker; a load-average pause; open question 4 for the Locals config. |
+| F22 logs, inputs, marker, contention | Section 2: the log cap restarts the cal server; seeds instead of inputs; the Locals marker; a load-average pause; section 10 (P6a acceptance): the Locals config stays unchanged. |
 
 Round 2:
 
