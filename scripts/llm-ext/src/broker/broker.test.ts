@@ -54,6 +54,7 @@ import { runCalibratorMain } from "../calibration/runner.ts";
 import { phaseA } from "../calibration/phase-a.ts";
 import { totalmem } from "node:os";
 import { timingsFromEnv } from "./scheduler.ts";
+import { memoryWaitCheck, WaitForMemory } from "../calibration/memory-wait.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
 if (mode === "__broker") {
@@ -72,6 +73,19 @@ if (mode === "__broker") {
     ? [{ name: "A", run: async () => env.TEST_MEMORY_PHASE === "too-big"
         ? { passed: false, step: "A/memory", message: "the model is too big for this machine's memory (test)", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: timingsFromEnv(env).memoryFloorPct, n_ctx_train: 128 } } }
         : { passed: false, step: "A/memory", message: "it only waited for free memory (test)", memory: { kind: "memory-limited" } } }]
+    // TEST_WAIT_PHASE (coordinator decision 2026-10-30): a phase "A" that records one trial on its first run, then waits
+    // for twice this machine's RAM through the real memoryWaitCheck: the model pauses with its wait saved, never a verdict.
+    : env.TEST_WAIT_PHASE === "1"
+    ? [{ name: "A", run: async (ctx) => {
+        if (ctx.progress.trials.length === 0) ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
+        try {
+          memoryWaitCheck(ctx, "A/wait", 2 * totalmem(), 0, 0);
+        } catch (e) {
+          if (e instanceof WaitForMemory) return { passed: false, paused: true, step: e.step, message: e.message };
+          throw e;
+        }
+        return { passed: true };
+      } }]
     : env.TEST_STOP_PHASE === "1"
     ? [{ name: "A", run: async (ctx) => {
         if (ctx.progress.trials.length === 0) ctx.record({ step: "A/test", seed: 1, outcome: "pass", at: new Date().toISOString() });
@@ -654,19 +668,19 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect(readBrokerState(dir)).toBeNull();
   }, 300_000);
 
-  it("a broker whose config dir is deleted stops its server and exits within two ticks; a dir missing for one tick only is not an exit (coordinator decision 2026-10-29, review m2)", async () => {
+  it("a broker whose config dir is deleted stops its server and exits after 10 s missing; absences of about 3 s are not an exit (coordinator decisions 2026-10-29 and 2026-10-30)", async () => {
     const dir = newDir();
     const r = await runClient(dir, jobsOf(A, 1));
     expect(r.results[0].status).toBe(200);
     const main = readRegistry(dir, "llama").find((e) => e.role === "main")!;
     expect(alive(main.pid)).toBe(true);
-    // Review m2: a volume briefly unavailable. Each 900 ms absence holds at most one 1 s tick (Node runs an interval no
-    // sooner than its period), and almost always exactly one, so one missing reading must not end the broker; 5 rounds
-    // make it near certain at least one tick falls inside an absence. The 1500 ms back in place resets the count.
+    // Coordinator decision 2026-10-30: a volume briefly unavailable (a disk remounting, a network home). Each 3 s absence
+    // holds two or three 1 s ticks, which ended the broker under the old two-tick rule; the 1500 ms back in place resets
+    // the missing time, so 5 rounds never add up to the 10 s the broker tolerates.
     for (let i = 0; i < 5; i++) {
       renameSync(dir, `${dir}.away`);
       try {
-        await new Promise((res) => setTimeout(res, 900));
+        await new Promise((res) => setTimeout(res, 3000));
       } finally {
         // Always back in place: a dir left away would leak past the test-dir cleanup.
         renameSync(`${dir}.away`, dir);
@@ -678,10 +692,18 @@ describe("broker with a real llama-server (two tiny GGUF models)", () => {
     expect(readFileSync(join(dir, "broker-local.log"), "utf8")).not.toContain("no longer exists");
     // The default idle windows (2 h): only the missing dir can make this broker exit within the bound.
     rmSync(dir, { recursive: true, force: true });
-    // Bound: the 1 s tick, the server stop (SIGTERM, then SIGKILL after 10 s) and a settle.
-    const deadline = Date.now() + 20_000;
-    while (Date.now() < deadline && (alive(r.pid) || (await processSnapshot()).some((p) => p.pgid === main.pgid))) await new Promise((res) => setTimeout(res, 200));
+    const deleted = Date.now();
+    // Still there 8 s into the absence: the exit waits for 10 s missing, not a count of ticks.
+    await new Promise((res) => setTimeout(res, 8000));
+    expect(alive(r.pid)).toBe(true);
+    expect(alive(main.pid)).toBe(true);
+    // Bound: 10 s missing plus the 1 s tick, then the server stop (SIGTERM, then SIGKILL after 10 s) and a settle.
+    const deadline = deleted + 30_000;
+    while (Date.now() < deadline && alive(r.pid)) await new Promise((res) => setTimeout(res, 200));
     expect(alive(r.pid)).toBe(false);
+    // The broker exits only after its server stop, so the exit itself shows the 10 s rule (about 11 s plus the stop).
+    expect(Date.now() - deleted).toBeGreaterThanOrEqual(10_000);
+    while (Date.now() < deadline && (await processSnapshot()).some((p) => p.pgid === main.pgid)) await new Promise((res) => setTimeout(res, 200));
     expect((await processSnapshot()).filter((p) => p.pgid === main.pgid)).toEqual([]);
     expect(existsSync(dir)).toBe(false);
   }, 300_000);
@@ -1248,6 +1270,43 @@ describe("calibration runner (P6 step 2)", () => {
     const after = readRecord(dir, "llama", B)!;
     expect([after.status, after.calibrated_at, after.failed_step]).toEqual(["ok", before.calibrated_at, null]);
     expect(runnerLogOf(dir)).toMatch(/memory-limited at A\/memory \(it only waited for free memory \(test\)\); the existing ok record is kept/);
+    expect(readQueue(dir)).toEqual([]);
+  }, 300_000);
+
+  it("coordinator decision 2026-10-30: --force resets the progress once; a later pass resumes it through the precheck, its memory wait accumulates, and the record ends the forced run", async () => {
+    const dir = newDir(); // B has an ok record naming the weights and engine build really loaded
+    const before = readRecord(dir, "llama", B)!;
+    withStateLock(dir, 5000, () => {
+      enqueueUnlocked(dir, { engine: "llama", model: B, reason: "manual", force: true });
+      return true;
+    });
+    // Pass 1: the forced reset, one trial, then the phase waits for more memory than the machine has (paused).
+    const first = spawnRunner(dir, { TEST_WAIT_PHASE: "1" });
+    await waitFor("the first pass", () => !alive(first), 180_000);
+    const p1 = loadProgress(dir, "llama", B, null);
+    expect(p1.trials.map((t) => t.step)).toEqual(["A/test"]);
+    expect(p1.memoryWait?.["A/wait"]?.waited_ms).toBe(0);
+    // Pass 2: no second reset. The precheck finds memory still short, so the model is not loaded, the wait counts the gap
+    // since pass 1, the trial of pass 1 stays, and the old ok record does not end the forced run.
+    const second = spawnRunner(dir, { TEST_WAIT_PHASE: "1" });
+    await waitFor("the second pass", () => !alive(second), 180_000);
+    const p2 = loadProgress(dir, "llama", B, null);
+    expect(p2.memoryWait?.["A/wait"]?.waited_ms).toBeGreaterThan(0);
+    expect(p2.trials).toEqual(p1.trials);
+    expect(runnerLogOf(dir)).toMatch(/A\/wait still waits for free memory .*the model is not loaded on this pass and stays queued/);
+    expect(runnerLogOf(dir)).not.toMatch(/already has a valid, current record/);
+    expect(readQueue(dir)).toMatchObject([{ engine: "llama", model: B, force: true }]);
+    expect(readRecord(dir, "llama", B)!.calibrated_at).toBe(before.calibrated_at);
+    // The stamp of the one reset is kept by the passes after it.
+    expect(p1.forced_at).toEqual(expect.any(String));
+    expect(p2.forced_at).toBe(p1.forced_at);
+    // Pass 3: the memory is free again (the wait dropped) and the phase ends memory-limited: the kept-record path writes
+    // the record, which ends the forced run, so the stamp is gone and the queue is empty.
+    saveProgress(dir, "llama", B, { ...p2, memoryWait: {} });
+    const third = spawnRunner(dir, { TEST_MEMORY_PHASE: "limited" });
+    await waitFor("the third pass", () => !alive(third), 180_000);
+    expect(runnerLogOf(dir)).toMatch(/the existing ok record is kept/);
+    expect(loadProgress(dir, "llama", B, null).forced_at).toBeUndefined();
     expect(readQueue(dir)).toEqual([]);
   }, 300_000);
 

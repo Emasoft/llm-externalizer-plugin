@@ -75,6 +75,12 @@ export interface BrokerOptions {
 const DEFAULT_EXEC_TIMEOUT_MS = 300_000;
 /** How often the broker re-evaluates abandon, rotation and idle rules between events. */
 const TICK_MS = 1000;
+/**
+ * Coordinator decision 2026-10-30: how long the config dir must be missing, continuously, before the broker exits. Two
+ * consecutive 1 s ticks (review m2) tolerated only about a 2 s gap, too short for an external disk remounting or a
+ * network home dropping for a few seconds; a removed config or a deleted test dir still ends the broker within ~11 s.
+ */
+const DIR_MISSING_EXIT_MS = 10_000;
 /** P6: how often the records of models with held jobs are re-read (spec section 2). */
 const HELD_CHECK_MS = 5000;
 /** How long a finished job's result stays readable after it finished or was last polled. */
@@ -1005,22 +1011,23 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
   let heldCheckedAt = 0;
   let calSweptAt = Date.now();
-  /** Review m2: consecutive ticks that found the config dir missing (it exits on the second). */
-  let dirMissing = 0;
+  /** When the config dir was first found missing in the current absence; null while it is there (coordinator decision 2026-10-30). */
+  let dirMissingSince: number | null = null;
   const tick = setInterval(() => {
     // Coordinator decision 2026-10-29 (spec local-engine-broker-design.md): a broker whose config dir is gone (a test's
     // temp dir, a removed config) serves nothing any client can reach again: it stops its servers, fails its held jobs
     // with the reason and exits, instead of living until its idle exit with a server holding RAM.
-    // Review m2: only on two consecutive missing readings (two ticks, about 1 s apart): a volume that is briefly
+    // Review m2, made time-based by the coordinator decision of 2026-10-30: only once the dir has been missing for
+    // DIR_MISSING_EXIT_MS without a break (any present reading resets it): a volume that is briefly
     // unavailable (an external disk remounting, a network home) must not end the broker and fail its held jobs.
     // Failing (not requeueing) the held jobs on the exit stays as decided (coordinator decision 2026-10-29).
     if (!existsSync(o.dir)) {
-      dirMissing++;
-      // The first missing reading skips this tick's work (it reads and writes files in that dir) and waits for the next.
-      if (dirMissing >= 2) void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
+      dirMissingSince ??= Date.now();
+      // Until then each missing reading skips this tick's work (it reads and writes files in that dir) and waits for the next.
+      if (Date.now() - dirMissingSince >= DIR_MISSING_EXIT_MS) void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
       return;
     }
-    dirMissing = 0;
+    dirMissingSince = null;
     // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();

@@ -435,8 +435,11 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
   try {
     // Review of 2411e6dc, finding 2: a Phase C candidate still waiting for free memory is re-checked with the model
     // unloaded, so a pass does not load the model only for Phase C to unload it again (about every minute while
-    // requests are held). --force drops the waits, so it skips the check.
-    const waiting = item.force ? null : await memoryWaitPrecheck(o.dir, item.engine, item.model, harness.id);
+    // requests are held). A forced run (--force) skips the check only on the pass that resets the progress (its waits
+    // are dropped there); coordinator decision 2026-10-30: once the reset is stamped (Progress.forced_at), later passes
+    // check like any other, so a forced run waiting for memory loads nothing and its wait accumulates.
+    const resetPending = item.force === true && loadProgress(o.dir, item.engine, item.model, null, harness.id).forced_at === undefined;
+    const waiting = resetPending ? null : await memoryWaitPrecheck(o.dir, item.engine, item.model, harness.id);
     if (waiting !== null) {
       o.log(`${name}: ${waiting}; the model is not loaded on this pass and stays queued`);
       return "done";
@@ -466,14 +469,22 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     engineCheck = existing !== null && stale === "engine" && !item.force && existing.status !== "calibration-failed";
     const fingerprint = identity.fingerprint;
     const progress = loadProgress(o.dir, item.engine, item.model, fingerprint, harness.id);
-    if (item.force) {
-      // --force re-runs everything (spec section 3): no finished trial is reused.
+    if (item.force && progress.forced_at === undefined) {
+      // --force re-runs everything (spec section 3): no finished trial is reused. Coordinator decision 2026-10-30: the
+      // reset happens once.
+      // The queue item keeps `force` until the record is written; resetting on every pass restarted each paused step
+      // and dropped each memory wait, so a forced run on a busy machine could loop forever. The stamp (set below)
+      // makes later passes resume this progress; it is removed when a record is written (finish, the crash record).
       progress.trials = [];
       progress.phases = {};
       progress.crashes = 0;
       progress.paused = {};
       progress.stepCrashes = {};
       progress.memoryWait = {};
+      progress.forced_at = new Date().toISOString();
+    } else if (!item.force) {
+      // A stamp with no forced item (its queue entry went without a record) must not block the reset of a later --force.
+      delete progress.forced_at;
     }
     if (engineCheck) {
       // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
@@ -526,6 +537,8 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     };
     const finish = (r: CalibrationRecord, line: string): "done" => {
       writeRecord(o.dir, r);
+      // Coordinator decision 2026-10-30: the forced run ends with its record; a later --force resets again.
+      delete progress.forced_at;
       progress.crashes = 0;
       saveProgress(o.dir, item.engine, item.model, progress);
       o.log(`${name}: ${line}`);
@@ -614,6 +627,8 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
     if (p.crashes < MAX_CRASHES) return "crashed";
     writeRecord(o.dir, failedRecord("runner/error", `calibration stopped ${p.crashes} times; the last error: ${msg}`));
     p.crashes = 0;
+    // The record ends a forced run too (coordinator decision 2026-10-30): a later --force resets again.
+    delete p.forced_at;
     saveProgress(o.dir, item.engine, item.model, p);
     o.log(`${name}: ${MAX_CRASHES} crashes: wrote a ${engineCheck ? "engine-check-failed" : "calibration-failed"} record`);
     dequeue();

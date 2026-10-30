@@ -631,26 +631,50 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     expect(ctx.progress.memoryWait ?? {}).toEqual({});
   }, 60_000);
 
-  it("a grid step over the soft W waits, is skipped for 2 passes while the other kinds go on, then is given up and the walk steps down", async () => {
-    // Coordinator decision 5: no precondition may depend on how much memory is in use. A tiny KV (1 block) and a 1 % floor:
-    // the hard W is the 32768 cap from total RAM alone; the server reports 6144 tokens of context, so the soft W is at
-    // most 6144 whatever free memory is, and the 13107 and 8192 steps (plus the 2112-token output) wait. The one
-    // reading-dependent precondition is the smallest window (5120 tokens, about 1 GiB with the headroom) fitting free
-    // memory above the floor: below it no Phase B step can run on the machine at all.
-    const { dir, gguf, need } = model(1);
+  /**
+   * Coordinator decision 2026-10-30: a grid-step memory wait comes from free memory with the model unloaded (the server's
+   * own context cap is a window skip, tested below). Coordinator decision 5: no precondition may depend on how much memory
+   * is in use. A 1 % floor and a synthetic KV sized from this machine's own reading so that the top step's window (the
+   * step plus the 2112-token output) needs the midpoint between free memory and total RAM, both above the floor: free
+   * memory misses it and total RAM holds it, each by half the memory in use. Steps near the 65536 window cap keep the KV
+   * per token small against that margin, so the next step down (256 tokens less) waits too.
+   */
+  const unloadedGrid = async (): Promise<{ dir: string; gguf: string; need: (tokens: number) => number; steps: number[]; url: string; floor: number }> => {
+    const total = totalmem();
+    const floor = Math.round(total / 100);
+    const { free } = await freeMemory(1);
+    const steps = [60000, 59744, 1024];
+    const one = model(1);
+    const top = steps[0]! + CAP_OFF + 64;
+    const perBlock = one.need(top) - one.need(0);
+    const m = model(Math.max(1, Math.round(((free + total) / 2 - floor - one.need(0)) / perBlock)));
     process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
-    const url = await props(6144);
-    const probe = await measureWindow(context(dir, gguf, url).ctx, 0, minWindow);
-    expect(probe.hard).toBe(32768);
-    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the smallest window (${Math.round(need(minWindow) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(minWindow);
-    const steps = gridSteps(probe.hard, null);
-    expect(steps.slice(0, 2)).toEqual([13107, 8192]);
+    // The server reports more context than any window here: only memory decides.
+    return { ...m, steps, url: await props(1 << 20), floor };
+  };
+  const gridContext = (g: { dir: string; gguf: string; url: string; steps: number[] }): { ctx: PhaseContext; trials: TrialRecord[] } => {
+    const c = context(g.dir, g.gguf, g.url);
+    c.ctx.harness = { ...c.ctx.harness, windowCap: 65536, steps: g.steps };
+    return c;
+  };
+  /** The two steps' windows fit total RAM minus the floor and miss free memory now; the smallest window fits free memory. */
+  const gridPreconditions = async (g: Awaited<ReturnType<typeof unloadedGrid>>): Promise<void> => {
+    const probe = await measureWindow(gridContext(g).ctx, 0, Math.min(...g.steps) + 256);
+    const mib = (x: number): number => Math.round(x / 2 ** 20);
+    expect(probe.hard, `total RAM minus the floor (${mib(totalmem() - g.floor)} MiB) must hold the top step's window (${mib(g.need(g.steps[0]! + CAP_OFF + 64))} MiB)`).toBeGreaterThanOrEqual(g.steps[0]! + CAP_OFF + 64);
+    expect(probe.window, `half the memory in use (${mib((totalmem() - probe.free) / 2)} MiB) must keep the second step's window over free memory`).toBeLessThan(g.steps[1]! + CAP_OFF + 64);
+    expect(probe.window, `free memory above the floor (${mib(probe.free - probe.floor)} MiB) must hold the smallest window`).toBeGreaterThanOrEqual(Math.min(...g.steps) + 256);
+  };
+
+  it("a grid step over the soft W waits, is skipped for 2 passes while the other kinds go on, then is given up and the walk steps down", async () => {
+    const g = await unloadedGrid();
+    await gridPreconditions(g);
+    const steps = g.steps;
     const top = (kind: string): string => `B/${kind}/${steps[0]}`;
-    // Review M1: the soft W is short only by the server's context cap, which no free memory clears: the saved need is
-    // over total RAM minus the floor, so the runner's unloaded precheck never loads the model for it.
-    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the top step (${Math.round(need(steps[0]! + CAP_OFF + 64) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(steps[0]! + CAP_OFF + 64);
-    const topNeed = totalmem() - probe.floor + 1;
-    const { ctx, trials } = context(dir, gguf, url);
+    // Review M1: the bytes chooseWindow counts for the step's window rounded up to the 256-token step, so the runner's
+    // unloaded precheck loads the model again exactly when chooseWindow would give a window that holds it.
+    const topNeed = g.need(Math.ceil((steps[0]! + CAP_OFF + 64) / 256) * 256);
+    const { ctx, trials } = gridContext(g);
 
     expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: top("fact") });
     expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual([top("fact")]);
@@ -682,17 +706,36 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     expect(trials.some((t) => t.step === "B/summary")).toBe(false);
   }, 60_000);
 
+  it("coordinator decision 2026-10-30: a step cut only by the server's own context is a window skip, never a memory wait", async () => {
+    // A tiny KV (1 block) and a 1 % floor: free memory holds every step's window with the model unloaded (asserted), and
+    // the server reports 6144 tokens of context, so the 13107 and 8192 steps (plus the 2112-token output) miss only that.
+    // No free memory clears it: before the decision they waited, expired by prechecks and ended memory-limited.
+    const { dir, gguf, need } = model(1);
+    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    const { ctx, trials } = context(dir, gguf, await props(6144));
+    ctx.harness = { ...ctx.harness, steps: [13107, 8192] };
+    const probe = await measureWindow(ctx, 0, 8192 + 256);
+    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the top step (${Math.round(need(13107 + CAP_OFF + 64) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(13107 + CAP_OFF + 64);
+    expect(await phaseB.run(ctx)).toEqual({ passed: true });
+    expect(ctx.progress.memoryWait ?? {}).toEqual({});
+    expect(trials.some((t) => t.data?.skipped === "memory-wait")).toBe(false);
+    const summary = trials.find((t) => t.step === "B/summary")?.data;
+    const kinds = ["fact", "aggregate", "bug"];
+    expect(JSON.parse(String(summary?.grid))).toEqual(kinds.flatMap((kind) => [13107, 8192].map((tokens) => ({ kind, tokens, skipped: "window", W: 6144 }))));
+    expect(JSON.parse(String(summary?.unfit_reasons))).toEqual(Object.fromEntries(kinds.map((k) => [k, "window 6144 too small for thinking off output"])));
+    expect([summary?.fill_fact, summary?.fill_aggregate, summary?.fill_bug]).toEqual([0, 0, 0]);
+  }, 60_000);
+
   it("review M1: windowWaitNeed asks the unloaded reading for what chooseWindow needs: short now, enough once that much is free", () => {
     // The production shape of the synthetic model (1 block), every step and step + cap of the grid, budgets around them.
     const { gguf, need } = model(1);
     const layers = modelKvLayers("llama", [gguf]);
     const weights = weightBytes([gguf]);
-    const free = 64 * 1024 ** 3;
     for (const tokens of [5120, 5121, 6337, 8192 + CAP_OFF + 64, 13107 + CAP_ON + 64, 32704]) {
       for (const budget of [need(tokens) - 1, need(tokens), need(tokens - 200), need(tokens) + 4096]) {
         const unloaded = chooseWindow(layers, weights, budget, 32768);
         if (unloaded >= tokens) continue; // the step would run: no wait
-        const n = windowWaitNeed(tokens, { unloaded, halved: unloaded, free: budget, floor: 0, deficit: 0, total: free }, need);
+        const n = windowWaitNeed(tokens, { unloaded, halved: unloaded, free: budget, floor: 0, deficit: 0 }, need);
         // The same reading that decided the wait keeps the precheck from loading the model...
         expect(n, `tokens ${tokens}, budget ${budget}`).toBeGreaterThan(budget);
         // ...and once that much is free, the next pass gets a window that holds the step.
@@ -700,30 +743,27 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
       }
     }
     // Short only after loading (the halving): more than this reading, by the shortage the halving saw.
-    expect(windowWaitNeed(9000, { unloaded: 16384, halved: 8192, free: 10e9, floor: 1e9, deficit: 5e8, total: 64e9 }, need)).toBe(10e9 - 1e9 + 5e8);
-    // Short only by the server's context cap: no reading reaches it, the prechecks alone count the wait.
-    expect(windowWaitNeed(9000, { unloaded: 16384, halved: 16384, free: 10e9, floor: 1e9, deficit: 0, total: 64e9 }, need)).toBeGreaterThan(64e9 - 1e9);
+    expect(windowWaitNeed(9000, { unloaded: 16384, halved: 8192, free: 10e9, floor: 1e9, deficit: 5e8 }, need)).toBe(10e9 - 1e9 + 5e8);
+    // Short only by the server's context cap: no memory wait at all (coordinator decision 2026-10-30, a window skip), so asking is a bug.
+    expect(() => windowWaitNeed(9000, { unloaded: 16384, halved: 16384, free: 10e9, floor: 1e9, deficit: 0 }, need)).toThrow(/a window skip, not a memory wait/);
   });
 
   it("review M1: a grid-step wait keeps a runner pass from loading the model; the prechecks alone bring it to its bound (gaps under 5 min)", async () => {
-    // The scenario of the test above: the soft W is the 6144 the server reports, the unloaded bytes fit every step.
-    const { dir, gguf, need } = model(1);
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
-    const url = await props(6144);
-    const { ctx, trials } = context(dir, gguf, url);
-    const top = "B/fact/13107";
-    const probe = await measureWindow(context(dir, gguf, url).ctx, 0, minWindow);
-    expect(probe.window, `free memory above the 1 % floor (${Math.round((probe.free - probe.floor) / 2 ** 20)} MiB) must hold the top step (${Math.round(need(13107 + CAP_OFF + 64) / 2 ** 20)} MiB)`).toBeGreaterThanOrEqual(13107 + CAP_OFF + 64);
+    // The scenario of the test above: the top step's window misses free memory with the model unloaded and fits total RAM.
+    const g = await unloadedGrid();
+    const { ctx, trials } = gridContext(g);
+    const top = `B/fact/${g.steps[0]}`;
+    await gridPreconditions(g);
     let loads = 0;
     ctx.restart = async () => void loads++;
-    const save = (): void => saveProgress(dir, "llama", "m", { ...ctx.progress, harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: PRODUCTION_HARNESS_ID, fingerprint: null });
+    const save = (): void => saveProgress(g.dir, "llama", "m", { ...ctx.progress, harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: PRODUCTION_HARNESS_ID, fingerprint: null });
     // One runner pass, in calibrateOne's order: the precheck with the model unloaded, then the load at the Phase A
     // context (counted), then the phase over the progress the runner reads from disk.
     const pass = async (): Promise<string | null> => {
-      const waiting = await memoryWaitPrecheck(dir, "llama", "m", PRODUCTION_HARNESS_ID);
+      const waiting = await memoryWaitPrecheck(g.dir, "llama", "m", PRODUCTION_HARNESS_ID);
       if (waiting !== null) return waiting;
       loads++;
-      ctx.progress.memoryWait = loadProgress(dir, "llama", "m", null, PRODUCTION_HARNESS_ID).memoryWait;
+      ctx.progress.memoryWait = loadProgress(g.dir, "llama", "m", null, PRODUCTION_HARNESS_ID).memoryWait;
       await phaseB.run(ctx);
       save();
       return null;
@@ -734,15 +774,15 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     const loaded = loads;
     expect(loaded).toBe(2);
     // The churn of review M1: before the fix this pass loaded the model again only for the step to wait again.
-    expect(await pass()).toMatch(/^B\/fact\/13107 still waits for free memory/);
+    expect(await pass()).toMatch(new RegExp(`^B/fact/${g.steps[0]} still waits for free memory`));
     expect(loads).toBe(loaded);
     // Passes 4 min apart (under MEMORY_WAIT_GAP_MS): each precheck counts its gap, none loads, until 30 min are counted.
     let prechecks = 0;
     for (;;) {
-      const p = loadProgress(dir, "llama", "m", null, PRODUCTION_HARNESS_ID);
+      const p = loadProgress(g.dir, "llama", "m", null, PRODUCTION_HARNESS_ID);
       const w = p.memoryWait![top]!;
       p.memoryWait = { [top]: { ...w, seen: new Date(Date.parse(w.seen) - 4 * 60_000).toISOString() } };
-      saveProgress(dir, "llama", "m", p);
+      saveProgress(g.dir, "llama", "m", p);
       if ((await pass()) === null) break;
       prechecks++;
       expect(prechecks).toBeLessThan(MEMORY_WAIT_MAX_MS / (4 * 60_000) + 2);

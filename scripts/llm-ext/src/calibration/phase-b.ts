@@ -458,7 +458,7 @@ export const phaseB: Phase = {
         // then a skip for the pass (rule A). Given up on the INCONCLUSIVE_PASSES-th pass, nothing could be loaded: the
         // calibration is memory-limited (rule 2), neither a pass nor a failure.
         // Review M1: rounded to the window step as chooseWindow counts it, so the precheck agrees with this decision.
-        const skip = memoryWaitCheck(ctx, "B/window", windowWaitNeed(minWindow, { unloaded: w.window, halved: w.window, free: w.free, floor: w.floor, deficit: 0, total: totalmem() }, needBytes), w.free, w.floor);
+        const skip = memoryWaitCheck(ctx, "B/window", windowWaitNeed(minWindow, { unloaded: w.window, halved: w.window, free: w.free, floor: w.floor, deficit: 0 }, needBytes), w.free, w.floor);
         const { passes, terminal } = recordInconclusiveSkip(ctx, "B/window", 0, { ...skip, soft_window: window, hard_window: w.hard, min_window: minWindow }, MEMORY_WAIT_CAUSE);
         if (!terminal) return { passed: false, paused: true, step: "B/window", message: `free memory allows a window of ${window} tokens, under the ${minWindow} calibration needs: skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one` };
         return { passed: false, step: "B/window", message: `free memory stayed below the smallest calibration window (${minWindow} tokens) on ${INCONCLUSIVE_PASSES} passes`, memory: { kind: "memory-limited" } };
@@ -528,12 +528,21 @@ export const phaseB: Phase = {
               return false;
             }
             if (fit === "wait") {
+              // Coordinator decision 2026-10-30: a step that fits the window after the halving is cut only by the
+              // server's own context (/props n_ctx). No free memory clears that, so it is no memory wait (it used to wait,
+              // expire by prechecks and end memory-limited): it is skipped like a step above the hard window, no wait saved.
+              if (tokens + nominal + 64 <= halved) {
+                memoryWaitClear(ctx, key);
+                grid.push({ kind, tokens, skipped: "window", W: softWindow(run) });
+                ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the server's context ${softWindow(run)}`);
+                return false;
+              }
               // Coordinator decision 2026-10-29: the shared memory wait, against the reading measureWindow took with the
               // model unloaded. Given up on its INCONCLUSIVE_PASSES-th pass, the step is a memory-wait grid skip and the
               // walk steps down, as for a window skip: a step that only waited never fails.
               // Review M1: the need is what the runner's unloaded precheck must see before it loads the model again
               // (windowWaitNeed), so a pass on which this step would only wait again loads nothing.
-              const need = windowWaitNeed(tokens + nominal + 64, { unloaded: w.window, halved, free: w.free, floor: w.floor, deficit, total: totalmem() }, needBytes);
+              const need = windowWaitNeed(tokens + nominal + 64, { unloaded: w.window, halved, free: w.free, floor: w.floor, deficit }, needBytes);
               const skip = memoryWaitCheck(ctx, key, need, w.free, w.floor);
               const { passes, terminal } = recordInconclusiveSkip(ctx, key, 0, { ...skip, kind, tokens, soft_window: softWindow(run) }, MEMORY_WAIT_CAUSE);
               if (!terminal) throw new StepPending(key, `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory allows ${softWindow(run)} (hard ${run.hardWindow}): skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one`);
@@ -554,7 +563,8 @@ export const phaseB: Phase = {
         const own = grid.filter((g) => g.kind === kind);
         if (fill[kind] === 0 && own.every((g) => "skipped" in g)) {
           // A step given up after its memory waits makes the kind memory-limited, never window-limited.
-          unfitReasons[kind] = own.some((g) => "skipped" in g && g.skipped === "memory-wait") ? `steps that fit total RAM ${MEMORY_WAIT_GIVEN_UP}` : windowTooSmallReason(run.hardWindow, thinking);
+          // Coordinator decision 2026-10-30: a window skip may come from the server's context (under the hard W): the reason names the smallest window that skipped.
+          unfitReasons[kind] = own.some((g) => "skipped" in g && g.skipped === "memory-wait") ? `steps that fit total RAM ${MEMORY_WAIT_GIVEN_UP}` : windowTooSmallReason(Math.min(run.hardWindow, ...own.flatMap((g) => ("skipped" in g ? [g.W] : []))), thinking);
           ctx.log(`Phase B ${kind}: unfit, ${unfitReasons[kind]}`);
         }
       }

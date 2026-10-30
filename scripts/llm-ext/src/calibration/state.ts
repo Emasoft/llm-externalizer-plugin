@@ -250,6 +250,14 @@ export interface Progress {
    * is skipped for the pass (memory-wait.ts), so a busy machine cannot hold a model forever.
    */
   memoryWait?: Record<string, MemoryWait>;
+  /**
+   * Coordinator decision 2026-10-30: when a forced calibration (models calibrate --force) reset this progress. The
+   * queue item keeps `force` until the record is written, so without this stamp every pass reset the whole progress
+   * again and skipped the memory precheck: a memory wait never accumulated and a paused step restarted from scratch
+   * each pass, so a forced run on a busy machine could loop forever. While it is set the runner does not reset again,
+   * runs the precheck, and never ends the run early on the old valid record; it is removed when a record is written.
+   */
+  forced_at?: string;
 }
 
 /**
@@ -306,6 +314,8 @@ export function loadProgress(dir: string, engine: BrokerEngine, model: string, f
     paused: counts(raw.paused),
     stepCrashes: counts(raw.stepCrashes),
     memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => isMemoryWait(v))) : {},
+    // Listed explicitly: this rebuild drops any field it does not name, and a lost stamp would reset a forced run again.
+    ...(typeof raw.forced_at === "string" ? { forced_at: raw.forced_at } : {}),
   };
 }
 

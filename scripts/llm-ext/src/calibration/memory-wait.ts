@@ -70,22 +70,22 @@ export function memoryWaitExpired(w: MemoryWait): boolean {
  * (memoryWaitPrecheck) must show before a pass loads the model for a Phase B wait on `tokens` of window. Phase B
  * decides the wait on the window the cal server got, which passes three stages: the unloaded reading (`unloaded`,
  * chooseWindow), the post-load halving (`halved`) and the server's own context cap. The precheck can only repeat the
- * first, so each stage stores what a fresh unloaded reading must reach, and a pass that would only wait again loads
- * nothing (before this, the bytes of the unrounded step were stored, the precheck found them free, and every pass
- * loaded the model 2-3 times only to wait again):
+ * first, so each memory stage stores what a fresh unloaded reading must reach, and a pass that would only wait again
+ * loads nothing (before this, the bytes of the unrounded step were stored, the precheck found them free, and every
+ * pass loaded the model 2-3 times only to wait again):
  *  - short already unloaded: the bytes chooseWindow counts for the step rounded up to its 256-token step, so
  *    `need <= free - floor` exactly when chooseWindow would give a window of at least `tokens`;
  *  - short only after loading (the halving found free memory under the floor): this pass's free memory above the floor
  *    plus the shortage the halving saw (`deficit`): the load showed this reading is not enough, and the shortage is
- *    also the margin that keeps a few MB of noise from loading it again;
- *  - short only by the server's context cap: no free memory helps, so a need over total RAM minus the floor; the wait
- *    is counted by the prechecks alone (about one a minute, never a load) until it is over.
+ *    also the margin that keeps a few MB of noise from loading it again.
+ * A step short only by the server's context cap (`tokens <= halved`) is no memory wait: no free memory clears it, so
+ * Phase B skips it as a `window` step (coordinator decision 2026-10-30) and never calls this; a call for it throws.
  * Waiting passes therefore cost one memory reading, so the 5-minute gap rule (MEMORY_WAIT_GAP_MS) is met unchanged.
  */
-export function windowWaitNeed(tokens: number, w: { unloaded: number; halved: number; free: number; floor: number; deficit: number; total: number }, needBytes: (tokens: number) => number): number {
+export function windowWaitNeed(tokens: number, w: { unloaded: number; halved: number; free: number; floor: number; deficit: number }, needBytes: (tokens: number) => number): number {
   if (tokens > w.unloaded) return needBytes(Math.ceil(tokens / WINDOW_STEP) * WINDOW_STEP);
   if (tokens > w.halved) return w.free - w.floor + w.deficit;
-  return w.total - w.floor + 1;
+  throw new Error(`windowWaitNeed: ${tokens} tokens fit the window after the halving (${w.halved}); only the server's context cuts it, a window skip, not a memory wait`);
 }
 
 /**

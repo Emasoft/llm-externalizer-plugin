@@ -63,7 +63,7 @@ export interface GridSkip {
   kind: TaskKind;
   tokens: number;
   skipped: "window" | "memory-wait";
-  /** The W the step did not fit: the hard W for "window", the soft W (free memory) for "memory-wait". */
+  /** The W the step did not fit: for "window" the hard W, or the server's own context when that cut it under the hard W (coordinator decision 2026-10-30); the soft W (free memory) for "memory-wait". */
   W: number;
 }
 export interface GridEntry {
