@@ -8221,10 +8221,11 @@ function isCommandStopped() {
 function abortReasonText(abortReason) {
   return reason ?? abortReason;
 }
-var reason, CommandStoppedError;
+var COMMAND_TIMEOUT_EXIT, reason, CommandStoppedError;
 var init_command_stop = __esm({
   "src/command-stop.ts"() {
     "use strict";
+    COMMAND_TIMEOUT_EXIT = 124;
     reason = null;
     CommandStoppedError = class extends Error {
       constructor(why) {
@@ -18883,12 +18884,13 @@ ${fixture.body}`;
   } catch (e) {
     clearTimeout(timeoutId);
     const err3 = e;
+    const code2 = typeof err3.cause?.code === "string" ? ` (${err3.cause.code})` : "";
     return {
       predicted: [],
       promptTokens: 0,
       completionTokens: 0,
       durationMs: Date.now() - startMs,
-      error: err3.name === "AbortError" ? `timeout after ${PER_CALL_MS}ms` : `network: ${err3.message}`
+      error: err3.name === "AbortError" ? `${SCOUT_TIMEOUT_PREFIX}${PER_CALL_MS}ms` : `${SCOUT_NETWORK_PREFIX}${err3.message}${code2}`
     };
   }
   clearTimeout(timeoutId);
@@ -18900,7 +18902,7 @@ ${fixture.body}`;
       promptTokens: 0,
       completionTokens: 0,
       durationMs,
-      error: `HTTP ${res.status}: ${text2.slice(0, 200)}`
+      error: `${SCOUT_HTTP_PREFIX}${res.status}: ${text2.slice(0, 200)}`
     };
   }
   let payload;
@@ -18976,7 +18978,7 @@ function scoreAccuracy(expected, actual) {
   }
   return { correct, total, accuracy: total === 0 ? 0 : correct / total };
 }
-var SCOUT_ACCURACY_FIXTURE_VERSION, MIN_FIXTURE_RECORDS, OPENROUTER_BASE_URL, CHAT_COMPLETIONS_SUFFIX, SCOUT_CATEGORIES, VOCAB, MIN_FIXTURE_BYTES, NEUTRAL_TAGS;
+var SCOUT_ACCURACY_FIXTURE_VERSION, MIN_FIXTURE_RECORDS, OPENROUTER_BASE_URL, CHAT_COMPLETIONS_SUFFIX, SCOUT_CATEGORIES, VOCAB, MIN_FIXTURE_BYTES, NEUTRAL_TAGS, SCOUT_TIMEOUT_PREFIX, SCOUT_NETWORK_PREFIX, SCOUT_HTTP_PREFIX;
 var init_scout_accuracy_fixture = __esm({
   "src/mass_scouting/scout-accuracy-fixture.ts"() {
     "use strict";
@@ -19333,6 +19335,9 @@ var init_scout_accuracy_fixture = __esm({
       "utf-8"
     );
     NEUTRAL_TAGS = ["#notes", "#misc", "#draft", "#wip", "#review", "#internal", "#v2", "#archive"];
+    SCOUT_TIMEOUT_PREFIX = "timeout after ";
+    SCOUT_NETWORK_PREFIX = "network: ";
+    SCOUT_HTTP_PREFIX = "HTTP ";
   }
 });
 
@@ -242117,895 +242122,6 @@ var init_registry3 = __esm({
   }
 });
 
-// src/calibration/record.ts
-import { createHash as createHash13 } from "node:crypto";
-import { closeSync as closeSync3, fsyncSync, mkdirSync as mkdirSync24, openSync as openSync3, readFileSync as readFileSync34, renameSync as renameSync19, writeSync as writeSync2 } from "node:fs";
-import { dirname as dirname10, join as join36 } from "node:path";
-function recordSlug(model) {
-  const safe = model.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120);
-  return `${safe}-${createHash13("sha256").update(model).digest("hex").slice(0, 8)}`;
-}
-function calibrationDir(dir, engine) {
-  return join36(dir, "calibration", engine);
-}
-function recordPath(dir, engine, model) {
-  return join36(calibrationDir(dir, engine), `${recordSlug(model)}.json`);
-}
-function recordSchemaErrors(raw) {
-  const e = [];
-  if (!isObj(raw)) return ["not an object"];
-  const need = (ok2, what) => {
-    if (!ok2) e.push(what);
-  };
-  need(raw.schema === RECORD_SCHEMA, `schema must be ${RECORD_SCHEMA}`);
-  need(isStr(raw.harness) && /^(production|custom:[0-9a-f]{64})$/.test(raw.harness), "harness (production or custom:<sha256>)");
-  need(isNonNeg(raw.harness_version), "harness_version");
-  need(isNonNeg(raw.fixture_version), "fixture_version");
-  need(raw.engine === "llama" || raw.engine === "locals", "engine");
-  need(isStr(raw.model) && raw.model !== "", "model");
-  const fp = raw.fingerprint;
-  need(isObj(fp) && Array.isArray(fp.blobs) && fp.blobs.every((b) => isStr(b) && /^[0-9a-f]{64}$/.test(b)) && isNonNeg(fp.ram_bytes), "fingerprint {blobs: sha256[], ram_bytes}");
-  need(isStr(raw.engine_version) && isStr(raw.engine_version_checked), "engine_version, engine_version_checked");
-  need(raw.status === "ok" || raw.status === "engine-check-failed" || raw.status === "calibration-failed", "status");
-  need(raw.failed_step === null || isStr(raw.failed_step), "failed_step");
-  need(raw.message === void 0 || isStr(raw.message), "message");
-  need(isStr(raw.calibrated_at) && isNonNeg(raw.duration_s), "calibrated_at, duration_s");
-  if (raw.status === "calibration-failed") {
-    need(isStr(raw.failed_step) && isStr(raw.message), "a calibration-failed record names failed_step and message");
-    return e;
-  }
-  need(isNum(raw.window_tokens) && raw.window_tokens >= 2048, "window_tokens");
-  need(isNonNeg(raw.free_ram_bytes), "free_ram_bytes");
-  need(isNum(raw.chars_per_token) && raw.chars_per_token > 0, "chars_per_token");
-  const cap = raw.capabilities;
-  need(isObj(cap) && isBool(cap.thinking) && isNonNeg(cap.n_ctx_train), "capabilities");
-  const tw = raw.thinking_works;
-  need(isObj(tw) && (isBool(tw.off) || tw.off === "leaky") && isBool(tw.on), "thinking_works");
-  need(perKind(raw.min_output_tokens), "min_output_tokens");
-  need(perKind(raw.fill_tokens), "fill_tokens");
-  const ur = raw.unfit_reasons;
-  need(ur === void 0 || isObj(ur) && Object.entries(ur).every(([k, v]) => TASK_KINDS.includes(k) && isStr(v)), "unfit_reasons");
-  need(
-    Array.isArray(raw.grid) && raw.grid.every(
-      (g) => isObj(g) && TASK_KINDS.includes(g.kind) && isNonNeg(g.tokens) && (g.skipped === "window" ? isNonNeg(g.W) : (g.counter === "main" || g.counter === "bug" || g.counter === "control") && [g.trials, g.passed, g.inconclusive, g.cuts, g.cut_fails].every(isNonNeg) && (g.cut_cap === null || isNonNeg(g.cut_cap)))
-    ),
-    "grid"
-  );
-  const so = raw.structured_output;
-  need(isObj(so) && isBool(so.off) && isBool(so.on) && isBool(so.array40) && (so.error === void 0 || isStr(so.error)), "structured_output");
-  const main2 = raw.main;
-  need(isObj(main2) && isNum(main2.slots) && main2.slots >= 1 && isNum(main2.slot_ctx) && main2.slot_ctx >= 256, "main");
-  const sc = raw.scouting_candidates;
-  need(Array.isArray(sc) && sc.every((c) => isObj(c) && SCOUT_CANDIDATE_KEYS.every((k) => isNonNeg(c[k]))), "scouting_candidates");
-  const sr = raw.scouting_unfit_reason;
-  need(sr === void 0 || isStr(sr) && sr !== "" && Array.isArray(sc) && sc.length === 0, "scouting_unfit_reason");
-  const sp = raw.speed;
-  need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_decode_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
-  return e;
-}
-function scoutingFor(candidates, threshold) {
-  const passing = candidates.filter((c) => c.accuracy >= threshold);
-  if (passing.length === 0) return "unfit";
-  const share = Math.max(...passing.map((c) => c.share_tokens));
-  return passing.filter((c) => c.share_tokens === share).reduce((a, b) => b.records_per_s > a.records_per_s ? b : a);
-}
-function okRecordFrom(base, trials) {
-  const of = (step) => {
-    const d = [...trials].reverse().find((t) => t.step === step && t.data)?.data;
-    if (!d) throw new Error(`cannot write the calibration record: no ${step}`);
-    return d;
-  };
-  const a = of("A/summary");
-  const b = of("B/summary");
-  const c = of("C/summary");
-  const n = (v) => Number(v);
-  const off = b.thinking_off_mode;
-  const reasons = typeof b.unfit_reasons === "string" ? JSON.parse(b.unfit_reasons) : {};
-  return {
-    schema: 2,
-    ...base,
-    status: "ok",
-    failed_step: null,
-    window_tokens: n(b.window_tokens_min ?? b.window_tokens),
-    free_ram_bytes: n(b.free_ram_bytes),
-    chars_per_token: n(a.chars_per_token),
-    capabilities: { thinking: a.template_thinking === true, n_ctx_train: n(a.n_ctx_train) },
-    thinking_works: { off: off === "leaky" ? "leaky" : off === true, on: a.thinking_on === true },
-    min_output_tokens: { fact: n(b.min_out_fact), aggregate: n(b.min_out_aggregate), bug: n(b.min_out_bug) },
-    fill_tokens: { fact: n(b.fill_fact), aggregate: n(b.fill_aggregate), bug: n(b.fill_bug) },
-    ...Object.keys(reasons).length > 0 ? { unfit_reasons: reasons } : {},
-    grid: JSON.parse(String(b.grid)),
-    structured_output: { off: a.json_off === true, on: a.json_on === true, array40: a.array40 === true, ...typeof a.json_error === "string" ? { error: a.json_error } : {} },
-    main: { slots: n(c.main_slots), slot_ctx: n(c.main_slot_ctx) },
-    scouting_candidates: JSON.parse(String(c.scout_candidates)),
-    ...typeof c.scouting_unfit_reason === "string" ? { scouting_unfit_reason: c.scouting_unfit_reason } : {},
-    speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_decode_tps: n(c.aggregate_decode_tps), load_avg: n(c.load_avg) }
-  };
-}
-function readRecord(dir, engine, model, log = () => void 0) {
-  const p = recordPath(dir, engine, model);
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync34(p, "utf8"));
-  } catch (err3) {
-    if (err3.code !== "ENOENT" && !loggedBad.has(p)) {
-      loggedBad.add(p);
-      log(`calibration record ${p} is unreadable (${err3.message}); it counts as missing`);
-    }
-    return null;
-  }
-  const errors = recordSchemaErrors(raw);
-  const r = raw;
-  if (errors.length === 0 && (r.engine !== engine || r.model !== model)) errors.push(`it is the record of ${r.engine} '${r.model}'`);
-  if (errors.length > 0) {
-    if (!loggedBad.has(p)) {
-      loggedBad.add(p);
-      log(`calibration record ${p} is invalid (${errors.join("; ")}); it counts as missing`);
-    }
-    return null;
-  }
-  return r;
-}
-function writeRecord(dir, record2) {
-  const errors = recordSchemaErrors(record2);
-  if (errors.length > 0) throw new Error(`refusing to write an invalid calibration record for '${record2.model}': ${errors.join("; ")}`);
-  const p = recordPath(dir, record2.engine, record2.model);
-  mkdirSync24(dirname10(p), { recursive: true });
-  const tmp = `${p}.${process.pid}.tmp`;
-  const fd = openSync3(tmp, "w", 384);
-  try {
-    writeSync2(fd, `${JSON.stringify(record2, null, 2)}
-`);
-    fsyncSync(fd);
-  } finally {
-    closeSync3(fd);
-  }
-  renameSync19(tmp, p);
-}
-function readRecordStatus(dir, engine, model, log) {
-  const r = readRecord(dir, engine, model, log);
-  if (r === null) return { state: "missing" };
-  if (r.harness_version !== HARNESS_VERSION || r.fixture_version !== FIXTURE_VERSION) return { state: "missing" };
-  if (r.harness !== PRODUCTION_HARNESS_ID) return { state: "missing" };
-  if (r.status === "ok") return { state: "ok" };
-  const step = r.failed_step !== null ? ` at ${r.failed_step}` : "";
-  const why = r.message !== void 0 ? `: ${r.message}` : "";
-  return { state: "failed", message: `model '${model}' ${r.status}${step}${why} (llm-ext models calibration-status; llm-ext models calibrate --model ${model} --force)` };
-}
-var HARNESS_VERSION, PRODUCTION_HARNESS_ID, RECORD_SCHEMA, FIXTURE_VERSION, TASK_KINDS, isNum, isNonNeg, isBool, isStr, isObj, perKind, SCOUT_CANDIDATE_KEYS, loggedBad;
-var init_record = __esm({
-  "src/calibration/record.ts"() {
-    "use strict";
-    HARNESS_VERSION = 4;
-    PRODUCTION_HARNESS_ID = "production";
-    RECORD_SCHEMA = 2;
-    FIXTURE_VERSION = 1;
-    TASK_KINDS = ["fact", "aggregate", "bug"];
-    isNum = (v) => typeof v === "number" && Number.isFinite(v);
-    isNonNeg = (v) => isNum(v) && v >= 0;
-    isBool = (v) => typeof v === "boolean";
-    isStr = (v) => typeof v === "string";
-    isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
-    perKind = (v) => isObj(v) && TASK_KINDS.every((k) => isNonNeg(v[k]));
-    SCOUT_CANDIDATE_KEYS = ["share_tokens", "slots", "slot_ctx", "accuracy", "records_per_s", "permutation_seed"];
-    loggedBad = /* @__PURE__ */ new Set();
-  }
-});
-
-// src/calibration/fingerprint.ts
-import { createHash as createHash14 } from "node:crypto";
-import { createReadStream, existsSync as existsSync27, mkdirSync as mkdirSync25, readdirSync as readdirSync10, readFileSync as readFileSync35, realpathSync as realpathSync5, renameSync as renameSync20, statSync as statSync16, writeFileSync as writeFileSync23 } from "node:fs";
-import { totalmem } from "node:os";
-import { basename as basename8, dirname as dirname11, join as join37 } from "node:path";
-function readDigests(dir) {
-  try {
-    const raw = JSON.parse(readFileSync35(digestCachePath(dir), "utf8"));
-    return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
-  }
-}
-async function blobSha256(file2, dir) {
-  const real = realpathSync5(file2);
-  const name = basename8(real);
-  if (SHA256_RE.test(name) && basename8(dirname11(real)) === "blobs") return name;
-  const st = statSync16(real);
-  const cached2 = dir === void 0 ? void 0 : readDigests(dir)[real];
-  if (cached2 && cached2.dev === st.dev && cached2.ino === st.ino && cached2.size === st.size && cached2.mtimeMs === st.mtimeMs && SHA256_RE.test(cached2.sha256)) return cached2.sha256;
-  const h = createHash14("sha256");
-  for await (const chunk of createReadStream(real)) h.update(chunk);
-  const sha256 = h.digest("hex");
-  if (dir !== void 0) {
-    const all = readDigests(dir);
-    all[real] = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, sha256 };
-    mkdirSync25(dirname11(digestCachePath(dir)), { recursive: true });
-    const tmp = `${digestCachePath(dir)}.${process.pid}.tmp`;
-    writeFileSync23(tmp, JSON.stringify(all), { mode: 384 });
-    renameSync20(tmp, digestCachePath(dir));
-  }
-  return sha256;
-}
-function snapshotWeightFiles(repo, env = process.env) {
-  const root2 = join37(hubCacheDir(env), `models--${repo.replace(/\//g, "--")}`);
-  const refFile = join37(root2, "refs", "main");
-  if (!existsSync27(refFile)) throw new Error(`no cached snapshot of '${repo}' under ${root2} (refs/main missing)`);
-  const snap = join37(root2, "snapshots", readFileSync35(refFile, "utf8").trim());
-  const files = readdirSync10(snap, { recursive: true }).map(String).filter((f) => WEIGHT_RE.test(f)).map((f) => join37(snap, f));
-  if (files.length === 0) throw new Error(`the cached snapshot ${snap} has no weight files`);
-  return files;
-}
-function ggufShards(modelPath) {
-  const m = /^(.*)-(\d{5})-of-(\d{5})\.gguf$/.exec(modelPath);
-  if (!m) return [modelPath];
-  const n = Number(m[3]);
-  return Array.from({ length: n }, (_, i) => `${m[1]}-${String(i + 1).padStart(5, "0")}-of-${m[3]}.gguf`);
-}
-async function fingerprintOf(files, dir) {
-  const blobs = [];
-  for (const f of files) blobs.push(await blobSha256(f, dir));
-  return { blobs: [...new Set(blobs)].sort(), ram_bytes: totalmem() };
-}
-function sameFingerprint(a, b) {
-  return a.ram_bytes === b.ram_bytes && a.blobs.length === b.blobs.length && a.blobs.every((x, i) => x === b.blobs[i]);
-}
-async function getJson(url2, headers) {
-  const res = await fetch(url2, { headers, signal: AbortSignal.timeout(1e4) });
-  const text2 = await res.text();
-  if (!res.ok) throw new Error(`${url2} answered HTTP ${res.status}: ${text2.slice(0, 200)}`);
-  try {
-    return JSON.parse(text2);
-  } catch {
-    throw new Error(`${url2} did not answer JSON: ${text2.slice(0, 200)}`);
-  }
-}
-async function loadedIdentity(engine, baseUrl, apiKey, model, dir) {
-  if (engine === "llama") {
-    const props = await getJson(`${baseUrl}/props`, { authorization: `Bearer ${apiKey}` });
-    if (typeof props.model_path !== "string" || props.model_path === "") throw new Error(`llama-server /props names no model_path for '${model}'`);
-    if (typeof props.build_info !== "string" || props.build_info === "") throw new Error("llama-server /props names no build_info");
-    const files2 = ggufShards(props.model_path);
-    return { fingerprint: await fingerprintOf(files2, dir), engineVersion: props.build_info, files: files2 };
-  }
-  const h = await getJson(`${baseUrl}/health`, {});
-  if (typeof h.version !== "string") throw new Error("the Locals server /health names no version");
-  const files = snapshotWeightFiles(model);
-  return { fingerprint: await fingerprintOf(files, dir), engineVersion: typeof h.build === "string" ? `${h.version}+${h.build}` : h.version, files };
-}
-function staleness(record2, now4, harnessId = PRODUCTION_HARNESS_ID) {
-  if (record2.harness_version !== HARNESS_VERSION || record2.fixture_version !== FIXTURE_VERSION) return "weights";
-  if (record2.harness !== harnessId) return "weights";
-  if (!sameFingerprint(record2.fingerprint, now4.fingerprint)) return "weights";
-  if (record2.engine_version_checked !== now4.engineVersion) return "engine";
-  return null;
-}
-var SHA256_RE, digestCachePath, WEIGHT_RE;
-var init_fingerprint = __esm({
-  "src/calibration/fingerprint.ts"() {
-    "use strict";
-    init_local_locals_server();
-    init_record();
-    SHA256_RE = /^[0-9a-f]{64}$/;
-    digestCachePath = (dir) => join37(dir, "calibration", "digests.json");
-    WEIGHT_RE = /\.(safetensors|gguf|npz)$/;
-  }
-});
-
-// src/calibration/state.ts
-import { mkdirSync as mkdirSync26, readFileSync as readFileSync36, renameSync as renameSync21, rmdirSync as rmdirSync4, statSync as statSync17, unlinkSync as unlinkSync4, writeFileSync as writeFileSync24 } from "node:fs";
-import { join as join38 } from "node:path";
-function writeJsonAtomic(path2, value) {
-  const tmp = `${path2}.${process.pid}.tmp`;
-  writeFileSync24(tmp, `${JSON.stringify(value, null, 2)}
-`, { mode: 384 });
-  renameSync21(tmp, path2);
-}
-function readJson(path2) {
-  try {
-    return JSON.parse(readFileSync36(path2, "utf8"));
-  } catch {
-    return null;
-  }
-}
-function takeAway(lock) {
-  const gone = `${lock}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  try {
-    renameSync21(lock, gone);
-  } catch {
-    return;
-  }
-  for (const f of ["owner", "pid"]) {
-    try {
-      unlinkSync4(join38(gone, f));
-    } catch {
-    }
-  }
-  rmdirSync4(gone);
-}
-function withStateLock(dir, waitMs, fn) {
-  mkdirSync26(root(dir), { recursive: true });
-  const lock = stateLockPath(dir);
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const deadline = Date.now() + waitMs;
-  for (; ; ) {
-    try {
-      mkdirSync26(lock);
-      writeFileSync24(join38(lock, "owner"), token);
-      break;
-    } catch (err3) {
-      if (err3.code !== "EEXIST") throw err3;
-      try {
-        if (Date.now() - statSync17(lock).mtimeMs > STATE_LOCK_STALE_MS) {
-          takeAway(lock);
-          continue;
-        }
-      } catch {
-        continue;
-      }
-      if (Date.now() > deadline) return void 0;
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    let owner = null;
-    try {
-      owner = readFileSync36(join38(lock, "owner"), "utf8");
-    } catch {
-    }
-    if (owner === token) {
-      unlinkSync4(join38(lock, "owner"));
-      rmdirSync4(lock);
-    }
-  }
-}
-function readQueue(dir) {
-  const raw = readJson(queuePath(dir));
-  if (!raw || !Array.isArray(raw.items)) return [];
-  return raw.items.filter((i) => (i.engine === "llama" || i.engine === "locals") && typeof i.model === "string" && i.model !== "");
-}
-function enqueueUnlocked(dir, item3) {
-  const items = readQueue(dir);
-  const same = items.find((i) => i.engine === item3.engine && i.model === item3.model);
-  if (same) {
-    if (!item3.force || same.force) return;
-    same.force = true;
-  } else items.push({ ...item3, at: (/* @__PURE__ */ new Date()).toISOString() });
-  writeJsonAtomic(queuePath(dir), { version: 1, items });
-}
-function dequeueUnlocked(dir, engine, model) {
-  const items = readQueue(dir);
-  const kept = items.filter((i) => !(i.engine === engine && i.model === model));
-  if (kept.length !== items.length) writeJsonAtomic(queuePath(dir), { version: 1, items: kept });
-}
-function readSeenModels(dir) {
-  const raw = readJson(seenModelsPath(dir));
-  if (!raw || typeof raw.profiles !== "object" || raw.profiles === null || !Array.isArray(raw.used_profiles)) return null;
-  return { profiles: raw.profiles, used_profiles: raw.used_profiles.filter((p) => typeof p === "string") };
-}
-function writeSeenModelsUnlocked(dir, seen) {
-  writeJsonAtomic(seenModelsPath(dir), { version: 1, ...seen });
-}
-async function acquireModelLock(dir, engine, model, self = (pid) => isRunnerOf(dir, pid)) {
-  const lock = modelLockPath(dir, engine, model);
-  mkdirSync26(calibrationDir(dir, engine), { recursive: true });
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      mkdirSync26(lock);
-      const tmp = join38(lock, `pid.${process.pid}.tmp`);
-      writeFileSync24(tmp, String(process.pid));
-      renameSync21(tmp, join38(lock, "pid"));
-      return true;
-    } catch (err3) {
-      if (err3.code !== "EEXIST") throw err3;
-    }
-    const pid = Number(readJson(join38(lock, "pid")) ?? NaN);
-    if (!Number.isInteger(pid)) {
-      let age;
-      try {
-        age = Date.now() - statSync17(lock).mtimeMs;
-      } catch {
-        continue;
-      }
-      if (age < MODEL_LOCK_CREATING_MS) return false;
-    } else if (pid > 1 && pid !== process.pid && pidState(pid) === "alive" && await self(pid)) return false;
-    takeAway(lock);
-  }
-  return false;
-}
-function releaseModelLock(dir, engine, model) {
-  const lock = modelLockPath(dir, engine, model);
-  const pid = Number(readJson(join38(lock, "pid")) ?? NaN);
-  if (pid !== process.pid) return;
-  unlinkSync4(join38(lock, "pid"));
-  rmdirSync4(lock);
-}
-function loadProgress(dir, engine, model, fingerprint, harness = null) {
-  const raw = readJson(progressPath(dir, engine, model));
-  if (!raw || raw.harness_version !== HARNESS_VERSION || raw.fixture_version !== FIXTURE_VERSION || !Array.isArray(raw.trials) || typeof raw.phases !== "object" || raw.phases === null) {
-    return { ...emptyProgress(), fingerprint, harness };
-  }
-  if (harness !== null && raw.harness !== harness) return { ...emptyProgress(), fingerprint, harness };
-  const old = raw.fingerprint ?? null;
-  if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint, harness };
-  const counts = (v) => typeof v === "object" && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) : {};
-  return {
-    harness_version: HARNESS_VERSION,
-    fixture_version: FIXTURE_VERSION,
-    harness: harness ?? (typeof raw.harness === "string" ? raw.harness : null),
-    fingerprint: fingerprint ?? old,
-    trials: raw.trials,
-    phases: raw.phases,
-    crashes: typeof raw.crashes === "number" ? raw.crashes : 0,
-    paused: counts(raw.paused),
-    stepCrashes: counts(raw.stepCrashes),
-    memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => typeof v === "string")) : {}
-  };
-}
-function saveProgress(dir, engine, model, p) {
-  mkdirSync26(calibrationDir(dir, engine), { recursive: true });
-  writeJsonAtomic(progressPath(dir, engine, model), p);
-}
-var root, queuePath, seenModelsPath, stateLockPath, STATE_LOCK_STALE_MS, modelLockPath, MODEL_LOCK_CREATING_MS, progressPath, emptyProgress;
-var init_state = __esm({
-  "src/calibration/state.ts"() {
-    "use strict";
-    init_local_llama_server();
-    init_protocol();
-    init_record();
-    root = (dir) => join38(dir, "calibration");
-    queuePath = (dir) => join38(root(dir), "queue.json");
-    seenModelsPath = (dir) => join38(root(dir), "seen-models.json");
-    stateLockPath = (dir) => join38(root(dir), "state.lock");
-    STATE_LOCK_STALE_MS = 3e4;
-    modelLockPath = (dir, engine, model) => join38(calibrationDir(dir, engine), `${recordSlug(model)}.lock`);
-    MODEL_LOCK_CREATING_MS = 5e3;
-    progressPath = (dir, engine, model) => join38(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
-    emptyProgress = () => ({ harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: null, fingerprint: null, trials: [], phases: {} });
-  }
-});
-
-// src/calibration/runner.ts
-var runner_exports = {};
-__export(runner_exports, {
-  MAX_CRASHES: () => MAX_CRASHES,
-  METHOD_PHASES: () => METHOD_PHASES,
-  PHASE_A_CTX: () => PHASE_A_CTX,
-  PRODUCTION_HARNESS: () => PRODUCTION_HARNESS,
-  calibratorLogPath: () => calibratorLogPath,
-  ensureCalibrator: () => ensureCalibrator,
-  harnessFromEnv: () => harnessFromEnv,
-  liveCalibrator: () => liveCalibrator,
-  runCalibrator: () => runCalibrator,
-  runCalibratorMain: () => runCalibratorMain,
-  startCalServer: () => startCalServer,
-  waitForTurn: () => waitForTurn
-});
-import { createHash as createHash15, randomBytes as randomBytes3 } from "node:crypto";
-import { existsSync as existsSync28, mkdirSync as mkdirSync27, readFileSync as readFileSync37, renameSync as renameSync22, rmdirSync as rmdirSync5, unlinkSync as unlinkSync5, writeFileSync as writeFileSync25 } from "node:fs";
-import { join as join39 } from "node:path";
-import { totalmem as totalmem2 } from "node:os";
-function harnessFromEnv(env) {
-  const raw = env.LLM_EXT_CALIBRATION_HARNESS;
-  if (raw === void 0 || raw === "") return PRODUCTION_HARNESS;
-  let v;
-  try {
-    v = JSON.parse(raw);
-  } catch {
-    throw new Error(`LLM_EXT_CALIBRATION_HARNESS is not JSON: ${raw}`);
-  }
-  const h = { ...PRODUCTION_HARNESS, ...v, id: `custom:${createHash15("sha256").update(raw).digest("hex")}` };
-  const posInt = (n) => Number.isInteger(n) && n > 0;
-  const posList = (l) => Array.isArray(l) && l.length > 0 && l.every(posInt);
-  if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || h.steps !== null && !posList(h.steps) || !posList(h.mainSlots) || !posList(h.scoutShares) || !posList(h.scoutSlots)) {
-    throw new Error(`LLM_EXT_CALIBRATION_HARNESS has an invalid field: ${raw}`);
-  }
-  return h;
-}
-async function liveCalibrator(dir) {
-  const s = readCalibratorState(dir);
-  if (!s || pidState(s.pid) !== "alive" || !await isCalibratorProcess(s.pid)) return null;
-  return s;
-}
-async function ensureCalibrator(o) {
-  const live = await liveCalibrator(o.dir);
-  if (live && live.version === o.version) return "running";
-  if (live) {
-    writeFileSync25(handoverPath(o.dir), JSON.stringify({ version: o.version, at: (/* @__PURE__ */ new Date()).toISOString() }));
-    return "handover-requested";
-  }
-  mkdirSync27(o.dir, { recursive: true });
-  spawnDetachedChild({
-    command: process.execPath,
-    args: [o.entry, CALIBRATE_ARGV],
-    logPath: calibratorLogPath(o.dir),
-    env: { ...o.env ?? process.env, LLM_EXT_CONFIG_DIR: o.dir },
-    onError: (e) => process.stderr.write(`[llm-externalizer] the calibration runner failed to start: ${e.message}
-`)
-  });
-  return "started";
-}
-async function startCalServer(dir, engine, model, ctx, slots, log, onClaimed) {
-  let llamaArgv = [];
-  if (engine === "llama") {
-    const parsed = parseManagedModel(model);
-    if ("error" in parsed) throw new Error(parsed.error);
-    llamaArgv = parsed.argv;
-  } else {
-    const parsed = parseLocalsModel(model);
-    if ("error" in parsed) throw new Error(parsed.error);
-  }
-  const port = await freePort();
-  const target = { port, model, ctx, slots };
-  const logFile = roleLogFile(dir, "cal", engine);
-  const apiKey = randomBytes3(24).toString("hex");
-  let exited = false;
-  let cwd;
-  const entry = await claimAndSpawn({
-    dir,
-    engine,
-    role: "cal",
-    ownerPid: process.pid,
-    log,
-    spawn: async () => {
-      let s;
-      if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
-      else {
-        const l = await spawnLocalsServer(target, logFile, logFile);
-        cwd = l.cwd;
-        s = l;
-      }
-      s.child.once("exit", () => {
-        exited = true;
-      });
-      log(`spawned cal ${serverLabel(engine)} pid ${s.pid} model '${model}' ctx ${ctx} slots ${slots} port ${port}`);
-      return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model, ctx };
-    }
-  });
-  const stop = async (why) => {
-    const how = await stopOwnServer(dir, engine, entry, log);
-    log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
-    if (cwd !== void 0) {
-      try {
-        rmdirSync5(cwd);
-      } catch (e) {
-        log(`left the Locals working directory ${cwd}: ${e.message}`);
-      }
-    }
-  };
-  onClaimed?.({ stop });
-  try {
-    if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
-    else await waitLocalsReady(target, entry.pid, () => exited, logFile);
-  } catch (err3) {
-    await stop("it did not become ready");
-    throw err3;
-  }
-  return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, ctx, slots, alive: () => !exited, stop };
-}
-async function runCalibrator(o) {
-  const claimed = await withAsyncLock(runnerLockPath(o.dir), async () => {
-    const live = await liveCalibrator(o.dir);
-    if (live && live.pid !== process.pid) return false;
-    const tmp = `${calibratorStatePath(o.dir)}.${process.pid}.tmp`;
-    writeFileSync25(tmp, JSON.stringify({ pid: process.pid, version: o.version, startedAt: (/* @__PURE__ */ new Date()).toISOString() }), { mode: 384 });
-    renameSync22(tmp, calibratorStatePath(o.dir));
-    return true;
-  });
-  if (!claimed) {
-    o.log("another calibration runner is working on this config dir; exiting");
-    return "another-runner";
-  }
-  let current = null;
-  let stopping = false;
-  let inflight = null;
-  const onSignal = (sig) => {
-    stopping = true;
-    o.log(`signal ${sig}: stopping after cleanup`);
-    void (current?.stop(`runner ${sig}`) ?? Promise.resolve()).then(() => Promise.race([(inflight ?? Promise.resolve()).catch(() => void 0), new Promise((r) => setTimeout(r, STOP_SETTLE_MS))])).finally(() => {
-      removeOwnState(o.dir);
-      process.exit(0);
-    });
-  };
-  process.once("SIGTERM", onSignal);
-  process.once("SIGINT", onSignal);
-  const attempted = /* @__PURE__ */ new Set();
-  try {
-    for (; ; ) {
-      if (stopping) return "stopped";
-      if (handoverRequested(o.dir, o.version)) {
-        o.log("a newer llm-ext asked for a handover: exiting");
-        return "handover";
-      }
-      const item3 = readQueue(o.dir).find((i) => !attempted.has(`${i.engine}\0${i.model}`));
-      if (!item3) return "done";
-      const one = calibrateOne(o, item3, (s) => current = s, () => stopping);
-      inflight = one;
-      const r = await one;
-      inflight = null;
-      if (r === "paused") return "paused";
-      if (r !== "crashed") attempted.add(`${item3.engine}\0${item3.model}`);
-    }
-  } finally {
-    removeOwnState(o.dir);
-  }
-}
-function handoverRequested(dir, version2) {
-  try {
-    const h = JSON.parse(readFileSync37(handoverPath(dir), "utf8"));
-    return typeof h.version === "string" && h.version !== version2;
-  } catch {
-    return false;
-  }
-}
-function removeOwnState(dir) {
-  if (readCalibratorState(dir)?.pid !== process.pid) return;
-  unlinkSync5(calibratorStatePath(dir));
-  if (existsSync28(handoverPath(dir))) unlinkSync5(handoverPath(dir));
-}
-async function waitForTurn(dir, engine, model, log) {
-  const started = Date.now();
-  let said = false;
-  for (; ; ) {
-    const st = readBrokerState(dir);
-    let busy = false;
-    if (st && pidState(st.pid) === "alive") {
-      try {
-        const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token }, signal: AbortSignal.timeout(5e3) });
-        const h = await res.json();
-        busy = (h.models ?? []).some((m) => !(m.engine === engine && m.model === model) && (m.queued ?? 0) + (m.running ?? 0) > 0);
-      } catch {
-        busy = false;
-      }
-    }
-    if (!busy) return;
-    if (!said) log("pausing: the broker is serving another model");
-    said = true;
-    if (Date.now() - started > TURN_MAX_PAUSE_MS) throw new PausedError("paused for the broker's work for 5 minutes");
-    await new Promise((r) => setTimeout(r, TURN_POLL_MS));
-  }
-}
-async function calibrateOne(o, item3, setCurrent, isStopping) {
-  const name = `${item3.engine} '${item3.model}'`;
-  const harness = o.harness ?? PRODUCTION_HARNESS;
-  if (!await acquireModelLock(o.dir, item3.engine, item3.model)) {
-    o.log(`${name}: another runner holds its lock; skipped`);
-    return "done";
-  }
-  let server2 = null;
-  let identity = null;
-  let existing = null;
-  let engineCheck = false;
-  const startedAt = Date.now();
-  const dequeue = () => {
-    withStateLock(o.dir, 6e4, () => {
-      dequeueUnlocked(o.dir, item3.engine, item3.model);
-      return true;
-    });
-  };
-  const failedRecord = (step, message) => engineCheck && existing ? (
-    // The record keeps its measured body; only the status says the new build failed the quick check.
-    { ...existing, status: "engine-check-failed", failed_step: step, message }
-  ) : {
-    schema: 2,
-    harness: harness.id,
-    harness_version: HARNESS_VERSION,
-    fixture_version: FIXTURE_VERSION,
-    engine: item3.engine,
-    model: item3.model,
-    // Review M2: a model that never loaded has no blobs to name; the record still ends the wait with the reason.
-    fingerprint: identity?.fingerprint ?? { blobs: [], ram_bytes: totalmem2() },
-    engine_version: identity?.engineVersion ?? "unknown",
-    engine_version_checked: identity?.engineVersion ?? "unknown",
-    status: "calibration-failed",
-    failed_step: step,
-    message,
-    calibrated_at: (/* @__PURE__ */ new Date()).toISOString(),
-    duration_s: Math.round((Date.now() - startedAt) / 1e3)
-  };
-  try {
-    await waitForTurn(o.dir, item3.engine, item3.model, (m) => o.log(`${name}: ${m}`));
-    server2 = await startCalServer(o.dir, item3.engine, item3.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s));
-    const loadMs = Date.now() - startedAt;
-    setCurrent(server2);
-    identity = await loadedIdentity(item3.engine, server2.baseUrl, server2.apiKey, item3.model, o.dir);
-    existing = readRecord(o.dir, item3.engine, item3.model, o.log);
-    const stale = existing ? staleness(existing, identity, harness.id) : null;
-    if (existing && !item3.force && stale === null) {
-      writeRecord(o.dir, existing);
-      o.log(`${name}: already has a valid, current record (${existing.status}); removed from the queue`);
-      dequeue();
-      return "done";
-    }
-    if (stale !== null) o.log(`${name}: its record is stale (${stale === "weights" ? "the weights, the RAM or the calibration method changed" : `the engine build changed to ${identity.engineVersion}`})`);
-    engineCheck = existing !== null && stale === "engine" && !item3.force && existing.status !== "calibration-failed";
-    const fingerprint = identity.fingerprint;
-    const progress = loadProgress(o.dir, item3.engine, item3.model, fingerprint, harness.id);
-    if (item3.force) {
-      progress.trials = [];
-      progress.phases = {};
-      progress.crashes = 0;
-      progress.paused = {};
-      progress.stepCrashes = {};
-      progress.memoryWait = {};
-    }
-    if (engineCheck) {
-      progress.trials = progress.trials.filter((t) => !t.step.startsWith("A/"));
-      delete progress.phases.A;
-    }
-    saveProgress(o.dir, item3.engine, item3.model, progress);
-    const ctx = {
-      dir: o.dir,
-      item: item3,
-      server: server2,
-      harness,
-      identity,
-      loadMs,
-      progress,
-      // After a stop signal nothing is saved: a trial or a step crash then comes from the stop (RunnerStopping).
-      record: (t) => {
-        if (isStopping()) throw new RunnerStopping("the runner is stopping");
-        progress.trials.push(t);
-        saveProgress(o.dir, item3.engine, item3.model, progress);
-      },
-      save: () => {
-        if (isStopping()) throw new RunnerStopping("the runner is stopping");
-        saveProgress(o.dir, item3.engine, item3.model, progress);
-      },
-      waitForTurn: () => waitForTurn(o.dir, item3.engine, item3.model, (m) => o.log(`${name}: ${m}`)),
-      stopServer: async (why) => {
-        const s = server2;
-        server2 = null;
-        setCurrent(null);
-        if (s) await s.stop(why);
-      },
-      restart: async (c, slots) => {
-        if (isStopping()) throw new RunnerStopping("the runner is stopping");
-        await ctx.stopServer(`restart at ctx ${c}, ${slots} slot(s)`);
-        const t0 = Date.now();
-        server2 = await startCalServer(o.dir, item3.engine, item3.model, c, slots, o.log, (s) => setCurrent(s));
-        setCurrent(server2);
-        ctx.server = server2;
-        ctx.loadMs = Date.now() - t0;
-      },
-      logTail: () => {
-        try {
-          return readFileSync37(roleLogFile(o.dir, "cal", item3.engine), "utf8").split("\n").slice(-20).join("\n");
-        } catch {
-          return "(no cal server log)";
-        }
-      },
-      log: (m) => o.log(`${name}: ${m}`)
-    };
-    const finish = (r, line) => {
-      writeRecord(o.dir, r);
-      progress.crashes = 0;
-      saveProgress(o.dir, item3.engine, item3.model, progress);
-      o.log(`${name}: ${line}`);
-      dequeue();
-      return "done";
-    };
-    for (const phase of engineCheck ? o.phases.filter((p) => p.name === "A") : o.phases) {
-      if (progress.phases[phase.name] === "passed") continue;
-      const r = await phase.run(ctx);
-      if (isStopping()) throw new RunnerStopping("the runner is stopping");
-      if (!r.passed && r.paused === true) {
-        o.log(`${name}: step ${r.step} paused (${r.message}); the model stays queued`);
-        return "done";
-      }
-      progress.phases[phase.name] = r.passed ? "passed" : "failed";
-      saveProgress(o.dir, item3.engine, item3.model, progress);
-      if (!r.passed) return finish(failedRecord(r.step, r.message), `phase ${phase.name} failed at ${r.step}: ${r.message}`);
-      o.log(`${name}: phase ${phase.name} passed`);
-    }
-    if (engineCheck && existing) {
-      if (progress.phases.A !== "passed") {
-        o.log(`${name}: the engine quick check needs Phase A, which this runner does not have; no record change, the model stays queued`);
-        return "done";
-      }
-      return finish({ ...existing, status: "ok", failed_step: null, message: void 0, engine_version_checked: identity.engineVersion }, `the engine quick check passed on ${identity.engineVersion}; record updated`);
-    }
-    const missing2 = METHOD_PHASES.filter((p) => progress.phases[p] !== "passed");
-    if (missing2.length > 0) {
-      o.log(`${name}: phases ${missing2.join(", ")} are not in this runner; no record written, the model stays queued`);
-      return "done";
-    }
-    const ok2 = okRecordFrom(
-      {
-        harness: harness.id,
-        harness_version: HARNESS_VERSION,
-        fixture_version: FIXTURE_VERSION,
-        engine: item3.engine,
-        model: item3.model,
-        fingerprint: identity.fingerprint,
-        engine_version: identity.engineVersion,
-        engine_version_checked: identity.engineVersion,
-        calibrated_at: (/* @__PURE__ */ new Date()).toISOString(),
-        duration_s: Math.round((Date.now() - startedAt) / 1e3)
-      },
-      progress.trials
-    );
-    return finish(ok2, `calibrated (${harness.id}): fill_tokens fact ${ok2.fill_tokens?.fact}, aggregate ${ok2.fill_tokens?.aggregate}, bug ${ok2.fill_tokens?.bug}; main ${ok2.main?.slots} slot(s) of ${ok2.main?.slot_ctx}; ${ok2.scouting_candidates?.length ?? 0} scouting candidate(s) (the threshold is applied when the record is read)`);
-  } catch (err3) {
-    const msg = err3.message;
-    if (err3 instanceof RunnerStopping || isStopping()) {
-      o.log(`${name}: stopped by a signal (${msg}); not counted as a crash, the model stays queued`);
-      return "paused";
-    }
-    if (err3 instanceof PausedError) {
-      o.log(`${name}: ${msg}; the model stays queued`);
-      return "paused";
-    }
-    const p = loadProgress(o.dir, item3.engine, item3.model, null);
-    p.crashes = (p.crashes ?? 0) + 1;
-    saveProgress(o.dir, item3.engine, item3.model, p);
-    o.log(`${name}: calibration stopped (${p.crashes} of ${MAX_CRASHES}): ${msg}`);
-    if (p.crashes < MAX_CRASHES) return "crashed";
-    writeRecord(o.dir, failedRecord("runner/error", `calibration stopped ${p.crashes} times; the last error: ${msg}`));
-    p.crashes = 0;
-    saveProgress(o.dir, item3.engine, item3.model, p);
-    o.log(`${name}: ${MAX_CRASHES} crashes: wrote a ${engineCheck ? "engine-check-failed" : "calibration-failed"} record`);
-    dequeue();
-    return "done";
-  } finally {
-    if (server2) await server2.stop("model finished");
-    setCurrent(null);
-    releaseModelLock(o.dir, item3.engine, item3.model);
-  }
-}
-async function runCalibratorMain(version2, phases = []) {
-  const log = (msg) => {
-    process.stdout.write(`${(/* @__PURE__ */ new Date()).toISOString()} ${msg}
-`);
-  };
-  try {
-    const why = await runCalibrator({ dir: getConfigDir(), version: version2, log, phases, harness: harnessFromEnv(process.env) });
-    log(`calibration runner exiting: ${why}`);
-    process.exit(0);
-  } catch (err3) {
-    log(`calibration runner failed: ${err3.stack ?? String(err3)}`);
-    process.exit(1);
-  }
-}
-var METHOD_PHASES, PHASE_A_CTX, PRODUCTION_HARNESS, calibratorLogPath, handoverPath, runnerLockPath, STOP_SETTLE_MS, MAX_CRASHES, PausedError, RunnerStopping, TURN_POLL_MS, TURN_MAX_PAUSE_MS;
-var init_runner3 = __esm({
-  "src/calibration/runner.ts"() {
-    "use strict";
-    init_bench_spawn();
-    init_protocol();
-    init_registry3();
-    init_local_llama_server();
-    init_local_locals_server();
-    init_config();
-    init_fingerprint();
-    init_record();
-    init_state();
-    METHOD_PHASES = ["A", "B", "C"];
-    PHASE_A_CTX = 16384;
-    PRODUCTION_HARNESS = {
-      id: PRODUCTION_HARNESS_ID,
-      phaseACtx: PHASE_A_CTX,
-      windowCap: 32768,
-      steps: null,
-      trials: 5,
-      mainSlots: [1, 2, 4, 8],
-      scoutShares: [2048, 4096],
-      scoutSlots: [4, 8]
-    };
-    calibratorLogPath = (dir) => join39(dir, "calibrator-local.log");
-    handoverPath = (dir) => join39(dir, "calibrator-handover.json");
-    runnerLockPath = (dir) => join39(dir, "calibrator.lock");
-    STOP_SETTLE_MS = 1e4;
-    MAX_CRASHES = 3;
-    PausedError = class extends Error {
-    };
-    RunnerStopping = class extends Error {
-    };
-    TURN_POLL_MS = 2e3;
-    TURN_MAX_PAUSE_MS = 5 * 6e4;
-  }
-});
-
 // src/broker/scheduler.ts
 function timingsFromEnv(env) {
   const out = { ...DEFAULT_TIMINGS };
@@ -243205,13 +242321,307 @@ var init_scheduler = __esm({
   }
 });
 
+// src/calibration/record.ts
+import { createHash as createHash13 } from "node:crypto";
+import { closeSync as closeSync3, fsyncSync, mkdirSync as mkdirSync24, openSync as openSync3, readFileSync as readFileSync34, renameSync as renameSync19, writeSync as writeSync2 } from "node:fs";
+import { totalmem } from "node:os";
+import { dirname as dirname10, join as join36 } from "node:path";
+function recordSlug(model) {
+  const safe = model.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 120);
+  return `${safe}-${createHash13("sha256").update(model).digest("hex").slice(0, 8)}`;
+}
+function calibrationDir(dir, engine) {
+  return join36(dir, "calibration", engine);
+}
+function recordPath(dir, engine, model) {
+  return join36(calibrationDir(dir, engine), `${recordSlug(model)}.json`);
+}
+function recordSchemaErrors(raw) {
+  const e = [];
+  if (!isObj(raw)) return ["not an object"];
+  const need = (ok2, what) => {
+    if (!ok2) e.push(what);
+  };
+  need(raw.schema === RECORD_SCHEMA, `schema must be ${RECORD_SCHEMA}`);
+  need(isStr(raw.harness) && /^(production|custom:[0-9a-f]{64})$/.test(raw.harness), "harness (production or custom:<sha256>)");
+  need(isNonNeg(raw.harness_version), "harness_version");
+  need(isNonNeg(raw.fixture_version), "fixture_version");
+  need(raw.engine === "llama" || raw.engine === "locals", "engine");
+  need(isStr(raw.model) && raw.model !== "", "model");
+  const fp = raw.fingerprint;
+  need(isObj(fp) && Array.isArray(fp.blobs) && fp.blobs.every((b) => isStr(b) && /^[0-9a-f]{64}$/.test(b)) && isNonNeg(fp.ram_bytes), "fingerprint {blobs: sha256[], ram_bytes}");
+  need(isStr(raw.engine_version) && isStr(raw.engine_version_checked), "engine_version, engine_version_checked");
+  need(raw.status === "ok" || raw.status === "engine-check-failed" || raw.status === "calibration-failed" || raw.status === "memory-limited", "status");
+  need(raw.failed_step === null || isStr(raw.failed_step), "failed_step");
+  need(raw.message === void 0 || isStr(raw.message), "message");
+  need(isStr(raw.calibrated_at) && isNonNeg(raw.duration_s), "calibrated_at, duration_s");
+  const mj = raw.memory_judged;
+  need(mj === void 0 || raw.status === "calibration-failed" && isObj(mj) && isNonNeg(mj.total_ram_bytes) && isNonNeg(mj.floor_pct) && isNonNeg(mj.n_ctx_train), "memory_judged (a calibration-failed record only)");
+  if (raw.status === "calibration-failed" || raw.status === "memory-limited") {
+    need(isStr(raw.failed_step) && isStr(raw.message), `a ${raw.status} record names failed_step and message`);
+    return e;
+  }
+  need(isNum(raw.window_tokens) && raw.window_tokens >= 2048, "window_tokens");
+  need(isNonNeg(raw.free_ram_bytes), "free_ram_bytes");
+  need(isNum(raw.chars_per_token) && raw.chars_per_token > 0, "chars_per_token");
+  const cap = raw.capabilities;
+  need(isObj(cap) && isBool(cap.thinking) && isNonNeg(cap.n_ctx_train), "capabilities");
+  const tw = raw.thinking_works;
+  need(isObj(tw) && (isBool(tw.off) || tw.off === "leaky") && isBool(tw.on), "thinking_works");
+  need(perKind(raw.min_output_tokens), "min_output_tokens");
+  need(perKind(raw.fill_tokens), "fill_tokens");
+  const ur = raw.unfit_reasons;
+  need(ur === void 0 || isObj(ur) && Object.entries(ur).every(([k, v]) => TASK_KINDS.includes(k) && isStr(v)), "unfit_reasons");
+  need(
+    Array.isArray(raw.grid) && raw.grid.every(
+      (g) => isObj(g) && TASK_KINDS.includes(g.kind) && isNonNeg(g.tokens) && (g.skipped === "window" || g.skipped === "memory-wait" ? isNonNeg(g.W) : (g.counter === "main" || g.counter === "bug" || g.counter === "control") && [g.trials, g.passed, g.inconclusive, g.cuts, g.cut_fails].every(isNonNeg) && (g.cut_cap === null || isNonNeg(g.cut_cap)))
+    ),
+    "grid"
+  );
+  const so = raw.structured_output;
+  need(isObj(so) && isBool(so.off) && isBool(so.on) && isBool(so.array40) && (so.error === void 0 || isStr(so.error)), "structured_output");
+  const main2 = raw.main;
+  need(isObj(main2) && isNum(main2.slots) && main2.slots >= 1 && isNum(main2.slot_ctx) && main2.slot_ctx >= 256, "main");
+  const sc = raw.scouting_candidates;
+  need(Array.isArray(sc) && sc.every((c) => isObj(c) && SCOUT_CANDIDATE_KEYS.every((k) => isNonNeg(c[k]))), "scouting_candidates");
+  const sr = raw.scouting_unfit_reason;
+  need(sr === void 0 || isStr(sr) && sr !== "" && Array.isArray(sc) && sc.length === 0, "scouting_unfit_reason");
+  const sp = raw.speed;
+  need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
+  return e;
+}
+function scoutingFor(candidates, threshold) {
+  const passing = candidates.filter((c) => c.accuracy >= threshold);
+  if (passing.length === 0) return "unfit";
+  const share = Math.max(...passing.map((c) => c.share_tokens));
+  return passing.filter((c) => c.share_tokens === share).reduce((a, b) => b.records_per_s > a.records_per_s ? b : a);
+}
+function okRecordFrom(base, trials) {
+  const of = (step) => {
+    const d = [...trials].reverse().find((t) => t.step === step && t.data)?.data;
+    if (!d) throw new Error(`cannot write the calibration record: no ${step}`);
+    return d;
+  };
+  const a = of("A/summary");
+  const b = of("B/summary");
+  const c = of("C/summary");
+  const n = (v) => Number(v);
+  const off = b.thinking_off_mode;
+  const reasons = typeof b.unfit_reasons === "string" ? JSON.parse(b.unfit_reasons) : {};
+  return {
+    schema: 2,
+    ...base,
+    status: "ok",
+    failed_step: null,
+    window_tokens: n(b.window_tokens_min ?? b.window_tokens),
+    free_ram_bytes: n(b.free_ram_bytes),
+    chars_per_token: n(a.chars_per_token),
+    capabilities: { thinking: a.template_thinking === true, n_ctx_train: n(a.n_ctx_train) },
+    thinking_works: { off: off === "leaky" ? "leaky" : off === true, on: a.thinking_on === true },
+    min_output_tokens: { fact: n(b.min_out_fact), aggregate: n(b.min_out_aggregate), bug: n(b.min_out_bug) },
+    fill_tokens: { fact: n(b.fill_fact), aggregate: n(b.fill_aggregate), bug: n(b.fill_bug) },
+    ...Object.keys(reasons).length > 0 ? { unfit_reasons: reasons } : {},
+    grid: JSON.parse(String(b.grid)),
+    structured_output: { off: a.json_off === true, on: a.json_on === true, array40: a.array40 === true, ...typeof a.json_error === "string" ? { error: a.json_error } : {} },
+    main: { slots: n(c.main_slots), slot_ctx: n(c.main_slot_ctx) },
+    scouting_candidates: JSON.parse(String(c.scout_candidates)),
+    ...typeof c.scouting_unfit_reason === "string" ? { scouting_unfit_reason: c.scouting_unfit_reason } : {},
+    speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_tps: n(c.aggregate_tps), load_avg: n(c.load_avg) }
+  };
+}
+function readRecord(dir, engine, model, log = () => void 0) {
+  const p = recordPath(dir, engine, model);
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync34(p, "utf8"));
+  } catch (err3) {
+    if (err3.code !== "ENOENT" && !loggedBad.has(p)) {
+      loggedBad.add(p);
+      log(`calibration record ${p} is unreadable (${err3.message}); it counts as missing`);
+    }
+    return null;
+  }
+  const errors = recordSchemaErrors(raw);
+  const r = raw;
+  if (errors.length === 0 && (r.engine !== engine || r.model !== model)) errors.push(`it is the record of ${r.engine} '${r.model}'`);
+  if (errors.length > 0) {
+    if (!loggedBad.has(p)) {
+      loggedBad.add(p);
+      log(`calibration record ${p} is invalid (${errors.join("; ")}); it counts as missing`);
+    }
+    return null;
+  }
+  return r;
+}
+function writeRecord(dir, record2) {
+  const errors = recordSchemaErrors(record2);
+  if (errors.length > 0) throw new Error(`refusing to write an invalid calibration record for '${record2.model}': ${errors.join("; ")}`);
+  const p = recordPath(dir, record2.engine, record2.model);
+  mkdirSync24(dirname10(p), { recursive: true });
+  const tmp = `${p}.${process.pid}.tmp`;
+  const fd = openSync3(tmp, "w", 384);
+  try {
+    writeSync2(fd, `${JSON.stringify(record2, null, 2)}
+`);
+    fsyncSync(fd);
+  } finally {
+    closeSync3(fd);
+  }
+  renameSync19(tmp, p);
+}
+function memoryVerdictStale(r, floorPct = timingsFromEnv(process.env).memoryFloorPct, totalRam = totalmem()) {
+  const j = r.memory_judged;
+  if (r.status !== "calibration-failed" || j === void 0) return null;
+  if (j.total_ram_bytes !== totalRam) return `the total RAM changed from ${j.total_ram_bytes} to ${totalRam} bytes`;
+  if (j.floor_pct !== floorPct) return `the memory floor changed from ${j.floor_pct} % to ${floorPct} %`;
+  return null;
+}
+function readRecordStatus(dir, engine, model, log, nowMs = Date.now()) {
+  const r = readRecord(dir, engine, model, log);
+  if (r === null) return { state: "missing" };
+  if (r.harness_version !== HARNESS_VERSION || r.fixture_version !== FIXTURE_VERSION) return { state: "missing" };
+  if (r.harness !== PRODUCTION_HARNESS_ID) return { state: "missing" };
+  if (r.status === "ok") return { state: "ok" };
+  if (r.status === "memory-limited") {
+    const retryAt = Date.parse(r.calibrated_at) + MEMORY_LIMITED_RETRY_MS;
+    if (nowMs >= retryAt) return { state: "missing" };
+    return {
+      state: "failed",
+      message: `model '${model}': not enough free memory to calibrate it (${r.failed_step ?? "?"}: ${r.message ?? ""}); free memory, or run llm-ext models calibrate --model ${model} (it is calibrated again on the first request after ${new Date(retryAt).toISOString()})`
+    };
+  }
+  if (memoryVerdictStale(r) !== null) return { state: "missing" };
+  const step = r.failed_step !== null ? ` at ${r.failed_step}` : "";
+  const why = r.message !== void 0 ? `: ${r.message}` : "";
+  return { state: "failed", message: `model '${model}' ${r.status}${step}${why} (llm-ext models calibration-status; llm-ext models calibrate --model ${model} --force)` };
+}
+var HARNESS_VERSION, PRODUCTION_HARNESS_ID, RECORD_SCHEMA, FIXTURE_VERSION, TASK_KINDS, isNum, isNonNeg, isBool, isStr, isObj, perKind, SCOUT_CANDIDATE_KEYS, loggedBad, MEMORY_LIMITED_RETRY_MS;
+var init_record = __esm({
+  "src/calibration/record.ts"() {
+    "use strict";
+    init_scheduler();
+    HARNESS_VERSION = 5;
+    PRODUCTION_HARNESS_ID = "production";
+    RECORD_SCHEMA = 2;
+    FIXTURE_VERSION = 1;
+    TASK_KINDS = ["fact", "aggregate", "bug"];
+    isNum = (v) => typeof v === "number" && Number.isFinite(v);
+    isNonNeg = (v) => isNum(v) && v >= 0;
+    isBool = (v) => typeof v === "boolean";
+    isStr = (v) => typeof v === "string";
+    isObj = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+    perKind = (v) => isObj(v) && TASK_KINDS.every((k) => isNonNeg(v[k]));
+    SCOUT_CANDIDATE_KEYS = ["share_tokens", "slots", "slot_ctx", "accuracy", "records_per_s", "permutation_seed"];
+    loggedBad = /* @__PURE__ */ new Set();
+    MEMORY_LIMITED_RETRY_MS = 36e5;
+  }
+});
+
+// src/calibration/fingerprint.ts
+import { createHash as createHash14 } from "node:crypto";
+import { createReadStream, existsSync as existsSync27, mkdirSync as mkdirSync25, readdirSync as readdirSync10, readFileSync as readFileSync35, realpathSync as realpathSync5, renameSync as renameSync20, statSync as statSync16, writeFileSync as writeFileSync23 } from "node:fs";
+import { totalmem as totalmem2 } from "node:os";
+import { basename as basename8, dirname as dirname11, join as join37 } from "node:path";
+function readDigests(dir) {
+  try {
+    const raw = JSON.parse(readFileSync35(digestCachePath(dir), "utf8"));
+    return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
+  } catch {
+    return {};
+  }
+}
+async function blobSha256(file2, dir) {
+  const real = realpathSync5(file2);
+  const name = basename8(real);
+  if (SHA256_RE.test(name) && basename8(dirname11(real)) === "blobs") return name;
+  const st = statSync16(real);
+  const cached2 = dir === void 0 ? void 0 : readDigests(dir)[real];
+  if (cached2 && cached2.dev === st.dev && cached2.ino === st.ino && cached2.size === st.size && cached2.mtimeMs === st.mtimeMs && SHA256_RE.test(cached2.sha256)) return cached2.sha256;
+  const h = createHash14("sha256");
+  for await (const chunk of createReadStream(real)) h.update(chunk);
+  const sha256 = h.digest("hex");
+  if (dir !== void 0) {
+    const all = readDigests(dir);
+    all[real] = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, sha256 };
+    mkdirSync25(dirname11(digestCachePath(dir)), { recursive: true });
+    const tmp = `${digestCachePath(dir)}.${process.pid}.tmp`;
+    writeFileSync23(tmp, JSON.stringify(all), { mode: 384 });
+    renameSync20(tmp, digestCachePath(dir));
+  }
+  return sha256;
+}
+function snapshotWeightFiles(repo, env = process.env) {
+  const root2 = join37(hubCacheDir(env), `models--${repo.replace(/\//g, "--")}`);
+  const refFile = join37(root2, "refs", "main");
+  if (!existsSync27(refFile)) throw new Error(`no cached snapshot of '${repo}' under ${root2} (refs/main missing)`);
+  const snap = join37(root2, "snapshots", readFileSync35(refFile, "utf8").trim());
+  const files = readdirSync10(snap, { recursive: true }).map(String).filter((f) => WEIGHT_RE.test(f)).map((f) => join37(snap, f));
+  if (files.length === 0) throw new Error(`the cached snapshot ${snap} has no weight files`);
+  return files;
+}
+function ggufShards(modelPath) {
+  const m = /^(.*)-(\d{5})-of-(\d{5})\.gguf$/.exec(modelPath);
+  if (!m) return [modelPath];
+  const n = Number(m[3]);
+  return Array.from({ length: n }, (_, i) => `${m[1]}-${String(i + 1).padStart(5, "0")}-of-${m[3]}.gguf`);
+}
+async function fingerprintOf(files, dir) {
+  const blobs = [];
+  for (const f of files) blobs.push(await blobSha256(f, dir));
+  return { blobs: [...new Set(blobs)].sort(), ram_bytes: totalmem2() };
+}
+function sameFingerprint(a, b) {
+  return a.ram_bytes === b.ram_bytes && a.blobs.length === b.blobs.length && a.blobs.every((x, i) => x === b.blobs[i]);
+}
+async function getJson(url2, headers) {
+  const res = await fetch(url2, { headers, signal: AbortSignal.timeout(1e4) });
+  const text2 = await res.text();
+  if (!res.ok) throw new Error(`${url2} answered HTTP ${res.status}: ${text2.slice(0, 200)}`);
+  try {
+    return JSON.parse(text2);
+  } catch {
+    throw new Error(`${url2} did not answer JSON: ${text2.slice(0, 200)}`);
+  }
+}
+async function loadedIdentity(engine, baseUrl, apiKey, model, dir) {
+  if (engine === "llama") {
+    const props = await getJson(`${baseUrl}/props`, { authorization: `Bearer ${apiKey}` });
+    if (typeof props.model_path !== "string" || props.model_path === "") throw new Error(`llama-server /props names no model_path for '${model}'`);
+    if (typeof props.build_info !== "string" || props.build_info === "") throw new Error("llama-server /props names no build_info");
+    const files2 = ggufShards(props.model_path);
+    return { fingerprint: await fingerprintOf(files2, dir), engineVersion: props.build_info, files: files2 };
+  }
+  const h = await getJson(`${baseUrl}/health`, {});
+  if (typeof h.version !== "string") throw new Error("the Locals server /health names no version");
+  const files = snapshotWeightFiles(model);
+  return { fingerprint: await fingerprintOf(files, dir), engineVersion: typeof h.build === "string" ? `${h.version}+${h.build}` : h.version, files };
+}
+function staleness(record2, now4, harnessId = PRODUCTION_HARNESS_ID) {
+  if (record2.harness_version !== HARNESS_VERSION || record2.fixture_version !== FIXTURE_VERSION) return "weights";
+  if (record2.harness !== harnessId) return "weights";
+  if (!sameFingerprint(record2.fingerprint, now4.fingerprint)) return "weights";
+  if (record2.engine_version_checked !== now4.engineVersion) return "engine";
+  return null;
+}
+var SHA256_RE, digestCachePath, WEIGHT_RE;
+var init_fingerprint = __esm({
+  "src/calibration/fingerprint.ts"() {
+    "use strict";
+    init_local_locals_server();
+    init_record();
+    SHA256_RE = /^[0-9a-f]{64}$/;
+    digestCachePath = (dir) => join37(dir, "calibration", "digests.json");
+    WEIGHT_RE = /\.(safetensors|gguf|npz)$/;
+  }
+});
+
 // src/calibration/memory.ts
-import { closeSync as closeSync4, existsSync as existsSync29, openSync as openSync4, readFileSync as readFileSync38, readSync as readSync2, statSync as statSync18 } from "node:fs";
+import { closeSync as closeSync4, existsSync as existsSync28, openSync as openSync4, readFileSync as readFileSync36, readSync as readSync2, statSync as statSync17 } from "node:fs";
 import { freemem, platform, totalmem as totalmem3 } from "node:os";
-import { dirname as dirname12, join as join40 } from "node:path";
+import { dirname as dirname12, join as join38 } from "node:path";
 function readGgufMetadata(file2, keepArray = 4096) {
   const fd = openSync4(file2, "r");
-  const size = statSync18(file2).size;
+  const size = statSync17(file2).size;
   let buf = Buffer.alloc(0);
   let bufStart = 0;
   let pos = 0;
@@ -243382,14 +242792,14 @@ function modelKvLayers(engine, weightFiles) {
   if (weightFiles.length === 0) throw new Error("no weight files to read the model shape from");
   if (engine === "llama") return ggufKvLayers(readGgufMetadata(weightFiles[0]));
   for (let d = dirname12(weightFiles[0]); ; d = dirname12(d)) {
-    const cfg = join40(d, "config.json");
-    if (existsSync29(cfg)) return configKvLayers(JSON.parse(readFileSync38(cfg, "utf8")));
+    const cfg = join38(d, "config.json");
+    if (existsSync28(cfg)) return configKvLayers(JSON.parse(readFileSync36(cfg, "utf8")));
     if (/\/snapshots$/.test(dirname12(d)) || dirname12(d) === d) break;
   }
   throw new Error(`no config.json beside ${weightFiles[0]}`);
 }
 function weightBytes(files) {
-  return files.reduce((s, f) => s + statSync18(f).size, 0);
+  return files.reduce((s, f) => s + statSync17(f).size, 0);
 }
 async function freeMemory(floorPct) {
   const total = totalmem3();
@@ -243410,6 +242820,744 @@ var init_memory = __esm({
     WINDOW_HEADROOM_BYTES = 1024 ** 3;
     WINDOW_STEP = 256;
     num = (v) => typeof v === "number" ? v : typeof v === "bigint" ? Number(v) : null;
+  }
+});
+
+// src/calibration/state.ts
+import { mkdirSync as mkdirSync26, readFileSync as readFileSync37, renameSync as renameSync21, rmdirSync as rmdirSync4, statSync as statSync18, unlinkSync as unlinkSync4, writeFileSync as writeFileSync24 } from "node:fs";
+import { join as join39 } from "node:path";
+function writeJsonAtomic(path2, value) {
+  const tmp = `${path2}.${process.pid}.tmp`;
+  writeFileSync24(tmp, `${JSON.stringify(value, null, 2)}
+`, { mode: 384 });
+  renameSync21(tmp, path2);
+}
+function readJson(path2) {
+  try {
+    return JSON.parse(readFileSync37(path2, "utf8"));
+  } catch {
+    return null;
+  }
+}
+function takeAway(lock) {
+  const gone = `${lock}.stale-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  try {
+    renameSync21(lock, gone);
+  } catch {
+    return;
+  }
+  for (const f of ["owner", "pid"]) {
+    try {
+      unlinkSync4(join39(gone, f));
+    } catch {
+    }
+  }
+  rmdirSync4(gone);
+}
+function withStateLock(dir, waitMs, fn) {
+  mkdirSync26(root(dir), { recursive: true });
+  const lock = stateLockPath(dir);
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const deadline = Date.now() + waitMs;
+  for (; ; ) {
+    try {
+      mkdirSync26(lock);
+      writeFileSync24(join39(lock, "owner"), token);
+      break;
+    } catch (err3) {
+      if (err3.code !== "EEXIST") throw err3;
+      try {
+        if (Date.now() - statSync18(lock).mtimeMs > STATE_LOCK_STALE_MS) {
+          takeAway(lock);
+          continue;
+        }
+      } catch {
+        continue;
+      }
+      if (Date.now() > deadline) return void 0;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    let owner = null;
+    try {
+      owner = readFileSync37(join39(lock, "owner"), "utf8");
+    } catch {
+    }
+    if (owner === token) {
+      unlinkSync4(join39(lock, "owner"));
+      rmdirSync4(lock);
+    }
+  }
+}
+function readQueue(dir) {
+  const raw = readJson(queuePath(dir));
+  if (!raw || !Array.isArray(raw.items)) return [];
+  return raw.items.filter((i) => (i.engine === "llama" || i.engine === "locals") && typeof i.model === "string" && i.model !== "");
+}
+function enqueueUnlocked(dir, item3) {
+  const items = readQueue(dir);
+  const same = items.find((i) => i.engine === item3.engine && i.model === item3.model);
+  if (same) {
+    if (!item3.force || same.force) return;
+    same.force = true;
+  } else items.push({ ...item3, at: (/* @__PURE__ */ new Date()).toISOString() });
+  writeJsonAtomic(queuePath(dir), { version: 1, items });
+}
+function dequeueUnlocked(dir, engine, model) {
+  const items = readQueue(dir);
+  const kept = items.filter((i) => !(i.engine === engine && i.model === model));
+  if (kept.length !== items.length) writeJsonAtomic(queuePath(dir), { version: 1, items: kept });
+}
+function readSeenModels(dir) {
+  const raw = readJson(seenModelsPath(dir));
+  if (!raw || typeof raw.profiles !== "object" || raw.profiles === null || !Array.isArray(raw.used_profiles)) return null;
+  return { profiles: raw.profiles, used_profiles: raw.used_profiles.filter((p) => typeof p === "string") };
+}
+function writeSeenModelsUnlocked(dir, seen) {
+  writeJsonAtomic(seenModelsPath(dir), { version: 1, ...seen });
+}
+async function acquireModelLock(dir, engine, model, self = (pid) => isRunnerOf(dir, pid)) {
+  const lock = modelLockPath(dir, engine, model);
+  mkdirSync26(calibrationDir(dir, engine), { recursive: true });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      mkdirSync26(lock);
+      const tmp = join39(lock, `pid.${process.pid}.tmp`);
+      writeFileSync24(tmp, String(process.pid));
+      renameSync21(tmp, join39(lock, "pid"));
+      return true;
+    } catch (err3) {
+      if (err3.code !== "EEXIST") throw err3;
+    }
+    const pid = Number(readJson(join39(lock, "pid")) ?? NaN);
+    if (!Number.isInteger(pid)) {
+      let age;
+      try {
+        age = Date.now() - statSync18(lock).mtimeMs;
+      } catch {
+        continue;
+      }
+      if (age < MODEL_LOCK_CREATING_MS) return false;
+    } else if (pid > 1 && pid !== process.pid && pidState(pid) === "alive" && await self(pid)) return false;
+    takeAway(lock);
+  }
+  return false;
+}
+function releaseModelLock(dir, engine, model) {
+  const lock = modelLockPath(dir, engine, model);
+  const pid = Number(readJson(join39(lock, "pid")) ?? NaN);
+  if (pid !== process.pid) return;
+  unlinkSync4(join39(lock, "pid"));
+  rmdirSync4(lock);
+}
+function isMemoryWait(v) {
+  if (typeof v !== "object" || v === null) return false;
+  const w = v;
+  return typeof w.since === "string" && typeof w.seen === "string" && typeof w.waited_ms === "number" && typeof w.need === "number";
+}
+function loadProgress(dir, engine, model, fingerprint, harness = null) {
+  const raw = readJson(progressPath(dir, engine, model));
+  if (!raw || raw.harness_version !== HARNESS_VERSION || raw.fixture_version !== FIXTURE_VERSION || !Array.isArray(raw.trials) || typeof raw.phases !== "object" || raw.phases === null) {
+    return { ...emptyProgress(), fingerprint, harness };
+  }
+  if (harness !== null && raw.harness !== harness) return { ...emptyProgress(), fingerprint, harness };
+  const old = raw.fingerprint ?? null;
+  if (fingerprint !== null && old !== null && (old.ram_bytes !== fingerprint.ram_bytes || old.blobs.join() !== fingerprint.blobs.join())) return { ...emptyProgress(), fingerprint, harness };
+  const counts = (v) => typeof v === "object" && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).filter(([, n]) => typeof n === "number")) : {};
+  return {
+    harness_version: HARNESS_VERSION,
+    fixture_version: FIXTURE_VERSION,
+    harness: harness ?? (typeof raw.harness === "string" ? raw.harness : null),
+    fingerprint: fingerprint ?? old,
+    trials: raw.trials,
+    phases: raw.phases,
+    crashes: typeof raw.crashes === "number" ? raw.crashes : 0,
+    paused: counts(raw.paused),
+    stepCrashes: counts(raw.stepCrashes),
+    memoryWait: typeof raw.memoryWait === "object" && raw.memoryWait !== null && !Array.isArray(raw.memoryWait) ? Object.fromEntries(Object.entries(raw.memoryWait).filter(([, v]) => isMemoryWait(v))) : {},
+    // Listed explicitly: this rebuild drops any field it does not name, and a lost stamp would reset a forced run again.
+    ...typeof raw.forced_at === "string" ? { forced_at: raw.forced_at } : {}
+  };
+}
+function saveProgress(dir, engine, model, p) {
+  mkdirSync26(calibrationDir(dir, engine), { recursive: true });
+  writeJsonAtomic(progressPath(dir, engine, model), p);
+}
+var root, queuePath, seenModelsPath, stateLockPath, STATE_LOCK_STALE_MS, modelLockPath, MODEL_LOCK_CREATING_MS, progressPath, emptyProgress;
+var init_state = __esm({
+  "src/calibration/state.ts"() {
+    "use strict";
+    init_local_llama_server();
+    init_protocol();
+    init_record();
+    root = (dir) => join39(dir, "calibration");
+    queuePath = (dir) => join39(root(dir), "queue.json");
+    seenModelsPath = (dir) => join39(root(dir), "seen-models.json");
+    stateLockPath = (dir) => join39(root(dir), "state.lock");
+    STATE_LOCK_STALE_MS = 3e4;
+    modelLockPath = (dir, engine, model) => join39(calibrationDir(dir, engine), `${recordSlug(model)}.lock`);
+    MODEL_LOCK_CREATING_MS = 5e3;
+    progressPath = (dir, engine, model) => join39(calibrationDir(dir, engine), `${recordSlug(model)}.progress.json`);
+    emptyProgress = () => ({ harness_version: HARNESS_VERSION, fixture_version: FIXTURE_VERSION, harness: null, fingerprint: null, trials: [], phases: {} });
+  }
+});
+
+// src/calibration/memory-wait.ts
+function budgetFit(needBytes, hardBudget, softBudget) {
+  if (needBytes > hardBudget) return "skip";
+  if (needBytes > softBudget) return "wait";
+  return "run";
+}
+function memoryWaitTick(prev, need, nowMs) {
+  const at = new Date(nowMs).toISOString();
+  if (prev === void 0) return { since: at, seen: at, waited_ms: 0, need };
+  const gap = nowMs - Date.parse(prev.seen);
+  return { since: prev.since, seen: at, waited_ms: prev.waited_ms + (gap >= 0 && gap <= MEMORY_WAIT_GAP_MS ? gap : 0), need };
+}
+function memoryWaitExpired(w) {
+  return w.waited_ms >= MEMORY_WAIT_MAX_MS;
+}
+function windowWaitNeed(tokens, w, needBytes) {
+  if (tokens > w.unloaded) return needBytes(Math.ceil(tokens / WINDOW_STEP) * WINDOW_STEP);
+  if (tokens > w.halved) return w.free - w.floor + w.deficit;
+  throw new Error(`windowWaitNeed: ${tokens} tokens fit the window after the halving (${w.halved}); only the server's context cuts it, a window skip, not a memory wait`);
+}
+async function memoryWaitPrecheck(dir, engine, model, harnessId) {
+  const p = loadProgress(dir, engine, model, null, harnessId);
+  const entries2 = Object.entries(p.memoryWait ?? {});
+  if (entries2.length === 0) return null;
+  const { free, floor } = await freeMemory(timingsFromEnv(process.env).memoryFloorPct);
+  if (entries2.some(([, w2]) => w2.need <= free - floor)) return null;
+  const nowMs = Date.now();
+  const ticked = entries2.map(([step2, w2]) => [step2, memoryWaitTick(w2, w2.need, nowMs)]);
+  if (ticked.some(([, w2]) => memoryWaitExpired(w2))) return null;
+  p.memoryWait = Object.fromEntries(ticked);
+  saveProgress(dir, engine, model, p);
+  const mib = (x) => Math.round(x / 2 ** 20);
+  const [step, w] = ticked[0];
+  return `${step} still waits for free memory (${mib(w.need)} MiB needed, ${mib(free - floor)} MiB free above the floor; ${Math.round(w.waited_ms / 6e4)} of ${MEMORY_WAIT_MAX_MS / 6e4} min counted)`;
+}
+function memoryWaitClear(ctx, step) {
+  const waits = ctx.progress.memoryWait;
+  if (waits?.[step] === void 0) return;
+  delete waits[step];
+  ctx.save();
+}
+function memoryWaitCheck(ctx, step, need, free, floor) {
+  const waits = ctx.progress.memoryWait ??= {};
+  const wait = memoryWaitTick(waits[step], need, Date.now());
+  const waited = Math.round(wait.waited_ms / 6e4);
+  const mib = (x) => Math.round(x / 2 ** 20);
+  if (memoryWaitExpired(wait)) {
+    delete waits[step];
+    ctx.save();
+    ctx.log(`${step}: skipped for this pass after waiting ${waited} min for free memory (${mib(need)} MiB needed, ${mib(free - floor)} MiB free above the floor)`);
+    return { skipped: "memory-wait", waited_min: waited };
+  }
+  waits[step] = wait;
+  ctx.save();
+  throw new WaitForMemory(
+    step,
+    `${step} needs ${mib(need)} MiB; free memory now allows ${mib(free - floor)} MiB: the model waits for memory (waiting since ${wait.since}, ${waited} of ${MEMORY_WAIT_MAX_MS / 6e4} min counted; ${step} is skipped for this pass once ${MEMORY_WAIT_MAX_MS / 6e4} min of checks still find memory short)`
+  );
+}
+function recordInconclusiveSkip(ctx, step, seed, data, cause) {
+  const passes = ctx.progress.trials.filter((t) => t.step === step && t.outcome === "inconclusive" && typeof t.data?.skipped === "string").length + 1;
+  const terminal = passes >= INCONCLUSIVE_PASSES;
+  ctx.record({ step, seed, outcome: terminal ? "pass" : "inconclusive", data: { ...data, passes }, at: (/* @__PURE__ */ new Date()).toISOString() });
+  ctx.log(`${step}: ${cause}, pass ${passes} of ${INCONCLUSIVE_PASSES}: ${terminal ? "given up, not scored" : "measured again on the next pass"}`);
+  return { passes, terminal };
+}
+var MEMORY_WAIT_MAX_MS, MEMORY_WAIT_GAP_MS, INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP, WaitForMemory;
+var init_memory_wait = __esm({
+  "src/calibration/memory-wait.ts"() {
+    "use strict";
+    init_scheduler();
+    init_memory();
+    init_state();
+    MEMORY_WAIT_MAX_MS = 30 * 6e4;
+    MEMORY_WAIT_GAP_MS = 5 * 6e4;
+    INCONCLUSIVE_PASSES = 3;
+    MEMORY_WAIT_CAUSE = `still short of free memory after ${MEMORY_WAIT_MAX_MS / 6e4} min`;
+    MEMORY_WAIT_GIVEN_UP = `waited for free memory on ${INCONCLUSIVE_PASSES} passes`;
+    WaitForMemory = class extends Error {
+      constructor(step, message) {
+        super(message);
+        this.step = step;
+      }
+    };
+  }
+});
+
+// src/calibration/runner.ts
+var runner_exports = {};
+__export(runner_exports, {
+  MAX_CRASHES: () => MAX_CRASHES,
+  METHOD_PHASES: () => METHOD_PHASES,
+  PHASE_A_CTX: () => PHASE_A_CTX,
+  PRODUCTION_HARNESS: () => PRODUCTION_HARNESS,
+  calibratorLogPath: () => calibratorLogPath,
+  ensureCalibrator: () => ensureCalibrator,
+  harnessFromEnv: () => harnessFromEnv,
+  liveCalibrator: () => liveCalibrator,
+  runCalibrator: () => runCalibrator,
+  runCalibratorMain: () => runCalibratorMain,
+  startCalServer: () => startCalServer,
+  waitForTurn: () => waitForTurn
+});
+import { createHash as createHash15, randomBytes as randomBytes3 } from "node:crypto";
+import { existsSync as existsSync29, mkdirSync as mkdirSync27, readFileSync as readFileSync38, renameSync as renameSync22, rmdirSync as rmdirSync5, unlinkSync as unlinkSync5, writeFileSync as writeFileSync25 } from "node:fs";
+import { join as join40 } from "node:path";
+import { totalmem as totalmem4 } from "node:os";
+function harnessFromEnv(env) {
+  const raw = env.LLM_EXT_CALIBRATION_HARNESS;
+  if (raw === void 0 || raw === "") return PRODUCTION_HARNESS;
+  let v;
+  try {
+    v = JSON.parse(raw);
+  } catch {
+    throw new Error(`LLM_EXT_CALIBRATION_HARNESS is not JSON: ${raw}`);
+  }
+  const h = { ...PRODUCTION_HARNESS, ...v, id: `custom:${createHash15("sha256").update(raw).digest("hex")}` };
+  const posInt = (n) => Number.isInteger(n) && n > 0;
+  const posList = (l) => Array.isArray(l) && l.length > 0 && l.every(posInt);
+  if (!posInt(h.phaseACtx) || !posInt(h.windowCap) || !posInt(h.trials) || h.steps !== null && !posList(h.steps) || !posList(h.mainSlots) || !posList(h.scoutShares) || !posList(h.scoutSlots)) {
+    throw new Error(`LLM_EXT_CALIBRATION_HARNESS has an invalid field: ${raw}`);
+  }
+  return h;
+}
+async function liveCalibrator(dir) {
+  const s = readCalibratorState(dir);
+  if (!s || pidState(s.pid) !== "alive" || !await isCalibratorProcess(s.pid)) return null;
+  return s;
+}
+async function ensureCalibrator(o) {
+  const live = await liveCalibrator(o.dir);
+  if (live && live.version === o.version) return "running";
+  if (live) {
+    writeFileSync25(handoverPath(o.dir), JSON.stringify({ version: o.version, at: (/* @__PURE__ */ new Date()).toISOString() }));
+    return "handover-requested";
+  }
+  mkdirSync27(o.dir, { recursive: true });
+  spawnDetachedChild({
+    command: process.execPath,
+    args: [o.entry, CALIBRATE_ARGV],
+    logPath: calibratorLogPath(o.dir),
+    env: { ...o.env ?? process.env, LLM_EXT_CONFIG_DIR: o.dir },
+    onError: (e) => process.stderr.write(`[llm-externalizer] the calibration runner failed to start: ${e.message}
+`)
+  });
+  return "started";
+}
+async function startCalServer(dir, engine, model, ctx, slots, log, onClaimed) {
+  let llamaArgv = [];
+  if (engine === "llama") {
+    const parsed = parseManagedModel(model);
+    if ("error" in parsed) throw new Error(parsed.error);
+    llamaArgv = parsed.argv;
+  } else {
+    const parsed = parseLocalsModel(model);
+    if ("error" in parsed) throw new Error(parsed.error);
+  }
+  const port = await freePort();
+  const target = { port, model, ctx, slots };
+  const logFile = roleLogFile(dir, "cal", engine);
+  const apiKey = randomBytes3(24).toString("hex");
+  let exited = false;
+  let cwd;
+  const entry = await claimAndSpawn({
+    dir,
+    engine,
+    role: "cal",
+    ownerPid: process.pid,
+    log,
+    spawn: async () => {
+      let s;
+      if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
+      else {
+        const l = await spawnLocalsServer(target, logFile, logFile);
+        cwd = l.cwd;
+        s = l;
+      }
+      s.child.once("exit", () => {
+        exited = true;
+      });
+      log(`spawned cal ${serverLabel(engine)} pid ${s.pid} model '${model}' ctx ${ctx} slots ${slots} port ${port}`);
+      return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model, ctx };
+    }
+  });
+  const stop = async (why) => {
+    const how = await stopOwnServer(dir, engine, entry, log);
+    log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
+    if (cwd !== void 0) {
+      try {
+        rmdirSync5(cwd);
+      } catch (e) {
+        log(`left the Locals working directory ${cwd}: ${e.message}`);
+      }
+    }
+  };
+  onClaimed?.({ stop });
+  try {
+    if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
+    else await waitLocalsReady(target, entry.pid, () => exited, logFile);
+  } catch (err3) {
+    await stop("it did not become ready");
+    throw err3;
+  }
+  return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, ctx, slots, alive: () => !exited, stop };
+}
+async function runCalibrator(o) {
+  const claimed = await withAsyncLock(runnerLockPath(o.dir), async () => {
+    const live = await liveCalibrator(o.dir);
+    if (live && live.pid !== process.pid) return false;
+    const tmp = `${calibratorStatePath(o.dir)}.${process.pid}.tmp`;
+    writeFileSync25(tmp, JSON.stringify({ pid: process.pid, version: o.version, startedAt: (/* @__PURE__ */ new Date()).toISOString() }), { mode: 384 });
+    renameSync22(tmp, calibratorStatePath(o.dir));
+    return true;
+  });
+  if (!claimed) {
+    o.log("another calibration runner is working on this config dir; exiting");
+    return "another-runner";
+  }
+  let current = null;
+  let stopping = false;
+  let inflight = null;
+  const onSignal = (sig) => {
+    stopping = true;
+    o.log(`signal ${sig}: stopping after cleanup`);
+    void (current?.stop(`runner ${sig}`) ?? Promise.resolve()).then(() => Promise.race([(inflight ?? Promise.resolve()).catch(() => void 0), new Promise((r) => setTimeout(r, STOP_SETTLE_MS))])).finally(() => {
+      removeOwnState(o.dir);
+      process.exit(0);
+    });
+  };
+  process.once("SIGTERM", onSignal);
+  process.once("SIGINT", onSignal);
+  const attempted = /* @__PURE__ */ new Set();
+  try {
+    for (; ; ) {
+      if (stopping) return "stopped";
+      if (handoverRequested(o.dir, o.version)) {
+        o.log("a newer llm-ext asked for a handover: exiting");
+        return "handover";
+      }
+      const item3 = readQueue(o.dir).find((i) => !attempted.has(`${i.engine}\0${i.model}`));
+      if (!item3) return "done";
+      const one = calibrateOne(o, item3, (s) => current = s, () => stopping);
+      inflight = one;
+      const r = await one;
+      inflight = null;
+      if (r === "paused") return "paused";
+      if (r !== "crashed") attempted.add(`${item3.engine}\0${item3.model}`);
+    }
+  } finally {
+    removeOwnState(o.dir);
+  }
+}
+function handoverRequested(dir, version2) {
+  try {
+    const h = JSON.parse(readFileSync38(handoverPath(dir), "utf8"));
+    return typeof h.version === "string" && h.version !== version2;
+  } catch {
+    return false;
+  }
+}
+function removeOwnState(dir) {
+  if (readCalibratorState(dir)?.pid !== process.pid) return;
+  unlinkSync5(calibratorStatePath(dir));
+  if (existsSync29(handoverPath(dir))) unlinkSync5(handoverPath(dir));
+}
+async function waitForTurn(dir, engine, model, log) {
+  const started = Date.now();
+  let said = false;
+  for (; ; ) {
+    const st = readBrokerState(dir);
+    let busy = false;
+    if (st && pidState(st.pid) === "alive") {
+      try {
+        const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token }, signal: AbortSignal.timeout(5e3) });
+        const h = await res.json();
+        busy = (h.models ?? []).some((m) => !(m.engine === engine && m.model === model) && (m.queued ?? 0) + (m.running ?? 0) > 0);
+      } catch {
+        busy = false;
+      }
+    }
+    if (!busy) return;
+    if (!said) log("pausing: the broker is serving another model");
+    said = true;
+    if (Date.now() - started > TURN_MAX_PAUSE_MS) throw new PausedError("paused for the broker's work for 5 minutes");
+    await new Promise((r) => setTimeout(r, TURN_POLL_MS));
+  }
+}
+async function calibrateOne(o, item3, setCurrent, isStopping) {
+  const name = `${item3.engine} '${item3.model}'`;
+  const harness = o.harness ?? PRODUCTION_HARNESS;
+  if (!await acquireModelLock(o.dir, item3.engine, item3.model)) {
+    o.log(`${name}: another runner holds its lock; skipped`);
+    return "done";
+  }
+  let server2 = null;
+  let identity = null;
+  let existing = null;
+  let engineCheck = false;
+  const startedAt = Date.now();
+  const dequeue = () => {
+    withStateLock(o.dir, 6e4, () => {
+      dequeueUnlocked(o.dir, item3.engine, item3.model);
+      return true;
+    });
+  };
+  const failedRecord = (step, message, status = "calibration-failed") => engineCheck && existing && status === "calibration-failed" ? (
+    // The record keeps its measured body; only the status says the new build failed the quick check.
+    { ...existing, status: "engine-check-failed", failed_step: step, message }
+  ) : {
+    schema: 2,
+    harness: harness.id,
+    harness_version: HARNESS_VERSION,
+    fixture_version: FIXTURE_VERSION,
+    engine: item3.engine,
+    model: item3.model,
+    // Review M2: a model that never loaded has no blobs to name; the record still ends the wait with the reason.
+    fingerprint: identity?.fingerprint ?? { blobs: [], ram_bytes: totalmem4() },
+    engine_version: identity?.engineVersion ?? "unknown",
+    engine_version_checked: identity?.engineVersion ?? "unknown",
+    status,
+    failed_step: step,
+    message,
+    calibrated_at: (/* @__PURE__ */ new Date()).toISOString(),
+    duration_s: Math.round((Date.now() - startedAt) / 1e3)
+  };
+  try {
+    const firstRead = loadProgress(o.dir, item3.engine, item3.model, null, harness.id);
+    if (!item3.force && firstRead.forced_at !== void 0) {
+      delete firstRead.forced_at;
+      saveProgress(o.dir, item3.engine, item3.model, firstRead);
+    }
+    const resetPending = item3.force === true && firstRead.forced_at === void 0;
+    const waiting = resetPending ? null : await memoryWaitPrecheck(o.dir, item3.engine, item3.model, harness.id);
+    if (waiting !== null) {
+      o.log(`${name}: ${waiting}; the model is not loaded on this pass and stays queued`);
+      return "done";
+    }
+    await waitForTurn(o.dir, item3.engine, item3.model, (m) => o.log(`${name}: ${m}`));
+    server2 = await startCalServer(o.dir, item3.engine, item3.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s));
+    const loadMs = Date.now() - startedAt;
+    setCurrent(server2);
+    identity = await loadedIdentity(item3.engine, server2.baseUrl, server2.apiKey, item3.model, o.dir);
+    existing = readRecord(o.dir, item3.engine, item3.model, o.log);
+    const stale = existing ? staleness(existing, identity, harness.id) : null;
+    const memoryRedo = existing === null ? null : existing.status === "memory-limited" ? "it only waited for free memory" : memoryVerdictStale(existing);
+    if (existing && !item3.force && stale === null && memoryRedo === null) {
+      writeRecord(o.dir, existing);
+      o.log(`${name}: already has a valid, current record (${existing.status}); removed from the queue`);
+      dequeue();
+      return "done";
+    }
+    if (memoryRedo !== null) o.log(`${name}: calibrated again: ${memoryRedo}`);
+    if (stale !== null) o.log(`${name}: its record is stale (${stale === "weights" ? "the weights, the RAM or the calibration method changed" : `the engine build changed to ${identity.engineVersion}`})`);
+    engineCheck = existing !== null && stale === "engine" && !item3.force && existing.status !== "calibration-failed";
+    const fingerprint = identity.fingerprint;
+    const progress = loadProgress(o.dir, item3.engine, item3.model, fingerprint, harness.id);
+    if (item3.force && progress.forced_at === void 0) {
+      progress.trials = [];
+      progress.phases = {};
+      progress.crashes = 0;
+      progress.paused = {};
+      progress.stepCrashes = {};
+      progress.memoryWait = {};
+      progress.forced_at = (/* @__PURE__ */ new Date()).toISOString();
+    }
+    if (engineCheck) {
+      progress.trials = progress.trials.filter((t) => !t.step.startsWith("A/"));
+      delete progress.phases.A;
+    }
+    saveProgress(o.dir, item3.engine, item3.model, progress);
+    const ctx = {
+      dir: o.dir,
+      item: item3,
+      server: server2,
+      harness,
+      identity,
+      loadMs,
+      progress,
+      // After a stop signal nothing is saved: a trial or a step crash then comes from the stop (RunnerStopping).
+      record: (t) => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
+        progress.trials.push(t);
+        saveProgress(o.dir, item3.engine, item3.model, progress);
+      },
+      save: () => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
+        saveProgress(o.dir, item3.engine, item3.model, progress);
+      },
+      waitForTurn: () => waitForTurn(o.dir, item3.engine, item3.model, (m) => o.log(`${name}: ${m}`)),
+      stopServer: async (why) => {
+        const s = server2;
+        server2 = null;
+        setCurrent(null);
+        if (s) await s.stop(why);
+      },
+      restart: async (c, slots) => {
+        if (isStopping()) throw new RunnerStopping("the runner is stopping");
+        await ctx.stopServer(`restart at ctx ${c}, ${slots} slot(s)`);
+        const t0 = Date.now();
+        server2 = await startCalServer(o.dir, item3.engine, item3.model, c, slots, o.log, (s) => setCurrent(s));
+        setCurrent(server2);
+        ctx.server = server2;
+        ctx.loadMs = Date.now() - t0;
+      },
+      logTail: () => {
+        try {
+          return readFileSync38(roleLogFile(o.dir, "cal", item3.engine), "utf8").split("\n").slice(-20).join("\n");
+        } catch {
+          return "(no cal server log)";
+        }
+      },
+      log: (m) => o.log(`${name}: ${m}`)
+    };
+    const finish = (r, line) => {
+      writeRecord(o.dir, r);
+      delete progress.forced_at;
+      progress.crashes = 0;
+      saveProgress(o.dir, item3.engine, item3.model, progress);
+      o.log(`${name}: ${line}`);
+      dequeue();
+      return "done";
+    };
+    for (const phase of engineCheck ? o.phases.filter((p) => p.name === "A") : o.phases) {
+      if (progress.phases[phase.name] === "passed") continue;
+      const r = await phase.run(ctx);
+      if (isStopping()) throw new RunnerStopping("the runner is stopping");
+      if (!r.passed && r.paused === true) {
+        o.log(`${name}: step ${r.step} paused (${r.message}); the model stays queued`);
+        return "done";
+      }
+      if (!r.passed && r.memory?.kind === "memory-limited") {
+        progress.trials = progress.trials.filter((t) => !(typeof t.data?.skipped === "string" && PASS_COUNTED_SKIPS.includes(t.data.skipped)));
+        progress.memoryWait = {};
+        saveProgress(o.dir, item3.engine, item3.model, progress);
+        if (existing?.status === "ok" && stale === null) return finish(existing, `phase ${phase.name} memory-limited at ${r.step} (${r.message}); the existing ok record is kept, run models calibrate --model ${item3.model} --force again once memory is free`);
+        return finish(failedRecord(r.step, r.message, "memory-limited"), `phase ${phase.name} memory-limited at ${r.step}: ${r.message}`);
+      }
+      progress.phases[phase.name] = r.passed ? "passed" : "failed";
+      saveProgress(o.dir, item3.engine, item3.model, progress);
+      if (!r.passed) {
+        const rec = failedRecord(r.step, r.message);
+        return finish(r.memory?.kind === "too-big" ? { ...rec, memory_judged: r.memory.judged } : rec, `phase ${phase.name} failed at ${r.step}: ${r.message}`);
+      }
+      o.log(`${name}: phase ${phase.name} passed`);
+    }
+    if (engineCheck && existing) {
+      if (progress.phases.A !== "passed") {
+        o.log(`${name}: the engine quick check needs Phase A, which this runner does not have; no record change, the model stays queued`);
+        return "done";
+      }
+      return finish({ ...existing, status: "ok", failed_step: null, message: void 0, engine_version_checked: identity.engineVersion }, `the engine quick check passed on ${identity.engineVersion}; record updated`);
+    }
+    const missing2 = METHOD_PHASES.filter((p) => progress.phases[p] !== "passed");
+    if (missing2.length > 0) {
+      o.log(`${name}: phases ${missing2.join(", ")} are not in this runner; no record written, the model stays queued`);
+      return "done";
+    }
+    const ok2 = okRecordFrom(
+      {
+        harness: harness.id,
+        harness_version: HARNESS_VERSION,
+        fixture_version: FIXTURE_VERSION,
+        engine: item3.engine,
+        model: item3.model,
+        fingerprint: identity.fingerprint,
+        engine_version: identity.engineVersion,
+        engine_version_checked: identity.engineVersion,
+        calibrated_at: (/* @__PURE__ */ new Date()).toISOString(),
+        duration_s: Math.round((Date.now() - startedAt) / 1e3)
+      },
+      progress.trials
+    );
+    return finish(ok2, `calibrated (${harness.id}): fill_tokens fact ${ok2.fill_tokens?.fact}, aggregate ${ok2.fill_tokens?.aggregate}, bug ${ok2.fill_tokens?.bug}; main ${ok2.main?.slots} slot(s) of ${ok2.main?.slot_ctx}; ${ok2.scouting_candidates?.length ?? 0} scouting candidate(s) (the threshold is applied when the record is read)`);
+  } catch (err3) {
+    const msg = err3.message;
+    if (err3 instanceof RunnerStopping || isStopping()) {
+      o.log(`${name}: stopped by a signal (${msg}); not counted as a crash, the model stays queued`);
+      return "paused";
+    }
+    if (err3 instanceof PausedError) {
+      o.log(`${name}: ${msg}; the model stays queued`);
+      return "paused";
+    }
+    const p = loadProgress(o.dir, item3.engine, item3.model, null);
+    p.crashes = (p.crashes ?? 0) + 1;
+    saveProgress(o.dir, item3.engine, item3.model, p);
+    o.log(`${name}: calibration stopped (${p.crashes} of ${MAX_CRASHES}): ${msg}`);
+    if (p.crashes < MAX_CRASHES) return "crashed";
+    writeRecord(o.dir, failedRecord("runner/error", `calibration stopped ${p.crashes} times; the last error: ${msg}`));
+    p.crashes = 0;
+    delete p.forced_at;
+    saveProgress(o.dir, item3.engine, item3.model, p);
+    o.log(`${name}: ${MAX_CRASHES} crashes: wrote a ${engineCheck ? "engine-check-failed" : "calibration-failed"} record`);
+    dequeue();
+    return "done";
+  } finally {
+    if (server2) await server2.stop("model finished");
+    setCurrent(null);
+    releaseModelLock(o.dir, item3.engine, item3.model);
+  }
+}
+async function runCalibratorMain(version2, phases = []) {
+  const log = (msg) => {
+    process.stdout.write(`${(/* @__PURE__ */ new Date()).toISOString()} ${msg}
+`);
+  };
+  try {
+    const why = await runCalibrator({ dir: getConfigDir(), version: version2, log, phases, harness: harnessFromEnv(process.env) });
+    log(`calibration runner exiting: ${why}`);
+    process.exit(0);
+  } catch (err3) {
+    log(`calibration runner failed: ${err3.stack ?? String(err3)}`);
+    process.exit(1);
+  }
+}
+var METHOD_PHASES, PHASE_A_CTX, PRODUCTION_HARNESS, PASS_COUNTED_SKIPS, calibratorLogPath, handoverPath, runnerLockPath, STOP_SETTLE_MS, MAX_CRASHES, PausedError, RunnerStopping, TURN_POLL_MS, TURN_MAX_PAUSE_MS;
+var init_runner3 = __esm({
+  "src/calibration/runner.ts"() {
+    "use strict";
+    init_bench_spawn();
+    init_protocol();
+    init_registry3();
+    init_local_llama_server();
+    init_local_locals_server();
+    init_config();
+    init_fingerprint();
+    init_memory_wait();
+    init_record();
+    init_state();
+    METHOD_PHASES = ["A", "B", "C"];
+    PHASE_A_CTX = 16384;
+    PRODUCTION_HARNESS = {
+      id: PRODUCTION_HARNESS_ID,
+      phaseACtx: PHASE_A_CTX,
+      windowCap: 32768,
+      steps: null,
+      trials: 5,
+      mainSlots: [1, 2, 4, 8],
+      scoutShares: [2048, 4096],
+      scoutSlots: [4, 8]
+    };
+    PASS_COUNTED_SKIPS = ["memory-wait", "timeout", "transport"];
+    calibratorLogPath = (dir) => join40(dir, "calibrator-local.log");
+    handoverPath = (dir) => join40(dir, "calibrator-handover.json");
+    runnerLockPath = (dir) => join40(dir, "calibrator.lock");
+    STOP_SETTLE_MS = 1e4;
+    MAX_CRASHES = 3;
+    PausedError = class extends Error {
+    };
+    RunnerStopping = class extends Error {
+    };
+    TURN_POLL_MS = 2e3;
+    TURN_MAX_PAUSE_MS = 5 * 6e4;
   }
 });
 
@@ -244380,7 +244528,7 @@ __export(phase_b_exports, {
   measureWindow: () => measureWindow,
   phaseB: () => phaseB
 });
-import { totalmem as totalmem4 } from "node:os";
+import { totalmem as totalmem5 } from "node:os";
 function dataOf(ctx, step) {
   const t = [...ctx.progress.trials].reverse().find((x) => x.step === step && x.data);
   return t?.data ?? null;
@@ -244601,7 +244749,7 @@ async function measureWindow(ctx, nCtxTrain, minWindow) {
   await ctx.stopServer("measuring free memory for the calibration window");
   const { free, floor } = await freeMemory(floorPct);
   const window = chooseWindow(layers, weights, free - floor, cap);
-  const hard = chooseWindow(layers, weights, totalmem4() - floor, cap);
+  const hard = chooseWindow(layers, weights, totalmem5() - floor, cap);
   const old = [...ctx.progress.trials].reverse().find((t) => t.step === "B/window" && typeof t.data?.hard_window_tokens === "number")?.data ?? null;
   const resume = windowResume(old === null ? null : Number(old.hard_window_tokens), hard);
   if (resume === "restart") {
@@ -244614,8 +244762,8 @@ async function measureWindow(ctx, nCtxTrain, minWindow) {
     ctx.log(`hard window W = ${hard} tokens, as before: the Phase B trials are kept (free memory now ${Math.round(free / 2 ** 20)} MiB)`);
   }
   if (window < minWindow) {
-    ctx.log(`not enough free memory for calibration: W would be ${window} tokens (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB); the model waits`);
-    return null;
+    ctx.log(`not enough free memory for calibration: W would be ${window} tokens, under ${minWindow} (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, hard W ${hard})`);
+    return { window, free, hard, floor };
   }
   ctx.record({
     step: "B/window",
@@ -244625,14 +244773,14 @@ async function measureWindow(ctx, nCtxTrain, minWindow) {
     at: now2()
   });
   ctx.log(`calibration window W = ${window} tokens, hard W ${hard} (free ${Math.round(free / 2 ** 20)} MiB, floor ${Math.round(floor / 2 ** 20)} MiB, weights ${Math.round(weights / 2 ** 20)} MiB, KV ${Math.round(kvBytes(layers, window) / 2 ** 20)} MiB)`);
-  return { window, free, hard };
+  return { window, free, hard, floor };
 }
 async function localsIds(ctx) {
   const res = await fetch(`${ctx.server.baseUrl}/v1/models`, { signal: AbortSignal.timeout(1e4) });
   const m = await res.json();
   return (m.data ?? []).map((d) => d.id).filter((id) => typeof id === "string");
 }
-var SIZE_TOLERANCE, MAX_REBUILDS, MAX_STEP_CRASHES, MIN_HALVED_WINDOW, StepPaused, StepFailed, WaitForMemory, now2, stepKey, phaseB;
+var SIZE_TOLERANCE, MAX_REBUILDS, MAX_STEP_CRASHES, MIN_HALVED_WINDOW, StepPaused, StepFailed, StepPending, now2, stepKey, phaseB;
 var init_phase_b = __esm({
   "src/calibration/phase-b.ts"() {
     "use strict";
@@ -244640,6 +244788,7 @@ var init_phase_b = __esm({
     init_local_locals_server();
     init_local_llama_server();
     init_memory();
+    init_memory_wait();
     init_phase_a();
     init_phase_b_fixtures();
     SIZE_TOLERANCE = 0.03;
@@ -244658,7 +244807,7 @@ var init_phase_b = __esm({
         this.step = step;
       }
     };
-    WaitForMemory = class extends Error {
+    StepPending = class extends Error {
       constructor(step, message) {
         super(message);
         this.step = step;
@@ -244680,19 +244829,45 @@ var init_phase_b = __esm({
         const bugJson = bugThinking === "on" ? a.json_on === true : a.json_off === true;
         try {
           const w = await measureWindow(ctx, Number(caps.n_ctx_train), minWindow);
-          if (w === null) return { passed: false, paused: true, step: "B/window", message: "not enough free memory for the calibration window; the model waits" };
-          let window = w.window;
-          await ctx.restart(window, 1);
+          const steps = ctx.harness.steps !== null ? steps0 : gridSteps(w.hard, null);
+          const fill = { fact: 0, aggregate: 0, bug: 0 };
+          const grid = [];
+          const unfitReasons = {};
+          const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
+          const weights = weightBytes(ctx.identity.files);
+          const needBytes = (tokens) => weights + kvBytes(layers, tokens) + WINDOW_HEADROOM_BYTES;
           const floorPct = timingsFromEnv(process.env).memoryFloorPct;
+          if (w.hard < minWindow) {
+            memoryWaitClear(ctx, "B/window");
+            const nCtxTrain = Number(caps.n_ctx_train);
+            return {
+              passed: false,
+              step: "B/window",
+              message: `the model is too big for this machine's memory: the calibration window cannot reach ${minWindow} tokens (the hard W is ${w.hard}: total RAM ${Math.round(totalmem5() / 2 ** 20)} MiB minus the ${floorPct} % floor${nCtxTrain > 0 ? `, at most the trained context ${nCtxTrain}` : ""})`,
+              memory: { kind: "too-big", judged: { total_ram_bytes: totalmem5(), floor_pct: floorPct, n_ctx_train: nCtxTrain } }
+            };
+          }
+          let window = w.window;
+          if (window < minWindow) {
+            const skip = memoryWaitCheck(ctx, "B/window", windowWaitNeed(minWindow, { unloaded: w.window, halved: w.window, free: w.free, floor: w.floor, deficit: 0 }, needBytes), w.free, w.floor);
+            const { passes, terminal } = recordInconclusiveSkip(ctx, "B/window", 0, { ...skip, soft_window: window, hard_window: w.hard, min_window: minWindow }, MEMORY_WAIT_CAUSE);
+            if (!terminal) return { passed: false, paused: true, step: "B/window", message: `free memory allows a window of ${window} tokens, under the ${minWindow} calibration needs: skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one` };
+            return { passed: false, step: "B/window", message: `free memory stayed below the smallest calibration window (${minWindow} tokens) on ${INCONCLUSIVE_PASSES} passes`, memory: { kind: "memory-limited" } };
+          }
+          memoryWaitClear(ctx, "B/window");
+          await ctx.restart(window, 1);
+          let deficit = 0;
           for (; ; ) {
             const pct2 = process.platform === "darwin" ? await memoryFreePercent() : null;
             const lower = Math.max(Math.min(MIN_HALVED_WINDOW, ctx.harness.windowCap), Math.floor(window / 2 / 256) * 256);
             if (pct2 === null || pct2 >= floorPct || lower >= window) break;
+            if (deficit === 0) deficit = Math.round((floorPct - pct2) / 100 * totalmem5());
             ctx.log(`after loading at W = ${window}, free memory is ${pct2} % (floor ${floorPct} %): W halved to ${lower}`);
             window = lower;
             ctx.record({ step: "B/window", seed: 1, outcome: "pass", data: { window_tokens: window, free_ram_bytes: w.free, halved: true }, at: now2() });
             await ctx.restart(window, 1);
           }
+          const halved = window;
           if (ctx.server.engine === "llama") {
             const props = await (await fetch(`${ctx.server.baseUrl}/props`, { headers: { authorization: `Bearer ${ctx.server.apiKey}` }, signal: AbortSignal.timeout(1e4) })).json();
             const got = Number(props.default_generation_settings?.n_ctx ?? 0);
@@ -244712,31 +244887,57 @@ var init_phase_b = __esm({
             cpt: { fact: cpt, aggregate: cpt, bug: cpt },
             overhead: { fact: 0, aggregate: 0, bug: 0 }
           };
-          const steps = ctx.harness.steps !== null ? steps0 : gridSteps(w.hard, null);
-          const fill = { fact: 0, aggregate: 0, bug: 0 };
-          const grid = [];
-          const unfitReasons = {};
+          const pending = [];
+          const givenUp = (key) => ctx.progress.trials.some((t) => t.step === key && t.outcome === "pass" && t.data?.skipped === "memory-wait");
           for (const kind of kinds) {
             const thinking = kind === "bug" ? bugThinking : "off";
             const nominal = thinking === "on" ? CAP_ON : CAP_OFF;
-            fill[kind] = await walkGrid(steps, async (tokens) => {
-              const fit = stepFit(tokens, nominal, run2.hardWindow, softWindow(run2));
-              if (fit === "skip") {
-                grid.push({ kind, tokens, skipped: "window", W: run2.hardWindow });
-                ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the hard window ${run2.hardWindow}`);
-                return false;
-              }
-              if (fit === "wait") throw new WaitForMemory(stepKey(kind, tokens), `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory now allows ${softWindow(run2)} (hard ${run2.hardWindow}): the model waits for memory`);
-              const ok2 = await stepPasses(run2, kind, tokens, bugThinking, bugJson);
-              grid.push(...gridOf(ctx, kind, tokens));
-              ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok2 ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
-              return ok2;
-            });
-            if (fill[kind] === 0 && grid.filter((g) => g.kind === kind).every((g) => "skipped" in g)) {
-              unfitReasons[kind] = windowTooSmallReason(run2.hardWindow, thinking);
+            try {
+              fill[kind] = await walkGrid(steps, async (tokens) => {
+                const key = stepKey(kind, tokens);
+                if (givenUp(key)) {
+                  grid.push({ kind, tokens, skipped: "memory-wait", W: softWindow(run2) });
+                  return false;
+                }
+                const fit = stepFit(tokens, nominal, run2.hardWindow, softWindow(run2));
+                if (fit === "skip") {
+                  memoryWaitClear(ctx, key);
+                  grid.push({ kind, tokens, skipped: "window", W: run2.hardWindow });
+                  ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the hard window ${run2.hardWindow}`);
+                  return false;
+                }
+                if (fit === "wait") {
+                  if (tokens + nominal + 64 <= halved) {
+                    memoryWaitClear(ctx, key);
+                    grid.push({ kind, tokens, skipped: "window", W: softWindow(run2) });
+                    ctx.log(`Phase B ${kind} at ${tokens} tokens: skipped, no room for the thinking ${thinking} output cap (${nominal}) in the server's context ${softWindow(run2)}`);
+                    return false;
+                  }
+                  const need = windowWaitNeed(tokens + nominal + 64, { unloaded: w.window, halved, free: w.free, floor: w.floor, deficit }, needBytes);
+                  const skip = memoryWaitCheck(ctx, key, need, w.free, w.floor);
+                  const { passes, terminal } = recordInconclusiveSkip(ctx, key, 0, { ...skip, kind, tokens, soft_window: softWindow(run2) }, MEMORY_WAIT_CAUSE);
+                  if (!terminal) throw new StepPending(key, `step ${tokens} of ${kind} needs ${tokens + nominal + 64} tokens of window; free memory allows ${softWindow(run2)} (hard ${run2.hardWindow}): skipped for this pass (pass ${passes} of ${INCONCLUSIVE_PASSES}), measured again on the next one`);
+                  grid.push({ kind, tokens, skipped: "memory-wait", W: softWindow(run2) });
+                  return false;
+                }
+                memoryWaitClear(ctx, key);
+                const ok2 = await stepPasses(run2, kind, tokens, bugThinking, bugJson);
+                grid.push(...gridOf(ctx, kind, tokens));
+                ctx.log(`Phase B ${kind} at ${tokens} tokens: ${ok2 ? "pass" : "fail"} (${gridOf(ctx, kind, tokens).map((g) => `${g.counter} ${g.passed}/${g.trials}${g.inconclusive ? `, ${g.inconclusive} inconclusive` : ""}`).join("; ")})`);
+                return ok2;
+              });
+            } catch (e) {
+              if (!(e instanceof StepPending)) throw e;
+              pending.push(e);
+              continue;
+            }
+            const own = grid.filter((g) => g.kind === kind);
+            if (fill[kind] === 0 && own.every((g) => "skipped" in g)) {
+              unfitReasons[kind] = own.some((g) => "skipped" in g && g.skipped === "memory-wait") ? `steps that fit total RAM ${MEMORY_WAIT_GIVEN_UP}` : windowTooSmallReason(Math.min(run2.hardWindow, ...own.flatMap((g) => "skipped" in g ? [g.W] : [])), thinking);
               ctx.log(`Phase B ${kind}: unfit, ${unfitReasons[kind]}`);
             }
           }
+          if (pending.length > 0) return { passed: false, paused: true, step: pending[0].step, message: pending.map((p) => p.message).join("; ") };
           const floors = Object.fromEntries(
             kinds.map((k) => [
               k,
@@ -244748,7 +244949,7 @@ var init_phase_b = __esm({
           if (offMode === "leaky") ctx.log(`thinking off is leaky: ${offTokens.length} short thinking-off answers have a median over ${LEAKY_LIMIT} completion tokens (thinking_works.off: "leaky", not a failure)`);
           const summary = {
             window_tokens: window,
-            hard_window_tokens: run2.hardWindow,
+            hard_window_tokens: w.hard,
             // Decision 2026-10-29 (after review): the record's window_tokens is the smallest W any counted trial ran under.
             window_tokens_min: Math.min(window, ...ctx.progress.trials.filter((t) => t.step.startsWith("B/") && t.outcome !== "inconclusive" && typeof t.data?.window === "number").map((t) => Number(t.data?.window))),
             free_ram_bytes: w.free,
@@ -244783,17 +244984,14 @@ var init_phase_b = __esm({
 // src/calibration/phase-c.ts
 var phase_c_exports = {};
 __export(phase_c_exports, {
-  INCONCLUSIVE_PASSES: () => INCONCLUSIVE_PASSES,
-  MEMORY_WAIT_MAX_MS: () => MEMORY_WAIT_MAX_MS,
   SCOUT_OUTPUT_CAP: () => SCOUT_OUTPUT_CAP,
   SCOUT_TIMEOUT_RERUNS: () => SCOUT_TIMEOUT_RERUNS,
   THROUGHPUT_OUTPUT_TOKENS: () => THROUGHPUT_OUTPUT_TOKENS,
   batchThroughput: () => batchThroughput,
-  budgetFit: () => budgetFit,
   chooseSlots: () => chooseSlots,
   isScoutTimeout: () => isScoutTimeout,
+  isScoutTransportFailure: () => isScoutTransportFailure,
   mainSlotCtx: () => mainSlotCtx,
-  memoryWaitExpired: () => memoryWaitExpired,
   pendingCause: () => pendingCause,
   phaseC: () => phaseC,
   scoutSlotCtx: () => scoutSlotCtx,
@@ -244801,14 +244999,18 @@ __export(phase_c_exports, {
   skipText: () => skipText,
   throughputPromptTokens: () => throughputPromptTokens
 });
-import { loadavg, totalmem as totalmem5 } from "node:os";
+import { loadavg, totalmem as totalmem6 } from "node:os";
 function pendingCause(skipped) {
-  return skipped === "timeout" ? "a scouting run timed out after its reruns" : `still short of free memory after ${MEMORY_WAIT_MAX_MS / 6e4} min`;
+  if (skipped === "timeout") return "a scouting run timed out after its reruns";
+  if (skipped === "transport") return "a scouting run lost its connection (reset, or HTTP 502/503/504) after its reruns";
+  if (skipped === "memory-wait") return MEMORY_WAIT_CAUSE;
+  throw new Error(`unknown pending Phase C skip '${skipped}'`);
 }
 function skipText(skipped) {
   if (skipped === "memory") return "over total RAM";
-  if (skipped === "memory-wait") return `waited for free memory on ${INCONCLUSIVE_PASSES} passes`;
+  if (skipped === "memory-wait") return MEMORY_WAIT_GIVEN_UP;
   if (skipped === "timeout") return `timed out on ${INCONCLUSIVE_PASSES} passes`;
+  if (skipped === "transport") return `lost its connection on ${INCONCLUSIVE_PASSES} passes`;
   throw new Error(`unknown Phase C skip '${skipped}'`);
 }
 function scoutUnfitReason(skips) {
@@ -244830,11 +245032,6 @@ function chooseSlots(results) {
   const best = Math.max(...results.map((r) => r.tps));
   return Math.min(...results.filter((r) => r.tps >= 0.9 * best).map((r) => r.slots));
 }
-function budgetFit(needBytes, hardBudget, softBudget) {
-  if (needBytes > hardBudget) return "skip";
-  if (needBytes > softBudget) return "wait";
-  return "run";
-}
 function batchThroughput(replies, wallMs) {
   const tokens = replies.reduce((s, r) => {
     if (r.completionTokens === null) throw new Error("a throughput reply carries no usage.completion_tokens");
@@ -244842,13 +245039,16 @@ function batchThroughput(replies, wallMs) {
   }, 0);
   return tokens / Math.max(wallMs / 1e3, 1e-3);
 }
-function memoryWaitExpired(since, nowMs) {
-  return nowMs - Date.parse(since) >= MEMORY_WAIT_MAX_MS;
-}
 function isScoutTimeout(error51) {
-  return error51 !== null && error51.startsWith("timeout after");
+  return error51 !== null && error51.startsWith(SCOUT_TIMEOUT_PREFIX);
 }
-var THROUGHPUT_OUTPUT_TOKENS, SCOUT_OUTPUT_CAP, SLOT_OVERHEAD, SCOUT_RUNS, SCOUT_TIMEOUT_RERUNS, INCONCLUSIVE_PASSES, MEMORY_WAIT_MAX_MS, roundup256, now3, WaitForMemory2, phaseC;
+function isScoutTransportFailure(error51) {
+  if (error51 === null) return false;
+  if (error51.startsWith(SCOUT_NETWORK_PREFIX)) return true;
+  if (!error51.startsWith(SCOUT_HTTP_PREFIX)) return false;
+  return LOAD_HTTP_STATUSES.includes(Number.parseInt(error51.slice(SCOUT_HTTP_PREFIX.length), 10));
+}
+var THROUGHPUT_OUTPUT_TOKENS, SCOUT_OUTPUT_CAP, SLOT_OVERHEAD, SCOUT_RUNS, SCOUT_TIMEOUT_RERUNS, roundup256, now3, LOAD_HTTP_STATUSES, phaseC;
 var init_phase_c = __esm({
   "src/calibration/phase-c.ts"() {
     "use strict";
@@ -244861,21 +245061,15 @@ var init_phase_c = __esm({
     init_phase_b_fixtures();
     init_phase_b();
     init_record();
+    init_memory_wait();
     THROUGHPUT_OUTPUT_TOKENS = 256;
     SCOUT_OUTPUT_CAP = CAP_OFF;
     SLOT_OVERHEAD = 512;
     SCOUT_RUNS = 3;
     SCOUT_TIMEOUT_RERUNS = 2;
-    INCONCLUSIVE_PASSES = 3;
-    MEMORY_WAIT_MAX_MS = 30 * 6e4;
     roundup256 = (n) => Math.ceil(n / 256) * 256;
     now3 = () => (/* @__PURE__ */ new Date()).toISOString();
-    WaitForMemory2 = class extends Error {
-      constructor(step, message) {
-        super(message);
-        this.step = step;
-      }
-    };
+    LOAD_HTTP_STATUSES = [502, 503, 504];
     phaseC = {
       name: "C",
       run: async (ctx) => {
@@ -244892,7 +245086,6 @@ var init_phase_c = __esm({
           const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
           const weights = weightBytes(ctx.identity.files);
           const floorPct = timingsFromEnv(process.env).memoryFloorPct;
-          const waits = ctx.progress.memoryWait ??= {};
           const finished = (step) => {
             const t = [...ctx.progress.trials].reverse().find((x) => x.step === step);
             if (t?.outcome !== "pass" || !t.data) return null;
@@ -244904,49 +245097,21 @@ var init_phase_c = __esm({
               ctx.record({ step, seed, outcome: "pass", data: { ...base, ...skip, floor_pct: floorPct }, at: now3() });
               return;
             }
-            const passes = ctx.progress.trials.filter((t) => t.step === step && t.outcome === "inconclusive" && typeof t.data?.skipped === "string").length + 1;
-            const terminal = passes >= INCONCLUSIVE_PASSES;
-            ctx.record({ step, seed, outcome: terminal ? "pass" : "inconclusive", data: { ...base, ...skip, passes }, at: now3() });
-            ctx.log(`${step}: ${pendingCause(String(skip.skipped))}, pass ${passes} of ${INCONCLUSIVE_PASSES}: ${terminal ? "given up, not scored" : "measured again on the next pass"}`);
+            recordInconclusiveSkip(ctx, step, seed, { ...base, ...skip }, pendingCause(String(skip.skipped)));
           };
           const fits = async (step, slots2, slotCtx2) => {
             await ctx.stopServer(`measuring free memory for ${step}`);
             const { free, floor } = await freeMemory(floorPct);
             const need = weights + kvBytes(layers, slots2 * slotCtx2) + WINDOW_HEADROOM_BYTES;
             const mib = (x) => Math.round(x / 2 ** 20);
-            const fit = budgetFit(need, totalmem5() - floor, free - floor);
-            if (fit === "run") {
-              if (waits[step] !== void 0) {
-                delete waits[step];
-                ctx.save();
-              }
-              return null;
-            }
+            const fit = budgetFit(need, totalmem6() - floor, free - floor);
+            if (fit !== "wait") memoryWaitClear(ctx, step);
+            if (fit === "run") return null;
             if (fit === "skip") {
-              if (waits[step] !== void 0) {
-                delete waits[step];
-                ctx.save();
-              }
-              ctx.log(`${step}: skipped, ${mib(need)} MiB does not fit total RAM minus the floor (${mib(totalmem5() - floor)} MiB)`);
+              ctx.log(`${step}: skipped, ${mib(need)} MiB does not fit total RAM minus the floor (${mib(totalmem6() - floor)} MiB)`);
               return { skipped: "memory" };
             }
-            const since = waits[step];
-            if (since !== void 0 && memoryWaitExpired(since, Date.now())) {
-              const waited = Math.round((Date.now() - Date.parse(since)) / 6e4);
-              delete waits[step];
-              ctx.save();
-              ctx.log(`${step}: skipped for this pass after waiting ${waited} min for free memory (${mib(need)} MiB needed, ${mib(free - floor)} MiB free above the floor)`);
-              return { skipped: "memory-wait", waited_min: waited };
-            }
-            if (since === void 0) {
-              waits[step] = now3();
-              ctx.save();
-            }
-            const start = waits[step];
-            throw new WaitForMemory2(
-              step,
-              `${step} needs ${mib(need)} MiB; free memory now allows ${mib(free - floor)} MiB: the model waits for memory (since ${start}; the candidate is skipped at ${new Date(Date.parse(start) + MEMORY_WAIT_MAX_MS).toISOString()} if memory stays short)`
-            );
+            return memoryWaitCheck(ctx, step, need, free, floor);
           };
           const slotCtx = mainSlotCtx(fill, minOut, bugThinking);
           const prompt = throughputPromptTokens(fill);
@@ -244981,13 +245146,25 @@ Describe the document above in about 200 words.` }], {
               rates.push(batchThroughput(replies, wallMs));
             }
             const tps = Math.round(rates.reduce((s, x) => s + x, 0) / rates.length * 10) / 10;
-            ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, aggregate_decode_tps: tps, load_avg: loadavg()[0] }, at: now3() });
+            ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, aggregate_tps: tps, load_avg: loadavg()[0] }, at: now3() });
             ctx.log(`Phase C main ${n} slot(s) of ${slotCtx}: parallel throughput ${tps} tok/s (completion tokens over wall time)`);
           }
           const mainSteps = ctx.harness.mainSlots.map((n) => `C/main/${n}`);
-          const measured2 = mainSteps.map((s) => finished(s)).filter((d) => d !== null && typeof d.aggregate_decode_tps === "number").map((d) => ({ slots: Number(d.slots), tps: Number(d.aggregate_decode_tps), load: Number(d.load_avg) }));
+          const measured2 = mainSteps.map((s) => finished(s)).filter((d) => d !== null && typeof d.aggregate_tps === "number").map((d) => ({ slots: Number(d.slots), tps: Number(d.aggregate_tps), load: Number(d.load_avg) }));
           if (measured2.length === 0 && mainSteps.every((s) => finished(s) !== null)) {
-            return { passed: false, step: "C/main", message: `no main-slot candidate could be measured: ${mainSteps.map((s) => `${s} ${skipText(String(finished(s)?.skipped))}`).join(", ")}` };
+            const skips = mainSteps.map((s) => String(finished(s)?.skipped));
+            const text2 = mainSteps.map((s, i) => `${s} ${skipText(skips[i])}`).join(", ");
+            if (skips.every((s) => s === "memory")) {
+              const nCtxTrain = Number(dataOf(ctx, "A/capabilities")?.n_ctx_train ?? 0);
+              return {
+                passed: false,
+                step: "C/main",
+                message: `the model is too big for this machine's memory: no main-slot candidate fits total RAM ${Math.round(totalmem6() / 2 ** 20)} MiB minus the ${floorPct} % floor (${text2})`,
+                memory: { kind: "too-big", judged: { total_ram_bytes: totalmem6(), floor_pct: floorPct, n_ctx_train: nCtxTrain } }
+              };
+            }
+            if (skips.every((s) => s === "memory" || s === "memory-wait")) return { passed: false, step: "C/main", message: `no main-slot candidate could be measured for lack of free memory: ${text2}`, memory: { kind: "memory-limited" } };
+            return { passed: false, step: "C/main", message: `no main-slot candidate could be measured: ${text2}` };
           }
           const responseMode = a.array40 === true ? "json_schema" : "text";
           for (const share of ctx.harness.scoutShares) {
@@ -245008,8 +245185,8 @@ Describe the document above in about 200 words.` }], {
               let total = 0;
               let errors = 0;
               let wallMs = 0;
-              let timedOutRuns = 0;
-              for (let run2 = 0; run2 < SCOUT_RUNS && timedOutRuns === 0; run2++) {
+              let unscored = null;
+              for (let run2 = 0; run2 < SCOUT_RUNS && unscored === null; run2++) {
                 const fixtures = Array.from({ length: n }, (_, i) => calibrationScoutFixture(seed + run2 * n + i, Math.floor(share * cpt)));
                 for (let attempt = 0; ; attempt++) {
                   await ctx.waitForTurn();
@@ -245025,12 +245202,19 @@ Describe the document above in about 200 words.` }], {
                     )
                   );
                   const timeouts = results.filter((r) => isScoutTimeout(r.error)).length;
-                  if (timeouts > 0) {
+                  const lost = results.filter((r) => isScoutTransportFailure(r.error)).length;
+                  if (timeouts + lost > 0) {
                     if (attempt >= SCOUT_TIMEOUT_RERUNS) {
-                      timedOutRuns++;
+                      unscored = { skipped: timeouts > 0 ? "timeout" : "transport" };
                       break;
                     }
-                    ctx.log(`${step}: run ${run2 + 1}: ${timeouts} of ${n} request(s) timed out; the run is repeated (${attempt + 1} of ${SCOUT_TIMEOUT_RERUNS})`);
+                    ctx.log(`${step}: run ${run2 + 1}: ${timeouts} of ${n} request(s) timed out and ${lost} lost the connection; the run is repeated (${attempt + 1} of ${SCOUT_TIMEOUT_RERUNS})`);
+                    const skip2 = await fits(step, n, sCtx);
+                    if (skip2 !== null) {
+                      unscored = skip2;
+                      break;
+                    }
+                    await ctx.restart(sCtx, n);
                     continue;
                   }
                   wallMs += Date.now() - t0;
@@ -245043,8 +245227,8 @@ Describe the document above in about 200 words.` }], {
                   break;
                 }
               }
-              if (timedOutRuns > 0) {
-                recordSkip(step, seed, { share, slots: n, slot_ctx: sCtx }, { skipped: "timeout" });
+              if (unscored !== null) {
+                recordSkip(step, seed, { share, slots: n, slot_ctx: sCtx }, unscored);
                 continue;
               }
               const accuracy = Math.round(correct / total * 1e3) / 1e3;
@@ -245071,7 +245255,7 @@ Describe the document above in about 200 words.` }], {
           const summary = {
             main_slots: slots,
             main_slot_ctx: slotCtx,
-            aggregate_decode_tps: chosen.tps,
+            aggregate_tps: chosen.tps,
             load_avg: Math.round(chosen.load * 100) / 100,
             scout_candidates: JSON.stringify(candidates),
             ...unfitReason !== null ? { scouting_unfit_reason: unfitReason } : {}
@@ -245082,7 +245266,7 @@ Describe the document above in about 200 words.` }], {
           ctx.log(`Phase C done: main ${slots} slot(s) of ${slotCtx} (${chosen.tps} tok/s parallel); ${candidates.length} scouting candidate(s) scored; ${unfitReason !== null ? `scouting unfit: ${unfitReason}` : `at the current threshold ${threshold}: ${scouting === "unfit" ? "unfit" : `share ${scouting.share_tokens} at ${scouting.slots} slots, accuracy ${scouting.accuracy}`}`}`);
           return { passed: true };
         } catch (e) {
-          if (e instanceof WaitForMemory2) return { passed: false, paused: true, step: e.step, message: e.message };
+          if (e instanceof WaitForMemory) return { passed: false, paused: true, step: e.step, message: e.message };
           throw e;
         }
       }
@@ -245161,7 +245345,7 @@ function queueManual(dir, profiles, model, force) {
   const e = engineOf(profiles, model);
   if ("error" in e) return e;
   const r = readRecord(dir, e.engine, model);
-  if (r && !force) return { error: `'${model}' already has a calibration record (${r.status}, ${r.calibrated_at}); pass --force to calibrate it again` };
+  if (r && !force && r.status !== "memory-limited" && memoryVerdictStale(r) === null) return { error: `'${model}' already has a calibration record (${r.status}, ${r.calibrated_at}); pass --force to calibrate it again` };
   const done = withStateLock(dir, 3e4, () => {
     enqueueUnlocked(dir, { engine: e.engine, model, reason: "manual", force });
     return true;
@@ -245181,9 +245365,14 @@ async function calibrationStatusText(dir, profiles) {
       if (seen.has(key)) continue;
       seen.add(key);
       const r = readRecord(dir, p.engine, model);
+      const prog = existsSync30(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
+      const queued = queue.some((q) => q.engine === p.engine && q.model === model);
       let state;
       if (r) {
-        state = r.status === "ok" ? `calibrated ${r.calibrated_at}${r.fill_tokens ? `; fill_tokens fact ${r.fill_tokens.fact}, aggregate ${r.fill_tokens.aggregate}, bug ${r.fill_tokens.bug}` : ""}` : `${r.status} at ${r.failed_step ?? "?"}: ${r.message ?? ""}`;
+        state = r.status === "ok" ? `calibrated ${r.calibrated_at}${r.fill_tokens ? `; fill_tokens ${TASK_KINDS.map((k) => `${k} ${r.fill_tokens[k]}${fillMemoryNote(k, r.fill_tokens, r.grid ?? [])}`).join(", ")}` : ""}` : `${r.status} at ${r.failed_step ?? "?"}: ${r.message ?? ""}`;
+        if (r.status === "memory-limited") state += `; calibrated again on the first request after ${new Date(Date.parse(r.calibrated_at) + MEMORY_LIMITED_RETRY_MS).toISOString()}, or now with llm-ext models calibrate --model ${model}`;
+        const restale = memoryVerdictStale(r);
+        if (restale !== null) state += `; judged again on the next request: ${restale}`;
         if (r.harness !== PRODUCTION_HARNESS_ID) state += `; made with a custom harness (${r.harness}): never used for requests`;
         if (r.thinking_works?.off === "leaky") state += `; thinking off is leaky (it reasons in its visible answer)`;
         if (r.status === "ok" && r.fill_tokens && r.grid) for (const why of unfitExplanations(r.fill_tokens, r.grid, r.unfit_reasons)) state += `; ${why}`;
@@ -245193,20 +245382,16 @@ async function calibrationStatusText(dir, profiles) {
           if (r.scouting_unfit_reason !== void 0) state += `; scouting unfit: ${r.scouting_unfit_reason} (no candidate scored; the model is usable for everything else)`;
           else state += sc === "unfit" ? `; scouting unfit at threshold ${threshold}: no candidate reached the accuracy (${r.scouting_candidates.length} measured)` : `; scouting share ${sc.share_tokens} at ${sc.slots} slots (accuracy ${sc.accuracy} at threshold ${threshold})`;
         }
+        if (queued && prog) state += `; being calibrated again (${phasesText(prog)})${progressNotes(prog)}`;
       } else {
-        const prog = existsSync30(progressPath(dir, p.engine, model)) ? loadProgress(dir, p.engine, model, null) : null;
-        const phases = prog ? METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ") : "not started";
-        const queued = queue.some((q) => q.engine === p.engine && q.model === model);
+        const phases = prog ? phasesText(prog) : "not started";
         state = `not calibrated (${phases}; ${prog ? prog.trials.length : 0} trials${queued ? "; queued" : ""})`;
         const a = prog?.trials.find((t) => t.step === "A/summary")?.data;
         const offMode = prog?.trials.find((t) => t.step === "B/summary")?.data?.thinking_off_mode ?? a?.thinking_off_mode;
         if (a) state += `; Phase A: thinking off ${offMode ?? a.thinking_off} on ${a.thinking_on}, json_schema off ${a.json_off} on ${a.json_on} array40 ${a.array40}, decode ${a.decode_tps} tok/s`;
         if (offMode === "leaky") state += "; thinking off is leaky: the model reasons in its visible answer";
         if (a?.thinking_on === false) state += "; thinking cannot be turned on: the bug kind runs with thinking off";
-        for (const [step, since] of Object.entries(prog?.memoryWait ?? {})) state += `; ${step} waiting for free memory since ${since} (skipped for this pass after ${MEMORY_WAIT_MAX_MS / 6e4} min)`;
-        const latest = /* @__PURE__ */ new Map();
-        for (const t of prog?.trials ?? []) if (t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped, passes: t.data?.passes });
-        for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") state += `; ${step} pending: ${pendingCause(t.skipped)}, pass ${String(t.passes)} of ${INCONCLUSIVE_PASSES}; measured again on the next pass`;
+        if (prog) state += progressNotes(prog);
       }
       lines.push(`${name} ${p.engine} '${model}': ${state}`);
     }
@@ -245218,6 +245403,17 @@ async function calibrationStatusText(dir, profiles) {
   }
   return lines.join("\n");
 }
+function phasesText(prog) {
+  return METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ");
+}
+function progressNotes(prog) {
+  let s = "";
+  for (const [step, w] of Object.entries(prog.memoryWait ?? {})) s += `; ${step} waiting for free memory since ${w.since} (${Math.round(w.waited_ms / 6e4)} of ${MEMORY_WAIT_MAX_MS / 6e4} min counted, then skipped for this pass)`;
+  const latest = /* @__PURE__ */ new Map();
+  for (const t of prog.trials) if (t.step.startsWith("B/") || t.step.startsWith("C/")) latest.set(t.step, { outcome: t.outcome, skipped: t.data?.skipped, passes: t.data?.passes });
+  for (const [step, t] of latest) if (t.outcome === "inconclusive" && typeof t.skipped === "string") s += `; ${step} pending: ${pendingCause(t.skipped)}, pass ${String(t.passes)} of ${INCONCLUSIVE_PASSES}; measured again on the next pass`;
+  return s;
+}
 function profileUnfitLines(profile, models) {
   const decided = models.filter((m) => m.status !== "missing");
   if (decided.length === 0) return [];
@@ -245225,10 +245421,16 @@ function profileUnfitLines(profile, models) {
   const kinds = TASK_KINDS.filter((k) => !decided.some((m) => m.status === "ok" && (m.fill?.[k] ?? 0) > 0));
   return kinds.map((k) => `no model of profile ${profile} is fit for ${k}${pending > 0 ? ` so far; ${pending} still calibrating` : ""}`);
 }
+function fillMemoryNote(kind, fill, grid) {
+  const limited = fill[kind] > 0 && grid.some((e) => e.kind === kind && "skipped" in e && e.skipped === "memory-wait" && e.tokens > fill[kind]);
+  return limited ? " (fill limited by free memory during calibration; `models calibrate --force` measures it again)" : "";
+}
 function unfitExplanations(fill, grid, reasons = {}) {
   return TASK_KINDS.filter((k) => fill[k] === 0).map((k) => {
+    const why = reasons[k] !== void 0 ? ` (${reasons[k]})` : "";
+    if (grid.some((e) => e.kind === k && "skipped" in e && e.skipped === "memory-wait")) return `unfit for ${k}: memory-limited${why}`;
     const g = grid.filter((e) => e.kind === k && !("skipped" in e));
-    if (g.length === 0) return `unfit for ${k}: window-limited${reasons[k] !== void 0 ? ` (${reasons[k]})` : ""}`;
+    if (g.length === 0) return `unfit for ${k}: window-limited${why}`;
     const fails = g.reduce((n, e) => n + e.trials - e.passed, 0);
     const cutFails = g.reduce((n, e) => n + e.cut_fails, 0);
     const caps = g.map((e) => e.cut_cap).filter((c) => c !== null);
@@ -245241,6 +245443,7 @@ var init_commands = __esm({
     init_config();
     init_record();
     init_runner3();
+    init_memory_wait();
     init_phase_c();
     init_state();
     init_triggers();
@@ -265745,6 +265948,8 @@ async function callDecisions(call, opts) {
   }
   const max = clampAttempts(opts.maxAttempts);
   for (let attempt = 0; ; attempt++) {
+    const stopWhy = commandStopReason();
+    if (stopWhy !== null) throw new CommandStoppedError(stopWhy);
     const r = await sendOnce(call, body, opts);
     if (r.ok) return r.reply;
     if (!r.error.retryable || attempt + 1 >= max) throw r.error;
@@ -265773,6 +265978,7 @@ var init_transport = __esm({
     init_http();
     init_safe_body();
     init_errors3();
+    init_command_stop();
     MAX_REPLY_BYTES = 1e6;
     MAX_ATTEMPTS_CAP = 6;
     HTTP_DATE = /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
@@ -266046,11 +266252,13 @@ async function runPlan(plan, opts) {
     worker: async (request, index, deadline) => {
       await limiter?.acquire();
       if (opts.budget?.exceeded()) return { budgetStop: true };
+      if (commandStopReason() !== null) return { commandStop: true };
       const started = epoch;
       let reply;
       try {
         reply = await opts.exec(request, deadline);
       } catch (e) {
+        if (e instanceof CommandStoppedError) return { commandStop: true };
         if (e instanceof BilledClassifierError) {
           opts.budget?.add(e.billed.cost.costUsd);
           billedByRequest.set(index, e.billed);
@@ -266093,6 +266301,8 @@ async function runPlan(plan, opts) {
     } else if (o.status === "aborted" || o.status === "skipped") {
       if (fatal !== null) fail3({ requestIndex, kind: "fatal", message: `the run stopped after a ${fatal.class} failure on request ${fatal.requestIndex}` });
       else fail3({ requestIndex, kind: "aborted", message: "the run was aborted" });
+    } else if ("commandStop" in o.value) {
+      fail3({ requestIndex, kind: "stopped", message: commandStopReason() ?? "--command_timeout stopped the run" });
     } else if ("budgetStop" in o.value) {
       fail3({ requestIndex, kind: "budget", message: "--max-budget was passed before this request was sent" });
     } else {
@@ -266112,8 +266322,10 @@ async function runPlan(plan, opts) {
   const snapshots = [...new Set(replies.map((r) => r.model))];
   if (snapshots.length > 1) warnings.push(warning("snapshot-changed", `the served model changed during the run: ${snapshots.join(", ")}`, snapshots.length));
   const notSent = failures.filter((f) => f.kind === "budget").length;
-  const stopped = notSent > 0 ? "budget" : null;
+  const notSentStop = failures.filter((f) => f.kind === "stopped").length;
+  const stopped = notSent > 0 ? "budget" : notSentStop > 0 ? "timeout" : null;
   if (opts.budget && notSent > 0) warnings.push(warning("budget-stop", `--max-budget stopped the run: ${notSent} of ${plan.requests.length} requests not sent, ${opts.budget.spent()} USD spent`, notSent));
+  if (notSentStop > 0) warnings.push(warning("command-timeout-stop", `--command_timeout stopped the run: ${notSentStop} of ${plan.requests.length} requests not sent; the answers already received are kept`, notSentStop));
   const status = fatal !== null || failures.length > 0 && opts.split === "whole-result" ? "failed" : failures.length > 0 ? "partial" : "complete";
   const dropped = status === "failed" && opts.split === "whole-result";
   return { status, answers: dropped ? {} : answers, chunks: dropped ? {} : chunks, replies, snapshots, warnings, failures, fatal, stopped, aborted: opts.signal?.aborted ?? false, answeredBy: dropped ? {} : answeredBy };
@@ -266130,6 +266342,7 @@ var init_fan_out = __esm({
     init_chunker();
     init_planner();
     init_warnings();
+    init_command_stop();
     FATAL_CLASSES = ["auth", "payment", "key-limit", "not-found", "in-flight-budget"];
     BilledClassifierError = class extends ClassifierError {
       constructor(original, billed) {
@@ -266138,7 +266351,7 @@ var init_fan_out = __esm({
         this.cause = original.cause;
       }
     };
-    REASON_PREFIX = { error: "invalid_response", aborted: "aborted", budget: "not_sent_budget", fatal: "not_sent_fatal" };
+    REASON_PREFIX = { error: "invalid_response", aborted: "aborted", budget: "not_sent_budget", stopped: "not_sent_timeout", fatal: "not_sent_fatal" };
   }
 });
 
@@ -266940,6 +267153,7 @@ async function refusingAsync(code2, f) {
 function failureCode(m) {
   if (m.aborted) return CTRL_C_EXIT_CODE;
   if (m.stopped === "budget") return BUDGET_EXIT_CODE;
+  if (m.stopped === "timeout") return COMMAND_TIMEOUT_EXIT;
   const codes = m.failures.flatMap((f) => f.error === void 0 ? [] : [exitCodeForError(f.error)]);
   const worst2 = [3, 4, 5].find((c) => codes.includes(c));
   return worst2 ?? (m.failures.length > 0 ? 5 : void 0);
@@ -267310,6 +267524,7 @@ var init_run_decision = __esm({
     init_warnings();
     init_input_args();
     init_shared_flags();
+    init_command_stop();
     Refusal = class extends Error {
       constructor(message, code2 = 1) {
         super(message);
@@ -273993,7 +274208,7 @@ async function brokerCounts(dir, engine, model) {
   if (!res.ok) throw new Error(`the broker's /v1/health answered HTTP ${res.status}`);
   const h = await res.json();
   const rows = (h.models ?? []).filter((m) => m.engine === engine && m.model === model);
-  return { queued: rows.reduce((n, m) => n + (m.queued ?? 0), 0), held: rows.reduce((n, m) => n + (m.held ?? 0), 0) };
+  return { queued: rows.reduce((n, m) => n + (m.queued ?? 0) + (m.running ?? 0), 0), held: rows.reduce((n, m) => n + (m.held ?? 0), 0) };
 }
 async function serverStopText(dir, opts) {
   const engines = opts.engine ? [opts.engine] : BROKER_ENGINES;
@@ -274014,7 +274229,7 @@ async function serverStopText(dir, opts) {
         lines.push(`stopped ${e.role} ${serverLabel(engine)} pid ${e.pid} (port ${e.port}, model '${e.model}'): ${how}`);
         try {
           const counts = await brokerCounts(dir, engine, e.model);
-          if (e.role === "main" && counts !== null && counts.queued > 0) lines.push(`the broker still has ${counts.queued} queued request(s) for '${e.model}': it will start the server again to serve them`);
+          if (e.role === "main" && counts !== null && counts.queued > 0) lines.push(`the broker still has ${counts.queued} queued or running request(s) for '${e.model}': it will start the server again to serve them`);
           if (e.role === "cal" && counts !== null && counts.held > 0) lines.push(`the broker holds ${counts.held} request(s) for '${e.model}' until it is calibrated: it will start calibration again within about a minute`);
         } catch (err3) {
           lines.push(`could not ask the broker about queued work for '${e.model}': ${err3.message}`);
@@ -275024,7 +275239,7 @@ var init_prompt3 = __esm({
 
 // src/local_discovery/scan.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { cpus, totalmem as totalmem6 } from "node:os";
+import { cpus, totalmem as totalmem7 } from "node:os";
 function parseOpenAiModels(body) {
   if (!body || typeof body !== "object") return [];
   const data = body.data;
@@ -275091,7 +275306,7 @@ function detectInstalledClis(checkInstalled = defaultCheckInstalled) {
   return KNOWN_LOCAL_CLIS.map((cli) => ({ cli, installed: checkInstalled(cli) }));
 }
 function detectSystemInfo() {
-  return { totalRamBytes: totalmem6(), cpuCount: cpus().length };
+  return { totalRamBytes: totalmem7(), cpuCount: cpus().length };
 }
 function formatDiscoveredServices(services, cliEvidence) {
   const lines = ["Local LLM services scan:"];
@@ -276087,11 +276302,8 @@ function resolveModelOverride(freeRequested) {
   return freeId;
 }
 async function resolveMassScoutFreeModelOverride(requestedModel) {
-  return resolveSubsystemFreeModel(
-    isFreeModeActive(),
-    activeFreePool(),
-    requestedModel
-  );
+  if (!isFreeModeActive()) return void 0;
+  return resolveSubsystemFreeModel(true, activeFreePool(), requestedModel);
 }
 function trackRequestStart() {
   _activeRequests++;
@@ -280454,7 +280666,7 @@ __export(server_exports, {
   runBrokerMain: () => runBrokerMain
 });
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
-import { mkdirSync as mkdirSync41, readFileSync as readFileSync54, rmdirSync as rmdirSync6, statSync as statSync25 } from "node:fs";
+import { existsSync as existsSync43, mkdirSync as mkdirSync41, readFileSync as readFileSync54, rmdirSync as rmdirSync6, statSync as statSync25 } from "node:fs";
 import { createServer as createServer2, request as httpRequest } from "node:http";
 function readBody(req) {
   return new Promise((resolve21, reject) => {
@@ -280923,14 +281135,14 @@ async function runBroker(o) {
       pump();
     });
   };
-  const shutdown = async (why) => {
+  const shutdown = async (why, heldEnd = "requeued") => {
     if (exiting) return;
     exiting = true;
     clearInterval(tick);
     o.log(`broker exiting: ${why}`);
     for (const ac of running.values()) ac.abort();
     for (const j of sched.allQueued()) finish(j, "failed", `broker exiting: ${why}`);
-    for (const j of held.values()) finish(j, "requeued", `broker exiting while the job was held for calibration: ${why}`);
+    for (const j of held.values()) finish(j, heldEnd, `broker exiting while the job was held for calibration: ${why}`);
     held.clear();
     if (stopping) await stopping.catch(() => void 0);
     await stopServer(`broker exit: ${why}`).catch((e) => o.log(`stop failed: ${e.message}`));
@@ -281157,7 +281369,14 @@ async function runBroker(o) {
   o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
   let heldCheckedAt = 0;
   let calSweptAt = Date.now();
+  let dirMissingSince = null;
   const tick = setInterval(() => {
+    if (!existsSync43(o.dir)) {
+      dirMissingSince ??= Date.now();
+      if (Date.now() - dirMissingSince >= DIR_MISSING_EXIT_MS) void shutdown(`its config dir ${o.dir} no longer exists`, "failed");
+      return;
+    }
+    dirMissingSince = null;
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();
       releaseHeld();
@@ -281212,7 +281431,7 @@ function slotSizing(argv, logFile) {
   const kv = /KV (?:buffer|cache)[^\n]*?size\s*=\s*[\d.]+ MiB/i.exec(log)?.[0] ?? "KV size not reported by llama-server at this log verbosity";
   return `-np ${flag("-np")} -c ${flag("-c")}; ${slots}; ${kv}`;
 }
-var DEFAULT_EXEC_TIMEOUT_MS, TICK_MS, HELD_CHECK_MS, FINISHED_KEEP_MS, MAX_BODY_BYTES;
+var DEFAULT_EXEC_TIMEOUT_MS, TICK_MS, DIR_MISSING_EXIT_MS, HELD_CHECK_MS, FINISHED_KEEP_MS, MAX_BODY_BYTES;
 var init_server = __esm({
   "src/broker/server.ts"() {
     "use strict";
@@ -281229,6 +281448,7 @@ var init_server = __esm({
     init_protocol();
     DEFAULT_EXEC_TIMEOUT_MS = 3e5;
     TICK_MS = 1e3;
+    DIR_MISSING_EXIT_MS = 1e4;
     HELD_CHECK_MS = 5e3;
     FINISHED_KEEP_MS = 6e5;
     MAX_BODY_BYTES = 64 * 1024 * 1024;
@@ -281800,7 +282020,6 @@ function die(msg) {
 `);
   exitCommand(1);
 }
-var COMMAND_TIMEOUT_EXIT = 124;
 var STOP_FLUSH_GRACE_MS = 3e4;
 function commandTimedOut() {
   return commandStopReason() !== null;

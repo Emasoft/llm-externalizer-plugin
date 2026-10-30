@@ -235416,6 +235416,9 @@ function parsePositionalText(content) {
   if (!list.every((v) => typeof v === "string")) return { error: "the categories array holds a non-string entry" };
   return { categories: list.map((v) => v.trim().toLowerCase()) };
 }
+var SCOUT_TIMEOUT_PREFIX = "timeout after ";
+var SCOUT_NETWORK_PREFIX = "network: ";
+var SCOUT_HTTP_PREFIX = "HTTP ";
 async function classifyPositional(modelId, baseUrl, apiKey, fixture, schema, opts = {}) {
   const doFetch = opts.fetchImpl ?? ((u, init) => fetch(u, init));
   const mode = opts.responseMode ?? "json_schema";
@@ -235459,12 +235462,13 @@ ${fixture.body}`;
   } catch (e) {
     clearTimeout(timeoutId);
     const err = e;
+    const code = typeof err.cause?.code === "string" ? ` (${err.cause.code})` : "";
     return {
       predicted: [],
       promptTokens: 0,
       completionTokens: 0,
       durationMs: Date.now() - startMs,
-      error: err.name === "AbortError" ? `timeout after ${PER_CALL_MS}ms` : `network: ${err.message}`
+      error: err.name === "AbortError" ? `${SCOUT_TIMEOUT_PREFIX}${PER_CALL_MS}ms` : `${SCOUT_NETWORK_PREFIX}${err.message}${code}`
     };
   }
   clearTimeout(timeoutId);
@@ -235476,7 +235480,7 @@ ${fixture.body}`;
       promptTokens: 0,
       completionTokens: 0,
       durationMs,
-      error: `HTTP ${res.status}: ${text.slice(0, 200)}`
+      error: `${SCOUT_HTTP_PREFIX}${res.status}: ${text.slice(0, 200)}`
     };
   }
   let payload;
