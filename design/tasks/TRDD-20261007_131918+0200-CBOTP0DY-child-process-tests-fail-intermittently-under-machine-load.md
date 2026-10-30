@@ -4,7 +4,7 @@ title: Child-process tests fail intermittently under machine load
 column: backburner
 status: tasked
 created: 2026-10-07T13:19:18+0200
-updated: 2026-10-23T07:15:19+0200
+updated: 2026-10-30T10:02:49+0100
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -31,3 +31,4 @@ Next step: record load (uptime) per run and repeat under controlled load to conf
 Caveat: the 7-vs-7 comparison is confounded (the earlier tree ran later, under /private/tmp, with a symlinked node_modules, load unrecorded); only "the symptom also occurs before b22bfae8" is established.
 Before raising any timeout: rerun both trees under identical conditions (both outside /tmp, each with its own node_modules, load logged per run, runs alternated).
 2026-10-23 recurrence: under load average 70-146 the background-update count symptom (expected 1, got 0) reappeared in profile-chain-402 (two full runs, a different test each time) and in empty-pool-wait D2 (one of four sequential runs). Both read the count after a fixed wait. Seen while verifying 1e5adabe (TRDD-YG72CYY7), whose change cannot reach these tests.
+2026-10-30: during the 14.2.0 final checks a full-suite run with TMPDIR set to the user temp folder had 5 failures (profile-chain-402.test.ts:394 and :443 hit the 30 s test timeout, plus a cascade at :575 where the two timed-out tests left their dispatch running and its fetch calls landed on the next test mock server; retry-clock.test.ts:123 and :154 failed). Full runs with that TMPDIR and with a fresh TMPDIR then passed, as did both files alone with and without 56 CPU burners; load average was 66-86 on 14 cores, so TMPDIR is not the cause. Inferred cause (not reproduced): wall-clock starvation of real-timer margins (retry-clock.test.ts around lines 106-155) and the 30 s test timeouts, since each profile-chain-402 test reloads src/index.js with vi.resetModules() (loadFreshIndex, profile-chain-402.test.ts:302-327) and the failing run showed transform 173 s / import 197 s against 9 s / 28 s in a passing leg. Proposed test fixes: (1) profile-chain-402.test.ts:394, :443 and the ensemble test near :575: raise the per-test timeout from 30000 to about 120000, and make each test await or abort its dispatch in its finally block, or have the redirectFetchTo spy reject calls from a previous test, so a timed-out test cannot pollute the next. (2) retry-clock.test.ts:106-125 and :140-155: derive deadlineAt after the server is up and widen the 1500/3000 ms margins (only about 0.3-1 s above the 1800/2000 ms events), or use vi.useFakeTimers with a fake server clock. (3) Process: run the release test gate on an unloaded machine or with fewer workers (--maxWorkers) and re-run the two files alone on a failure.
