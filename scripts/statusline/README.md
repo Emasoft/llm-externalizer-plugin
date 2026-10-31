@@ -60,7 +60,7 @@ affected, not the underlying accounts.
 | 🔌 CLI | `/tmp/claude/llm-externalizer-stats.json` | tokens + cost |
 | 🏦 OpenRouter | OpenRouter `/credits` API | cached 5min |
 | ⏱️ 5h | `rate_limits.five_hour.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset time; row appears when the data carries a 5-hour window. Verified Ultra accounts have none; Pro and Max keep the limit, but the row can briefly disappear right after a reset until the next API response, which does not mean the limit is gone |
-| 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time; row appears only when the account has a 7-day window |
+| 📅 7d | `rate_limits.seven_day.used_percentage` (spec) → `utilization` (legacy) | bar + % + reset date+time; row appears when the data carries a 7-day window |
 | 💰 extra | `rate_limits.extra_usage` (when enabled) | bar + $used/$limit |
 
 ## Width tiering
