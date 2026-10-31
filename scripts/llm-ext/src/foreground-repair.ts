@@ -20,13 +20,14 @@
 // records so a record written between the two reads is still seen.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { benchLockIsHeld } from "./bench-lock.js";
+import { commandStopReason } from "./command-stop.js";
 import { backgroundUpdateLockPathFor, type ProfileUpdateRequest } from "./default-profiles-runner.js";
 import { getDynamicProfileRecord, getProfileRecord } from "./default-profiles-state.js";
 import type { DynamicProfileName } from "./config.js";
 
 export const FOREGROUND_REPAIR_TIMEOUT_ENV = "LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS";
 export const DEFAULT_FOREGROUND_REPAIR_TIMEOUT_MS = 10 * 60_000;
-const FOREGROUND_REPAIR_POLL_MS = 500;
+export const FOREGROUND_REPAIR_POLL_MS = 500;
 
 /** Missing/blank/non-positive/non-finite -> the default (same fail-safe as parseCatalogTtlMs). */
 export function parseForegroundRepairTimeoutMs(raw: string | undefined): number {
@@ -94,6 +95,11 @@ export async function waitForProfileUpdate(
   const lockPath = backgroundUpdateLockPathFor(profile);
   const deadline = Date.now() + limitMs;
   for (;;) {
+    // WHY: a command stopped by --command_timeout must not sit out the repair wait. Without this check the loop
+    // polled until the update ended or the limit passed, so the 30 s stop grace ended the process with no summary
+    // and no unfinished-file list. Checked before every poll, and so before every sleep.
+    const stopped = commandStopReason();
+    if (stopped !== null) return { ok: false, failed: false, why: `the command was stopped (${stopped})` };
     const held = benchLockIsHeld(lockPath);
     const outcome = readOutcome(profile, base, held);
     if (outcome.kind === "rebenchmarked") return { ok: true, rebenchmarked: true };

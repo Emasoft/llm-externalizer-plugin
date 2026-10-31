@@ -252,3 +252,51 @@ describe("D2 empty pool: dispatch pre-flight on a never-yet-populated dynamic pr
     }
   });
 });
+
+// A --command_timeout stop at the empty-pool gate. loadFreshIndex resets the module registry, so the command-stop.js
+// imported right after it is the instance index.js uses and the process-wide stop flag never leaks between tests.
+const STOP_REASON = "--command_timeout: the command ran longer than 2 s and was stopped";
+
+describe("empty pool gate and a command stopped by --command_timeout", () => {
+  it("stop during the repair wait: the answer is the stop reason, no retry-later, no provider call, the tool did not run", async () => {
+    await withKeys("test-openrouter-key-not-a-real-one", async () => {
+      const m = installMarker(6_000, "none");
+      const { idx, cleanup } = await loadFreshIndex();
+      const { stopCommand } = await import("./command-stop.js");
+      const calls = vi.spyOn(globalThis, "fetch");
+      try {
+        const { dynamicProfileRetryLaterMessage } = await import("./profile-fallback.js");
+        setTimeout(() => stopCommand(STOP_REASON), 1_500);
+        const t0 = Date.now();
+        const r = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
+        expect(Date.now() - t0, "the stop ends the wait, not the 10 minute limit").toBeLessThan(8_000);
+        expect(r.isError).toBe(true);
+        expect(textOf(r)).toBe(STOP_REASON);
+        expect(textOf(r)).not.toContain(dynamicProfileRetryLaterMessage("free"));
+        expect(calls.mock.calls.filter((c) => String(c[0]).includes("chat/completions")), "no provider call").toHaveLength(0);
+        await settle();
+        expect(m.records().filter((rec) => rec.requested === "1"), "one update was requested before the stop").toHaveLength(1);
+      } finally {
+        cleanup();
+      }
+    });
+  }, 60_000);
+
+  it("stop already set when the gate is reached: no update is requested and the answer is the stop reason", async () => {
+    await withKeys("test-openrouter-key-not-a-real-one", async () => {
+      const m = installMarker(0, "none");
+      const { idx, cleanup } = await loadFreshIndex();
+      const { stopCommand } = await import("./command-stop.js");
+      try {
+        stopCommand(STOP_REASON);
+        const r = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
+        expect(r.isError).toBe(true);
+        expect(textOf(r)).toBe(STOP_REASON);
+        await settle();
+        expect(m.records().filter((rec) => rec.requested === "1"), "a stopped command starts no update").toHaveLength(0);
+      } finally {
+        cleanup();
+      }
+    });
+  }, 60_000);
+});

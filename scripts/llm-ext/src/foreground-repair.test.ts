@@ -5,7 +5,7 @@
 // writes the same outcome stamps the real benchmark child writes (default-profiles-state.ts).
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { createServer, type Server } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { dynamicProfileRetryLaterMessage } from "./profile-fallback.js";
 import { claimBenchLock, releaseBenchLock } from "./bench-lock.js";
@@ -91,7 +91,7 @@ function installMarker(flag: string, holdMs: number, mode: UpdaterMode): void {
     `const fs = require("node:fs");
 const path = require("node:path");
 const cfg = process.env.LLM_EXT_CONFIG_DIR;
-fs.writeFileSync(${JSON.stringify(flag)}, "x");
+fs.writeFileSync(${JSON.stringify(flag)}, process.env.LLM_EXT_PROFILE_UPDATE_REQUESTED ?? "x");
 ${body}
 setTimeout(() => process.exit(0), ${holdMs});
 `,
@@ -457,4 +457,99 @@ describe("waitForProfileUpdate waits on the recorded OUTCOME, not on the lock (s
     expect(parseForegroundRepairTimeoutMs("-5")).toBe(600_000);
     expect(parseForegroundRepairTimeoutMs("abc")).toBe(600_000);
   });
+});
+
+// WHY fresh module copies: stopCommand sets a process-wide flag that is never reset, so the test loads its own
+// copies of command-stop and foreground-repair (vi.resetModules) and cannot affect, or depend on the order of, any other test.
+describe("waitForProfileUpdate in a command stopped by --command_timeout", () => {
+  it("returns ok:false with the stop text within one poll interval while the update lock is held, instead of sitting out the repair wait", async () => {
+    process.env.LLM_EXT_CONFIG_DIR = tempDir("wait-stop-cfg");
+    const lockPath = backgroundUpdateLockPathFor("free");
+    expect(claimBenchLock(lockPath).ok).toBe(true);
+    try {
+      vi.resetModules();
+      const fresh = await import("./foreground-repair.js");
+      const { stopCommand } = await import("./command-stop.js");
+      const reason = "--command_timeout: the command ran longer than 3 s and was stopped";
+      // Stop the command 150 ms into the wait; without the check the loop would poll until the 60 s limit.
+      setTimeout(() => stopCommand(reason), 150);
+      const t0 = Date.now();
+      const r = await fresh.waitForProfileUpdate("free", { state: "running" }, fresh.takeUpdateBaseline(), {}, 60_000);
+      expect(r).toEqual({ ok: false, failed: false, why: `the command was stopped (${reason})` });
+      expect(Date.now() - t0).toBeLessThan(150 + fresh.FOREGROUND_REPAIR_POLL_MS * 2 + 2000);
+    } finally {
+      releaseBenchLock(lockPath);
+      delete process.env.LLM_EXT_CONFIG_DIR;
+      vi.resetModules();
+    }
+  });
+});
+
+// Routes of a --command_timeout stop through dispatchCallTool. Each test loads a fresh index.js (loadFreshIndex resets the
+// module registry), and command-stop.js imported right after it is the SAME instance index.js uses, so one test's
+// process-wide stop flag never reaches another and the order of the tests does not matter.
+const STOP_REASON = "--command_timeout: the command ran longer than 2 s and was stopped";
+
+describe("every model failed and the command is stopped by --command_timeout", () => {
+  it("stop during the repair wait: the first pass's result (the completed file's success) is kept, the real cause stays, no second dispatch", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 6_000, "silent");
+    const srv = await startServer((body) => (body.includes("second file") ? "ok" : [404, "No endpoints found"]));
+    const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
+    const { stopCommand } = await import("./command-stop.js");
+    try {
+      const args = scanArgs();
+      writeFileSync(join(args.folder_path, "b.txt"), "second file\n", "utf-8");
+      // The stop comes from the test's own event, not a timer: the marker child writes `flag` when the update starts, which
+      // happens only after the first pass has finished, i.e. while dispatchCallTool waits for the repair.
+      const poll = setInterval(() => {
+        if (existsSync(flag)) {
+          clearInterval(poll);
+          stopCommand(STOP_REASON);
+        }
+      }, 50);
+      const t0 = Date.now();
+      const r = await idx.dispatchCallTool("scan_folder", args);
+      clearInterval(poll);
+      const text = textOf(r);
+      expect(Date.now() - t0, "the stop ends the wait, not the 10 minute limit").toBeLessThan(30_000);
+      // A second dispatch under the stop would report "0 processed, 2 failed": only the first pass produced the success.
+      expect(text).toMatch(/1 processed, 1 failed/);
+      expect(text.match(/SCAN COMPLETE/g), "one scan summary: the tool ran once").toHaveLength(1);
+      expect(text).toContain(`${STOP_REASON}; every model of 'free' had failed and its update continues in the background`);
+      expect(text).not.toContain(dynamicProfileRetryLaterMessage("free"));
+      expect(r.isError).toBe(true);
+      const reports = readdirSync(args.output_dir).filter((f) => f.endsWith(".md"));
+      expect(reports.some((f) => f.includes("b.txt")), "the completed file's report was written by the first pass").toBe(true);
+      expect(srv.posts(), "one request per file, none after the stop").toBe(2);
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
+});
+
+describe("the last model fails at the moment the command is stopped by --command_timeout", () => {
+  it("failDynamicProfile requests no update and the answer has no retry-later text", async () => {
+    const flag = join(tempDir("flag"), "updated");
+    installMarker(flag, 300, "success");
+    const hook: { stop?: (why: string) => void } = {};
+    const srv = await startServer(() => {
+      hook.stop?.(STOP_REASON);
+      return [404, "No endpoints found"];
+    });
+    const { idx, cleanup } = await loadFreshIndex(FREE_YAML);
+    hook.stop = (await import("./command-stop.js")).stopCommand;
+    try {
+      const r = await idx.dispatchCallTool("chat", chatArgs());
+      expect(textOf(r)).not.toContain(dynamicProfileRetryLaterMessage("free"));
+      expect(r.isError).toBe(true);
+      await new Promise((res) => setTimeout(res, 1_000));
+      // The marker child also runs for the post-dispatch detector; it stores LLM_EXT_PROFILE_UPDATE_REQUESTED, which is "1" only
+      // for a requested update, so that value discriminates.
+      expect(existsSync(flag) ? readFileSync(flag, "utf-8") : "", "no profile update was requested for a stopped command").not.toBe("1");
+      expect(srv.posts()).toBe(1);
+    } finally {
+      cleanup();
+    }
+  }, 60_000);
 });

@@ -64,7 +64,7 @@ import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
-import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost } from "./provider/http.js";
+import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost, stoppedError } from "./provider/http.js";
 import {
   detectLMStudio,
   clearLMStudioProbeCache,
@@ -153,7 +153,7 @@ import type { RetryClock } from "./provider/http.js";
 import { brokerClientVersion, brokerQueueTimeoutMs, defaultBrokerEntry, endpointFailureKind, ensureBroker } from "./broker/client.js";
 import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
 import { ensureCalibrator } from "./calibration/runner.js";
-import { abortReasonText, CommandStoppedError, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
+import { abortReasonText, CommandStoppedError, commandStopReason, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 import { serverStatusText, serverStopText } from "./broker/server-commands.js";
 
@@ -2261,6 +2261,13 @@ function failDynamicProfile(
     const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
     if (refusedTools.every((t) => t !== undefined && !profileUpdateCanValidate(t))) return actionable(causes);
   }
+  // WHY: a command stopped by --command_timeout starts no profile update: a detached updater would be spawned for a
+  // command that no longer runs, and a retry-later answer would promise a repair nobody waits for. The file is reported
+  // as stopped (it is unfinished); the models may well have failed first, but with the stop set this command does not
+  // act on that. Placed after the actionable branches above so a real 401 or credit verdict still reports its true
+  // cause, and before the retry test so a first pass reached with the stop already set is covered too.
+  const stopped = commandStopReason();
+  if (stopped !== null) return stoppedError(stopped);
   // WHY (TRDD-5Q79QZM7): the single same-run retry after the foreground repair must not start another update --
   // one repair per run; its failure is reported by dispatchCallTool.
   if (dynamicExhaustionStore.getStore()?.retry === true) return new ProfileExhaustedError(profileName, "dynamic", causes);
@@ -4275,6 +4282,12 @@ export async function dispatchCallTool(
     if (!first.content.some((c) => c.text.includes(retryLater))) return first;
     process.stderr.write(`[llm-externalizer] every model of '${exhaustion.profile}' failed -- repairing the profile in the foreground\n`);
     const repair = await repairProfileInForeground(exhaustion.profile, exhaustion.update, exhaustion.baseline);
+    // WHY: the stop ended the repair wait. The request is not dispatched again (that would re-enter the gate and could
+    // start another update); the first pass's result, with the files that already completed, is kept and only its
+    // retry-later sentence is replaced by the stop reason and the real cause. The CLI exits 124 because the stop flag is
+    // set (cli/main.ts).
+    const stopped = commandStopReason();
+    if (stopped !== null) return withStopReason(first, retryLater, exhaustion.profile, stopped);
     if (!repair.ok) return withRepairLine(first, repair.line);
     if (!repair.changed) {
       return withRepairLine(
@@ -4316,6 +4329,15 @@ async function repairProfileInForeground(
   const reloaded = reloadSettingsFromDisk();
   if (!reloaded.ok) return { ok: false, line: `Foreground repair finished but the repaired settings were not loaded: ${reloaded.error}.` };
   return { ok: true, changed: snapshot() !== before, rebenchmarked: waited.rebenchmarked };
+}
+
+/** The tool result with the retry-later sentence replaced by the stop reason plus the real cause; all else is kept.
+ *  WHY: this runs only after every model of the profile failed, so those files did fail for lack of working models and
+ *  the output must still say so; the stop only ended the wait for the repair, whose update continues in the background.
+ *  The lines of files that completed before the failure stay in the output. */
+function withStopReason(result: ToolResult, retryLater: string, profile: string, stopReason: string): ToolResult {
+  const text = `${stopReason}; every model of '${profile}' had failed and its update continues in the background`;
+  return { ...result, content: result.content.map((c) => ({ ...c, text: c.text.split(retryLater).join(text) })) };
 }
 
 /** The tool result with one extra line appended to its last text block. */
@@ -4415,11 +4437,20 @@ async function dispatchCallToolInner(
           // (malformed profile, forbidden tool, no credentials, maintenance disabled, catalog recently failed,
           // unpopulated paid/local) keeps its own message, as before.
           if (gate.reason === "empty-pool-refreshable") {
+            // WHY: a command already stopped by --command_timeout starts no profile update (it would spawn a detached
+            // updater for a command that no longer runs); the tool does not run, so the answer is the stop reason.
+            const stoppedBefore = commandStopReason();
+            if (stoppedBefore !== null) return { content: [{ type: "text", text: stoppedBefore }], isError: true };
             // Before the spawn, for the same reason as in failDynamicProfile.
             const baseline = takeUpdateBaseline();
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
             if (update.state !== "unavailable") {
               const repair = await repairProfileInForeground(effective, update, baseline);
+              // WHY: the stop ended the repair wait (waitForProfileUpdate), so the pool is still empty and the tool must not
+              // run on it. The answer is the stop reason, not the retry-later sentence: the command was stopped, it did not
+              // fail for lack of models. The CLI exits 124 because the stop flag is set (cli/main.ts).
+              const stoppedAfter = commandStopReason();
+              if (stoppedAfter !== null) return { content: [{ type: "text", text: stoppedAfter }], isError: true };
               if (repair.ok && profileGateRefusal(name) === null) {
                 gate = null;
               } else {
@@ -6003,7 +6034,9 @@ async function dispatchCallToolInner(
             break;
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
-            if (!untilDone) {
+            // WHY: --until-done retries every failure, so without this a command stopped by --command_timeout would keep
+            // retrying (and sleeping) a request that can no longer start; a stopped command fails once, with the stop reason.
+            if (!untilDone || commandStopReason() !== null) {
               return {
                 content: [{ type: "text", text: `FAILED: ${msg}` }],
                 isError: true,

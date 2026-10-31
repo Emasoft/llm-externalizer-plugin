@@ -191,7 +191,7 @@ function armCommandTimeout(seconds: number): void {
       process.stderr.write(`llm-ext: ${reason}; ${cancelled} unfinished local job(s) cancelled${notCancelled}; writing the results already complete\n`);
     });
     setTimeout(() => {
-      process.stderr.write(`llm-ext: the stopped command did not finish writing within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
+      process.stderr.write(`llm-ext: the stopped command did not end within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
       process.exit(COMMAND_TIMEOUT_EXIT);
     }, STOP_FLUSH_GRACE_MS).unref();
   }, seconds * 1000).unref();
