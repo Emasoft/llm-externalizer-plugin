@@ -281994,7 +281994,7 @@ function extractTimeoutFlags(argv) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.1.2";
+var VERSION = "14.2.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

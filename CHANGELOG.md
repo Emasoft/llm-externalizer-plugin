@@ -1,6 +1,276 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.2.0] - 2026-10-31
+
+### Added
+
+- Feat(llm-ext): models server-status and server-stop for managed local servers (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): calibration Phase C and the hard/soft window rule (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): calibration cap cuts walk the grid, leaky thinking-off, schema 2 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): calibration Phase B, safe input size per task kind (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): calibration Phase A and review fixes (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): calibration runner, records and triggers for local models (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): broker holds requests for uncalibrated local models (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): built-in local_llama and locals-mlx profiles with three models each (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): the broker runs MLX models through Locals, never alongside llama (TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): --command_timeout keeps finished results and lists the rest (TRDD-1OOAH3LD)
+
+- Feat(llm-ext): per-engine request broker with the llama.cpp engine (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Feat(llm-ext): request_options profile key — per-tool thinking, output ceiling, OUTPUT LIMIT error (TRDD-1OOAH3LD)
+
+- Feat(llm-ext): classifier commands fall back from Jev to another System One model (TRDD-28BAL5ER)
+
+
+### Changed
+
+- Build: rebuild dist with the --command_timeout routes (TRDD-GBC4A4CF)
+
+- Build: rebuild dist for 14.2.0 (TRDD-WBZJRSQB)
+
+- Build(llm-ext): rebuild dist for 14.2.0
+
+- Ci: key the llama model cache on the broker test file (TRDD-1OOAH3LD)
+
+- Ci: install a pinned llama-server for the broker tests (TRDD-1OOAH3LD)
+
+
+### Documentation
+
+- Docs: broker clause names the broker; calibration has no load check (TRDD-GBC4A4CF)
+
+- Docs(skills): trim the CLI reference skill under the validator limit (TRDD-GBC4A4CF)
+
+- Docs: broker runs one local server across engines; calibrate --force exceptions; timeout caveat (TRDD-WBZJRSQB, TRDD-GBC4A4CF)
+
+- Docs: restore what the machine-notes scrub cut too far (TRDD-WBZJRSQB, TRDD-ZGSGGHQG)
+
+- Docs(scripts): publish.py says git-cliff picks the bump and --no-verify skips the hook
+
+- Docs: design files drop notes about the user's own machine (TRDD-WBZJRSQB)
+
+- Docs: 14.2.0 highlights and publish notes match the code; cards drop local data (TRDD-WBZJRSQB)
+
+- Docs: 14.2.0 highlights, current publish notes, card resume points (TRDD-WBZJRSQB)
+
+- Docs: 2026-10-30 resume points and the 2026-10-29 coordinator decisions on the release and calibration cards (TRDD-WBZJRSQB, TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: release card STATE names the 2026-10-29 publish authority (TRDD-WBZJRSQB)
+
+- Docs: record the 2026-10-29 publish decision and release plan (TRDD-WBZJRSQB)
+
+- Docs: document the timeout flags, the managed local profiles and calibration (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: add TRDD-N0S2UL0K — models health fails on a managed local profile
+
+- Docs: record the calibration-implementation resume point on both cards
+
+- Docs: calibration design revision 3 after the round-2 review (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: revise the calibration design after review (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the calibration-design resume point on both local-profile cards
+
+- Docs: add the local model calibration design, draft for review (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the broker resume point on TRDD-1OOAH3LD and TRDD-ZGSGGHQG
+
+- Docs: record the broker review resume point on TRDD-1OOAH3LD
+
+- Docs: document --command_timeout and --queue_timeout in the CLI reference skill (TRDD-1OOAH3LD)
+
+- Docs: fix two review-note lines on TRDD-7H5MGN34 and TRDD-SWNIIFTF
+
+- Docs: add the review notes to TRDD-SWNIIFTF and TRDD-7H5MGN34
+
+- Docs: apply review notes to TRDD-SWNIIFTF and TRDD-7H5MGN34
+
+- Docs: add TRDD-SWNIIFTF (--stop_on_errors) and TRDD-7H5MGN34 (ensemble fan-out bug)
+
+- Docs: accept --timeout and --command-timeout on every command (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: add the command timeout and fix the rotation rule (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the 5-minute queue timeout and --queue-timeout flag (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: add the per-engine request broker design (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: update the resume STATE before a session restart (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the local-only smart-router directive (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the smart-batching directive (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: program plan revision 3 - router-mode llama-server, server-count safeguard (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the two-servers-per-engine rule (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the calibration-server ruling (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: apply the round-2 review to the goal program plan (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: add the goal program plan for the two local profiles (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record the drop-Krill directive (TRDD-1OOAH3LD, TRDD-ZGSGGHQG, TRDD-UT7UC025)
+
+- Docs: record the /goal directive and STATE blocks (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: fix three review defects in the locals-mlx design (TRDD-ZGSGGHQG)
+
+- Docs: record the locals-mlx design after two review rounds (TRDD-ZGSGGHQG)
+
+- Docs: record increment 2a revision 4 of the managed llama-server plan (TRDD-1OOAH3LD)
+
+- Docs: fallback on errors by default, --stop_on_errors to fail; low memory queues (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs: record --no_stop_on_fail scope (TRDD-1OOAH3LD) and the per-request memory check (TRDD-ZGSGGHQG)
+
+- Docs: record the TRDD-ZGSGGHQG user rulings on Locals concurrency, memory and port
+
+- Docs: record the TRDD-1OOAH3LD 2a user rulings; plan approved in part, revision pending
+
+- Docs: add TRDD-ZGSGGHQG — mac-only locals-mlx profile through the Locals server
+
+- Docs: TRDD-1OOAH3LD design names the CLI only, there is no MCP server
+
+- Docs: keep the approved TRDD-1OOAH3LD increment 2 in force until the 2a plan is approved
+
+- Docs: mark review-born TRDD-1OOAH3LD increment 2a decisions as not yet approved
+
+- Docs: record TRDD-1OOAH3LD increment 2a plan after two review rounds
+
+- Docs: TRDD-1OOAH3LD increment 1 committed as f105c646
+
+- Docs: record the TRDD-1OOAH3LD increment 1 review blocker and recovery paths
+
+- Docs: record TRDD-1OOAH3LD increment 1 progress before compaction
+
+- Docs: engine updates run a smoke check, never a recalibration (TRDD-1OOAH3LD)
+
+- Docs: approve the local_llama design and move TRDD-1OOAH3LD to todo
+
+- Docs: record the automatic per-model calibration directive on TRDD-1OOAH3LD
+
+- Docs: record the thinking on/off directive and Liquid AI LFM3 facts on TRDD-1OOAH3LD
+
+- Docs: record the thinking-effort directive on TRDD-1OOAH3LD
+
+- Docs: record the 256k-context directive and LFM3 smoke result on TRDD-1OOAH3LD
+
+- Docs: record TRDD-1OOAH3LD user decisions and the TRDD-5Q79QZM7 race-repair test finding
+
+- Docs: add TRDD-1OOAH3LD — llm-ext runs local GGUF models through llama.cpp (local_llama profile)
+
+- Docs: close TRDD-28BAL5ER, record TRDD-5Q79QZM7 progress and its last open test
+
+- Docs(TRDD-5Q79QZM7): record the review findings on 045a66fb to fix next
+
+- Docs(TRDD-5Q79QZM7): record items 1 and 2 as done and the scan_folder follow-up
+
+- Docs(TRDD-UT7UC025): split the self-healing design into four cards
+
+- Docs(TRDD-UT7UC025): record the USER's Krill-for-Nanbeige4.2 decision verbatim
+
+- Docs(TRDD-UT7UC025): record the USER's 3B size-cap decision verbatim
+
+- Docs: add TRDD-UT7UC025 — the USER's self-healing directive, verbatim
+
+- Docs: split the Dependabot triage onto TRDD-EH91LD5F, tighten TRDD-CV2OAB7D, record the old-session risk
+
+- Docs: file TRDD-CV2OAB7D and TRDD-WXR5LZ9Z, mark TRDD-VAORGKVF closed in its STATE block
+
+- Docs: close TRDD-2GIA66AK, CQSODQ78, VAORGKVF and 7OEAO8GS after the v14.1.2 release
+
+- Docs(TRDD-7OEAO8GS): record release progress and the next steps
+
+
+### Fixed
+
+- Fix(statusline): a spend-only line keeps tier 3; say why a row can vanish
+
+- Fix(statusline): show a limit only when the account has that window
+
+- Fix(cli): --command_timeout ends a command waiting on a profile update (TRDD-GBC4A4CF)
+
+- Fix(llm-ext): a non-forced pass drops a stale forced_at stamp before any early return (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): --force resets once, a server-context cut is a window skip, broker tolerates 10 s without its dir (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): a waiting Phase B step loads nothing, --force keeps a valid record, broker survives a one-tick dir gap (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(scripts): statusline timeouts end with a clear message, not a traceback
+
+- Fix(llm-ext): bounded calibration memory waits and memory verdicts, broker exits without its config dir (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): classify honours --command_timeout (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): model tools work on a managed local profile (TRDD-N0S2UL0K)
+
+- Fix(scripts): bound local git and installer subprocesses, name the file in JSON errors
+
+- Fix(llm-ext): bounded re-measure of pending calibration candidates, scouting unfit never fails a model (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): a busy machine pauses calibration instead of giving a verdict (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): server-stop never counts as a calibration crash; help and docs fixes (TRDD-1OOAH3LD, TRDD-ZGSGGHQG, TRDD-WBZJRSQB)
+
+- Fix(llm-ext): Phase C review fixes, real LFM3 calibration passes (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): locals-mlx gate is not recorded and is Rosetta-safe (TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): add locals-mlx only on Apple-silicon Macs, pin the add-once contract (TRDD-ZGSGGHQG, TRDD-1OOAH3LD)
+
+- Fix(llm-ext): calibration cut verdicts only at the nominal cap, leaky judged on every short answer (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): settings.yaml keeps its mode and symlink when a migration writes it (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): drain old single-engine brokers, count own leftover mains, wait on silent loads (TRDD-ZGSGGHQG)
+
+- Fix(llm-ext): a timed-out command stops every request and names every unfinished file (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): one full context window per llama-server slot (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): broker hardening and isolated broker tests (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): per-call queue time, no second broker, model-scoped broker errors (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): broker rotation serves a minimum slice and honours long queue timeouts (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): broker kill safety and dead-server hang (TRDD-1OOAH3LD)
+
+- Fix(llm-ext): a racing repair no longer backs up over the user original (TRDD-5Q79QZM7)
+
+- Fix(llm-ext): foreground repair retries the right tools and reads this update's outcome (TRDD-5Q79QZM7)
+
+- Fix(llm-ext): report a provider outage instead of repairing healthy models (TRDD-5Q79QZM7)
+
+- Fix(llm-ext): wait for the profile repair and retry once instead of retry-later (TRDD-5Q79QZM7)
+
+- Fix(llm-ext): repair an invalid active generated profile inline (TRDD-5Q79QZM7)
+
+
+### Styling
+
+- Style(scripts): statusline warning says exited N or timed out, PEP 8 blank lines
+
+
+### Testing
+
+- Test(llm-ext): record the P5 local-profile add-once steps in settings-invariant tests (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Test(llm-ext): end-to-end broker runs through the real CLI (TRDD-1OOAH3LD)
+
+
 
 ### Highlights
 
