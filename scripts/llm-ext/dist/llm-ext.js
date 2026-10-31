@@ -275032,6 +275032,8 @@ async function waitForProfileUpdate(profile, update, base, env = process.env, li
   const lockPath = backgroundUpdateLockPathFor(profile);
   const deadline = Date.now() + limitMs;
   for (; ; ) {
+    const stopped = commandStopReason();
+    if (stopped !== null) return { ok: false, failed: false, why: `the command was stopped (${stopped})` };
     const held = benchLockIsHeld(lockPath);
     const outcome = readOutcome(profile, base, held);
     if (outcome.kind === "rebenchmarked") return { ok: true, rebenchmarked: true };
@@ -275053,6 +275055,7 @@ var init_foreground_repair = __esm({
   "src/foreground-repair.ts"() {
     "use strict";
     init_bench_lock();
+    init_command_stop();
     init_default_profiles_runner();
     init_default_profiles_state();
     FOREGROUND_REPAIR_TIMEOUT_ENV = "LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS";
@@ -276610,6 +276613,8 @@ function failDynamicProfile(profileName, causes, actionable) {
     const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
     if (refusedTools.every((t) => t !== void 0 && !profileUpdateCanValidate(t))) return actionable(causes);
   }
+  const stopped = commandStopReason();
+  if (stopped !== null) return stoppedError(stopped);
   if (dynamicExhaustionStore.getStore()?.retry === true) return new ProfileExhaustedError(profileName, "dynamic", causes);
   const baseline = takeUpdateBaseline();
   const update = requestProfileUpdate({ profile: profileName, log: (m) => process.stderr.write(m) });
@@ -277560,6 +277565,8 @@ async function dispatchCallTool(name, rawArgs, opts = {}) {
     process.stderr.write(`[llm-externalizer] every model of '${exhaustion.profile}' failed -- repairing the profile in the foreground
 `);
     const repair = await repairProfileInForeground(exhaustion.profile, exhaustion.update, exhaustion.baseline);
+    const stopped = commandStopReason();
+    if (stopped !== null) return withStopReason(first, retryLater, exhaustion.profile, stopped);
     if (!repair.ok) return withRepairLine(first, repair.line);
     if (!repair.changed) {
       return withRepairLine(
@@ -277587,6 +277594,10 @@ async function repairProfileInForeground(profile, update, baseline) {
   const reloaded = reloadSettingsFromDisk();
   if (!reloaded.ok) return { ok: false, line: `Foreground repair finished but the repaired settings were not loaded: ${reloaded.error}.` };
   return { ok: true, changed: snapshot() !== before, rebenchmarked: waited.rebenchmarked };
+}
+function withStopReason(result, retryLater, profile, stopReason) {
+  const text2 = `${stopReason}; every model of '${profile}' had failed and its update continues in the background`;
+  return { ...result, content: result.content.map((c) => ({ ...c, text: c.text.split(retryLater).join(text2) })) };
 }
 function withRepairLine(result, line) {
   const content = result.content.map((c) => ({ ...c }));
@@ -277631,10 +277642,14 @@ Run the "discover" tool to see the current profile status.`
         let gate = profileGateRefusal(name);
         if (gate) {
           if (gate.reason === "empty-pool-refreshable") {
+            const stoppedBefore = commandStopReason();
+            if (stoppedBefore !== null) return { content: [{ type: "text", text: stoppedBefore }], isError: true };
             const baseline = takeUpdateBaseline();
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
             if (update.state !== "unavailable") {
               const repair = await repairProfileInForeground(effective, update, baseline);
+              const stoppedAfter = commandStopReason();
+              if (stoppedAfter !== null) return { content: [{ type: "text", text: stoppedAfter }], isError: true };
               if (repair.ok && profileGateRefusal(name) === null) {
                 gate = null;
               } else {
@@ -278769,7 +278784,7 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
               break;
             } catch (err3) {
               const msg = err3 instanceof Error ? err3.message : String(err3);
-              if (!untilDone) {
+              if (!untilDone || commandStopReason() !== null) {
                 return {
                   content: [{ type: "text", text: `FAILED: ${msg}` }],
                   isError: true
@@ -282038,7 +282053,7 @@ function armCommandTimeout(seconds2) {
 `);
     });
     setTimeout(() => {
-      process.stderr.write(`llm-ext: the stopped command did not finish writing within ${STOP_FLUSH_GRACE_MS / 1e3} s; exiting
+      process.stderr.write(`llm-ext: the stopped command did not end within ${STOP_FLUSH_GRACE_MS / 1e3} s; exiting
 `);
       process.exit(COMMAND_TIMEOUT_EXIT);
     }, STOP_FLUSH_GRACE_MS).unref();
