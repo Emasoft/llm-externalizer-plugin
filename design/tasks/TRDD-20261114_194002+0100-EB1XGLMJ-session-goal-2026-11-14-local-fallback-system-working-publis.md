@@ -4,7 +4,7 @@ title: Session goal 2026-11-14 local fallback system working, published and inst
 column: dev
 status: tasked
 created: 2026-11-14T19:40:02+0100
-updated: 2026-11-15T19:09:10+0100
+updated: 2026-11-15T20:41:31+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -52,3 +52,4 @@ since the janitor cleared the goal and did not restore it, here it is again: fin
 ## Notes
 
 2026-11-15T19:09:10+0100 USER decision on the 14.3.0 CPV blocker (login-agent installer): verbatim answer 'Leave it out (Recommended)'; installer hook and script removed from 14.3.0; follow-up card J5HREA2G.
+2026-11-15T20:41+0100 USER 2026-11-15, verbatim: "on the other things, do as you think is better. but base your decisions on verified facts." Decisions: c4dc6bd5 message kept (its claim is scoped to the 18 non-patch-equivalent commits, matching the reconciliation report); WBZJRSQB sentence not ported (commit 33ac87cd is in origin/main history, the card is archived); volume paths in OK1NN5RN and RD-01 made generic, archived DAGBDXUB left frozen; or-jev classifier profile to be restored after 14.3.0 is installed.

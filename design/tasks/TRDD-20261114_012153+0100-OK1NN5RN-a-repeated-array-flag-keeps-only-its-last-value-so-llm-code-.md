@@ -53,4 +53,4 @@ Acceptance:
 2026-11-14T03:08+0100 ubs on ff8b730c: Critical 0; the 2 warnings are pre-existing and outside the changed lines 345-367: main.ts:201 then-without-catch and main.ts:842 type narrowing (blame 3e281b35, 2026-10-31). dd6f5302 was not scanned (its ubs pre-commit scan timed out at 180 s by itself); it is a 2-line config change.
 2026-11-14T03:08+0100 target-release is not chosen (left unset).
 2026-11-14T03:08+0100 README.md:569 also marks --source-files as repeated, consistent with accumulation (box 3).
-2026-11-14T03:08+0100 Scratch worktree: the user can drop it with git -C /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer worktree remove --force /tmp/ok1nn5rn-head ; no prune, about 30 other worktrees are prunable.
+2026-11-14T03:08+0100 Scratch worktree: the user can drop it with git -C <repo-root> worktree remove --force /tmp/ok1nn5rn-head ; no prune, about 30 other worktrees are prunable.

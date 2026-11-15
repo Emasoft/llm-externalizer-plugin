@@ -1,6 +1,6 @@
 # RD-01 report: style study of the quicksilver README and chart script (2026-10-09)
 
-Files written: /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/NOTICE (new), this report. No code changed, nothing committed (rule 4; the card asks one commit, left to the orchestrator).
+Files written: <repo-root>/llm-externalizer-plugin/NOTICE (new), this report. No code changed, nothing committed (rule 4; the card asks one commit, left to the orchestrator).
 
 ## Sources read (as data)
 - GitHub UditAkhourii/quicksilver (default branch main, MIT, last push 2026-09-25): README.md (177 lines), LICENSE (21 lines), bench/chart.mjs (62 lines), fetched with `gh api`. The local clone ~/Code/quicksilver has a byte-identical LICENSE.
@@ -53,7 +53,7 @@ chart.mjs (QC = chart.mjs line):
 
 ## Acceptance
 - reads quicksilver LICENSE itself: satisfied (fetched LICENSE via gh api, 21 lines, MIT; also cmp-identical to local clone).
-- NOTICE created with the quicksilver entry: satisfied (/Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/NOTICE, full MIT text).
+- NOTICE created with the quicksilver entry: satisfied (<repo-root>/llm-externalizer-plugin/NOTICE, full MIT text).
 - every outline item cites the quicksilver README line: satisfied, except item 10 (no counterpart, stated) and the item 9 extension (stated).
 - definition of done: no code changed, README not touched so RD-15 test not applicable; the single commit with the card id in its subject is NOT made by me (rule 4); orchestrator to commit NOTICE and this study.
 
