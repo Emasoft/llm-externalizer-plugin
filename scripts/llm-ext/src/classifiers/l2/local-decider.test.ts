@@ -421,7 +421,7 @@ describe("ensureLocalDecider — nothing found anywhere", () => {
     expect(result).toEqual({
       ok: false,
       retryable: false,
-      reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one — install mlx-decision and its login agent",
+      reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one — install mlx-decision and start its server yourself (this plugin does not install or start it)",
     });
   });
 

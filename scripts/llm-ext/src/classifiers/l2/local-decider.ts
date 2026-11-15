@@ -8,7 +8,7 @@
  * Hard rules, each a stated constraint rather than a preference:
  * - llm-ext NEVER starts an mlx-decision server. USER, 2026-11-13, verbatim: "yes, the mlx-decision was moved to
  *   be a startup singleton server process for all, to avoid the risk of duplicate processes." The singleton is
- *   started by its own login agent; this module only DISCOVERS and ADOPTS it, or refuses. Nothing here can
+ *   started by the user (a login agent or by hand); this module only DISCOVERS and ADOPTS it, or refuses. Nothing here can
  *   cause a second server, so every "not there yet" answer is safe to retry.
  * - a decider is a /health answer with a 2xx status AND a JSON body with a `loaded` array. Anything else (a 404,
  *   a non-JSON page, a JSON body without `loaded`) is some other program on the port, never a decider.
@@ -298,7 +298,7 @@ export async function ensureLocalDecider(cfg: LocalDeciderConfig, deps: LocalDec
   if (installed) {
     return { ok: false, retryable: true, reason: "no mlx-decision server is running yet (the singleton may be restarting); llm-ext never starts one" };
   }
-  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one — install mlx-decision and its login agent" };
+  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one — install mlx-decision and start its server yourself (this plugin does not install or start it)" };
 }
 
 /**
