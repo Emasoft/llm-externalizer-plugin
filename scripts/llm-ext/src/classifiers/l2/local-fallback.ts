@@ -4,8 +4,8 @@
  *
  * WHY the section is read here and not in config.ts: config.ts validates `local_fallback` and must not import
  * from classifiers/ (the cycle rule at config.ts:202), so the DEFAULTS of a valid section live next to their one
- * consumer. The values below are policy, not measurements: `url` is the port of the mlx-decision login agent that
- * llm-externalizer installs; a singleton on any other port is still found by its process and sockets (local-discovery.ts).
+ * consumer. The values below are policy, not measurements: `url` is the port the already-running mlx-decision server
+ * usually listens on (the plugin does not install one); a singleton on any other port is still found by its process and sockets (local-discovery.ts).
  *
  * WHY `enabled` defaults to TRUE: the whole point of this tier is that a run still answers when every remote
  * model is unreachable, and llm-ext never starts a server (local-decider.ts): it only adopts the singleton that
@@ -24,14 +24,14 @@ import type { GlobalFetch } from "../l0/transport.js";
 import { ensureLocalDecider, SERVED_MODEL, type LocalDeciderConfig, type LocalDeciderDeps } from "./local-decider.js";
 import { releaseDirectLease, takeDirectLease } from "../../governor/direct.js";
 
-/** The port of the mlx-decision login agent that llm-externalizer installs. WHY a named export: the login-agent
- * plist is generated from the same number, so the default url and the agent cannot drift. */
+/** The port the already-running mlx-decision server listens on (127.0.0.1:8123); the plugin does not install one.
+ * WHY a named export: the default url and the tests share one number. */
 export const DECIDER_SINGLETON_PORT = 8123;
 
 /** The defaults of the `local_fallback` section, key by key: the same keys config.ts validates. */
 export const LOCAL_FALLBACK_DEFAULTS: LocalDeciderConfig = {
   enabled: true,
-  /** WHY the login agent port: it is only the FIRST place looked at; discovery by process and listening sockets finds the singleton on any other port anyway. */
+  /** WHY the singleton port: it is only the FIRST place looked at; discovery by process and listening sockets finds the singleton on any other port anyway. */
   url: `http://127.0.0.1:${DECIDER_SINGLETON_PORT}`,
   /** How long to wait for an ADOPTED singleton to finish loading its model: five minutes, since MLX loads the weights before /health reports them, and that is minutes, not seconds. */
   startTimeoutMs: 300000,

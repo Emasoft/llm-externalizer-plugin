@@ -643,8 +643,6 @@ export default defineConfig({
       // Global `llm-ext` PATH shim (TRDD-VV0INGRT) — the SessionStart installer
       // hook and the resolver wrapper it installs to ~/.local/bin/llm-ext.
       'src/path-shim.test.ts',
-      // C4 (TRDD-O93LFMF3): the mlx-decision login-agent installer hook; real sh, temp HOME, fake PATH binaries.
-      'src/decider-agent-hook.test.ts',
       // Guards test-hermetic-config.ts: during the suite getConfigDir() must
       // never resolve to the real ~/.llm-externalizer, and must resolve
       // under /tmp (TRDD-90DM5YHO).
