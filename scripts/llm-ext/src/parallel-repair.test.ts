@@ -101,7 +101,20 @@ describe("parallel inline repair of one invalid marked section (TRDD-5Q79QZM7)",
       platform: "node",
       format: "esm",
       external: ["better-sqlite3"],
-      banner: { js: 'import { createRequire as __r } from "node:module"; const require = __r(import.meta.url);' },
+      // WHY: the child pulls in typescript (dynamic-maintainer -> security-triage -> benchmark/code-task/dataset), whose
+      // CJS body reads __filename at load; in an ESM bundle that throws ReferenceError, both children exit 1 before
+      // writing their ready file, and the test only reported "children never became ready" after 60 s. This is the
+      // banner esbuild.config.mjs gives the shipped bundles (require, __filename, __dirname), so the child runs as production does.
+      banner: {
+        js: [
+          'import { createRequire as __r } from "node:module";',
+          'import { fileURLToPath as __f } from "node:url";',
+          'import { dirname as __d } from "node:path";',
+          'const require = __r(import.meta.url);',
+          'const __filename = __f(import.meta.url);',
+          'const __dirname = __d(__filename);',
+        ].join("\n"),
+      },
       // The entry lives in a temp dir with no node_modules: resolve "yaml" from this package.
       nodePaths: [resolve(HERE, "..", "node_modules")],
       logLevel: "silent",
@@ -120,8 +133,17 @@ describe("parallel inline repair of one invalid marked section (TRDD-5Q79QZM7)",
     const a = runChild(bundle, [settingsPath, gate, readyA], env);
     const b = runChild(bundle, [settingsPath, gate, readyB], env);
     // Release both only once both have loaded and parsed, so they hit the lock together.
+    // WHY: a child that dies at startup (a bundle that throws on load) never writes its ready file; without this the test
+    // sat out the whole 60 s and reported only "never became ready". A child exiting before the gate opens is always a failure.
+    const early: { msg?: string } = {};
+    for (const [name, child] of [["A", a], ["B", b]] as const) {
+      void child.then((r) => {
+        early.msg ??= `child ${name} exited with code ${r.code} before it was ready: ${r.stderr}`;
+      });
+    }
     const deadline = Date.now() + 60_000;
     while (!(existsSync(readyA) && existsSync(readyB))) {
+      if (early.msg) throw new Error(early.msg);
       if (Date.now() > deadline) throw new Error("children never became ready");
       await new Promise((r) => setTimeout(r, 10));
     }

@@ -202,7 +202,9 @@ describe("controller: polling and settings", () => {
   });
 
   it("the defaults are the spec's, and a valid override applies", () => {
-    expect(resolveConfig({}, null, 8)).toEqual({ enabled: true, limits: LIMITS, serverThreads: 0, settleMs: 2_000, cpuFloorWaitMs: 30_000, loadYieldMs: 120_000 });
+    // WHY: LIMITS (90/85) is a judge() fixture, not the default. The owner-ruled defaults are 80/80 (51cbf755, TRDD-ZTO9K8EK),
+    // so the expectation spells them out instead of reusing the fixture.
+    expect(resolveConfig({}, null, 8)).toEqual({ enabled: true, limits: { ramLimitPct: 80, cpuLimitPct: 80, maxInferences: 8 }, serverThreads: 0, settleMs: 2_000, cpuFloorWaitMs: 30_000, loadYieldMs: 120_000 });
     const cfg = resolveConfig({ LLM_EXT_GOVERNOR_ENABLED: "false", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "70", LLM_EXT_GOVERNOR_CPU_LIMIT_PCT: "100", LLM_EXT_GOVERNOR_MAX_INFERENCES: "3", LLM_EXT_GOVERNOR_SERVER_THREADS: "2", LLM_EXT_GOVERNOR_SETTLE_MS: "5", LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS: "6", LLM_EXT_GOVERNOR_LOAD_YIELD_MS: "7" }, null, 8);
     expect(cfg).toEqual({ enabled: false, limits: { ramLimitPct: 70, cpuLimitPct: 100, maxInferences: 3 }, serverThreads: 2, settleMs: 5, cpuFloorWaitMs: 6, loadYieldMs: 7 });
   });

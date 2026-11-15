@@ -139,7 +139,9 @@ describe("localFallbackErrors", () => {
 
   it("refuses a non-loopback url with the exact refusal wording", () => {
     expect(localFallbackErrors({ url: "https://decider.example.com:443" })).toEqual([
-      "local_fallback.url must be http://127.0.0.1:<port> or http://localhost:<port> — refused: not a loopback decider url, got \"https://decider.example.com:443\"",
+      // WHY: config.ts (23f70d87, TRDD-O93LFMF3) deliberately widened the wording: the url must also carry no path, query or
+      // fragment, because local-transport appends /v1/systemone itself. The assertion pins that exact current text.
+      "local_fallback.url must be http://127.0.0.1:<port> or http://localhost:<port> with no path, query or fragment (llm-ext appends /v1/systemone itself) — refused: not a loopback decider url, got \"https://decider.example.com:443\"",
     ]);
     expect(localFallbackErrors({ url: "http://192.168.1.5:57455" })).toHaveLength(1);
   });
