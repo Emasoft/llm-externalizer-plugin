@@ -1,6 +1,6 @@
 # llm-ext reference: session and llm groups
 
-Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see SKILL.md). All text below comes from `llm-ext <group> <action> --help`.
+Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see cli-conventions.md). All text below comes from `llm-ext <group> <action> --help`.
 
 ## Contents
 
@@ -12,6 +12,7 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext llm topics`
 - `llm-ext llm sem-deduplicate`
 - `llm-ext llm describe`
+- Flat command names (advanced)
 
 ## `session` group
 

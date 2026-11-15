@@ -1,6 +1,6 @@
 # llm-ext reference: models and settings groups
 
-Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see SKILL.md). All text below comes from `llm-ext <group> <action> --help`.
+Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see cli-conventions.md). All text below comes from `llm-ext <group> <action> --help`.
 
 ## Contents
 
@@ -11,15 +11,15 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext models replacements`
 - `llm-ext models calibrate`
 - `llm-ext models calibration-status`
-- `llm-ext models server-status` lists the registered managed local servers (with their threads) and the local inference governor figures; `llm-ext models server-stop [--engine llama|locals] [--role main|cal|all]` stops them (only registered ones; the broker starts a new main server only when work arrives)
 - `llm-ext settings show`
 - `llm-ext settings profile`
 - `llm-ext settings profiles`
 - `llm-ext settings reset`
 - `llm-ext settings status`
 - `llm-ext settings scan-local`
-- Local inference governor (`local_governor` settings, env overrides, what is not promised)
-- Local decider fallback (`local_fallback` settings: the six keys, defaults, what it never does)
+- Managed local models
+- Local inference governor
+- Local decider fallback (`local_fallback`)
 
 ## `models` group
 
@@ -242,6 +242,8 @@ llm-ext settings scan-local
 ## Managed local models
 
 Two local profiles are built in and added to `settings.yaml` once, never active by default: select one with `--profile local_llama` or `--profile locals-mlx`.
+
+`llm-ext models server-status` lists the registered managed local servers (with their threads) and the local inference governor figures; `llm-ext models server-stop [--engine llama|locals] [--role main|cal|all]` stops them (only registered ones; the broker starts a new main server only when work arrives)
 
 | Profile | Engine | Models (`model`, `second_model`, `third_model`) |
 |---|---|---|
