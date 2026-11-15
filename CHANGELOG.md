@@ -1,6 +1,41 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.3.0] - 2026-11-15
+
+### Added
+
+- Feat: 14.3.0 - local inference fallback, machine-wide governor, classifier commands, answered-only benchmark scoring
+
+
+### Changed
+
+- Build: rebuild dist with the reworded local-decider refusal (TRDD-J5HREA2G)
+
+
+### Documentation
+
+- Docs(design): make volume paths generic in OK1NN5RN and RD-01; record the 2026-11-15 USER delegation (TRDD-EB1XGLMJ)
+
+- Docs(changelog): 14.3.0 Highlights no longer say the server can be installed as a login agent (TRDD-J5HREA2G)
+
+- Docs(skill): split llm-externalizer-cli-reference SKILL.md under the CPV body limit
+
+- Docs(trdd): add NX50C2VF, the maintainer import chain loads the typescript compiler since f77113d9
+
+
+### Fixed
+
+- Fix(local-decider): refusal no longer tells users to install a login agent the plugin no longer ships (TRDD-J5HREA2G)
+
+- Fix(release): drop the automatic mlx-decision login-agent installer from SessionStart (TRDD-J5HREA2G)
+
+
+### Testing
+
+- Test: fix 3 stale tests found by the 14.3.0 publish dry run (TRDD-EB1XGLMJ)
+
+
 
 ### Highlights
 
