@@ -33,13 +33,17 @@ import {
   type RegexRedactOpts,
 } from "../scan-pipeline.js";
 import { autoGroupByHeuristic } from "../grouping.js";
-import { abortReasonText, isCommandStopped, unfinishedFileLines } from "../command-stop.js";
+import { mergePieceDir } from "../project-root.js";
+import { abortReasonText, failedHeader, isCommandStopped, runOutcome, unfinishedFileLines } from "../command-stop.js";
 import { rateLimitedParallel, type ProgressFn } from "../rate-limiter.js";
 import { type HighQualityRequest } from "../config.js";
+import { formatUsageTotals, type FileUsage } from "../usage-totals.js";
 
 export type ScanFolderToolResult = {
   content: { type: "text"; text: string }[];
   isError?: boolean;
+  /** Some files delivered results although isError is set: the CLI prints the summary on stdout (runOutcome). */
+  partial?: boolean;
 };
 
 /**
@@ -54,6 +58,8 @@ export interface ScanFolderFileResult {
   backupPath?: string;
   error?: string;
   noChange?: boolean;
+  /** The reply's own usage block, summed into the SCAN COMPLETE line (TRDD-RPLLP8CF). */
+  usage?: FileUsage;
 }
 
 /**
@@ -261,7 +267,9 @@ export async function runScanFolder(
                 ensemble: sfUseEnsemble,
                 maxBytes: sfBudgetBytes,
                 modelOverride: deps.modelOverride,
-                outputDir: deps.outputDir,
+                // TRDD-PNU8XECB: modes 1/2 merge these per-file pieces into final reports, so the pieces
+                // are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
+                outputDir: mergePieceDir(deps.outputDir, sfMode !== 0),
                 hqRequest: deps.hqRequest,
               });
               recentOutcomes.push(result.success);
@@ -354,20 +362,20 @@ export async function runScanFolder(
             deps.outputDir,
           );
           const summary = [
-            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found) — ${formatUsageTotals(batchResults)}`,
             `Folder: ${folder_path}`,
             `Batch UUID: ${batchId}`,
             `MERGED REPORT: ${mergedPath}`,
           ];
           if (failed.length > 0 && !isCommandStopped()) {
-            summary.push("", "FAILED:");
+            summary.push("", failedHeader(failed.length, files.length));
             for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
           }
           summary.push(...unfinishedFileLines(batchResults));
           if (aborted) summary.push("", `ABORTED: ${abortReasonText(abortReason)}`);
           return {
             content: [{ type: "text", text: summary.join("\n") }],
-            isError: aborted,
+            ...runOutcome(aborted, failed.length, succeeded.length),
           };
         }
 
@@ -413,7 +421,7 @@ export async function runScanFolder(
             sfGroupReportPaths.push(`[group:${gid}] ${groupPath}`);
           }
           const summary = [
-            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+            `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found) — ${formatUsageTotals(batchResults)}`,
             `Folder: ${folder_path}`,
             `Batch UUID: ${batchId}`,
           ];
@@ -422,20 +430,20 @@ export async function runScanFolder(
             for (const line of sfGroupReportPaths) summary.push(`  ${line}`);
           }
           if (failed.length > 0 && !isCommandStopped()) {
-            summary.push("", "FAILED:");
+            summary.push("", failedHeader(failed.length, files.length));
             for (const r of failed) summary.push(`  ${r.filePath}: ${r.error}`);
           }
           summary.push(...unfinishedFileLines(batchResults));
           if (aborted) summary.push("", `ABORTED: ${abortReasonText(abortReason)}`);
           return {
             content: [{ type: "text", text: summary.join("\n") }],
-            isError: aborted,
+            ...runOutcome(aborted, failed.length, succeeded.length),
           };
         }
 
         // Mode 0: list individual reports
         const sfSummaryLines = [
-          `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found)`,
+          `SCAN COMPLETE — ${succeeded.length} processed, ${failed.length} failed, ${skipped.length} skipped (${files.length} files found) — ${formatUsageTotals(batchResults)}`,
           `Folder: ${folder_path}`,
           `Batch UUID: ${batchId}`,
           "",
@@ -446,7 +454,7 @@ export async function runScanFolder(
         }
         // Follow-up review M1: once stopped, every non-success file is listed (helper), instead of FAILED.
         if (failed.length > 0 && !isCommandStopped()) {
-          sfSummaryLines.push("", "FAILED:");
+          sfSummaryLines.push("", failedHeader(failed.length, files.length));
           for (const r of failed)
             sfSummaryLines.push(`  ${r.filePath}: ${r.error}`);
         }
@@ -454,6 +462,6 @@ export async function runScanFolder(
         if (aborted) sfSummaryLines.push("", `ABORTED: ${abortReasonText(abortReason)}`);
         return {
           content: [{ type: "text", text: sfSummaryLines.join("\n") }],
-          isError: aborted,
+          ...runOutcome(aborted, failed.length, succeeded.length),
         };
 }

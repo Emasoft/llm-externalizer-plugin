@@ -67,6 +67,7 @@ import {
   waitFitsClock,
   type RetryClock,
 } from "./http.js";
+import { directAttemptGate } from "../governor/direct.js";
 import { chatCompletionNative } from "./lmstudio.js";
 import {
   OutputLimitError,
@@ -106,6 +107,7 @@ import {
 } from "./types.js";
 
 import { formatProviderState, slimEndpoints, type ProviderStateEntry } from "./provider-state.js";
+import { stoppableSleep } from "../command-stop.js";
 
 // ── Reasoning effort cache + configurable default ───────────────────
 // OpenRouter's chat/completions accepts a `reasoning: { effort }` field. Not
@@ -228,6 +230,11 @@ function dumpRequestBody(body: Record<string, unknown>, model: string | undefine
 const MODEL_SUPPORTED_PARAMS = new Map<string, Set<string>>();
 let modelSupportedParamsCacheTime = 0;
 const MODEL_SUPPORTED_PARAMS_TTL_MS = 3600_000; // 1 hour
+// WHY (TRDD-0ICSRZ0K): a failed, non-ok or empty /endpoints reply used to be re-fetched on every
+// call, an extra round trip on the fast paths. The null result is remembered per model until this
+// expiry; shorter than a hit so a transient outage is retried soon.
+const MODEL_SUPPORTED_PARAMS_NEGATIVE_TTL_MS = 300_000; // 5 minutes
+const MODEL_SUPPORTED_PARAMS_NEGATIVE = new Map<string, number>(); // model id -> expiry epoch ms
 
 
 // Slim endpoint state per exact model id, filled by the same /endpoints fetch
@@ -302,11 +309,23 @@ async function getModelSupportedParams(
   if (now - modelSupportedParamsCacheTime > MODEL_SUPPORTED_PARAMS_TTL_MS) {
     MODEL_SUPPORTED_PARAMS.clear();
     MODEL_PROVIDER_STATE.clear();
+    MODEL_SUPPORTED_PARAMS_NEGATIVE.clear();
     modelSupportedParamsCacheTime = now;
   }
   const cached = MODEL_SUPPORTED_PARAMS.get(modelId);
   if (cached !== undefined) return cached;
+  const negativeUntil = MODEL_SUPPORTED_PARAMS_NEGATIVE.get(modelId);
+  if (negativeUntil !== undefined && now < negativeUntil) return null;
+  const result = await fetchModelSupportedParams(modelId, backend, deps);
+  if (result === null) MODEL_SUPPORTED_PARAMS_NEGATIVE.set(modelId, now + MODEL_SUPPORTED_PARAMS_NEGATIVE_TTL_MS);
+  return result;
+}
 
+async function fetchModelSupportedParams(
+  modelId: string,
+  backend: { baseUrl: string },
+  deps: CompletionDeps,
+): Promise<Set<string> | null> {
   try {
     // Query the per-model endpoint with the EXACT model id.
     // /v1/models/{id}/endpoints returns { data: { endpoints: [...] } }
@@ -446,6 +465,10 @@ export interface SimpleCompletionOptions {
    *  both this and `deadlineAt` are given, `retryClock` wins (its own deadline
    *  applies). Control field: never part of the request body. */
   retryClock?: RetryClock;
+  /** Cancels the request when aborted (issue 19 / TRDD-3SNQAGIC: a losing session-summary racer). The
+   *  call then throws at once, with no retry, no breaker failure, no verdict and no FAIL history line.
+   *  Honored on the direct HTTP path and the local broker (the pending job is cancelled). Control field: never part of the body. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -491,6 +514,15 @@ function requestOptionsConnection(
   };
 }
 
+/**
+ * The start of one call, which a governor wait moves forward (design D9), and
+ * where that wait is recorded so clockForCall keeps it off the call's retry
+ * deadline, as for broker queue time.
+ */
+interface SendTime {
+  startTime: number;
+  queued: { brokerQueuedMs?: number };
+}
 
 /**
  * One send of a finished body. TRDD-1OOAH3LD: a managed profile's request goes
@@ -502,12 +534,15 @@ function requestOptionsConnection(
 function sendChat(
   conn: ConnectionSetup,
   body: Record<string, unknown>,
-  startTime: number,
+  time: SendTime,
   rl429: { saw429: boolean; refusedRetryAt?: number },
   clock: RetryClock | undefined,
   // The logical call (chatCompletionWithRetry's call object): a retry of it reuses its pending broker job, and its broker queue time is
   // recorded on it; undefined = no reuse and no queue-time exclusion (chatCompletionJSON).
   scope?: { brokerQueuedMs?: number },
+  // Cancels the request when aborted, direct or broker. WHY the broker path takes it too (TRDD-3SNQAGIC): without it an
+  // aborted local racer kept its broker job queued or running, holding the governor lease and the local server.
+  signal?: AbortSignal,
 ): Promise<Response> {
   // Follow-up review M3: a stopped command (--command_timeout) starts no new request, broker or remote.
   throwIfStopped();
@@ -516,10 +551,22 @@ function sendChat(
       conn.broker,
       { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
       // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
-      { scope, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms), reconnect: conn.broker.reconnect },
+      // signal: brokerExchange cancels (DELETE) the pending job on abort (see the sendChat parameter comment).
+      { scope, signal, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms), reconnect: conn.broker.reconnect },
     );
   }
-  return fetchWithRetry429(conn.url, { method: "POST", headers: conn.headers, body: JSON.stringify(body) }, conn.timeout, startTime, rl429, clock);
+  // Governor design D9: a loopback send takes one lease per attempt, inside fetchWithRetry429's loop (see its `gate`).
+  // The wait must not use up conn.timeout or the retry window, or a queue of 100 turns into 100 local timeouts, each of
+  // which --stop_on_errors would read as a dead model. Two clocks, one subtraction each: fetchWithRetry429 moves its own
+  // start (conn.timeout of this send) and `time.startTime` here (the next reasoning rung, which reuses it); the queued
+  // time moves the retry window through clockForCall.
+  const gate = directAttemptGate(conn.url, conn.timeout, {
+    onWaited: (ms) => {
+      time.startTime += ms;
+      time.queued.brokerQueuedMs = (time.queued.brokerQueuedMs ?? 0) + ms;
+    },
+  });
+  return fetchWithRetry429(conn.url, { method: "POST", headers: conn.headers, body: JSON.stringify(body), signal }, conn.timeout, time.startTime, rl429, clock, gate);
 }
 
 // ── Non-streaming text completion ────────────────────────────────────
@@ -549,7 +596,7 @@ export async function chatCompletionSimple(
 
   // LM Studio / llama.cpp native API — delegate to native handler (different request format). requestOptionsConnection never leaves a native conn when ro !== null.
   if (conn.isNative) {
-    return chatCompletionNative(conn, messages, options, deps);
+    return chatCompletionNative(conn, messages, options, deps, call);
   }
   const baseBody: Record<string, unknown> = {
     // WHY a copy with the stop sentence: see withStopInstruction (first system message only).
@@ -588,6 +635,7 @@ export async function chatCompletionSimple(
   const supportedParams = await getModelSupportedParams(conn.model || "", deps);
 
   const startTime = Date.now();
+  const time: SendTime = { startTime, queued: call ?? {} };
 
   // Heartbeat: send progress every 30s while waiting for the response.
   // Prevents MCP inactivity timeout on long-running requests (reasoning models).
@@ -626,7 +674,7 @@ export async function chatCompletionSimple(
       dumpRequestBody(body, conn.model);
 
       const rl429: { saw429: boolean; refusedRetryAt?: number } = { saw429: false };
-      const res = await sendChat(conn, body, startTime, rl429, clock, call);
+      const res = await sendChat(conn, body, time, rl429, clock, call, options.signal);
       if (call && rl429.refusedRetryAt !== undefined) call.refusedRetryAt = rl429.refusedRetryAt;
 
       // A1/A7: one durable rate_limit_429 per call that hit ≥1 429 (the retry
@@ -713,7 +761,8 @@ export async function chatCompletionSimple(
     // Failed web request — record a FAIL line (cost 0, since no billed
     // completion came back) then rethrow so the caller's retry/error logic is
     // unchanged. Logging never alters control flow.
-    recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
+    // A call cancelled by its own caller (issue 19 / TRDD-3SNQAGIC) is no failed web request: no FAIL line.
+    if (!options.signal?.aborted) recordRequest({ ok: false, durationMs: Date.now() - startTime, costUsd: 0 });
     throw e;
   } finally {
     if (heartbeat) clearInterval(heartbeat);
@@ -866,6 +915,9 @@ export async function chatCompletionJSON(
 
   // Periodic progress keepalive while waiting for non-streaming response
   const jsonStartTime = Date.now();
+  const time: SendTime = { startTime: jsonStartTime, queued: {} };
+  // This path has no call object of its own: the queued time still comes off its deadline, through the same view as chatCompletionWithRetry.
+  const clock = options.retryClock && clockForCall(options.retryClock, time.queued);
   let progressTimer: ReturnType<typeof setInterval> | undefined;
   if (options.onProgress) {
     const pg = options.onProgress;
@@ -905,7 +957,7 @@ export async function chatCompletionJSON(
       dumpRequestBody(body, conn.model);
 
       const rl429: { saw429: boolean; refusedRetryAt?: number } = { saw429: false };
-      const res = await sendChat(conn, body, jsonStartTime, rl429, options.retryClock);
+      const res = await sendChat(conn, body, time, rl429, clock);
 
       // A1/A7: one durable rate_limit_429 per call that hit ≥1 429. Logging-only.
       if ((rl429.saw429 || res.status === 429) && !emitted429) {
@@ -1097,8 +1149,8 @@ const SERVICE_HEALTH = {
   // Epoch at which the last success healed the breaker (-1 = none); a stale sleeper proceeds when this equals the current epoch (review M1).
   successEpoch: -1,
   sleepers: 0,
-  // If true, service is in backoff/cooldown mode
-  inCooldown: false,
+  // Bumped ONLY by resetServiceHealthForTests: a sleeper that began before the hook ran must not decrement the count the hook already zeroed (RFDHRB1O: it drove sleepers to -1).
+  sleeperGeneration: 0,
 };
 
 /** Test hook: zero the circuit breaker so one test's failures don't trip
@@ -1109,9 +1161,9 @@ export function resetServiceHealthForTests(): void {
   SERVICE_HEALTH.consecutiveFailures = 0;
   SERVICE_HEALTH.lastSuccessAt = Date.now();
   SERVICE_HEALTH.backoffAttempt = 0;
-  SERVICE_HEALTH.inCooldown = false;
   // Zeroed too: a stale epoch/sleepers/successEpoch from one test would leak into the next (round C review L2).
   SERVICE_HEALTH.sleepers = 0;
+  SERVICE_HEALTH.sleeperGeneration++;
   SERVICE_HEALTH.epoch = 0;
   SERVICE_HEALTH.successEpoch = -1;
 }
@@ -1153,7 +1205,6 @@ function recordServiceSuccess(): void {
   SERVICE_HEALTH.consecutiveFailures = 0;
   SERVICE_HEALTH.lastSuccessAt = Date.now();
   SERVICE_HEALTH.backoffAttempt = 0;
-  SERVICE_HEALTH.inCooldown = false;
   // Remember the epoch a success healed: sleepers reset-under earlier must not abort a healthy service (review M1).
   SERVICE_HEALTH.successEpoch = SERVICE_HEALTH.epoch;
 }
@@ -1163,7 +1214,7 @@ function recordServiceFailure(): void {
 }
 
 /** Returns true if we should abort (server-side issue confirmed). */
-async function checkServiceHealthOrWait(clock?: RetryClock): Promise<string | null> {
+async function checkServiceHealthOrWait(clock?: RetryClock, signal?: AbortSignal): Promise<string | null> {
   if (SERVICE_HEALTH.consecutiveFailures < SERVICE_HEALTH.failureThreshold) {
     return null; // Not enough failures to trigger cooldown
   }
@@ -1212,7 +1263,6 @@ async function checkServiceHealthOrWait(clock?: RetryClock): Promise<string | nu
       `Please retry later.`;
     SERVICE_HEALTH.consecutiveFailures = 0;
     SERVICE_HEALTH.backoffAttempt = 0;
-    SERVICE_HEALTH.inCooldown = false;
     // Round C item 1 (TRDD-YG72CYY7): bump the epoch ONLY here — a sleeper
     // waking to a changed epoch was reset under and returns the abort verdict
     // instead of a fresh attempt. A heal (recordServiceSuccess) must not bump
@@ -1243,17 +1293,19 @@ async function checkServiceHealthOrWait(clock?: RetryClock): Promise<string | nu
   // null sends the caller to a fresh request, resurrecting the bug.
   const myEpoch = SERVICE_HEALTH.epoch;
   SERVICE_HEALTH.sleepers++;
+  const mySleeperGeneration = SERVICE_HEALTH.sleeperGeneration;
   SERVICE_HEALTH.backoffAttempt++;
-  SERVICE_HEALTH.inCooldown = true;
   // try/finally: a throwing stderr write must not leak the sleeper count (review L1).
   try {
     process.stderr.write(
       `[circuit-breaker] ${SERVICE_HEALTH.consecutiveFailures} consecutive failures detected — ` +
       `waiting ${delay / 1000}s before retrying (backoff ${backoffAttempt + 1}/${backoffDelays.length})\n`,
     );
-    await new Promise((r) => setTimeout(r, delay));
+    // WHY stoppableSleep: a 60-350 s rung must end at once on --command_timeout; the caller's next request throws the stop.
+    await stoppableSleep(delay, signal);
   } finally {
-    SERVICE_HEALTH.sleepers--;
+    // A test reset after the increment already zeroed the count; decrementing again would go negative (RFDHRB1O).
+    if (mySleeperGeneration === SERVICE_HEALTH.sleeperGeneration) SERVICE_HEALTH.sleepers--;
   }
   // Round C item 1 (TRDD-YG72CYY7): stale sleeper — the breaker was reset
   // under this caller while it waited. Return the abort verdict (the
@@ -1271,7 +1323,6 @@ async function checkServiceHealthOrWait(clock?: RetryClock): Promise<string | nu
     }
     return `SERVER ISSUE DETECTED: the circuit breaker was reset by a concurrent caller while this call waited out its backoff rung; this call aborts instead of making a fresh attempt.`;
   }
-  SERVICE_HEALTH.inCooldown = false;
   return null;
 }
 
@@ -1390,7 +1441,7 @@ export async function chatCompletionWithRetry(
   // Check global service health before attempting. The shared clock (when
   // given) is passed so a call entering under an already-started clock never
   // sleeps a breaker rung that does not fit (N8).
-  const healthAbort = await checkServiceHealthOrWait(options.retryClock);
+  const healthAbort = await checkServiceHealthOrWait(options.retryClock, options.signal);
   if (healthAbort) {
     return {
       content: healthAbort,
@@ -1438,6 +1489,8 @@ export async function chatCompletionWithRetry(
   let callProvider: string | undefined;
 
   while (true) {
+    // A cancelled call starts no new attempt (see the catch below).
+    if (options.signal?.aborted) throw options.signal.reason;
     // A refused wait or a passed deadline ends the retrying here, before a new
     // attempt is started. Under a shared clock this CAN be reached before this
     // call has failed at all (another call closed the window), so the cause
@@ -1464,6 +1517,12 @@ export async function chatCompletionWithRetry(
       // Batch-level heartbeat in rateLimitedParallel keeps MCP alive.
       resp = await chatCompletionSimple(messages, options, deps, clock, call);
     } catch (err) {
+      // WHY this is the FIRST statement of the catch (issue 19 / TRDD-3SNQAGIC): a call cancelled through
+      // options.signal (a losing session-summary racer whose chunk the winner committed) is OUR doing, not a
+      // failure of the model. Everything below would treat it as one: recordServiceFailure() would feed the
+      // GLOBAL circuit breaker (and so sleep every other call), the verdict classifiers could mark a healthy
+      // model run-unusable, and the loop would retry the very request we just cancelled.
+      if (options.signal?.aborted) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
       startRetryClock(clock);
       lastErr = err;
@@ -1643,7 +1702,7 @@ export async function chatCompletionWithRetry(
         process.stderr.write(
           `[model-retry] ${retryModel}: request error: ${errMsg} — retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})\n`,
         );
-        const abort = await checkServiceHealthOrWait(clock);
+        const abort = await checkServiceHealthOrWait(clock, options.signal);
         if (abort) {
           return {
             content: abort,
@@ -1933,7 +1992,7 @@ export async function chatCompletionWithRetry(
       process.stderr.write(
         `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) — retrying (${currentAttempt}/${limit})\n`,
       );
-      const abort = await checkServiceHealthOrWait(clock);
+      const abort = await checkServiceHealthOrWait(clock, options.signal);
       // Round C item 2 (N4): a breaker wait that returned null can still have
       // marked the clock expired (waitFitsClock's refusal side effect); and
       // any wait here can straddle deadlineAt. When the window closed during
@@ -1962,7 +2021,7 @@ export async function chatCompletionWithRetry(
           process.stderr.write(
             `[llm-externalizer] Waiting ${Math.round(EMPTY_RESPONSE_RETRY_DELAY_MS / 1000)}s before retry ${currentAttempt + 1}\n`,
           );
-          await new Promise((r) => setTimeout(r, EMPTY_RESPONSE_RETRY_DELAY_MS));
+          await stoppableSleep(EMPTY_RESPONSE_RETRY_DELAY_MS, options.signal);
         }
         // Round C item 2 (N4, TRDD-YG72CYY7): POST-wait re-check — the gate
         // above evaluated BEFORE the sleep, so a wait that straddled

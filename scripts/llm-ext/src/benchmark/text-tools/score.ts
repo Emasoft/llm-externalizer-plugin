@@ -178,6 +178,13 @@ export interface TextToolScore {
   /** Cases whose pipeline run FAILED outright (isError / seam error). */
   failedCases: number;
   totalCases: number;
+  /**
+   * The subset of `failedCases` in which the model never produced any content
+   * (transport error, HTTP error, empty reply on every attempt) — UNANSWERED, as
+   * opposed to content the pipeline rejected as an echo or invalid output, which
+   * is a wrong answer. Optional: ledger rows written before TRDD-90BXJ2KO lack it.
+   */
+  unansweredCases?: number;
 }
 
 export interface TextToolThresholds {
@@ -200,11 +207,30 @@ export function aggregateTextToolScores(
   caseScores: readonly number[],
   failedCases: number,
   totalCases: number,
+  unansweredCases?: number,
 ): TextToolScore {
   const sum = caseScores.reduce((a, b) => a + b, 0);
   // Failed cases contribute 0 to the mean over the FULL dataset size.
   const meanScore = totalCases === 0 ? 0 : sum / totalCases;
-  return { meanScore, failedCases, totalCases };
+  return { meanScore, failedCases, totalCases, unansweredCases };
+}
+
+/**
+ * The score over ANSWERED cases only (TRDD-90BXJ2KO): unanswered cases leave the
+ * denominator. Failed cases contributed exactly 0 to the sum, so the sum is
+ * recovered as meanScore * totalCases. A score without `unansweredCases` (an
+ * older ledger row) cannot be separated and is returned as stored.
+ */
+export function answeredOnlyTextToolScore(agg: TextToolScore): TextToolScore {
+  const unanswered = agg.unansweredCases;
+  if (typeof unanswered !== "number") return agg;
+  const answered = agg.totalCases - unanswered;
+  return {
+    meanScore: answered <= 0 ? 0 : (agg.meanScore * agg.totalCases) / answered,
+    failedCases: agg.failedCases - unanswered,
+    totalCases: answered,
+    unansweredCases: 0,
+  };
 }
 
 export function passesTextToolThresholds(

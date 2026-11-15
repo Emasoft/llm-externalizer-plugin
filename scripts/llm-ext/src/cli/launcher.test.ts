@@ -10,6 +10,7 @@ import { buildTools } from "../tools/definitions.js";
 import {
   GLOBAL_BOOLEAN_FLAGS,
   GROUPS,
+  hoistLeadingFlags,
   isGroupName,
   levenshtein,
   resolveInvocation,
@@ -297,5 +298,19 @@ describe("levenshtein + suggest", () => {
   it("suggest returns [] beyond the threshold and caps at max candidates", () => {
     expect(suggest("scna", ["scan", "check", "config"], 3, 3)).toEqual(["scan"]);
     expect(suggest("nothing-like-any-of-these", ["scan", "check", "config"])).toEqual([]);
+  });
+});
+
+describe("hoistLeadingFlags", () => {
+  const hoistable = new Set(["--quiet", "--estimate", "--preview"]);
+
+  it("moves leading hoistable flags behind the command words and leaves help in place", () => {
+    expect(hoistLeadingFlags(["--quiet", "scan", "--help"], hoistable)).toEqual(["scan", "--help", "--quiet"]);
+    expect(hoistLeadingFlags(["--help", "--quiet"], hoistable)).toEqual(["--help", "--quiet"]);
+  });
+
+  it("puts the moved flags in front of a -- separator, so they never become positionals", () => {
+    // WHY: classify reads every token after -- as a file name; appending --quiet there would make it one.
+    expect(hoistLeadingFlags(["--quiet", "classify", "filter", "--", "a.txt"], hoistable)).toEqual(["classify", "filter", "--quiet", "--", "a.txt"]);
   });
 });

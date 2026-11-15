@@ -115,6 +115,7 @@ import { FREE_FORBIDDEN_TOOLS, isFreeForbiddenTool } from "./default-profiles.js
 import { MASS_SCOUT_TOOL_NAMES } from "./mass_scouting/mcp-tools.js";
 import { buildTools } from "./tools/definitions.js";
 import { DECISION_SPECS } from "./classifiers/catalog/index.js";
+import { PING_TOOL_NAME } from "./classifiers/commands/ping-flags.js";
 
 // PT-05 (D34): tools that accept only the scouting profile type send completions on a
 // scouting profile's model, not on the active (free) profile's head, so they are never free-forbidden.
@@ -416,7 +417,15 @@ describe("resolveDecl — depth cap", () => {
   });
 });
 
-const COMPLETIONS_LITERAL = "chat/completions";
+// WHY (TRDD-VDH3MDKT): the request paths that count as "a model request leaves this tool" are a NAMED list, not a literal
+// scattered through the walkers. chat/completions is the text transport; alpha/decisions is the classifier transport
+// (classifiers/l0/transport.ts, TRDD-ZB41KG62). A new transport is added here and one test below proves every entry still
+// occurs in src, so a renamed endpoint cannot leave the derivation silently blind.
+const SENDER_MARKERS: readonly string[] = ["chat/completions", "alpha/decisions"];
+/** The first sender marker contained in `text`, else null. */
+function senderMarkerIn(text: string): string | null {
+  return SENDER_MARKERS.find((m) => text.includes(m)) ?? null;
+}
 
 
 // S-2 (restored SAFE half of the memo, fq47 revision): a POSITIVE result is
@@ -465,7 +474,7 @@ function reachesCompletions(file: string, name: string, visiting: Set<string> = 
   let result = false;
   if (resolved) {
     const { literals, idents } = collectLiteralsAndIdentifiers(resolved.node);
-    if (literals.some((l) => l.includes(COMPLETIONS_LITERAL))) {
+    if (literals.some((l) => senderMarkerIn(l) !== null)) {
       result = true;
     } else {
       const pf = resolved.pf;
@@ -660,7 +669,7 @@ const FREE_SERVED_LLM_TOOLS: Record<string, string> = {
   topics: "text tool on the core ensemble pipeline; served from the free pool",
   sem_deduplicate: "text tool on the core ensemble pipeline; served from the free pool",
   describe: "text tool on the core ensemble pipeline; served from the free pool",
-  session_summary: "single bounded completion per session; served from the free pool",
+  session_summary: "chunked summary: several free models may be raced on a one-chunk run or hedged on a slow chunk (raceSingleChunk, raceForFirstOk), and the rest fall back in a chain; every model comes from selectModels (assertFreeOnlyModel, biggest context first), free only, never the profile head",
   batch_check: "per-file checks through the core pipeline; free rotation covers it",
   scan_folder: "per-file scan through the core pipeline; free rotation covers it",
   search_existing_implementations: "core ensemble pipeline; served from the free pool",
@@ -668,10 +677,21 @@ const FREE_SERVED_LLM_TOOLS: Record<string, string> = {
   check_references: "core ensemble pipeline; served from the free pool",
   check_imports: "bounded JSON completions through the core client; served from the free pool",
   check_against_specs: "per-file checks through the core pipeline; free rotation covers it",
-  cluster_synonyms: "completions with profile fallback; served from the free pool",
+  cluster_synonyms: "thousands of small 4K-capped, reasoning-off completions: rotates the free pool in free mode, walks the profile chain (chatCompletionWithProfileFallback) otherwise",
   security_triage_benchmark: "benchmark picks its own candidate models, never the profile head",
   search_existing_benchmark: "benchmark picks its own candidate models, never the profile head",
   check_tool_replacements: "qualification probe picks its own candidate models, never the profile head",
+}
+
+/** Tools the task cards call "senders whose sender is injected": their dispatch case takes an injectable
+ *  catalog fetch (`opts.modelCatalogFetch`) and makes NO model request at all (a public catalog read, no key, no
+ *  token). Reading assessModelById / runCheckModelHealth / runDiscoverNewArrivals showed no completions path, so the
+ *  free-mode decision is explicit: served, because there is nothing to bill and no profile head is used.
+ *  (TRDD-VDH3MDKT item 2.) */
+const CATALOG_ONLY_TOOLS: Record<string, string> = {
+  assess_model: "public catalog fetch via the injected opts.modelCatalogFetch; no model request, served on free",
+  check_model_health: "one public catalog fetch diffed against the seeded baseline; no model request, served on free",
+  discover_new_models: "one public catalog fetch diffed against the seeded snapshot; no model request, served on free",
 }
 
 /** `case "<tool>":` label -> that case's body text, for a dispatch function
@@ -700,7 +720,8 @@ function caseBodies(file: string, fn: string, indent: number): Map<string, strin
 /** The first identifier in `blob` whose declaration reaches chat/completions
  *  (or "chat/completions" itself when the literal is in the blob), else null. */
 function blobSender(file: string, blob: string): string | null {
-  if (blob.includes(COMPLETIONS_LITERAL)) return COMPLETIONS_LITERAL;
+const direct = senderMarkerIn(blob);
+  if (direct) return direct;
   const pf = PER_FILE.get(file)!;
   for (const id of new Set(blob.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
     if (!pf.decls.has(id) && !pf.imports.has(id) && !pf.reExports.has(id)) continue;
@@ -721,6 +742,18 @@ describe("FREE_FORBIDDEN_TOOLS — per-tool derivation beyond the CLI-routed too
     const via = blobSender(file, blob);
     if (via) derived.set(tool, via);
   }
+
+  // WHY (TRDD-VDH3MDKT): caseBodies() finds cases by indentation regex; a case it misses (reformatting, nesting, a
+  // fall-through) would simply never be checked above and every test would stay green. Every catalog tool must be
+  // accounted for by exactly one source: a dispatch case derived above, a CLI-routed mass-scout tool (Section 2), or a
+  // classifier tool (registry-derived). Compared as sets AND by count, so a miss on either side fails with the names.
+  it("every catalog tool is accounted for by a derived dispatch case, a mass-scout tool or a classifier tool (a parse miss fails)", () => {
+    const catalog = (buildTools("") as Array<{ name: string }>).map((t) => t.name);
+    const accounted = new Set<string>([...cases.keys(), ...MASS_SCOUT_TOOL_NAMES, ...CLASSIFIER_TOOLS]);
+    expect(catalog.filter((n) => !accounted.has(n)), "catalog tools with no derived dispatch case (the derivation missed them)").toEqual([]);
+    expect([...accounted].filter((n) => !catalog.includes(n)), "derived cases that are not catalog tools").toEqual([]);
+    expect(accounted.size).toBe(new Set(catalog).size);
+  });
 
   it("the derivation is not vacuous: it sees the known senders", () => {
     expect(cases.size).toBeGreaterThan(20);
@@ -744,15 +777,35 @@ describe("FREE_FORBIDDEN_TOOLS — per-tool derivation beyond the CLI-routed too
       expect(isFreeForbiddenTool(tool), `${tool} is listed as free-served but is free-forbidden — drop it`).toBe(false);
     }
   });
+
+  // TRDD-VDH3MDKT item 2: the three model-qualification tools are named, each with its free-mode decision. They stay
+  // OUT of FREE_SERVED_LLM_TOOLS because they are not senders; this test fails if one becomes a sender (its case or
+  // anything it reaches gains a request path) or loses its injected catalog fetch, forcing a new free-mode decision.
+  it("the catalog-only tools are named: injected catalog fetch, no request path, not free-forbidden", () => {
+    for (const tool of Object.keys(CATALOG_ONLY_TOOLS)) {
+      const c = cases.get(tool);
+      expect(c, `${tool} has no derived dispatch case`).toBeDefined();
+      expect(c!.blob, `${tool} no longer takes the injected opts.modelCatalogFetch`).toContain("opts.modelCatalogFetch");
+      expect(derived.get(tool), `${tool} now reaches a model request (${derived.get(tool)}) — move it to FREE_SERVED_LLM_TOOLS or FREE_FORBIDDEN_TOOLS with a reason`).toBeUndefined();
+      expect(isFreeForbiddenTool(tool), `${tool} is listed as catalog-only (served on free) but is free-forbidden`).toBe(false);
+    }
+  });
+
+  it("every named sender marker still occurs in non-test src, so a renamed endpoint cannot blind the derivation", () => {
+    const srcText = CODE_FILES.filter((f) => !f.endsWith(".test.ts")).map((f) => readFileSync(f, "utf-8")).join("\n");
+    for (const marker of SENDER_MARKERS) {
+      expect(srcText.includes(marker), `sender marker ${JSON.stringify(marker)} occurs in no non-test src file — renamed endpoint? update SENDER_MARKERS`).toBe(true);
+    }
+  });
 });
 
 // PF-10 (plan section 15, KV2WCFCS conflict). WHY a separate category and not FREE_FORBIDDEN_TOOLS: a classifier tool sends decisions requests on a classifier profile's model, which is billed by design (D2) and has no free tier, so the free-only rule cannot apply to it; but a tool that CAN send a decisions request must still be listed here, so a new one cannot slip in unnoticed.
-// Derived from the catalog registry (one `classify_<id>` tool per registered decision spec, the naming rule of unregisteredClassifyTools), never typed by hand.
-const CLASSIFIER_TOOLS: ReadonlySet<string> = new Set(DECISION_SPECS.map((spec) => `classify_${spec.id.replaceAll("-", "_")}`));
+// Derived from the catalog registry (one `classify_<id>` tool per registered decision spec, the naming rule of unregisteredClassifyTools), never typed by hand. Ping is the one classifier tool that is not a decision spec, so its name comes from PING_TOOL_NAME.
+const CLASSIFIER_TOOLS: ReadonlySet<string> = new Set([...DECISION_SPECS.map((spec) => `classify_${spec.id.replaceAll("-", "_")}`), PING_TOOL_NAME]);
 
 describe("CLASSIFIER_TOOLS — exempt from the free-only rule: classifiers are paid by design (D2)", () => {
   it("is derived from the registry and not empty", () => {
-    expect(CLASSIFIER_TOOLS.size).toBe(DECISION_SPECS.length);
+    expect(CLASSIFIER_TOOLS.size).toBe(DECISION_SPECS.length + 1); // + PING_TOOL_NAME, the one classifier tool that is not a decision spec
     expect(CLASSIFIER_TOOLS.has("classify_filter")).toBe(true);
   });
 

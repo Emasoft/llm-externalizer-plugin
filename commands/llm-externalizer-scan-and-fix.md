@@ -494,6 +494,7 @@ On any error: `[FAILED] llm-externalizer-scan-and-fix — <one-line reason>`.
 
 - `answer_mode` is chosen by the command itself: `0` (per-file) by default, `1` (per-group) when `--file-list` contains `---GROUP:id---` markers, on `scan_folder` always `0`. Never `2`. Do NOT accept overrides from `$ARGUMENTS`.
 - `output_dir` is hardcoded to `$MAIN_ROOT/reports/llm-externalizer`. Do NOT accept overrides from `$ARGUMENTS`.
+- Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report.
 - You MUST NOT summarize any report content. Only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the whole design.

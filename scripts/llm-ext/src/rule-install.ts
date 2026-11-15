@@ -17,6 +17,10 @@
  *     this fails (returns a status object instead).
  *   - CONTENT-GATED: writes only when the destination is absent or differs, so
  *     repeated server starts cause zero churn after the first sync.
+ *   - VERSION-GATED: the rule's first line carries `<!-- llm-ext-rule-version: N -->`; an
+ *     installed rule with a HIGHER N than the bundled one is kept (an older plugin run
+ *     after a newer one must not downgrade it). Equal/lower N or no/malformed marker
+ *     overwrites when content differs.
  *   - ATOMIC: tmp-file + rename, so a crash mid-write never leaves a partial.
  *   - GUARDED: refuses to write anywhere except under $HOME, an explicit
  *     $CLAUDE_CONFIG_DIR, or the OS temp dir (os.tmpdir(), the test sandbox) —
@@ -39,6 +43,20 @@ import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const RULE_FILENAME = "use-llm-externalizer.md";
+
+// Version marker on the FIRST line of the bundled rule: `<!-- llm-ext-rule-version: N -->`.
+// WHY: an older plugin version run after a newer one used to overwrite the newer rule with
+// older text. An installed rule with a HIGHER N than the bundled one is now left untouched.
+// FUTURE RULE EDITS MUST BUMP N in rules/use-llm-externalizer.md, or the edit never replaces
+// an installed copy that carries the same number (differing content with equal N is still
+// overwritten, but a bump is what protects it from an older plugin).
+const RULE_VERSION_RE = /^<!-- llm-ext-rule-version: (\d+) -->(?:\r?\n|$)/;
+
+/** Version from the first line; null when absent or malformed (counts as no marker). */
+function parseRuleVersion(text: string): number | null {
+  const m = RULE_VERSION_RE.exec(text);
+  return m ? Number(m[1]) : null;
+}
 
 /**
  * Resolve the bundled rule shipped with the plugin. Prefers $CLAUDE_PLUGIN_ROOT
@@ -152,7 +170,18 @@ export function installUsageRule(
   const existed = existsSync(dest);
   if (existed) {
     try {
-      if (readFileSync(dest, "utf-8") === desired) return { status: "unchanged", dest };
+      const installed = readFileSync(dest, "utf-8");
+      if (installed === desired) return { status: "unchanged", dest };
+      // Keep a NEWER installed rule: see the RULE_VERSION_RE note on bumping.
+      const installedVersion = parseRuleVersion(installed);
+      const bundledVersion = parseRuleVersion(desired);
+      if (installedVersion !== null && bundledVersion !== null && installedVersion > bundledVersion) {
+        return {
+          status: "unchanged",
+          dest,
+          detail: `installed rule version ${installedVersion} is newer than bundled ${bundledVersion}; kept`,
+        };
+      }
     } catch {
       /* unreadable destination — fall through and overwrite it. */
     }

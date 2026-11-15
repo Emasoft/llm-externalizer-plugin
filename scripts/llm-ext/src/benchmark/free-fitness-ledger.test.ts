@@ -58,6 +58,18 @@ describe("free-fitness ledger", () => {
     expect(passedFitnessModelIds("mass_scout", hash).size).toBe(0);
   });
 
+  it("a same-day INCONCLUSIVE never replaces a conclusive row, but a conclusive one replaces anything (TRDD-FUHTNE04)", () => {
+    const hash = massScoutThroughputHash(DEFAULT_THROUGHPUT_PARAMS);
+    recordFitnessVerdict("mass_scout", "v/fast:free", hash, { pass: true, inconclusive: false });
+    recordFitnessVerdict("mass_scout", "v/fast:free", hash, { pass: false, inconclusive: true });
+    expect(passedFitnessModelIds("mass_scout", hash).has("v/fast:free")).toBe(true);
+    recordFitnessVerdict("mass_scout", "v/fast:free", hash, { pass: false, inconclusive: false });
+    expect(passedFitnessModelIds("mass_scout", hash).has("v/fast:free")).toBe(false);
+    recordFitnessVerdict("mass_scout", "v/flaky:free", hash, { pass: false, inconclusive: true });
+    recordFitnessVerdict("mass_scout", "v/flaky:free", hash, { pass: true, inconclusive: false });
+    expect(passedFitnessModelIds("mass_scout", hash).has("v/flaky:free")).toBe(true);
+  });
+
   it("a stale-hash PASS never authorizes (A8) — a retuned benchmark re-probes", () => {
     const oldHash = massScoutThroughputHash({ ...DEFAULT_THROUGHPUT_PARAMS, calls: 7 });
     recordFitnessVerdict("mass_scout", "v/fast:free", oldHash, { pass: true, inconclusive: false });

@@ -208,6 +208,28 @@ describe("attention", () => {
 
 // SP-07 partial-run cases (plan §5 L2-05, hardening point 6): per-item spec, so a lost request invalidates only the candidates it carried, with the fan-out's reason, and raises attention.
 // Abort contract: a request in flight when Ctrl-C arrives rejects and is recorded "aborted" (l2/abort.ts:72); requests not yet started are "skipped", reported "aborted" too (l2/abort.ts:63, l2/fan-out.ts aborted/skipped branch); a reply that already arrived is kept (l2/abort.ts:67-68). merged.aborted mirrors the caller's signal (l2/fan-out.ts, last line).
+// IN-09 (TRDD-2N4JVQI8): the text form, from a REAL projection through the real spec.renderText.
+describe("IN-09 rank: text form", () => {
+  const i = parse({ query: "q", candidates: [{ id: "a", text: "1" }, { id: "b", text: "2" }, { id: "c", text: "3" }] });
+  const answers = validateAnswers(questionsOf(spec.build(i, T)), { rank_i0: sc(1), rank_i1: sc(4), rank_i2: sc(3) }, SCORE_POLICY).answers;
+  it("prints `relevance  id` lines, best first", () => {
+    const r = spec.project(answers, i, T, { truncated: false }) as RankResult;
+    expect(spec.renderText!(r, {}).lines).toEqual(["1.00  b", "0.75  c", "0.25  a"]);
+  });
+  it("prints (no candidates) when --keep-at drops every one", () => {
+    const r = spec.project(answers, i, { ...T, "keep-at": 1.01 }, { truncated: false }) as RankResult;
+    expect(spec.renderText!(r, {}).lines).toEqual(["(no candidates)"]);
+  });
+  it("adds the chunk note (N chunks, best lines A-B) for a candidate judged in parts", () => {
+    const r = spec.project(answers, i, T, { truncated: false, chunks: { rank_i1: { chunks: 4, best_chunk: 2, best_lines: [5, 9] } } }) as RankResult;
+    expect(spec.renderText!(r, {}).lines[0]).toBe("1.00  b (4 chunks, best lines 5-9)");
+    expect(spec.renderText!(r, {}).lines[1]).toBe("0.75  c");
+  });
+  it("names a candidate with no answer and why", () => {
+    const r = { ...(spec.project(answers, i, T, { truncated: false }) as RankResult), invalid: [{ id: "z", reason: "aborted" }] };
+    expect(spec.renderText!(r, {}).lines).toContain("? no answer: z (aborted)");
+  });
+});
 describe("SP-07 rank: partial failure through the real planner and fan-out", () => {
   // Why maxQuestionsPerRequest 1 (a real ModelLimits field, l2/planner.ts:22): json candidates are atomic units that the planner packs into ONE request; one question per request makes each candidate its own request.
   const ONE_EACH = { limits: { maxQuestionsPerRequest: 1 } };

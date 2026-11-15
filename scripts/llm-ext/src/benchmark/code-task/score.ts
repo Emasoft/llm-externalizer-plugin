@@ -339,6 +339,20 @@ export function aggregateScores(cases: readonly CaseScore[]): CodeAuditScore {
   };
 }
 
+/**
+ * The score over ANSWERED cases only (TRDD-90BXJ2KO): a case the pipeline never
+ * produced a report for is dropped, not scored as an empty accusation, so a
+ * provider outage does not read as missed defects. Used for the stored quality
+ * verdict; the raw score keeps every case for the report.
+ */
+export function answeredOnlyScore(score: CodeAuditScore): CodeAuditScore {
+  // A ledger row is untrusted JSON: one without a cases list (a hand-written or
+  // truncated row) cannot be separated and is judged as stored.
+  // Nothing to drop: keep the stored aggregate rather than re-deriving it from `cases`.
+  if (!Array.isArray(score.cases) || !score.cases.some((c) => c.failed)) return score;
+  return aggregateScores(score.cases.filter((c) => !c.failed));
+}
+
 export interface CodeAuditThresholds {
   /** Mean per-case F1 — the primary bar. */
   minMacroF1: number;

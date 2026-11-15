@@ -151,6 +151,7 @@ Never treat the dispatch call's own return value as the fixer's answer — it is
 - Exactly ONE fixer dispatch per invocation. No parallel fanout (`scan-and-fix` is for that).
 - The orchestrator MUST NOT `Read` the report, the source files, or the fixer summary. Only `Bash` validation + one `Agent` call + one user-facing line.
 - No commits, no pushes. The user reviews the diff and commits themselves.
+- Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 
 ## Three-surface compliance: by-design slash-only (GAP-9)
 

@@ -11,7 +11,7 @@ import {
   type ScanFolderCase,
 } from "./scan-folder/dataset.js";
 import { runHqScanQualityBenchmark } from "./hq-scan-quality.js";
-import { hqScanQualityHash, freeFitnessUnlocked } from "./free-fitness-ledger.js";
+import { hqScanQualityHash, freeFitnessUnlocked, loadFitnessCache } from "./free-fitness-ledger.js";
 
 const FILE_DECISIONS = SCAN_FOLDER_CASES.reduce((n, c) => n + scannedFilesFor(c).length, 0);
 
@@ -107,6 +107,85 @@ describe("hq-scan quality benchmark (addendum H part 2)", () => {
     expect(r.pass).toBe(false);
     expect(r.microRecall).toBe(0);
     expect(freeFitnessUnlocked("high_quality_scan")).toBe(false);
+  });
+
+  it("a provider 429 on every call is INCONCLUSIVE, never recorded as a fail verdict (TRDD-FUHTNE04)", async () => {
+    const rateLimited = (async () => ({
+      ok: false,
+      status: 429,
+      json: async () => ({}),
+      text: async () => "rate limited",
+    })) as unknown as FetchImpl;
+    const r = await runHqScanQualityBenchmark("v/limited:free", {
+      apiKey: "k",
+      datasetHash: datasetFingerprint(),
+      fetchImpl: rateLimited,
+    });
+    expect(r.pass).toBe(false);
+    expect(r.inconclusive).toBe(true);
+    expect(r.summaryLine).toMatch(/INCONCLUSIVE/);
+    const rows = Object.values(loadFitnessCache("high_quality_scan"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.score).toEqual({ pass: false, inconclusive: true });
+  });
+
+  it("an empty model reply is a model answer, so a silent model still FAILS conclusively", async () => {
+    const r = await runHqScanQualityBenchmark("v/empty:free", {
+      apiKey: "k",
+      datasetHash: datasetFingerprint(),
+      fetchImpl: fakeOpenRouter(() => ""),
+    });
+    expect(r.pass).toBe(false);
+    expect(r.inconclusive).toBe(false);
+  });
+
+  // The next tests drive the REAL bench-runner, so the failure strings
+  // isTransientFailureReason matches are the ones bench-runner.ts really writes.
+  const status = (code: number): FetchImpl =>
+    (async () => ({ ok: false, status: code, json: async () => ({}), text: async () => "x" })) as unknown as FetchImpl;
+
+  it("a non-retryable 400 on every call is a conclusive FAIL, not inconclusive", async () => {
+    const r = await runHqScanQualityBenchmark("v/bad:free", { apiKey: "k", datasetHash: datasetFingerprint(), fetchImpl: status(400) });
+    expect(r.pass).toBe(false);
+    expect(r.inconclusive).toBe(false);
+  });
+
+  it("a network error (thrown fetch) on every call is INCONCLUSIVE", async () => {
+    const thrown = (async () => {
+      throw new Error("fetch failed");
+    }) as unknown as FetchImpl;
+    const r = await runHqScanQualityBenchmark("v/offline:free", { apiKey: "k", datasetHash: datasetFingerprint(), fetchImpl: thrown });
+    expect(r.inconclusive).toBe(true);
+  });
+
+  /** Answer with `answer`, except a 429 on the first call. */
+  function oneRateLimit(answer: (body: string) => string): FetchImpl {
+    const ok = fakeOpenRouter(answer);
+    let first = true;
+    return (async (url: string, init: { body: string }) => {
+      if (first) {
+        first = false;
+        return { ok: false, status: 429, json: async () => ({}), text: async () => "rate limited" };
+      }
+      return (ok as unknown as (u: string, i: { body: string }) => Promise<unknown>)(url, init);
+    }) as unknown as FetchImpl;
+  }
+
+  it("one 429 cannot rescue a model that fails the bar even in the best case — conclusive FAIL", async () => {
+    const r = await runHqScanQualityBenchmark("v/silent2:free", { apiKey: "k", datasetHash: datasetFingerprint(), fetchImpl: oneRateLimit(() => "NO_MATCH") });
+    expect(r.failures.length).toBe(1);
+    expect(r.pass).toBe(false);
+    expect(r.inconclusive).toBe(false);
+  });
+
+  it("a same-day inconclusive rerun never overwrites an earlier PASS row", async () => {
+    await runHqScanQualityBenchmark("v/oracle:free", { apiKey: "k", datasetHash: datasetFingerprint(), fetchImpl: fakeOpenRouter(ORACLE) });
+    const r = await runHqScanQualityBenchmark("v/oracle:free", { apiKey: "k", datasetHash: datasetFingerprint(), fetchImpl: status(429) });
+    expect(r.inconclusive).toBe(true);
+    const rows = Object.values(loadFitnessCache("high_quality_scan"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.score).toEqual({ pass: true, inconclusive: false });
+    expect(freeFitnessUnlocked("high_quality_scan")).toBe(true);
   });
 
   it("an oracle pass records the unlock verdict under the CURRENT corpus hash", async () => {

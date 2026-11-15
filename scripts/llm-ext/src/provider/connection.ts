@@ -9,7 +9,7 @@
  */
 
 import { assertFreeOnlyModel, withinPriceCeiling, type ResolvedRoute } from "../config.js";
-import { assertModelValidated } from "../benchmark/validated.js";
+import { assertModelValidated, IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
 import { ctxStore } from "../usage-history.js";
 import { detectLMStudio } from "./lmstudio.js";
 import { detectEndpointFlavor } from "./endpoint-flavor.js";
@@ -23,6 +23,116 @@ import type { ConnectionSetup, ProviderDeps } from "./types.js";
 // no compiler/lint signal across the two files -- exporting the exact prefix
 // keeps the two in lockstep by construction instead of by convention.
 export const PRICE_CEILING_REFUSAL_PREFIX = "refusing to send auto-picked paid model ";
+
+
+/** Start of assertFreeOnlyModel (config.ts) refusal text; pinned by estimate-gates.test.ts. */
+export const FREE_ONLY_REFUSAL_PREFIX = "free_only cost-safety: ";
+
+/** Billability of a model send: the route (if any) decides, else the primary
+ *  backend. Shared with `--estimate` (TRDD-4TTFUIL0) so both judge it alike. */
+export function modelIsBillable(
+  route: ResolvedRoute | null | undefined,
+  backend: { billable: boolean },
+): boolean {
+  return route ? !route.isLocal && !route.isFreeProvider : backend.billable;
+}
+
+/**
+ * The two send-time gates for an AUTO-PICKED model, shared by resolveConnection
+ * (real sends) and the `--estimate` dry-run (TRDD-4TTFUIL0). WHY shared: the
+ * estimate path used to skip both, so it quoted a normal cost for a run the
+ * real command refuses; duplicating the checks there would let them drift, so
+ * both callers run this one function.
+ *
+ * 1. IRON RULE (TRDD-8b6b3646): a PAID model may only be SENT by a tool it has
+ *    passed the benchmark for. Fires only with a tool usage-context (a real tool
+ *    invocation). A hand-listed MANUAL model is never refused (TRDD-FDI9NYAS
+ *    D3b: "all manual, no benchmarks or updates").
+ * 2. D3c send-time price ceiling: an auto-picked PAID model must be priced under
+ *    the ceiling at the moment of send. NOT gated behind `toolCtx`: cost-safety
+ *    holds on every send. A cold/absent price cache FAILS CLOSED.
+ */
+export function assertAutoPickedModelAllowed(
+  model: string,
+  toolCtx: string | undefined,
+  billable: boolean,
+  deps: Pick<
+    ProviderDeps,
+    "isManualModel" | "getModelPricePerMillion" | "getEnsemblePriceCeilingUsd"
+  >,
+): void {
+  if (toolCtx && !deps.isManualModel(model)) assertModelValidated(model, toolCtx, billable);
+  if (billable && !deps.isManualModel(model)) {
+    const price = deps.getModelPricePerMillion(model);
+    const ceiling = deps.getEnsemblePriceCeilingUsd();
+    if (!price || !withinPriceCeiling(price, ceiling)) {
+      throw new Error(
+        price
+          ? `${PRICE_CEILING_REFUSAL_PREFIX}'${model}': price ` +
+            `($${price.inputDollarsPerMillion}/M in, $${price.outputDollarsPerMillion}/M out) ` +
+            `exceeds the $${ceiling}/M ceiling. No API call was made, $0 spent.`
+          : `${PRICE_CEILING_REFUSAL_PREFIX}'${model}': no recorded price data ` +
+            `for it (cold/absent price cache). No API call was made, $0 spent.`,
+      );
+    }
+  }
+}
+
+/**
+ * Every send-time refusal a MODEL can meet, in the order resolveConnection
+ * applies them: free_only cost-safety, then the IRON RULE and the price ceiling.
+ * ONE function used by the real send and by `--estimate` (TRDD-4TTFUIL0), so the
+ * estimate cannot quote a run for a model that this send refuses.
+ */
+export function assertSendGates(
+  model: string,
+  route: ResolvedRoute | null | undefined,
+  backend: { billable: boolean },
+  toolCtx: string | undefined,
+  deps: Pick<
+    ProviderDeps,
+    "isFreeOnly" | "isManualModel" | "getModelPricePerMillion" | "getEnsemblePriceCeilingUsd"
+  >,
+): void {
+  const billable = modelIsBillable(route, backend);
+  assertFreeOnlyModel(deps.isFreeOnly(), billable, model, route ? route.isFreeProvider : false);
+  assertAutoPickedModelAllowed(model, toolCtx, billable, deps);
+}
+
+/**
+ * The refusal message a real send would raise for this model, or null when the
+ * send is allowed. Only the three deliberate refusals are returned; anything
+ * else (a corrupt ledger, a TypeError) propagates unchanged -- an estimate must
+ * never relabel a defect as "would be refused" (TRDD-4TTFUIL0 review).
+ */
+export function sendRefusal(
+  model: string,
+  toolCtx: string | undefined,
+  deps: Pick<
+    ProviderDeps,
+    | "isFreeOnly"
+    | "isManualModel"
+    | "getModelPricePerMillion"
+    | "getEnsemblePriceCeilingUsd"
+    | "getBackend"
+    | "routeForModel"
+  >,
+): string | null {
+  try {
+    assertSendGates(model, deps.routeForModel(model), deps.getBackend(), toolCtx, deps);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "";
+    if (
+      msg.startsWith(FREE_ONLY_REFUSAL_PREFIX) ||
+      msg.startsWith(IRON_RULE_REFUSAL_PREFIX) ||
+      msg.startsWith(PRICE_CEILING_REFUSAL_PREFIX)
+    ) {
+      return msg;
+    }
+    throw err;
+  }
+  return null;
+}
 
 /**
  * Universal connection resolver — single source of truth for endpoint URL,
@@ -70,15 +180,6 @@ export async function resolveConnection(
   // differently here is what produced the regression: `!route.isFreeProvider`
   // alone marked a routed LOCAL model billable, so free_only refused an ollama
   // model that cannot cost anything. One rule, two call sites, no drift.
-  const billable = route
-    ? !route.isLocal && !route.isFreeProvider
-    : backend.billable;
-  assertFreeOnlyModel(
-    deps.isFreeOnly(),
-    billable,
-    model,
-    route ? route.isFreeProvider : false,
-  );
   // IRON RULE (TRDD-8b6b3646): a PAID OpenRouter model may only be SENT by a tool
   // it has passed the benchmark for (or a harder one). Fires ONLY when a tool
   // usage-context is present — i.e. a real tool invocation (set once at the
@@ -92,39 +193,11 @@ export async function resolveConnection(
   // exists to stop an AUTO-PICKED id from being sent with no proof it works;
   // a hand-listed id is the user's own choice, "all manual, no benchmarks or
   // updates" (USER spec 3.1), so no benchmark ledger applies to it.
-  const toolCtx = ctxStore.getStore()?.tool;
-  if (toolCtx && !deps.isManualModel(model)) assertModelValidated(model, toolCtx, billable);
-  // D3c send-time price check (TRDD-FDI9NYAS): an AUTO-PICKED PAID model must
-  // still be priced under the ceiling at THE MOMENT OF SEND — a provider can
-  // raise its price after a model was admitted to the pool, and the
-  // benchmark/pick-stage price check (D3a) is a snapshot at admission time,
-  // not a standing guarantee. Same `!isManualModel` exemption as the
-  // benchmark gate above: the user's own hand-listed model is manual, "no
-  // price gate on hand-listed models" (USER "No, manual is manual").
-  //
-  // Deliberately NOT gated behind `toolCtx` (unlike assertModelValidated
-  // above): cost-safety must hold on EVERY send, tool context or not — a
-  // context-less sender (a benchmark bench-runner calling chatCompletion*
-  // directly, outside dispatchCallTool's withUsageContext wrapper) must not
-  // become a way around this gate just by never setting one.
-  //
-  // A cold/absent price cache FAILS CLOSED: `getModelPricePerMillion`
-  // returns null when there is no recorded price, and `null` refuses here —
-  // refusing costs nothing, sending blind can cost real money.
-  if (billable && !deps.isManualModel(model)) {
-    const price = deps.getModelPricePerMillion(model);
-    const ceiling = deps.getEnsemblePriceCeilingUsd();
-    if (!price || !withinPriceCeiling(price, ceiling)) {
-      throw new Error(
-        price
-          ? `${PRICE_CEILING_REFUSAL_PREFIX}'${model}': price ` +
-            `($${price.inputDollarsPerMillion}/M in, $${price.outputDollarsPerMillion}/M out) ` +
-            `exceeds the $${ceiling}/M ceiling. No API call was made, $0 spent.`
-          : `${PRICE_CEILING_REFUSAL_PREFIX}'${model}': no recorded price data ` +
-            `for it (cold/absent price cache). No API call was made, $0 spent.`,
-      );
-    }
-  }
+  // One shared function (TRDD-4TTFUIL0): `--estimate` runs the same free_only,
+  // IRON RULE and price-ceiling gates through assertSendGates, so it reports every
+  // refusal this send would raise for the model (the chain walk and ensemble drop
+  // refused entries; the estimate shows them as dropped).
+  assertSendGates(model, route, backend, ctxStore.getStore()?.tool, deps);
   // A routed model uses ITS provider's key, never the primary's. Sending b.ai a
   // model with the OpenRouter key (or vice versa) is both a hard auth failure and
   // a credential leak to the wrong vendor.

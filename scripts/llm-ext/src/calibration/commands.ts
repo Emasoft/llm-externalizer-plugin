@@ -12,6 +12,7 @@ import { pendingCause } from "./phase-c.js";
 import { loadProgress, progressPath, readQueue, enqueueUnlocked, withStateLock, type Progress } from "./state.js";
 import { managedProfileModels } from "./triggers.js";
 import type { BrokerEngine } from "../broker/protocol.js";
+import { snapshot } from "../governor/client.js";
 
 /** The managed profiles naming `model`, and the engine they serve it with (refused when two disagree). */
 export function engineOf(profiles: Readonly<Record<string, Profile>>, model: string): { engine: BrokerEngine; profiles: string[] } | { error: string } {
@@ -42,7 +43,7 @@ export function queueManual(dir: string, profiles: Readonly<Record<string, Profi
 export async function calibrationStatusText(dir: string, profiles: Readonly<Record<string, Profile>>): Promise<string> {
   const lines: string[] = [];
   const runner = await liveCalibrator(dir);
-  lines.push(runner ? `calibration runner: pid ${runner.pid} (version ${runner.version}, since ${runner.startedAt})` : "calibration runner: not running");
+  lines.push(runner ? `calibration runner: pid ${runner.pid} (version ${runner.version}, since ${runner.startedAt})${governorWaitText(runner.pid)}` : "calibration runner: not running");
   const queue = readQueue(dir);
   const seen = new Set<string>();
   for (const [name, p] of Object.entries(managedProfileModels(profiles))) {
@@ -101,6 +102,25 @@ export async function calibrationStatusText(dir: string, profiles: Readonly<Reco
 }
 
 
+/**
+ * Governor D13: a runner queued for a governor grant (a cal server load, or a calibration request) is named the way a
+ * memory wait is, "waiting for ... since ...", with the reason the governor last gave that pid. From a lockless read;
+ * a governor that cannot be read says so instead of hiding the wait.
+ */
+function governorWaitText(pid: number): string {
+  try {
+    const s = snapshot();
+    return s.waiters
+      .filter((w) => w.holder.pid === pid)
+      .map((w) => {
+        const why = s.lastDenial !== null && s.lastDenial.pid === pid && s.lastDenial.kind === w.kind ? s.lastDenial.reason : "queued behind other requests";
+        return `; ${w.kind === "load" ? "its cal server load" : "a calibration request"} waiting for the local inference governor since ${new Date(w.since).toISOString()} (${why})`;
+      })
+      .join("");
+  } catch (err) {
+    return `; the local inference governor cannot be read: ${(err as Error).message}`;
+  }
+}
 function phasesText(prog: Progress): string {
   return METHOD_PHASES.map((ph) => `${ph} ${prog.phases[ph] ?? "pending"}`).join(", ");
 }

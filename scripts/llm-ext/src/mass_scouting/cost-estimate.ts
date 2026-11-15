@@ -107,6 +107,12 @@ export interface JobEstimateOptions {
   max_context_pct_scout?: number;
   /** Override `DEFAULT_MAX_CONTEXT_PCT_REGISTER`. */
   max_context_pct_register?: number;
+  /**
+   * P9 local: the per-file body cap from the calibrated input share (scout.ts inputCapBytes; per file because the
+   * user frame holds its basename). When set it replaces both percentage caps: a local model has no register cap of
+   * its own, and the share is the scout run's real cap.
+   */
+  scout_cap_for?: (row: RegistryRow) => number;
 }
 
 export interface BucketEstimate {
@@ -269,13 +275,13 @@ export function estimateJobCost(
 
   for (const row of rows) {
     const bytes = row.file_size_bytes;
-    if (bytes > registerCap) {
+    if (opts.scout_cap_for === undefined && bytes > registerCap) {
       // Should be impossible in practice — caller registered with a cap
       // already. Counted separately so the report can flag the anomaly.
       overRegisterCap++;
       continue;
     }
-    if (bytes > scoutCap) {
+    if (bytes > (opts.scout_cap_for ? opts.scout_cap_for(row) : scoutCap)) {
       skippedTooBig++;
       continue;
     }

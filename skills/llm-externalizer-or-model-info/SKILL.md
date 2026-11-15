@@ -3,8 +3,8 @@ name: llm-externalizer-or-model-info
 description: |-
   Reference for querying OpenRouter model details — supported params, pricing,
   latency, uptime, quantization. Real invocation path is the
-  `llm-ext or-model-info --model <id>` CLI (also `or-model-info-table` for a
-  colored table, `or-model-info-json` for raw JSON); this skill is loaded as
+  `llm-ext models info <id>` CLI (the flat-only `or-model-info-table` gives a
+  colored table, `or-model-info-json` raw JSON); this skill is loaded as
   background reference for those, not a standalone slash command.
 argument-hint: "--model <model-id>"
 effort: low
@@ -17,8 +17,7 @@ user-invocable: false
 
 Query OpenRouter's `/v1/models/{exact_id}/endpoints` for a specific model and display
 context length, pricing, **supported request-body parameters**, quantization, uptime,
-latency, and throughput. Uses the LLM Externalizer CLI (not the MCP tool) so it works
-from subagents — MCP tools from plugins are not available in subagent contexts.
+latency, and throughput. Uses the `llm-ext` CLI, so it works from subagents.
 
 ## Prerequisites
 
@@ -34,12 +33,12 @@ Copy this checklist and track your progress:
 1. [ ] Parse the user's prompt for the **exact OpenRouter model id** —
        case-sensitive, vendor-prefixed, with any `:free` / `:thinking` / `:beta`
        suffix. Then pick the command by desired output format:
-       - Colored terminal table → `or-model-info-table`
-       - Markdown report (default text) → `or-model-info`
-       - Raw JSON → `or-model-info-json` (optional `--file_path` to write to a file
+       - Colored terminal table → `or-model-info-table` (flat-only command)
+       - Markdown report (default text) → `models info`
+       - Raw JSON → `or-model-info-json` (flat-only command; optional `--file_path` to write to a file
          instead of stdout)
 2. [ ] If the user gave only a partial name, ask for the full id.
-3. [ ] Run: `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <or-model-info|or-model-info-table|or-model-info-json> --model "<exact-id>"`
+3. [ ] Run: `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info "<exact-id>"` (or `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" <or-model-info-table|or-model-info-json> --model "<exact-id>"`)
 4. [ ] **Stop. Do not reprint, paraphrase, summarize, or add commentary.** The Bash
        tool output pane renders the ANSI-colored table natively. If Claude Code
        collapses it behind a "+N lines" fold the user will expand it with ctrl+o
@@ -59,17 +58,16 @@ latency + throughput percentiles, supported_parameters. Live data, no cache.
 
 ## Examples
 
-```bash
-# Colored terminal table
+# Colored terminal table (flat-only command, no group form)
 "$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info-table --model "nvidia/nemotron-3-super-120b-a12b:free"
 
 # Compare providers (Llama 3.3 has 17 endpoints) — markdown report
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "meta-llama/llama-3.3-70b-instruct"
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model "meta-llama/llama-3.3-70b-instruct"
 
 # Markdown report — renders in any markdown viewer
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "google/gemini-2.5-flash"
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info "google/gemini-2.5-flash"
 
-# Raw JSON to stdout (for jq / scripts)
+# Raw JSON to stdout (for jq / scripts; flat-only command)
 "$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info-json --model "anthropic/claude-sonnet-4.5"
 
 # Raw JSON written to a file

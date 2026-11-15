@@ -50,5 +50,5 @@ adherence).
   setup permits.** The `:free` tier explicitly logs prompts.
 - The SQLite registry holds the cached bodies on YOUR disk under the user's
   project — that part stays local.
-- Reports under `reports/mass_scouting/` may contain excerpts of scouted
-  bodies. `reports/` and `reports_dev/` MUST be in `.gitignore`.
+- Reports under `reports/llm-externalizer/mass_scouting/` may contain excerpts of scouted
+  bodies: sanitize them of secrets before committing `reports/` (git tracked); `reports_dev/` is gitignored and holds intermediate or scratch output.

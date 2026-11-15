@@ -13,7 +13,7 @@
  */
 
 import { totalmem } from "node:os";
-import { timingsFromEnv } from "../broker/scheduler.js";
+import { freeFloorPct } from "../governor/settings.js";
 import { memoryFreePercent } from "../local-locals-server.js";
 import { pidState } from "../local-llama-server.js";
 import { chooseWindow, freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
@@ -376,7 +376,7 @@ function gridOf(ctx: PhaseContext, kind: TaskKind, tokens: number): GridEntry[] 
  * A soft W under minWindow is returned unrecorded: Phase B then waits for memory (not a failure, ruling L86-87), with the bound and rule A of Phase C.
  */
 export async function measureWindow(ctx: PhaseContext, nCtxTrain: number, minWindow: number): Promise<{ window: number; free: number; hard: number; floor: number }> {
-  const floorPct = timingsFromEnv(process.env).memoryFloorPct;
+  const floorPct = freeFloorPct();
   const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
   const weights = weightBytes(ctx.identity.files);
   const cap = Math.min(ctx.harness.windowCap, nCtxTrain > 0 ? nCtxTrain : ctx.harness.windowCap);
@@ -437,7 +437,7 @@ export const phaseB: Phase = {
       const weights = weightBytes(ctx.identity.files);
       /** The bytes a window of `tokens` needs above the floor, as chooseWindow counts them (for the memory waits). */
       const needBytes = (tokens: number): number => weights + kvBytes(layers, tokens) + WINDOW_HEADROOM_BYTES;
-      const floorPct = timingsFromEnv(process.env).memoryFloorPct;
+      const floorPct = freeFloorPct();
       // Coordinator decision 2026-10-29, rule 1: not even the smallest window fits total RAM minus the floor (or the
       // trained context). No wait can help: the model is too big for this machine's memory, a calibration-failed record
       // that stores what it was judged against, so a RAM or floor change judges it again.

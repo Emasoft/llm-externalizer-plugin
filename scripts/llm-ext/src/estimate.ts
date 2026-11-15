@@ -86,6 +86,13 @@ export interface EstimateDeps {
   /** The max_tokens the run would default to when the caller passes none. */
   defaultMaxTokens(): number;
   /**
+   * The refusal message when the real run would REFUSE this slot (free_only /
+   * IRON RULE / price
+   * ceiling). Bound to the provider layer's own send-time gate, never
+   * reimplemented here (TRDD-4TTFUIL0).
+   */
+  slotRefusal(toolName: string, modelId: string): string | null;
+  /**
    * Calibrated mean completion tokens per request for a tool×model (the
    * output-EWMA sidecar, task #188), or null when no calibration exists.
    * Optional so pure tests and older callers need not provide it.
@@ -116,6 +123,8 @@ export interface ToolEstimate {
   /** null ⇔ at least one slot had unknown pricing. */
   totalCeilingUsd: number | null;
   totalExpectedUsd: number | null;
+  /** Slots the real run would refuse and drop (the run continues with the rest). */
+  dropped: Array<{ model: string; reason: string }>;
   notes: string[];
 }
 
@@ -192,6 +201,7 @@ export function estimateToolRun(
       rows: [],
       totalCeilingUsd: 0,
       totalExpectedUsd: 0,
+      dropped: [],
       notes: ["local/read-only tool — no LLM request, $0 by construction"],
     };
   }
@@ -239,6 +249,7 @@ export function estimateToolRun(
         rows: [],
         totalCeilingUsd: 0,
         totalExpectedUsd: 0,
+        dropped: [],
         notes: ["git mode diffs refs locally — no LLM request, $0 by construction"],
       };
     }
@@ -367,9 +378,28 @@ export function estimateToolRun(
       ? args.max_tokens
       : deps.defaultMaxTokens();
 
-  const slots = deps.ensembleSlots(toolName);
-  if (slots.length === 0) {
+  const candidateSlots = deps.ensembleSlots(toolName);
+  if (candidateSlots.length === 0) {
     throw new Error("estimate aborted — no model slot resolved (no active profile?)");
+  }
+  // WHY (TRDD-4TTFUIL0): the real send refuses an unvalidated, over-ceiling or
+  // non-free (free_only) auto-picked model, so quoting a price for it would
+  // promise a run that cannot happen. But the real run does NOT stop at the first
+  // refused model: the ensemble drops a failed slot and the profile chain walk
+  // advances past a refused entry. So the estimate refuses only when EVERY slot is
+  // refused (the real run would produce nothing), and lists the others as dropped.
+  // Only deliberate refusals come back as a message; any other error propagates.
+  const slots: EstimateModelSlot[] = [];
+  const dropped: Array<{ model: string; reason: string }> = [];
+  for (const slot of candidateSlots) {
+    const reason = deps.slotRefusal(toolName, slot.id);
+    if (reason === null) slots.push(slot);
+    else dropped.push({ model: slot.id, reason });
+  }
+  if (slots.length === 0) {
+    throw new Error(
+      `WOULD BE REFUSED: ${dropped.map((d) => `${d.model}: ${d.reason}`).join(" | ")}`,
+    );
   }
 
   const rows: ModelEstimateRow[] = [];
@@ -432,6 +462,7 @@ export function estimateToolRun(
     rows,
     totalCeilingUsd: totalCeil,
     totalExpectedUsd: totalExp,
+    dropped,
     notes,
   };
 }
@@ -455,6 +486,9 @@ export function renderEstimate(e: ToolEstimate): string {
   lines.push(
     `TOTAL: expected ${usd(e.totalExpectedUsd)}, ceiling ${usd(e.totalCeilingUsd)}`,
   );
+  for (const d of e.dropped) {
+    lines.push(`DROPPED (the real run would refuse it, not billed here): ${d.model} — ${d.reason}`);
+  }
   for (const n of e.notes) lines.push(`note: ${n}`);
   return lines.join("\n");
 }

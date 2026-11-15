@@ -32,14 +32,17 @@ import { describeAcceptedTypes, profileSelectionRefusal } from "../profile-accep
 import { selectedChatProfileErrors } from "../classifiers/profile-checks.js";
 import { classifyCliUsage } from "../classifiers/catalog/spec.js";
 import { estimateToolRun, renderEstimate } from "../estimate.js";
+import { DRY_RUN_FLAGS, acceptedDryRunFlags, isProfileAware } from "./dry-run-flags.js";
 import { buildTools } from "../tools/definitions.js";
-import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, isGroupName, resolveInvocation, runClassifyCommand, suggestCommand } from "./launcher.js";
+import { GLOBAL_BOOLEAN_FLAGS, GROUPS, classifyHelpNote, classifySpecFor, hoistLeadingFlags, isClassifyTool, isGroupName, resolveInvocation, runClassifyCommand, runClassifyPing, suggestCommand } from "./launcher.js";
 import { readFileSync } from "node:fs";
 import type { GlobalFetch } from "../classifiers/l0/transport.js";
 import { BROKER_ARGV, CALIBRATE_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
-import { COMMAND_TIMEOUT_EXIT, commandStopReason, stopCommand } from "../command-stop.js";
-import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
+import { commandStopExitCode, commandStopReason, enableStopOnErrors, STOP_ON_ERRORS_EXIT, stopCommand } from "../command-stop.js";
+import { extractTimeoutFlags, STOP_ON_ERRORS_FLAGS, type TimeoutFlags } from "./timeout-flags.js";
+import { readAllFrom } from "./read-all.js";
+import { stopNoticeLine } from "./stop-notice.js";
 
 /**
  * The published version, and the anchor `scripts/publish.py` rewrites on every
@@ -52,7 +55,7 @@ import { extractTimeoutFlags, type TimeoutFlags } from "./timeout-flags.js";
  * longer existed, which aborts the release. This is now the only anchor, so it
  * is load-bearing: do not reformat, inline, or compute it.
  */
-const VERSION = "14.2.0";
+const VERSION = "14.1.2";
 
 // ── Catalog ──────────────────────────────────────────────────────────
 
@@ -162,7 +165,7 @@ function commandTimedOut(): boolean {
  * complete when the timer fired still exits 124; that is spec 15's letter.
  */
 function exitCommand(code: number): never {
-  process.exit(commandTimedOut() ? COMMAND_TIMEOUT_EXIT : code);
+  process.exit(commandTimedOut() ? commandStopExitCode() : code);
 }
 
 /**
@@ -184,17 +187,25 @@ function armCommandTimeout(seconds: number): void {
   setTimeout(() => {
     const reason = `--command_timeout: the command ran longer than ${seconds} s and was stopped`;
     stopCommand(reason);
-    process.exitCode = COMMAND_TIMEOUT_EXIT;
-    void cancelAllBrokerJobs(reason).then(({ cancelled, failed }) => {
-      // Follow-up review m1: only confirmed DELETEs are counted; the rest are named.
-      const notCancelled = failed.length > 0 ? `; ${failed.length} job(s) could not be cancelled (left to the broker's abandon rule): ${failed.join(", ")}` : "";
-      process.stderr.write(`llm-ext: ${reason}; ${cancelled} unfinished local job(s) cancelled${notCancelled}; writing the results already complete\n`);
-    });
-    setTimeout(() => {
-      process.stderr.write(`llm-ext: the stopped command did not end within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
-      process.exit(COMMAND_TIMEOUT_EXIT);
-    }, STOP_FLUSH_GRACE_MS).unref();
+    endStoppedCommand(reason);
   }, seconds * 1000).unref();
+}
+
+/**
+ * What every stop does once it is set, whichever flag set it: the exit code, every broker job cancelled, and the bounded
+ * exit. WHY shared: --stop_on_errors with siblings still in flight (a parallel scan with one dead model and seven requests
+ * waiting for their HTTP timeout) must end in the same bounded time as --command_timeout, not wait for them. The exit code
+ * is the one the FIRST stop recorded: a --command_timeout firing after a --stop_on_errors stop must not turn 6 into 124.
+ */
+function endStoppedCommand(reason: string): void {
+  process.exitCode = commandStopExitCode();
+  void cancelAllBrokerJobs(reason).then(({ cancelled, failed }) => {
+    process.stderr.write(`${stopNoticeLine(reason, cancelled, failed)}\n`);
+  });
+  setTimeout(() => {
+    process.stderr.write(`llm-ext: the stopped command did not end within ${STOP_FLUSH_GRACE_MS / 1000} s; exiting\n`);
+    process.exit(commandStopExitCode());
+  }, STOP_FLUSH_GRACE_MS).unref();
 }
 
 function schemaTypeOf(prop: JsonSchemaProp | undefined): string {
@@ -210,6 +221,7 @@ function schemaTypeOf(prop: JsonSchemaProp | undefined): string {
  *
  * Arrays accept three spellings because all three occur in the wild: a JSON
  * array (`'["a","b"]'`), a comma-separated list (`a,b`), or the flag repeated.
+ * Repeats are merged by parseFlags (one level, duplicates kept, in order).
  * Numbers and booleans are rejected loudly rather than coerced to NaN/false —
  * a silently-wrong `--max_files abc` would scan the wrong amount of the tree.
  */
@@ -332,7 +344,25 @@ function parseFlags(argv: string[], tool: ToolDef, invocation: string): ParsedAr
       if (raw === undefined) die(`--${flag} expects a value`);
     }
 
-    out[key] = coerce(flag, raw, prop);
+    // WHY (TRDD-OK1NN5RN): a repeated array/oneOf flag used to overwrite the earlier value, so
+    // `--input_files_paths a --input_files_paths b` (or a positional file plus the same flag, which the
+    // launcher turns into two occurrences) silently ran on b alone. Accumulate instead, as coerce()'s doc
+    // comment and the usage-patterns.md skill references state. Concatenate ONE level only: --file_pairs values are arrays
+    // of [a, b] pairs and must stay pairs. Values are kept in order with duplicates, the same as one JSON
+    // array: nothing is de-duplicated because duplicates carry meaning (GROUP markers are parsed by
+    // parseFileGroups, compare-files needs exactly two paths, mass-scout-build-fieldset reports a duplicate
+    // field name, instruction files are concatenated in order). Consumers that want unique paths
+    // (batch_check, check_references, check_imports) already de-duplicate themselves.
+    // A single occurrence is untouched: a lone oneOf value stays a string. Scalar repeats still keep the last
+    // value (TRDD-WB9N5UDV).
+    const value = coerce(flag, raw, prop);
+    const kind = schemaTypeOf(prop);
+    if ((kind === "array" || kind === "oneOf") && key in out) {
+      const prev = out[key];
+      out[key] = [...(Array.isArray(prev) ? prev : [prev]), ...(Array.isArray(value) ? value : [value])];
+    } else {
+      out[key] = value;
+    }
   }
 
   const missing = (tool.inputSchema?.required ?? []).filter((r) => !(r in out));
@@ -440,7 +470,21 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "                                the server after the current model's minimum slice (default 300;\n" +
       "                                a large value lets the job wait; waiting is never an error)\n" +
       "  --command_timeout <s>         stop the whole command after <s> seconds, cancel its queued\n" +
-      "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n\n" +
+      "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n" +
+      `  ${STOP_ON_ERRORS_FLAGS[0].padEnd(30)}end the command on the first model that does not respond or is not\n` +
+      "                                found, instead of falling back; finished results are kept;\n" +
+      `                                exit ${STOP_ON_ERRORS_EXIT} (alias ${STOP_ON_ERRORS_FLAGS[1]}); waiting for memory is no failure\n\n` +
+      // Governor D13 (TRDD-ZTO9K8EK): the settings and env of the machine-wide limits, so they are findable from --help.
+      "Local inference governor (settings.yaml local_governor; each key has an env override):\n" +
+      "  enabled: true                 LLM_EXT_GOVERNOR_ENABLED; false opts this config dir out: its\n" +
+      "                                local sends take no lease and are not counted\n" +
+      "  ram_limit_pct: 80             LLM_EXT_GOVERNOR_RAM_LIMIT_PCT (50-99): no load or inference\n" +
+      "                                starts while RAM used is at or over it\n" +
+      "  cpu_limit_pct: 80             LLM_EXT_GOVERNOR_CPU_LIMIT_PCT (10-100; 100 disables the CPU limit)\n" +
+      "  max_inferences: 8             LLM_EXT_GOVERNOR_MAX_INFERENCES (1-256), machine-wide\n" +
+      "  server_threads: 0             LLM_EXT_GOVERNOR_SERVER_THREADS (0 = half the thread budget,\n" +
+      "                                else 1 up to cores x cpu_limit_pct / 100)\n" +
+      "  llm-ext models server-status  shows the figures, the limits and the last denial\n\n" +
       "Groups:\n",
   );
   const groupWidth = Math.max(...Object.keys(GROUPS).map((g) => g.length));
@@ -462,8 +506,10 @@ function printGlobalHelp(tools: ToolDef[]): void {
       '  llm-ext llm ask ./src/api.ts --instructions "explain this file"\n',
   );
   process.stdout.write(
-    "\nReports are written to <project>/reports/llm-externalizer/ and the path " +
-      "is printed on stdout.\n",
+    // TRDD-PNU8XECB: name both roots so a user knows where per-file pieces and benchmark output went.
+    "\nFinal reports are written to <project>/reports/llm-externalizer/ and the path " +
+      "is printed on stdout; intermediate output (per-file pieces of a merged run, " +
+      "model-pool benchmarks) goes to <project>/reports_dev/llm-externalizer/.\n",
   );
   if (process.argv.includes("--all")) {
     const width = Math.max(...tools.map((t) => toKebab(t.name).length));
@@ -514,60 +560,6 @@ function printGroupHelp(group: string, tools: ToolDef[]): void {
     `\nRun 'llm-ext ${group} <action> --help' for that action's parameters.\n`,
   );
 }
-
-/**
- * Tools whose handler issues (or can issue) a real model/network request —
- * so `--profile <name>` (parsed centrally in extractProfileFlag(), never a
- * per-tool schema field — see its doc comment) actually changes what the
- * command does. Everything NOT in this set only reads local state or the
- * public OpenRouter catalog (no chat/completion request), so showing
- * `--profile` on it would be misleading.
- *
- * This is the single source of truth `printToolHelp()` consults — a new
- * LLM-calling command is discoverable-by-default ONLY once added here.
- * Classification is by READING each handler (dispatchCallToolInner in
- * ../index.ts and dispatchMassScoutTool in ../mass_scouting/mcp-tools.ts),
- * not by guessing from the name — notably this EXCLUDES `assess_model`,
- * `check_model_health`, `discover_new_models` (public catalog fetch only,
- * see RECONCILE_SKIP_TOOLS's own doc comment in ../index.ts), `review_plan`
- * and `rules_check` (both explicitly "no LLM" in their case bodies), and
- * most `mass_scout_*` sub-actions (register/preclassify/estimate/search/
- * search_xjob/get/export/jobs_list/audit_sample/body_get/build_fieldset/
- * diff/list_bundled_fieldsets — local SQLite + regex only, verified via
- * cli.ts: none of those handlers accept `opts.apiKey`/`opts.fetchImpl`).
- * It INCLUDES `code_task` and `session_summary` even though the unrelated
- * `LLM_TOOLS_SET` in ../index.ts (which only drives `reset`'s in-flight
- * drain wait) omits them — that set is not an exhaustive "sends a model
- * request" predicate and is intentionally left untouched here.
- */
-const PROFILE_AWARE_TOOLS = new Set([
-  // Flat catalog (src/tools/definitions.ts) — central LLM pipeline.
-  "chat",
-  "code_task",
-  "session_summary",
-  "summarize",
-  "topics",
-  "sem_deduplicate",
-  "describe",
-  "batch_check",
-  "scan_folder",
-  "high_quality_scan",
-  "compare_files",
-  "check_references",
-  "check_imports",
-  "check_against_specs",
-  "search_existing_implementations",
-  "cluster_synonyms",
-  // mass_scouting (src/mass_scouting/mcp-tools.ts) — actions whose CLI
-  // handler resolves a model via resolveCliModel()/opts.apiKey and sends it.
-  "mass_scout",
-  "mass_scout_chain",
-  "mass_scout_propose_fieldset",
-  "security_scan",
-  "security_triage_benchmark",
-  "search_existing_benchmark",
-  "check_tool_replacements",
-]);
 
 /** The default and range of a numeric parameter that declares them (classify thresholds), else nothing. */
 function rangeNote(prop: JsonSchemaProp): string {
@@ -622,7 +614,7 @@ function printToolHelp(
   // WHY printed for every command (not only profile-aware ones): these are the types the runtime check enforces, so the reader sees them before meeting a refusal.
   process.stdout.write(`\nAccepted profile types: ${describeAcceptedTypes(tool.acceptedProfileTypes)}\n`);
   const keys = Object.keys(props);
-  const showProfile = PROFILE_AWARE_TOOLS.has(tool.name);
+  const showProfile = isProfileAware(tool.name);
   if (keys.length === 0 && !showProfile) {
     process.stdout.write("\nTakes no parameters.\n");
     return;
@@ -635,6 +627,12 @@ function printToolHelp(
     process.stdout.write(
       `  --${key.padEnd(width)}  [${schemaTypeOf(prop)}]${tag} ${firstLine(prop.description ?? "")}${rangeNote(prop)}\n`,
     );
+  }
+  // WHY the same set as --profile, but filtered: the flags matter for the commands that can send a model request, and each of those lists only the dry-run flags it accepts (DRY_RUN_SUPPORT). Help must not advertise a flag the command refuses (TRDD-58CFBQHN).
+  if (showProfile) {
+    for (const { flag, help } of acceptedDryRunFlags(tool.name)) {
+      process.stdout.write(`  ${flag.padEnd(width + 2)}  [boolean] ${help}\n`);
+    }
   }
   if (showProfile) {
     process.stdout.write(
@@ -679,13 +677,22 @@ function extractProfileFlag(argv: string[]): { argv: string[]; profile?: string 
   return { argv };
 }
 
+/**
+ * Global dry-run/quiet flags typed BEFORE the group (`llm-ext --quiet scan --help`) move to the end of argv.
+ * WHY: global help advertises them as global, but the dispatcher takes argv[0] as the group/command word, so a leading flag was refused as an unknown command. Behind the command they hit the existing per-command handling (--estimate/--preview strip, --quiet in parseFlags). --help/-h stay put: argv[0] help is handled before dispatch.
+ */
+function hoistLeadingGlobalFlags(argv: string[]): string[] {
+  // Derived, not hand-listed: every global boolean flag and both dry-run flags, except help (handled before dispatch).
+  const hoistable = new Set(
+    [...GLOBAL_BOOLEAN_FLAGS, ...Object.values(DRY_RUN_FLAGS).map((d) => d.flag)].filter((f) => f !== "--help" && f !== "-h"),
+  );
+  return hoistLeadingFlags(argv, hoistable);
+}
+
 async function readAllStdin(): Promise<Buffer> {
   // WHY fail fast: with no --input and a terminal on stdin the command would wait for typing that never comes.
   if (process.stdin.isTTY) throw new Error("no --input given and stdin is a terminal; pass --input <file.json>, pipe the JSON, or name files (- reads stdin)");
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  // WHY the raw Buffer (IN-01): the file reader sniffs NUL bytes and reports invalid UTF-8, which a decoded string has already lost; the JSON path decodes it.
-  return Buffer.concat(chunks);
+  return readAllFrom(process.stdin);
 }
 
 /** First token that is not a global `--profile <name>` / `--profile=<name>` pair or a global boolean flag: the command word as the user typed it. */
@@ -701,7 +708,7 @@ function leadingToken(argv: string[]): string | undefined {
 }
 
 const isClassifyWord = (word: string | undefined): boolean =>
-  word === "classify" || (word !== undefined && classifySpecFor(word.replaceAll("-", "_")) !== undefined);
+  word === "classify" || (word !== undefined && isClassifyTool(word.replaceAll("-", "_")));
 
 async function main(): Promise<void> {
   // TRDD-1OOAH3LD, TRDD-ZGSGGHQG: `llm-ext __broker` turns this process into
@@ -736,8 +743,10 @@ async function main(): Promise<void> {
   }
   if (timeouts.queueTimeoutS !== undefined) setBrokerQueueTimeoutMs(timeouts.queueTimeoutS * 1000);
   if (timeouts.commandTimeoutS !== undefined) armCommandTimeout(timeouts.commandTimeoutS);
+  if (timeouts.stopOnErrors === true) enableStopOnErrors(endStoppedCommand);
   let engine = isClassifyWord(leadingToken(timeouts.argv)) ? undefined : await loadEngine();
-  const { argv, profile: profileOverride } = extractProfileFlag(timeouts.argv);
+  const { argv: profileStripped, profile: profileOverride } = extractProfileFlag(timeouts.argv);
+  const argv = hoistLeadingGlobalFlags(profileStripped);
   // The catalog's descriptions are backend-dependent, so build it per run.
   const tools = buildTools(engine ? engine.limitsBlock() : "") as ToolDef[];
 
@@ -832,13 +841,15 @@ async function main(): Promise<void> {
 
   // WHY here: a classify command is parsed by the runner itself (kebab flags, `-o`, its own refusals), so the generic flag parser and the --estimate/--preview strip below must not see it; the runner refuses those two as unknown options.
   const classifySpec = classifySpecFor(tool.name);
+  // C4-07: ping is run like a decision (own parser, classifier profile, no estimate/preview/boot) but has no spec; every guard below reads this, not classifySpec.
+  const isClassify = isClassifyTool(tool.name);
 
   // --estimate (task #187): dry-run the invocation and print the predicted
   // cost INSTEAD of dispatching. Stripped before parseFlags because it is a
   // global flag, not part of any tool's schema. The paid-mode rules/skills
   // tell agents to run this before every paid operation. Global boolean flags
   // stripped here MUST also be listed in GLOBAL_BOOLEAN_FLAGS (launcher.ts).
-  const estimateIdx = classifySpec ? -1 : rest.indexOf("--estimate");
+  const estimateIdx = isClassify ? -1 : rest.indexOf(DRY_RUN_FLAGS.estimate.flag);
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);
 
@@ -846,11 +857,11 @@ async function main(): Promise<void> {
   // candidate's verdict — included, or excluded WITH the reason — via the
   // same walker the real run uses. Composes with --estimate (selection +
   // price in one dry-run). Zero LLM sends either way.
-  const previewIdx = classifySpec ? -1 : rest.indexOf("--preview");
+  const previewIdx = isClassify ? -1 : rest.indexOf(DRY_RUN_FLAGS.preview.flag);
   const wantPreview = previewIdx !== -1;
   if (wantPreview) rest.splice(previewIdx, 1);
 
-  const { args, quiet } = classifySpec ? { args: {} as Record<string, unknown>, quiet: false } : parseFlags(rest, tool, groupedInvocation ?? toKebab(tool.name));
+  const { args, quiet } = isClassify ? { args: {} as Record<string, unknown>, quiet: false } : parseFlags(rest, tool, groupedInvocation ?? toKebab(tool.name));
 
   // --profile <name>: apply BEFORE boot() so publishFreeState()/the boot
   // banner and every downstream getCurrentBackend()/activeResolved read
@@ -867,11 +878,11 @@ async function main(): Promise<void> {
   // WHY (PT-05 follow-up): --profile on a scouting-only command names the SCOUTING profile mass scouting resolves its model from; a scouting profile is not a valid `active:`, so the active text profile is left alone and the name travels as the tool argument `profile`.
   const scoutingOnly = isScoutingOnlyTool(tool.name);
   // WHY (C4-03): a classify command takes a CLASSIFIER profile, which is never a valid `active:` (a text profile), so like a scouting command it leaves the active text profile alone; the name travels to the runner as its own --profile flag.
-  const activeOverride = scoutingOnly || classifySpec ? undefined : profileOverride;
+  const activeOverride = scoutingOnly || isClassify ? undefined : profileOverride;
   if (scoutingOnly && profileOverride !== undefined) args.profile = profileOverride;
   const effectiveProfile = activeOverride ?? effectiveProfileName(getActiveSettings());
   // WHY skipped for classify: the text profile chain is not used by a decision, and a dangling `active:` must not stop a command that never reads it.
-  if (!classifySpec) {
+  if (!isClassify) {
     const result = overrideActiveProfile(
       effectiveProfile,
       activeOverride !== undefined ? "flag" : "default",
@@ -893,7 +904,7 @@ async function main(): Promise<void> {
 
   // WHY here, before boot() and every dispatch: PT-03 refuses a profile whose type the command does not accept before any model call can happen (E80, E81, E81i); the table is tool.acceptedProfileTypes (tools/definitions.ts).
   // WHY not for classify: the runner applies the same check (profileSelectionRefusal) to `--profile`, else `active_classifier:`, and deliberately ignores `active:`; checking `active:` here refused the default invocation.
-  if (!classifySpec) {
+  if (!isClassify) {
     const refusal = profileSelectionRefusal({
       command: groupedInvocation ?? toKebab(tool.name),
       accepted: tool.acceptedProfileTypes,
@@ -905,17 +916,21 @@ async function main(): Promise<void> {
   }
 
   // C4-03: a classify command runs the one decision runner. What is and is not loaded: the engine (index.ts) IS loaded above, so settings.yaml is read/created/migrated and its messages go to stderr; boot() is NOT called (it only publishes the free-mode state and installs the usage rule, which a decision never reads); no estimate/preview, no tool dispatch. stdout carries only the envelope. process.exitCode, not process.exit, so stdout is flushed and the runner's code (0, 1, 3, 4, 5, Ctrl-C) reaches the shell unchanged.
-  if (classifySpec) {
-    process.exitCode = await runClassifyCommand(classifySpec, rest, profileOverride, {
+  if (isClassify) {
+    const io = {
       settings: settingsAsLoaded,
       fetch: globalThis.fetch as GlobalFetch,
-      readFile: (path) => readFileSync(path, "utf8"),
-      readStdin: readAllStdin,
-      stdout: (text) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`),
-      stderr: (line) => process.stderr.write(`${line}\n`),
-    });
+      // WHY here and not inside the runner: RunDeps.settings is narrowed to the three profile keys, so the local decider section travels as its own seam.
+      localFallback: settingsAsLoaded.local_fallback,
+      stdout: (text: string) => process.stdout.write(text.endsWith("\n") ? text : `${text}\n`),
+      stderr: (line: string) => process.stderr.write(`${line}\n`),
+    };
+    // C4-07: ping (no spec) reads no input; a decision reads its JSON or files.
+    process.exitCode = classifySpec === undefined
+      ? await runClassifyPing(rest, profileOverride, io)
+      : await runClassifyCommand(classifySpec, rest, profileOverride, { ...io, readFile: (path) => readFileSync(path, "utf8"), readStdin: readAllStdin });
     // Follow-up review m3: the runner's own code would overwrite the timeout's 124.
-    if (commandTimedOut()) process.exitCode = COMMAND_TIMEOUT_EXIT;
+    if (commandTimedOut()) process.exitCode = commandStopExitCode();
     return;
   }
 
@@ -927,10 +942,14 @@ async function main(): Promise<void> {
   // boot() publishes the free-mode state; dispatchCallTool refuses without it.
   await boot();
 
+  // WHY (TRDD-UVU9S4RV): chat declares input_files_paths as string-or-array and coerce() keeps a lone positional file a string; the estimate/preview file resolver reads only arrays, so it counted that file as zero. The real tools normalise string|string[] themselves, so the dry runs get the same view; `args` itself stays untouched for the real dispatch.
+  const dryRunArgs: Record<string, unknown> =
+    typeof args.input_files_paths === "string" ? { ...args, input_files_paths: [args.input_files_paths] } : args;
+
   if (wantPreview) {
     const deps = buildEstimateDeps();
     const excluded: Array<{ path: string; reason: string }> = [];
-    const resolved = deps.resolveFiles(args, (path, reason) =>
+    const resolved = deps.resolveFiles(dryRunArgs, (path, reason) =>
       excluded.push({ path, reason }),
     );
     if (resolved.error) {
@@ -959,11 +978,16 @@ async function main(): Promise<void> {
     // WHY (TRDD-CQSODQ78): an estimate must not price a run the real command refuses; the real run is gated in dispatchCallTool, which this branch never reaches.
     const gate = profileGateRefusal(tool.name);
     if (gate) {
-      process.stderr.write(`${gate.message}\n`);
+      // WHY (empty-pool-refreshable): the gate text says a background benchmark is refreshing the pool, which is true only after a real command started the repair (index.ts dispatch). An estimate starts nothing, so on a never-populated pool that sentence is false and sends the user to wait for work that is not running. Say what is actually true and what to do. Not started from here: the repair is a long free benchmark, not a dry-run side effect.
+      process.stderr.write(
+        gate.reason === "empty-pool-refreshable"
+          ? "free profile: no usable free model yet (0 available), and nothing is populating the pool: an estimate starts no work. Run the command once without --estimate (it populates the free pool first, no cost), then re-run --estimate.\n"
+          : `${gate.message}\n`,
+      );
       exitCommand(1);
     }
     await warmEstimatePricing();
-    const estimate = estimateToolRun(tool.name, args, buildEstimateDeps());
+    const estimate = estimateToolRun(tool.name, dryRunArgs, buildEstimateDeps());
     process.stdout.write(`${renderEstimate(estimate)}\n`);
     return;
   }
@@ -979,10 +1003,18 @@ async function main(): Promise<void> {
     // per-file results already written, and the unfinished files listed as
     // failed with the timeout reason). exitCode, not exit: stdout is flushed.
     process.stdout.write(`${text}\n`);
-    process.exitCode = COMMAND_TIMEOUT_EXIT;
+    process.exitCode = commandStopExitCode();
     return;
   }
   if (result.isError) {
+    // TRDD-PN84WC1L: a run with some failed files but some results (partial) keeps its
+    // summary, report paths included, on stdout where a clean run printed it, so a caller
+    // reading stdout does not lose the good results; stderr gets one line, the exit is 1.
+    if (result.partial === true) {
+      process.stdout.write(`${text}\n`);
+      process.stderr.write("llm-ext: some files failed or the run was aborted; see the FAILED / ABORTED block of the summary on stdout\n");
+      exitCommand(1);
+    }
     process.stderr.write(`${text}\n`);
     exitCommand(1);
   }

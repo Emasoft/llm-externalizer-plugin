@@ -223,8 +223,10 @@ describe("SP-11 review: build, whole diff", () => {
   it("correctness and spec match are asked the opposite way (how wrong, how far off), so the chunk merge's highest value is the worst case", () => {
     const b = spec.build(whole(), t);
     expect((b.unsplittable.defect as { criteria: string[] }).criteria[0]).toBe("Looks correct for the request");
-    expect((b.unsplittable.defect as { criteria: string[] }).criteria[2]).toMatch(/Clearly wrong/);
+    expect((b.unsplittable.defect as { criteria: string[] }).criteria[2]).toBe("Clearly wrong, or breaks the stated behavior, including an off-by-one or comparison-operator error");
     expect((b.unsplittable.mismatch as { criteria: string[] }).criteria[0]).toBe("Matches the request");
+    expect((b.unsplittable.mismatch as { criteria: string[] }).criteria[1]).toBe("Partial match: important pieces missing, or extra work added — but the change still does what the request asks");
+    expect((b.unsplittable.mismatch as { criteria: string[] }).criteria[2]).toBe("Misses the request, solves a different problem, or breaks a stated behavior constraint of the request — the change does not do what the request requires");
   });
   it("with claims: one atomic unit per claim, a 3-way choice judged from the evidence only; evidence texts are in shared state", () => {
     const b = spec.build(withClaims(2, { claims: [{ text: "tests pass" }, { id: "c-2", text: "no api change" }] }), t);
@@ -376,6 +378,10 @@ describe("SP-11 review: project, review half (jev-mcp lib.ts:286-401)", () => {
     expect(run(half({ confs: { blast_radius: 0.49 } })).review).toMatchObject({ action: "escalate", reason_codes: ["confidence_below_review"], limiting: [{ file: null, rubrics: ["blast_radius"] }] });
     const unknown = run(half({ confs: { correctness: null, spec_match: null } })).review;
     expect(unknown).toMatchObject({ action: "escalate", reason_codes: ["unknown_confidence"], limiting: [{ file: null, rubrics: ["correctness", "spec_match"] }] });
+  });
+  it("a rubric at confidence 0 never limits: the lowest-favourability judged rubric is named (quality eval of run 20261031_191133)", () => {
+    const r = run(half({ correctness: 0, spec_match: 2, confs: { test_gap: 0, blast_radius: 0 } })).review;
+    expect(r).toMatchObject({ action: "escalate", reason_codes: ["confidence_below_review"], limiting: [{ file: null, rubrics: ["correctness"] }] });
   });
   it("thresholds move the tiers", () => {
     expect(run(half({ safe: 0.85 }), whole(), ctx, { ...t, "auto-accept": 0.9 }).review.action).toBe("review");

@@ -302,6 +302,29 @@ describe("attention", () => {
 //   json  - best and exists are UNSPLITTABLE: they travel with every candidate in ONE request, so a lost request loses both answers and there is no partial result.
 //   files - per-item: each line chunk carries its own where/exists, so a lost request loses only that chunk's lines.
 // Abort contract: a request in flight at Ctrl-C rejects and is "aborted" (l2/abort.ts:72), unstarted ones are skipped and reported "aborted" (l2/abort.ts:63), a reply that already arrived is kept (l2/abort.ts:67-68).
+// IN-09 (TRDD-2N4JVQI8): the text form, from a REAL projection through the real spec.renderText.
+describe("IN-09 find: text form", () => {
+  const i = fileIn({ "a.ts": "retry once\nunrelated\nretry with backoff", "b.ts": "nothing here" });
+  const reply = {
+    where_i0: ch("3", { "1": 0.3, "2": 0.01, "3": 0.6, none: 0.09 }), exists_i0: nl(0.9),
+    where_i1: ch("1", { "1": 0.9, none: 0.1 }), exists_i1: nl(0.04),
+  };
+  it("files mode prints `score  file:line  text`, best first", () => {
+    expect(spec.renderText!(run(i, reply), {}).lines).toEqual(["0.54  a.ts:3  retry with backoff", "0.27  a.ts:1  retry once"]);
+  });
+  it("files mode prints (no matching lines) when nothing scores", () => {
+    expect(spec.renderText!(run(i, { ...reply, exists_i0: nl(0.01), exists_i1: nl(0.01) }), {}).lines).toEqual(["(no matching lines)"]);
+  });
+  it("names a question with no answer and why", () => {
+    const r = { ...run(i, reply), invalid: [{ key: "where_i0", reason: "aborted" }] };
+    expect(spec.renderText!(r, {}).lines).toContain("? no answer: where_i0 (aborted)");
+  });
+  it("json mode prints `probability  id` per ranked candidate, then the verdict", () => {
+    const j = jsonIn(2);
+    const r = run(j, { best: ch("u1", { u0: 0.2, u1: 0.8 }), exists: nl(0.9) });
+    expect(spec.renderText!(r, {}).lines).toEqual(["0.80  c1", "0.20  c0", "— answered, exists 0.90"]);
+  });
+});
 describe("SP-04 find: partial failure through the real planner and fan-out", () => {
   const reasonsOf = (r: FindResult): [string, string][] => r.invalid.map((x) => [x.key, x.reason.split(":")[0]!]);
   describe("json mode: unsplittable, one request, no partial result", () => {

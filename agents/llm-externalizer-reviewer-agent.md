@@ -102,6 +102,7 @@ Keep orchestrator-facing output under ~10 lines. No preamble, no postamble, no m
 - Default profile is the active one (usually `remote-ensemble`). Only pass `--free` on the CLI call if the user explicitly asked for free/cheap/quick.
 - Respect `.gitignore` (`--use_gitignore` defaults to true) unless the user says otherwise.
 - All input/output file paths must be absolute.
+- Scratch vs final: temporary or scratch files go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders. The reports `llm-ext` writes under `reports/llm-externalizer/` stay git tracked. Pass this rule to any subagent you spawn.
 
 ## When to decline
 

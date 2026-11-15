@@ -18,7 +18,7 @@ import { getConfigDir } from "../config.js";
 import { fetchProgrammingModels, type OpenRouterModel } from "../benchmark/discover.js";
 import { assessModelAcrossTools } from "./assess.js";
 import { localIsoTimestamp } from "../usage-history.js";
-import { defaultOutputDir } from "../project-root.js";
+import { defaultScratchDir } from "../project-root.js";
 import { compactStamp } from "./drift.js";
 
 // ── Shapes ─────────────────────────────────────────────────────────────
@@ -296,12 +296,12 @@ export function renderNewArrivalsText(report: NewArrivalsReport): string {
 // ── Top-level orchestrator (3 surfaces) ────────────────────────────────
 
 export interface RunDiscoverNewArrivalsOptions extends DiscoverNewArrivalsOptions {
-  /** Report output dir override. Default <main-project-dir>/reports/model-arrivals/. */
+  /** Report output dir override. Default <main-project-dir>/reports_dev/llm-externalizer/model-arrivals/. */
   outputDir?: string;
 }
 
 /**
- * Resolve, run, and persist a Markdown report under reports/model-arrivals/.
+ * Resolve, run, and persist a Markdown report under reports_dev/llm-externalizer/model-arrivals/.
  * Returns both the report and the file path. Advisory only — never writes settings.
  */
 export async function runDiscoverNewArrivals(
@@ -312,7 +312,9 @@ export async function runDiscoverNewArrivals(
   // defaultOutputDir() so it lands under reports/llm-externalizer/model-arrivals
   // (the USER-approved tree) and honors LLM_EXT_OUTPUT_DIR like every other
   // report writer; an explicit outputDir still wins verbatim.
-  const dir = opts.outputDir ?? join(defaultOutputDir(), "model-arrivals");
+  // TRDD-PNU8XECB: model-arrivals output describes llm-ext's own model pool (tool configuration), so it is
+  // scratch output for the gitignored reports_dev/llm-externalizer/, not a final tracked report.
+  const dir = opts.outputDir ?? join(defaultScratchDir(), "model-arrivals");
   mkdirSync(dir, { recursive: true });
   const reportPath = join(dir, `${compactStamp()}-new-arrivals.md`);
   writeFileSync(reportPath, renderNewArrivalsMarkdown(report));

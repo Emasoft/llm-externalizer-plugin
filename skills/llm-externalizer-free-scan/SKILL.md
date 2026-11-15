@@ -25,17 +25,18 @@ Run a project scan using the **free** NVIDIA Nemotron 3 Super model (`nvidia/nem
 
 ## Instructions
 
-1. Run `llm-ext discover` to verify service online AND confirm free mode is active for the current profile (it reports the active profile + whether free mode is on). `scan-folder` has no `--free` flag — free-only routing is a **profile setting** (`free_only: true` with a `free_models:` pool in `~/.llm-externalizer/settings.yaml`), not a per-command flag. If the active profile is not free-only, switch to a `free_only` profile first (see README "B2. OpenRouter free-only ensemble") or use the plugin's default free-by-default behavior.
+1. Run `llm-ext settings status` to verify service online AND confirm free mode is active for the current profile (it reports the active profile + whether free mode is on). `scan folder` has no `--free` flag — free-only routing is a **profile setting** (`free_only: true` with a `free_models:` pool in `~/.llm-externalizer/settings.yaml`), not a per-command flag. If the active profile is not free-only, switch to a `free_only` profile first (see README "B2. OpenRouter free-only ensemble") or use the plugin's default free-by-default behavior.
 2. Parse prompt for **folder_path** (default cwd), **extensions**, **exclude_dirs**, **instructions** (default: report real bugs only — logic, crashes, security exploits, data corruption, functionality mismatch; not missing error handling/null checks/validation/logging; cite functions + lines; terse).
-3. Run `llm-ext scan-folder --use_gitignore` plus parsed fields (`--folder_path`, `--extensions`, `--exclude_dirs`, `--instructions`). Under an active free-only profile, this automatically uses only free models — no extra flag needed. Scans over large folders can run long — use an extended Bash timeout or `run_in_background: true`. Background commands are capped at 30 min (max 2 h) in unattended sessions (`-p`, CI); interactive sessions are uncapped. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
-4. Command returns one report path per file. List them for the user.
+3. Run `llm-ext scan folder --use_gitignore` plus parsed fields (`--folder_path`, `--extensions`, `--exclude_dirs`, `--instructions`). Under an active free-only profile, this automatically uses only free models — no extra flag needed. Scans over large folders can run long — use an extended Bash timeout or `run_in_background: true`. Background commands are capped at 30 min (max 2 h) in unattended sessions (`-p`, CI); interactive sessions are uncapped. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
+4. Command returns one report path per file. List them for the user. Exit 1 with a `FAILED (n of m):` block: list the paths printed and name the failed files.
 5. Remind user this is low-quality — suggest ensemble for thorough audit. Do NOT read/summarise reports.
 
-Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search). LLM sees only 1–5 files/request — no cross-file refs (`check-against-specs` or `search-existing-implementations`).
+Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search). LLM sees only 1–5 files/request — no cross-file refs (`check specs` or `scan impl`).
 
 ## Output
 
-One `.md` report per source file. Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); `scan-folder` has no output-location flag. Report filenames include the source filename for easy identification.
+One `.md` report per source file. Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); override with `--output_dir`. Report filenames include the source filename for easy identification.
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). Subagents you spawn save temporary or scratch files to the `*_dev` folders and final files to the tracked ones.
 
 ## Error Handling
 
@@ -49,17 +50,17 @@ One `.md` report per source file. Reports default to `<main-project-dir>/reports
 ## Examples
 
 ```bash
-llm-ext scan-folder --folder_path /path/to/project/src \
+llm-ext scan folder --folder_path /path/to/project/src \
   --instructions "Find security issues." --use_gitignore
 ```
 
 ```bash
-llm-ext scan-folder --folder_path /path/to/project \
+llm-ext scan folder --folder_path /path/to/project \
   --extensions '[".py"]' \
   --instructions "Find TODO comments and classify by urgency."
 ```
 
-Both examples assume the active profile is `free_only` (verify with `llm-ext discover`) — `scan-folder` itself takes no free-mode flag.
+Both examples assume the active profile is `free_only` (verify with `llm-ext settings status`) — `scan folder` itself takes no free-mode flag.
 
 ## Resources
 

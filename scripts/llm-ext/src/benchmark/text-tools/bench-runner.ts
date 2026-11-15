@@ -157,6 +157,8 @@ interface CaseOutcome {
   detail: string;
   failed: boolean;
   failureReason?: string;
+  /** Failed AND the model never returned any content (transport/HTTP error, empty reply) — TRDD-90BXJ2KO. */
+  unanswered: boolean;
 }
 
 /**
@@ -264,10 +266,21 @@ async function runOneCase(
   if (result.isError) {
     const reason =
       result.content.map((p) => p.text).join(" ").split("\n")[0] || "pipeline produced no report";
-    return { caseId, score: 0, detail: "FAILED", failed: true, failureReason: reason };
+    // WHY unanswered is read off capturedRawContent: it is only set when a call returned
+    // non-empty content, so "" means every attempt was a transport/HTTP error or an empty
+    // reply (no answer to grade), while a non-empty value here means the pipeline rejected
+    // real content as an echo or invalid output (a wrong answer, stays scored).
+    return {
+      caseId,
+      score: 0,
+      detail: "FAILED",
+      failed: true,
+      failureReason: reason,
+      unanswered: capturedRawContent === "",
+    };
   }
   const { score, detail } = scoreOutcome(capturedRawContent, capturedSaveContent);
-  return { caseId, score, detail, failed: false };
+  return { caseId, score, detail, failed: false, unanswered: false };
 }
 
 /**
@@ -297,11 +310,13 @@ export async function runTextToolBenchmarkOnModel(
 
   const perCase: TextToolCaseResult[] = [];
   const failures: CaseFailure[] = [];
+  let unansweredCases = 0;
   let total: number;
 
   const record = (o: CaseOutcome): void => {
     perCase.push({ caseId: o.caseId, score: o.score, detail: o.detail });
     if (o.failed) failures.push({ caseId: o.caseId, reason: o.failureReason ?? "unknown failure" });
+    if (o.unanswered) unansweredCases++;
   };
 
   if (tool === "summarize") {
@@ -400,7 +415,7 @@ export async function runTextToolBenchmarkOnModel(
   }
 
   const scores = perCase.map((p) => p.score);
-  const aggregate = aggregateTextToolScores(scores, failures.length, total);
+  const aggregate = aggregateTextToolScores(scores, failures.length, total, unansweredCases);
   return {
     modelId,
     tool,

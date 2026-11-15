@@ -23,6 +23,7 @@ DOGFOOD_LIVE=1 uv run tests/dogfood/dogfood_test.py
 
 Exit code is `0` when every row is PASS/SKIP, non-zero on any FAIL. A full
 markdown report is written under `<main-repo-root>/reports/dogfood/`.
+The report is a final file in the git-tracked `reports/`; temporary or scratch files go to the `*_dev` folders (gitignored).
 
 ## What it checks
 

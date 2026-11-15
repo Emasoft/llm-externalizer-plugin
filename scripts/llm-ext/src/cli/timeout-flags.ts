@@ -15,6 +15,10 @@
 
 export const QUEUE_TIMEOUT_FLAGS: readonly string[] = ["--queue_timeout", "--queue-timeout"];
 export const COMMAND_TIMEOUT_FLAGS: readonly string[] = ["--command_timeout", "--command-timeout", "--timeout"];
+
+/** --stop_on_errors (TRDD-SWNIIFTF): the one place its spellings are listed; launcher.ts (GLOBAL_BOOLEAN_FLAGS) and the help read this. */
+export const STOP_ON_ERRORS_FLAGS: readonly string[] = ["--stop_on_errors", "--stop-on-errors"];
+
 /** The largest value a Node timer accepts, in whole seconds: floor((2^31 - 1) / 1000). */
 export const MAX_TIMEOUT_S = 2_147_483;
 
@@ -22,6 +26,8 @@ export interface TimeoutFlags {
   argv: string[];
   queueTimeoutS?: number;
   commandTimeoutS?: number;
+  /** --stop_on_errors was given. */
+  stopOnErrors?: true;
 }
 
 function seconds(flag: string, raw: string | undefined): number {
@@ -40,6 +46,11 @@ export function extractTimeoutFlags(argv: readonly string[]): TimeoutFlags {
   const res: TimeoutFlags = { argv: out };
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
+    // --stop_on_errors takes no value (TRDD-SWNIIFTF); `=value` is not a form of it, so that token falls through as an unknown flag.
+    if (STOP_ON_ERRORS_FLAGS.includes(token)) {
+      res.stopOnErrors = true;
+      continue;
+    }
     const eq = token.indexOf("=");
     const name = eq > 0 ? token.slice(0, eq) : token;
     const isQueue = QUEUE_TIMEOUT_FLAGS.includes(name);

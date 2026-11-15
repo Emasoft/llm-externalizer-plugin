@@ -4,9 +4,10 @@
  * against REAL node:http servers (no mocks, no store seam); /endpoints bodies are synthetic
  * (the recorded target body with its endpoints replaced).
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
+import { setTimeout as realDelay } from "node:timers/promises";
 import { chatCompletionWithRetry, resetServiceHealthForTests, providerStateLine } from "./completion.js";
 import { RetryDeadlineError, attachFailure } from "./http.js";
 import { ProfileExhaustedError } from "../profile-fallback.js";
@@ -36,6 +37,7 @@ const MESSAGES: ChatMessage[] = [{ role: "user", content: "hi" }];
 
 const servers: Server[] = [];
 afterEach(() => {
+  vi.useRealTimers();
   for (const s of servers.splice(0)) {
     s.closeAllConnections();
     s.close();
@@ -223,13 +225,25 @@ describe("provider-state line in the per-file reason (end to end)", () => {
     expect(__classifyErrorForTests(err).reason).toBe(err.message);
   }, 30_000);
 
-  // 🐌 slow: default 5-minute window, so the generic retries end the call with the RAW 503 error (not a RetryDeadlineError).
-  it("🐌 a give-up that throws the raw 503 error (no short deadline) shows the line, alone and inside a static exhaustion", async () => {
+  // Default 5-minute window, so the generic retries end the call with the RAW 503 error (not a RetryDeadlineError).
+  // WHY (TRDD-XY8BZ1PL): it used to sleep the whole window (~73 s). Only the clock is faked (setTimeout/Date); the HTTP server and
+  // sockets stay real, and the loop below advances the fake clock in steps, yielding to real I/O between steps, until the call settles.
+  it("a give-up that throws the raw 503 error (no short deadline) shows the line, alone and inside a static exhaustion", async () => {
     const s = await serve(DEGRADED);
-    const err = await chatCompletionWithRetry(MESSAGES, { model: "vendor/render-j" }, depsFor(s.url)).then(
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const call = chatCompletionWithRetry(MESSAGES, { model: "vendor/render-j" }, depsFor(s.url)).then(
       () => undefined,
       (e: unknown) => e,
     );
+    let settled = false;
+    void call.then(() => (settled = true));
+    // node:timers/promises is not patched by the fake clock: a real 10 ms lets the server and sockets answer between 1 s clock steps (an in-flight request would need 30 consecutive steps to hit its fetch timeout).
+    for (let i = 0; i < 2000 && !settled; i++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      await realDelay(10);
+    }
+    expect(settled).toBe(true);
+    const err = await call;
     expect(err).toBeInstanceOf(Error);
     expect(err).not.toBeInstanceOf(RetryDeadlineError);
     expect((err as Error).message).toMatch(/API error 503/);

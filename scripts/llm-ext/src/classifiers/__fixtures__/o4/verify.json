@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\n  \"model\": \"typesafe/jev-1.14-20261014\",\n  \"answers\": {\n    \"relation_i0\": {\n      \"type\": \"choice\",\n      \"choice\": \"says_nothing\",\n      \"probabilities\": {\n        \"supports\": 0.01,\n        \"contradicts\": 0.01,\n        \"says_nothing\": 0.98\n      },\n      \"confidence\": 0.97\n    },\n    \"subject_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.23\n    },\n    \"source_i0\": {\n      \"type\": \"choice\",\n      \"choice\": \"none\",\n      \"probabilities\": {\n        \"evidence_i0\": 0.05,\n        \"evidence_i1\": 0.02,\n        \"none\": 0.93\n      },\n      \"confidence\": 0.89\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 682,\n    \"output_tokens\": 113,\n    \"cost\": 0.000028644\n  }\n}\n"
+}

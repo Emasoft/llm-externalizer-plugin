@@ -49,6 +49,7 @@ import {
   autoGroupByHeuristic,
 } from "../grouping.js";
 import type { ProgressFn } from "../rate-limiter.js";
+import { runOutcome } from "../command-stop.js";
 
 export type CheckSpecsChatMessage = {
   role: "system" | "user" | "assistant";
@@ -58,6 +59,8 @@ export type CheckSpecsChatMessage = {
 export type CheckSpecsToolResult = {
   content: { type: "text"; text: string }[];
   isError?: boolean;
+  /** Some files delivered results although isError is set: the CLI prints the summary on stdout (runOutcome). */
+  partial?: boolean;
 };
 
 /**
@@ -302,8 +305,10 @@ export async function runCheckAgainstSpecs(
           // Mode 0 (non-grouped only): one output report per input file
           if (csMode === 0 && !csEffectivelyGrouped) {
             const csPerFileResults: string[] = [];
+            let csFailedFiles = 0;
             for (const fp of fgPaths) {
               if (!existsSync(fp)) {
+                csFailedFiles++;
                 csPerFileResults.push(`FAILED: ${fp} — File not found`);
                 continue;
               }
@@ -311,6 +316,7 @@ export async function runCheckAgainstSpecs(
               try {
                 fpBlock = readFileAsCodeBlock(fp, undefined, csRedact, csBudgetBytes, csRegexRedact);
               } catch (err) {
+                csFailedFiles++;
                 csPerFileResults.push(`FAILED: ${fp} — ${err instanceof Error ? err.message : String(err)}`);
                 continue;
               }
@@ -333,6 +339,7 @@ export async function runCheckAgainstSpecs(
                 csUseEnsemble,
               );
               if (fpResp.content.trim().length === 0) {
+                csFailedFiles++;
                 csPerFileResults.push(`FAILED: ${fp} — LLM returned empty response`);
                 continue;
               }
@@ -344,7 +351,8 @@ export async function runCheckAgainstSpecs(
               }, undefined, deps.outputDir);
               csPerFileResults.push(fpReportPath);
             }
-            return { content: [{ type: "text", text: csPerFileResults.join("\n") }] };
+            // TRDD-PN84WC1L: any failed file is an error (exit 1), the finished report paths stay on stdout.
+            return { content: [{ type: "text", text: csPerFileResults.join("\n") }], ...runOutcome(false, csFailedFiles, csPerFileResults.length - csFailedFiles) };
           }
 
           // Group source files using FFD bin packing

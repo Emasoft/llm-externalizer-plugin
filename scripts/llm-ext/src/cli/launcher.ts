@@ -11,8 +11,11 @@
 import { DECISION_SPECS } from "../classifiers/catalog/index.js";
 import { INPUT_FLAGS, SHARED_FLAGS } from "../classifiers/shared-flags.js";
 import type { AnySpec } from "../classifiers/catalog/spec.js";
+import { PING_FLAGS, PING_TOOL_NAME } from "../classifiers/commands/ping-flags.js";
+import type { PingDeps, PingExit } from "../classifiers/commands/ping.js";
 import type { ArgvDeps, ExitCode } from "../classifiers/run-decision.js";
 import { classifyToolName } from "../tools/definitions.js";
+import { STOP_ON_ERRORS_FLAGS } from "./timeout-flags.js";
 
 interface JsonSchemaProp {
   type?: string;
@@ -117,7 +120,13 @@ export function classifyActions(specs: readonly AnySpec[] = DECISION_SPECS): Rec
   return Object.fromEntries(specs.map((s) => [s.id, { command: classifyToolName(s.id) }]));
 }
 
-export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>>> = { ...FIXED_GROUPS, classify: classifyActions() };
+// C4-07: ping is the one classify action that is not a decision spec; it is listed after the generated ones.
+export const GROUPS: Readonly<Record<string, Readonly<Record<string, ActionSpec>>>> = { ...FIXED_GROUPS, classify: { ...classifyActions(), ping: { command: PING_TOOL_NAME } } };
+
+/** True for every tool that main.ts runs outside dispatchCallTool: a decision spec, or ping. */
+export function isClassifyTool(toolName: string): boolean {
+  return classifySpecFor(toolName) !== undefined || toolName === PING_TOOL_NAME;
+}
 
 /** The registry spec behind a classify tool name (`classify_filter`), or undefined for any other tool. */
 export function classifySpecFor(toolName: string, specs: readonly AnySpec[] = DECISION_SPECS): AnySpec | undefined {
@@ -134,7 +143,7 @@ export function classifySpecFor(toolName: string, specs: readonly AnySpec[] = DE
 export function classifyArgv(argv: readonly string[]): string[] {
   // WHY the INPUT_FLAGS too: `--lines app.log` must not take app.log as the value of --lines.
   // WHY the boolean spec flags too (rank --all): a valueless flag treated as value-taking would swallow the next flag name unrewritten.
-  const booleanFlags = new Set([...SHARED_FLAGS, ...INPUT_FLAGS, ...DECISION_SPECS.flatMap((s) => s.flags ?? [])].filter((f) => ("type" in f ? f.type === "boolean" : false)).map((f) => f.flag));
+  const booleanFlags = new Set([...SHARED_FLAGS, ...INPUT_FLAGS, ...PING_FLAGS, ...DECISION_SPECS.flatMap((s) => s.flags ?? [])].filter((f) => ("type" in f ? f.type === "boolean" : false)).map((f) => f.flag));
   const out: string[] = [];
   let valueNext = false;
   for (const t of argv) {
@@ -170,21 +179,34 @@ export function classifyHelpNote(toolName: string): string | undefined {
  * Runs one classify action through the one runner.
  * WHY no PT-03 call here or in main.ts: the runner's selectClassifierProfile applies profileSelectionRefusal itself, to `--profile` or else `active_classifier:`, with `active:` left out on purpose (classify never reads it), before any request. A second check here would only re-add the `active:` refusal the runner avoids.
  * WHY a dynamic import: the runner chain (transport, fan-out, planner, report) must not load at the start of every other command.
- * WHY --profile is re-injected: main.ts strips it from every argv, and the runner reads it as its own flag.
- * WHY --estimate/--preview are refused here: they are stripped by main.ts for other commands; for classify the dry run is a later card (C4-08), and "unknown option" would read as a typo.
+ * WHY --profile is re-injected: main.ts strips it from every argv, and the runner reads it as its own flag. WHY in front, next to the hoisted --estimate, and not appended (TRDD-OZIIABLY): the runner reads every token after a bare `--` as a positional (run-decision.ts, `if (raw === "--")`), so an appended `--profile <name>` landed in an input slot ("no such file or directory: --profile"). classifyArgv is not given it: the runner already accepts --profile as its first token.
+ * WHY --preview is refused here: main.ts strips it for other commands and classify has no preview; "unknown option" would read as a typo.
+ * WHY --estimate is taken out of argv and put back in front (C4-08, TRDD-58CFBQHN): not because classifyArgv misreads it (it is in SHARED_FLAGS), but so it stays an option even when typed after `--`, where the runner reads every token as a file name (run-decision.ts, `if (raw === "--")`). The runner owns the flag (RunRequest.estimate) and prints the dry run.
  */
 export async function runClassifyCommand(spec: AnySpec, argv: readonly string[], profileFlag: string | undefined, deps: ArgvDeps): Promise<ExitCode> {
-  const unavailable = argv.find((t) => t === "--estimate" || t === "--preview");
+  const unavailable = argv.find((t) => t === "--preview");
   if (unavailable !== undefined) {
     deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
     return 1;
   }
   const { runDecisionArgv } = await import("../classifiers/run-decision.js");
-  const args = classifyArgv(argv);
-  if (profileFlag !== undefined) args.push("--profile", profileFlag);
+  const args = [...argv.filter((t) => t === "--estimate"), ...(profileFlag !== undefined ? ["--profile", profileFlag] : []), ...classifyArgv(argv.filter((t) => t !== "--estimate"))];
   return runDecisionArgv(spec, args, deps);
 }
 
+/**
+ * Runs `classify ping` (C4-07). WHY a dynamic import and --profile re-injected: the same two reasons as runClassifyCommand (the runner chain must not load at every start; main.ts strips --profile).
+ * WHY --estimate/--preview refused: ping has a free step and one tiny question and no dry run; "unknown option" would read as a typo.
+ */
+export async function runClassifyPing(argv: readonly string[], profileFlag: string | undefined, deps: PingDeps): Promise<PingExit> {
+  const unavailable = argv.find((t) => t === "--estimate" || t === "--preview");
+  if (unavailable !== undefined) {
+    deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
+    return 1;
+  }
+  const { runPing } = await import("../classifiers/commands/ping.js");
+  return runPing(classifyArgv(argv), profileFlag, deps);
+}
 /** True when `name` is a known group — the launcher only engages then. */
 export function isGroupName(name: string): boolean {
   return Object.prototype.hasOwnProperty.call(GROUPS, name);
@@ -303,7 +325,24 @@ export const GLOBAL_BOOLEAN_FLAGS: ReadonlySet<string> = new Set([
   "--preview",
   "--help",
   "-h",
+  ...STOP_ON_ERRORS_FLAGS,
 ]);
+
+/**
+ * Move the leading `hoistable` flags behind the command words (`--quiet scan --help` -> `scan --help --quiet`).
+ * WHY before a `--` separator: classify treats every token after `--` as a positional (run-decision.ts), so a flag
+ * appended after it would be read as a file name; the moved flags go in front of the separator instead.
+ * `--help` and `-h` are never in `hoistable`: a leading help is handled before dispatch.
+ */
+export function hoistLeadingFlags(argv: string[], hoistable: ReadonlySet<string>): string[] {
+  let n = 0;
+  while (n < argv.length && hoistable.has(argv[n])) n++;
+  if (n === 0) return argv;
+  const rest = argv.slice(n);
+  const sep = rest.indexOf("--");
+  const at = sep === -1 ? rest.length : sep;
+  return [...rest.slice(0, at), ...argv.slice(0, n), ...rest.slice(at)];
+}
 
 /**
  * Does `token` (a `-`-prefixed flag) consume the NEXT token as its value?

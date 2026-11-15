@@ -26,6 +26,7 @@ import { closeSync, existsSync, mkdtempSync, openSync, readdirSync, readFileSync
 import { homedir, tmpdir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 import { spawnDetachedChild } from "./bench-spawn.js";
+import { readRam } from "./governor/ram.js";
 import { httpStatus, isPythonPath, LOCALS_MARKER_OPTION, ManagedServerError, pidState, sleep, STALL_MS, POLL_MS, type ManagedTarget } from "./local-llama-server.js";
 
 /**
@@ -99,7 +100,7 @@ export async function localsPython(env: NodeJS.ProcessEnv = process.env): Promis
 }
 
 /** The argv of a main Locals server (argv[0] is the interpreter). */
-export function buildLocalsArgv(python: string, target: ManagedTarget, marker: string): string[] {
+export function buildLocalsArgv(python: string, target: ManagedTarget, marker: string, cacheGb?: number): string[] {
   return [
     python,
     "-I",
@@ -117,6 +118,9 @@ export function buildLocalsArgv(python: string, target: ManagedTarget, marker: s
     String(target.slots ?? LOCALS_MAIN_SLOTS),
     // --max-context = prompt + reply tokens per request, the profile's context_window (Locals' default: what fits in memory).
     ...(target.ctx > 0 ? ["--max-context", String(target.ctx)] : []),
+    // Governor D11: Locals' own prompt cache defaults to all the GPU memory the weights leave, so on a large machine it
+    // could fill RAM to the limit by itself. Bounded, it belongs to the load projection.
+    ...(cacheGb !== undefined ? ["--cache-gb", String(cacheGb)] : []),
   ];
 }
 
@@ -161,10 +165,11 @@ export async function spawnLocalsServer(
   target: ManagedTarget,
   logFile: string,
   marker: string,
+  cacheGb?: number,
 ): Promise<{ pid: number; argv: string[]; child: ChildProcess; cwd: string }> {
   const python = await localsPython();
   if (existsSync(logFile)) renameSync(logFile, `${logFile}.1`);
-  const argv = buildLocalsArgv(python, target, marker);
+  const argv = buildLocalsArgv(python, target, marker, cacheGb);
   const cwd = mkdtempSync(join(tmpdir(), "llm-ext-locals-"));
   try {
     let rejectSpawn: (err: Error) => void = () => undefined;
@@ -309,12 +314,13 @@ export function localsOutgoingModel(ids: readonly string[], body: Record<string,
 }
 
 /**
- * macOS `memory_pressure`: the system-wide free memory percentage (it already
- * counts inactive, purgeable and compressed memory; Locals itself guards only
- * its own GPU working set, not other processes). null when it cannot be read.
+ * The free memory percentage: 100 minus governor/ram.ts's used share (round 3,
+ * D4). It was memory_pressure's free percentage, which counts reclaimable
+ * memory as free and moved 1 point for a 6 GiB allocation (measured); now
+ * calibration and the governor read the same figure on darwin. Never null: a
+ * reading that fails throws.
  */
-export async function memoryFreePercent(): Promise<number | null> {
-  const out = await execText("memory_pressure", []);
-  const m = out === null ? null : /free percentage:\s*(\d+)%/.exec(out);
-  return m ? Number(m[1]) : null;
+export async function memoryFreePercent(): Promise<number> {
+  const { usedBytes, totalBytes } = await readRam();
+  return 100 - (100 * usedBytes) / totalBytes;
 }

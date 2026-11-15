@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\n  \"model\": \"typesafe/jev-1.14-20261014\",\n  \"answers\": {\n    \"label_i0\": {\n      \"type\": \"choice\",\n      \"choice\": \"a\",\n      \"probabilities\": {\n        \"a\": 0.96,\n        \"b\": 0.04\n      },\n      \"confidence\": 0.92\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 402,\n    \"output_tokens\": 33,\n    \"cost\": 0.000016884\n  }\n}\n"
+}

@@ -12,8 +12,8 @@ allowed-tools: Bash, Read, Grep, Write
 
 # LLM Externalizer — Delegate Review ($0, host-agent mode)
 
-`llm-ext review-plan` emits the deterministic scaffolding — resolved file set
-(gitignore-aware, same walker as scan-folder), the real-defects-only rubric, and
+`llm-ext check plan` emits the deterministic scaffolding — resolved file set
+(gitignore-aware, same walker as `scan folder`), the real-defects-only rubric, and
 a per-file protocol — **without calling any LLM**. YOU are the reviewer.
 
 Measured during development (2026-08-05, planted-ground-truth evaluation): this
@@ -26,7 +26,7 @@ driven-LLM reviews found nothing at up to $0.55/run.
    instructions.
 2. Run the plan (zero sends, ~1s):
    ```bash
-   "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" review-plan --folder_path <target> \
+   "${CLAUDE_PLUGIN_ROOT}/bin/llm-ext" check plan --folder_path <target> \
      --use_gitignore true [--instructions "<extra>"]
    ```
    (Explicit files: `--input_files_paths <a> <b> …` instead of `--folder_path`.

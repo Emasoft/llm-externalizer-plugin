@@ -1,4 +1,4 @@
-# or_model_info — Example Output
+# models info — Example Output
 
 ## Table of Contents
 - [Sample response](#sample-response)
@@ -8,7 +8,7 @@
 
 ## Sample response
 
-Calling `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model nvidia/nemotron-3-super-120b-a12b:free`
+Calling `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model nvidia/nemotron-3-super-120b-a12b:free`
 returns markdown like this:
 
 ```markdown

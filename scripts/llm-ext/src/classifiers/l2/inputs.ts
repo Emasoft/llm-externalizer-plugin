@@ -33,7 +33,9 @@ export type ReadMode =
   | { kind: "whole" }
   | { kind: "head"; bytes: number }
   | { kind: "lines"; from: number; to: number }
-  | { kind: "window"; line: number; radius: number };
+  | { kind: "window"; line: number; radius: number }
+  /** Whole file, except that a file over `opts.maxBytes` keeps its last whole lines (at most that many bytes) instead of being refused; without `opts.maxBytes` it behaves as "whole" and an over-size file is refused with a hint. */
+  | { kind: "tail" };
 
 export interface Snippet {
   text: string;
@@ -42,6 +44,8 @@ export interface Snippet {
   fromLine: number;
   toLine: number;
   totalLines: number;
+  /** Bytes dropped from the start by the "tail" mode; absent otherwise. */
+  droppedBytes?: number;
 }
 
 export interface ReadOptions {
@@ -86,7 +90,7 @@ function sliceBytes(buf: Buffer, bytes: number): Buffer {
   return buf.subarray(0, end);
 }
 
-function applyMode(buf: Buffer, mode: ReadMode, label: string, budgetMs?: number): Snippet {
+function applyMode(buf: Buffer, mode: Exclude<ReadMode, { kind: "tail" }>, label: string, budgetMs?: number): Snippet {
   const warnings: string[] = [];
   // Why redact the whole text before any slice: a range or head cut inside a PEM block has no BEGIN marker, so the key body would be sent (E37).
   // redactContent keeps the line count, so the caller's line numbers still point at the same lines.
@@ -134,7 +138,8 @@ function checkRoot(p: string): string {
 
 // A file the caller named (--state @f, --items, spec file, --labels-json @f): naming a file is not consent to send a credential,
 // and a named input that cannot be used is refused, never skipped (E33, E35, E36, E40, E41, E124, E125).
-function readNamed(file: string, maxBytes: number): Buffer {
+// `tailCap` set: a regular file over it is not refused; its last whole lines (at most tailCap bytes) are read and the dropped byte count is returned (review of 3e281b35, finding 11).
+function readNamed(file: string, maxBytes: number, tail: { cap: number | undefined } | undefined): { buf: Buffer; dropped: number } {
   // Why exists first: sanitizeInputPath reports a missing /tmp path as traversal (realpath of a missing file is not canonical).
   if (!fs.existsSync(file)) throw new InputError(`no such file: ${file}`);
   const safe = checkRoot(file); // E35: roots and leaf symlink
@@ -143,15 +148,50 @@ function readNamed(file: string, maxBytes: number): Buffer {
   // Why before any read: readFileSync on a FIFO blocks forever waiting for a writer (F6).
   if (!st.isFile()) throw new InputError(`${file} is not a regular file`);
   if (isSecretPath(safe) || isSecretPath(fs.realpathSync(safe))) throw new InputError(`${file} looks like a secret file and is never sent`);
-  if (st.size > maxBytes) throw new InputError(`${file} is over ${fmtBytes(maxBytes)}; split it`);
+  if (st.size > maxBytes) {
+    // Why tailing only when the caller gave a cap: with none, a log over the hard cap is refused as before and the message says how to keep its end.
+    if (tail === undefined) throw new InputError(`${file} is over ${fmtBytes(maxBytes)}; split it`);
+    if (tail.cap === undefined) throw new InputError(`${file} is over ${fmtBytes(maxBytes)}; pass --max-bytes N to keep the last N bytes`);
+    return readTail(file, safe, st, tail.cap);
+  }
   const buf = fs.readFileSync(safe);
   if (isBinary(buf)) throw new InputError(`${file} is binary (NUL byte in the first ${BINARY_SNIFF_BYTES} bytes) and is never sent`);
   if (!buf.toString("utf8").trim()) throw new InputError(`${file}: empty input`);
-  return buf;
+  return { buf, dropped: 0 };
+}
+
+// Why cap+1 bytes: the byte before the window says whether the window starts on a line start (a newline there) or inside a line (then the partial first line is dropped).
+// Why the fstat comparison: the path was checked, then opened; a swap between the two (a symlink put in place of the file) would read a file the checks never saw, so the opened descriptor must be the same dev/ino as the checked path.
+function readTail(file: string, safe: string, checked: fs.Stats, cap: number): { buf: Buffer; dropped: number } {
+  const fd = fs.openSync(safe, "r");
+  try {
+    const opened = fs.fstatSync(fd);
+    if (opened.dev !== checked.dev || opened.ino !== checked.ino || !opened.isFile()) throw new InputError(`${file} changed while it was being opened; nothing was read`);
+    const size = opened.size;
+    const want = Math.min(cap + 1, size);
+    const raw = Buffer.alloc(want);
+    fs.readSync(fd, raw, 0, want, size - want);
+    const cutInside = want === size ? false : raw[0] !== 10;
+    const window = want === size ? raw : raw.subarray(1);
+    let start = 0;
+    if (cutInside) {
+      const nl = window.indexOf(10);
+      start = nl === -1 ? -1 : nl + 1;
+    }
+    if (start === -1 || start >= window.length) throw new InputError(`${file}: the last line alone is over ${cap} bytes; raise --max-bytes`);
+    const kept = window.subarray(start);
+    if (isBinary(kept)) throw new InputError(`${file} is binary (NUL byte in the first ${BINARY_SNIFF_BYTES} bytes) and is never sent`);
+    if (!kept.toString("utf8").trim()) throw new InputError(`${file}: empty input`);
+    return { buf: Buffer.from(kept), dropped: size - kept.length };
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 export async function readForJev(file: string, mode: ReadMode, opts: ReadOptions = {}): Promise<Snippet> {
-  return applyMode(readNamed(file, effectiveMax(opts.maxBytes)), mode, file, opts.redactBudgetMs);
+  const { buf, dropped } = readNamed(file, effectiveMax(opts.maxBytes), mode.kind === "tail" ? { cap: opts.maxBytes } : undefined);
+  const snippet = applyMode(buf, mode.kind === "tail" ? { kind: "whole" } : mode, file, opts.redactBudgetMs);
+  return dropped > 0 ? { ...snippet, droppedBytes: dropped } : snippet;
 }
 
 // ---- walking ----
@@ -332,7 +372,7 @@ export async function collectInputs(specs: string[], opts: CollectOptions = {}):
   if (opts.items !== undefined) {
     const raw = opts.items === "-"
       ? stdinText(opts.stdin, maxBytes, warnings, opts.redactBudgetMs)
-      : (() => { const s = applyMode(readNamed(opts.items, maxBytes), { kind: "whole" }, opts.items, opts.redactBudgetMs); warnings.push(...s.warnings); return s.text; })();
+      : (() => { const s = applyMode(readNamed(opts.items, maxBytes, undefined).buf, { kind: "whole" }, opts.items, opts.redactBudgetMs); warnings.push(...s.warnings); return s.text; })();
     for (const it of parseItems(raw)) push(it.id, it.text);
   }
 

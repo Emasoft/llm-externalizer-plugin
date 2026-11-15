@@ -63,6 +63,16 @@ export interface ManagedTarget {
   slots?: number;
 }
 
+/** What a llama-server is started with: a target plus its threads. Locals shares ManagedTarget and has no thread option. */
+export interface LlamaServerTarget extends ManagedTarget {
+  /**
+   * Governor D10: the `-t`/`-tb` (governor/client.ts spawnThreads), the T every lease on it counts, broker and calibration
+   * alike. Required, so a new spawn site cannot forget it and run ungoverned. 0 = no `-t`: cpu_limit_pct 100 disables the
+   * CPU limit (D13), and llama.cpp keeps its own default (measured: the 10 performance cores of a 14-core M-series).
+   */
+  threads: number;
+}
+
 export type ManagedModelKind = "hf" | "hf-file" | "file";
 
 const HF_PART = "[A-Za-z0-9][A-Za-z0-9._-]*";
@@ -98,7 +108,7 @@ export function parseManagedModel(model: string): { kind: ManagedModelKind; argv
 export const MAIN_SLOTS = 2;
 
 /** The full llama-server argv for a target (model args first). `--log-file` doubles as the stable marker the registry sweep finds an unrecorded llm-ext server by (spec point 8): it names THIS config dir, so a user-run llama-server never matches. */
-export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logFile: string): string[] {
+export function buildServerArgv(target: LlamaServerTarget, modelArgv: string[], logFile: string): string[] {
   return [
     ...modelArgv,
     "--alias", target.model,
@@ -115,6 +125,10 @@ export function buildServerArgv(target: ManagedTarget, modelArgv: string[], logF
     // the model's whole default context (MAIN_SLOTS slots would split it).
     "-np", String(target.slots ?? (target.ctx > 0 ? MAIN_SLOTS : 1)),
     ...(target.ctx > 0 ? ["-c", String(target.ctx * (target.slots ?? MAIN_SLOTS))] : []),
+    // Governor D10: -t and -tb alike, so prompt processing (the batch pool) stays inside the same T threads as decode.
+    // Measured in unit 5, with layers on the CPU: n_threads in the log equals T, and 1, 2 or 4 busy slots use T cores (they
+    // share one pool); on Metal the T threads stay idle. 0 leaves -t out (cpu_limit_pct 100, see LlamaServerTarget.threads).
+    ...(target.threads > 0 ? ["-t", String(target.threads), "-tb", String(target.threads)] : []),
     "--jinja",
     "--sleep-idle-seconds", String(SLEEP_IDLE_SECONDS),
     "--log-file", logFile,
@@ -430,7 +444,7 @@ export function freePort(): Promise<number> {
  * the previous run's log is kept as .1.
  */
 export async function spawnLlamaServer(
-  target: ManagedTarget,
+  target: LlamaServerTarget,
   modelArgv: string[],
   logFile: string,
   /** Review M13: the per-spawn key the server requires on its API (passed by env, never argv: `ps` shows argv to every user). */

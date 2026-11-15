@@ -4,7 +4,7 @@ title: llm-ext self-heals every profile, discovers new system-one models, falls 
 column: design
 status: tasked
 created: 2026-10-27T23:45:22+0100
-updated: 2026-10-28T20:03:26+0100
+updated: 2026-11-13T19:11:24+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-27T23:45:22+0100
-eht: [5Q79QZM7, 28BAL5ER, 8HDAFJ3N, J7AIC7ZW]
+eht: [5Q79QZM7, 28BAL5ER, 8HDAFJ3N, J7AIC7ZW, O93LFMF3, WSPV40Y5, 3CG178O7, PN0N4290, 78LZFUVJ]
 ---
 
 # llm-ext self-heals every profile, discovers new system-one models, falls back to a local small model
@@ -92,3 +92,9 @@ https://huggingface.co/srv-sngh/Ornith-9B-mlx-nvfp4
 - 2026-10-27 (verbatim): "you can try also those of 3B parameters" — the local fallback size cap rises from under 2B to 3B parameters, so Nanbeige4.2-3B and its MLX builds and LiquidAI d1-3B are now candidates beside LFM3-1.7B.
 - 2026-10-27 (verbatim): "you must use krill for nanbeinge4.2" — Nanbeige4.2 runs through Krill (https://github.com/srvsngh99/Krill), not through a generic MLX or Ollama runner. Krill itself is not yet researched.
 USER directive verbatim (2026-10-28, repeating the /goal with one addition): "since we are using Locals for all mlx models, you can drop the support for kiril." Consequence: Krill support is removed from llm-ext; every MLX model (including Nanbeige4.2 and Qwen3.5) runs through Locals; the earlier note that Nanbeige4.2 must run through Krill is superseded.
+2026-11-13 USER (verbatim, /goal): "you crashed (actually it was a corruption in the transcript, but i cleared all) so you need to reconstruct what were you doing yourself. surely you had a goal, but i forgot what it was. one thing was certainly to finish all TRDDs and fix all issues. do a /ultimate-bug-scanner pass on all sources, to check if some code was corrupted. then investigate the latest files that were edited. the most recent problem was the local jev/decision models sometimes using more than one instance of the mlx-decision server, instead of reusing it to ensure only one system wide existed (since it weights 15gb). The other was the automatic fallback of all commands to local small language models using the two local inference tools we have added to llm-ext, like locale and lama.cpp. in general the plugin was working on becoming resistant to any remote service becoming unavailable to errors, network isolation or credisf exhaustion, by falling back to local model, but with a carefully managed use of local models modulated in realtime to keep the system responsive and to not saturate or exhaust ram, cpu cores, disk space, etc. with a smart monitoring deciding when executing or terminating the processes of the local inference tools according to the overall state of the system. continue working until such system is working without errors and the updated plugin is published and installed."
+2026-11-13 consequence (advisor-reviewed): this goal is the ruling that lifts addendum 4 (profile-fallback.ts header, 2026-09-17) for SERVICE-LEVEL failure only (outage / no network / 402 credit exhaustion); a dead model inside a healthy service stays in-profile. Survey (reports_dev/sonnet-worker/20261113_180252+0100-local-fallback-survey.md): today NO general command falls back to local_llama/locals-mlx; only classify adopts the mlx-decision singleton. Design constraints for the new EHT: (1) ready-now or no fallback: engine binary present, model on disk, calibration record ok, else original error + one enable line, never a download or calibration on a failure path; (2) reuse the --profile <local> path through broker + governor, no new spawn/lease code; (3) respect the local input budget, refuse never truncate; (4) latch per run once switched; (5) same cause split as NO_LOCAL_RESCUE, request-specific 4xx never falls back; (6) never silent: answered-by label + one warning; (7) one function in chatCompletionWithProfileFallback (index.ts ~3543-3576) first, real tests (closed port, local 402 server, tiny-llamas), then ensemble, free-rotation, scouting, one commit each. Also read SWNIIFTF (--stop_on_errors, fallback default-on rule 2026-10-28) before designing.
+
+## Open questions
+
+2026-11-13 OPEN (raised by the C3 review of O93LFMF3): once the general remote-to-local fallback lands, local llama jobs will hold governor slots exactly when remote models are down, which is also when the decider escalates, so lease starvation of the decider becomes routine and the O93LFMF3 60 s fast-fail would then drop decisions routinely. Decide whether the decider gets a reserved governor slot or priority over long llama/Locals jobs; until then the O93LFMF3 lease memo is provisional.

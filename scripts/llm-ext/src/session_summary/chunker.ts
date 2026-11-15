@@ -253,7 +253,12 @@ export function classifyContextOverflow(detail: string): boolean {
     s.includes("prompt is too long") ||
     s.includes("payload too large") ||
     s.includes("request entity too large") ||
-    s.includes("maximum number of tokens allowed")
+    s.includes("maximum number of tokens allowed") ||
+    // TRDD-TYHKAKCB: llama-server (llama.cpp) rejects an over-window request with type "exceed_context_size_error" and
+    // "the request exceeds the available context size"; none of the phrases above match it, so a local chunk that
+    // overflowed would fail instead of being re-split. Locals (MLX) wording is not known yet: add it when observed.
+    s.includes("exceed_context_size") ||
+    s.includes("exceeds the available context size")
   );
 }
 

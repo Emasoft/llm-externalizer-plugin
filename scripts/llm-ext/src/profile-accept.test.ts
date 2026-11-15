@@ -48,7 +48,7 @@ describe("acceptedProfileTypes table", () => {
     expect(accepted("check_imports")).toEqual(["local", "free", "paid"]);
     expect(accepted("high_quality_scan")).toEqual(["paid"]);
     expect(accepted("security_scan")).toEqual(["paid"]);
-    expect(accepted("session_summary")).toEqual(["free", "paid"]);
+    expect(accepted("session_summary")).toEqual(["local", "free", "paid"]);
     expect(accepted("mass_scout")).toEqual(["scouting"]);
     expect(describeAcceptedTypes(accepted("rules_check"))).toBe("any");
   });
@@ -93,8 +93,9 @@ describe("profileSelectionRefusal", () => {
     expect(refuse("mass_scout", "scout run", "free", "free")).toContain("accepted profile types: scouting");
     expect(refuse("mass_scout", "scout run", "scouting", "free")).toBeUndefined();
   });
-  it("session compact refuses a local profile", () => {
-    expect(refuse("session_summary", "session compact", "local")).toContain("free, paid");
+  it("session compact accepts a local profile (TRDD-TYHKAKCB) and still refuses a scouting one", () => {
+    expect(refuse("session_summary", "session compact", "local")).toBeUndefined();
+    expect(refuse("session_summary", "session compact", "scouting")).toContain("local, free, paid");
   });
   it("a no-model command accepts every type via --profile", () => {
     for (const flag of Object.keys(profiles)) expect(refuse("rules_check", "check rules", flag)).toBeUndefined();

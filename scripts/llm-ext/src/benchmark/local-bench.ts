@@ -26,6 +26,7 @@
 
 import { API_PRESETS, isLocalUrl, overridesEndpoint } from "../config.js";
 import { recordRequest } from "../usage-history.js";
+import { releaseDirectLease, takeDirectLease, withDirectLease } from "../governor/direct.js";
 import type { GroundTruth } from "./ground-truth.js";
 import { chatCompletionsUrl, runBenchmarkOnModel, type RunResult } from "./runner.js";
 import { scoreRun } from "./score.js";
@@ -119,14 +120,18 @@ async function benchmarkOne(pair: LocalModelPair, deps: LocalBenchDeps): Promise
   const warmupError = await warmUp(pair, deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS);
   if (warmupError !== null) return { ...base, pass: false, tokPerSec: null, failReason: warmupError };
 
-  const run = await runBenchmarkOnModel(
-    // Zero prices + freeOnly:false: the runner's free_only gate reads OpenRouter
-    // catalog prices, which mean nothing for a local id. Billability was decided
-    // for the endpoint in benchmarkModelsSequentially, before any request.
-    { id: pair.model, inputDollarsPerMillion: 0, outputDollarsPerMillion: 0 },
-    deps.truth.keywords,
-    deps.truth.fixtures,
-    { baseUrl: pair.baseUrl, freeOnly: false, timeoutMs: deps.timeoutMs },
+  // Governor design D9: the timed request to a loopback server holds a lease, taken outside the runner so the wait is
+  // not timed. 600 s is the runner's own default timeout.
+  const run = await withDirectLease(pair.baseUrl, deps.timeoutMs ?? 600_000, () =>
+    runBenchmarkOnModel(
+      // Zero prices + freeOnly:false: the runner's free_only gate reads OpenRouter
+      // catalog prices, which mean nothing for a local id. Billability was decided
+      // for the endpoint in benchmarkModelsSequentially, before any request.
+      { id: pair.model, inputDollarsPerMillion: 0, outputDollarsPerMillion: 0 },
+      deps.truth.keywords,
+      deps.truth.fixtures,
+      { baseUrl: pair.baseUrl, freeOnly: false, timeoutMs: deps.timeoutMs },
+    ),
   );
   if (!run.ok) return { ...base, pass: false, tokPerSec: null, failReason: run.error };
 
@@ -150,6 +155,8 @@ async function benchmarkOne(pair: LocalModelPair, deps: LocalBenchDeps): Promise
  * endpoint or an unknown model stops HERE, without the timed run.
  */
 async function warmUp(pair: LocalModelPair, timeoutMs: number): Promise<string | null> {
+  // Outside the try on purpose: a stop or a failed governor ends the benchmark, it is not this model's warm-up error (D9).
+  const lease = await takeDirectLease(pair.baseUrl, timeoutMs);
   const t0 = performance.now();
   let ok = false;
   try {
@@ -174,6 +181,7 @@ async function warmUp(pair: LocalModelPair, timeoutMs: number): Promise<string |
   } finally {
     // history.log holds one line per LLM web request (usage-history.ts); $0 here.
     recordRequest({ ok, durationMs: performance.now() - t0, costUsd: 0 });
+    releaseDirectLease(lease);
   }
 }
 

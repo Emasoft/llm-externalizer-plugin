@@ -82,6 +82,27 @@ export interface ScoutOpts {
    */
   freeOnly: boolean;
   apiUrl?: string;
+  /**
+   * P9 local: the headers of the resolved local connection (its own token, never OPENROUTER_API_KEY), sent instead
+   * of `Authorization: Bearer <apiKey>`. Undefined = the remote headers, unchanged.
+   */
+  headers?: Record<string, string>;
+  /** P9 local: max_tokens on every request (SCOUT_OUTPUT_CAP, the reply size Phase C reserved). Undefined = not sent. */
+  maxTokens?: number;
+  /**
+   * P9 managed local: the broker bounds every call (timeoutMs from dispatch, its queue timeout while queued), so the
+   * per-call client timer is not set; it would abort a job still waiting for its turn or a model load.
+   */
+  noClientTimeout?: boolean;
+  /**
+   * P9 local: false = the calibration record says json_schema does not work on this server, so no response_format
+   * is sent, the schema goes in the system prompt and the JSON is taken from the reply text. Default true.
+   */
+  structuredOutput?: boolean;
+  /** P9 local: the calibrated per-request input share; replaces the context-percentage cap. */
+  inputBudget?: { tokens: number; charsPerToken: number };
+  /** P9 local: merged into every request body (the thinking setting Phase C measured scouting under). */
+  extraBody?: Record<string, unknown>;
   /** Default `DEFAULT_SCOUT_WORKERS` (16). Set 1 for tests. */
   workers?: number;
   /** Default 1 (= up to 2 attempts per file). */
@@ -233,6 +254,66 @@ export async function runWithLimit<T>(
   await Promise.all(workers);
 }
 
+/**
+ * The system prompt a scout request sends. Without structured output (P9 local) the schema is written into it, as
+ * calibration Phase C does for its text mode, because nothing else tells the model the shape.
+ */
+export function scoutSystemPrompt(compiled: CompiledFieldset, structured: boolean): string {
+  if (structured) return compiled.systemPrompt;
+  return `${compiled.systemPrompt}\n\nReply with only one JSON object, no other text. It must match this JSON Schema: ${JSON.stringify(compiled.jsonSchema.schema)}`;
+}
+
+/** P9 local: the longest error text a retry message carries, so the retry overhead in inputCapBytes is exact. */
+export const RETRY_ERROR_MAX_BYTES = 300;
+
+/** `s` cut to at most `max` UTF-8 bytes, never mid-character. */
+function clipBytes(s: string, max: number): string {
+  let out = s;
+  while (Buffer.byteLength(out, "utf-8") > max) out = out.slice(0, -1);
+  return out;
+}
+
+/**
+ * The user message of a retry: the first message plus the reason the previous reply failed. `maxErrorBytes` (P9
+ * local) bounds the reason, so the longest retry is computable; remote passes none and the text is unchanged.
+ */
+export function retryUserMessage(baseUserMsg: string, prevError: string, maxErrorBytes?: number): string {
+  const why = maxErrorBytes === undefined ? prevError : clipBytes(prevError, maxErrorBytes);
+  return `${baseUserMsg}\n\nPREVIOUS RESPONSE FAILED VALIDATION:\n${why}\n\nReturn a JSON object that satisfies the schema this time.`;
+}
+
+/**
+ * The largest body (bytes) of file `basename` that fits a calibrated input share (P9 local): the share in characters
+ * minus the system prompt and the longest user message without its body, which is a retry carrying the longest
+ * reason (retryUserMessage, the same code that builds it), so every attempt stays inside what Phase C measured.
+ */
+export function inputCapBytes(
+  compiled: CompiledFieldset,
+  budget: { tokens: number; charsPerToken: number },
+  structured: boolean,
+  basename: string,
+): number {
+  const longestFrame = retryUserMessage(compiled.userPromptFor(basename, ""), "x".repeat(RETRY_ERROR_MAX_BYTES), RETRY_ERROR_MAX_BYTES);
+  const overhead =
+    Buffer.byteLength(scoutSystemPrompt(compiled, structured), "utf-8") + Buffer.byteLength(longestFrame, "utf-8");
+  return Math.max(0, Math.floor(budget.tokens * budget.charsPerToken) - overhead);
+}
+
+/**
+ * The JSON object of a reply. With structured output the content IS the object (JSON.parse, as always). Without it
+ * (P9 local) a think block and code fences are dropped and the object is taken from the first "{" to the last "}",
+ * as parsePositionalText does for calibration, then parsed by the same JSON.parse. Throws what JSON.parse throws.
+ */
+export function parseReplyJson(content: string, structured: boolean): unknown {
+  if (structured) return JSON.parse(content);
+  let text = content.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const close = text.lastIndexOf("</think>");
+  if (close >= 0) text = text.slice(close + "</think>".length);
+  text = text.replace(/```(?:json)?/gi, "").trim();
+  const a = text.indexOf("{");
+  const b = text.lastIndexOf("}");
+  return JSON.parse(a >= 0 && b > a ? text.slice(a, b + 1) : text);
+}
 // ── Main entry point ───────────────────────────────────────────────────
 
 export async function runScoutJob(
@@ -259,7 +340,12 @@ export async function runScoutJob(
   const workers = Math.max(1, opts.workers ?? DEFAULT_SCOUT_WORKERS);
   const maxRetries = opts.maxRetries ?? 1;
   const scoutPct = opts.maxContextPctScout ?? 0.4;
-  const cap = bytesCapFromPct(opts.pricing.context_window, scoutPct);
+  const structured = opts.structuredOutput !== false;
+  // P9 local: the calibrated input share decides the cap, per file because the user frame holds its basename;
+  // remote keeps the context percentage.
+  const pctCap = bytesCapFromPct(opts.pricing.context_window, scoutPct);
+  const capFor = (row: RegistryRow): number =>
+    opts.inputBudget ? inputCapBytes(compiled, opts.inputBudget, structured, row.basename) : pctCap;
   const apiUrl = opts.apiUrl ?? OPENROUTER_URL;
   const smokeTest = opts.smokeTest !== false;
   const resume = opts.resume !== false;
@@ -311,14 +397,17 @@ export async function runScoutJob(
   const allRows = reg.listEligible(
     opts.bucket !== undefined ? { bucket: opts.bucket } : {},
   );
-  const sized = allRows.filter((r) => r.file_size_bytes <= cap);
+  const sized = allRows.filter((r) => r.file_size_bytes <= capFor(r));
   const skippedTooBig = allRows.length - sized.length;
   for (const row of allRows) {
+    const cap = capFor(row);
     if (row.file_size_bytes > cap) {
       reg.recordSkipped({
         short_id: row.short_id,
         file_path: row.file_path,
-        reason: `body_bytes ${row.file_size_bytes} > scout cap ${cap} (${(scoutPct * 100).toFixed(0)}% of context)`,
+        reason: opts.inputBudget
+          ? `body_bytes ${row.file_size_bytes} > scout cap ${cap} (calibrated input share ${opts.inputBudget.tokens} tokens)`
+          : `body_bytes ${row.file_size_bytes} > scout cap ${cap} (${(scoutPct * 100).toFixed(0)}% of context)`,
         phase: "scout",
         size_bytes: row.file_size_bytes,
         context_pct: row.file_size_bytes / (opts.pricing.context_window * 4),
@@ -494,6 +583,7 @@ async function scoutOneFile(
     };
   }
   const bodyStr = body.toString("utf-8");
+  const structured = opts.structuredOutput !== false;
   const baseUserMsg = compiled.userPromptFor(row.basename, bodyStr);
 
   let attempts = 0;
@@ -505,18 +595,26 @@ async function scoutOneFile(
     const userContent =
       prevError === null
         ? baseUserMsg
-        : `${baseUserMsg}\n\nPREVIOUS RESPONSE FAILED VALIDATION:\n${prevError}\n\nReturn a JSON object that satisfies the schema this time.`;
+        : retryUserMessage(baseUserMsg, prevError, opts.inputBudget ? RETRY_ERROR_MAX_BYTES : undefined);
     const reqBody = {
       model: opts.model,
       messages: [
-        { role: "system", content: compiled.systemPrompt },
+        { role: "system", content: scoutSystemPrompt(compiled, structured) },
         { role: "user", content: userContent },
       ],
-      response_format: {
-        type: "json_schema",
-        json_schema: compiled.jsonSchema,
-      },
+      // P9 local: no response_format when the calibration record says json_schema does not work there.
+      ...(structured
+        ? {
+            response_format: {
+              type: "json_schema",
+              json_schema: compiled.jsonSchema,
+            },
+          }
+        : {}),
       temperature: 0.1,
+      // P9 local: always bounded on a local server (SCOUT_OUTPUT_CAP, the reply size Phase C reserved); remote sends none, as before.
+      ...(opts.maxTokens !== undefined ? { max_tokens: opts.maxTokens } : {}),
+      ...opts.extraBody,
     };
     // Per-call timeout — defaults to 90s. Cancels the fetch via AbortSignal
     // so a hung provider can't stall the whole worker pool.
@@ -530,7 +628,9 @@ async function scoutOneFile(
     }
     const perCallMs = opts.perCallTimeoutMs ?? 90_000;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), perCallMs);
+    // P9 managed local (noClientTimeout): the broker bounds the call (its timeoutMs counts from dispatch, its queue
+    // timeout while queued), so no client timer may abort a job that is only waiting for its turn or a model load.
+    const timeoutId = opts.noClientTimeout ? undefined : setTimeout(() => controller.abort(), perCallMs);
     // One scout HTTP attempt = one usage-history line. Time each attempt so a
     // retry produces its own line with its own ok/duration/cost.
     const attemptStart = Date.now();
@@ -538,7 +638,7 @@ async function scoutOneFile(
     try {
       res = await fetchImpl(apiUrl, {
         method: "POST",
-        headers: {
+        headers: opts.headers ?? {
           "Content-Type": "application/json",
           Authorization: `Bearer ${opts.apiKey}`,
         },
@@ -593,7 +693,7 @@ async function scoutOneFile(
 
     let parsed: unknown;
     try {
-      parsed = JSON.parse(content);
+      parsed = parseReplyJson(content, structured);
     } catch (e) {
       prevError = `JSON.parse failed: ${(e as Error).message}`;
       continue;

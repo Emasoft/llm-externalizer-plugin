@@ -21,6 +21,7 @@ import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
 import { randomUUID } from "node:crypto";
+import { writeStatsJsonGuarded } from "./stats-file.js";
 import { buildReviewPlan } from "./review-plan.js";
 import {
   composeRuleInstructions,
@@ -60,11 +61,12 @@ import { untilDoneBackoffMs, looksQuotaCapped } from "./session_summary/until-do
 import { formatSizeReport } from "./session_summary/size-report.js";
 import { classifyContextOverflow } from "./session_summary/chunker.js";
 import { selectModels } from "./session_summary/model-select.js";
+import { resolveSessionSummaryChain } from "./session_summary/local-model.js";
 import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
-import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost, stoppedError } from "./provider/http.js";
+import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost, OUTAGE_NETWORK_CODES, stoppedError, stopIfStopOnErrors } from "./provider/http.js";
 import {
   detectLMStudio,
   clearLMStudioProbeCache,
@@ -76,6 +78,7 @@ import {
   type JSONCompletionResult,
   type SimpleCompletionOptions,
 } from "./provider/completion.js";
+import { sendRefusal } from "./provider/connection.js";
 // TRDD-OE27RD7I 14.1-C2 §0: profileChain drives the profile's OWN model
 // chain (never a foreign profile's) for the single-model completion path --
 // see chatCompletionWithProfileFallback below, its only caller.
@@ -115,6 +118,8 @@ import {
   redactSecrets,
   type RegexRedactOpts,
   parseRedactRegex,
+  isCalibratedBudget,
+  registerCalibratedBudget,
   buildPreInstructions,
   resolvePrompt,
   readAndGroupFiles,
@@ -137,6 +142,7 @@ import {
   runScanFolder,
   type ScanFolderDeps,
 } from "./scan-folder/core.js";
+import { formatUsageTotals, type FileUsage } from "./usage-totals.js";
 import {
   runCodeTask,
   type CodeTaskDeps,
@@ -152,8 +158,9 @@ import {
 import type { RetryClock } from "./provider/http.js";
 import { brokerClientVersion, brokerQueueTimeoutMs, defaultBrokerEntry, endpointFailureKind, ensureBroker } from "./broker/client.js";
 import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
+import { enqueueUnlocked, withStateLock } from "./calibration/state.js";
 import { ensureCalibrator } from "./calibration/runner.js";
-import { abortReasonText, CommandStoppedError, commandStopReason, isCommandStopped, unfinishedFileLines } from "./command-stop.js";
+import { abortReasonText, CommandStoppedError, commandStopReason, failedHeader, isCommandStopped, runOutcome, stoppableSleep, unfinishedFileLines } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 import { serverStatusText, serverStopText } from "./broker/server-commands.js";
 
@@ -165,9 +172,15 @@ import { serverStatusText, serverStopText } from "./broker/server-commands.js";
  * but they still count against this limit.
  * Falls back to context_length if max_completion_tokens is unavailable.
  */
-function resolveDefaultMaxTokens(): number {
-  // T2.7 — snapshot once, read consistently
-  const backend = getCurrentBackend();
+function maxTokensFor(profile: ResolvedProfile | null, backend: BackendConfig, tool: string | undefined): number {
+  // P7 decision 4: on a local llama.cpp or Locals model with an ok calibration record, max_tokens is the output cap the
+  // input budget subtracted, so the calibrated input and the output fit the window together. `tool` is the command name
+  // (completion.ts reads it the same way); outside a command, or for a remote profile, nothing changes.
+  // Review m3: the route of the send is not known here, so on a local profile that also routes some models to a
+  // remote provider group the cap applies to those sends too (spec 6 "P7 as built").
+  const localSizing = localSizingFor(profile, tool);
+  if (localSizing?.state === "calibrated") return localSizing.maxTokens;
+  // T2.7 — `backend` is the caller's snapshot, read consistently
   if (backend.type === "openrouter" && backend.model) {
     const match = openRouterModelCache.find(
       (m) => m.id === backend.model,
@@ -176,9 +189,135 @@ function resolveDefaultMaxTokens(): number {
       return match.top_provider.max_completion_tokens;
     if (match?.context_length) return match.context_length;
   }
-  return FALLBACK_CONTEXT_LENGTH;
+  // The same expression as FALLBACK_CONTEXT_LENGTH, which is assigned from activeResolved next to every write of it.
+  return profile?.contextWindow || 100000;
 }
 
+/** maxTokensFor over the ACTIVE profile and backend, for the command in progress. */
+function resolveDefaultMaxTokens(): number {
+  return maxTokensFor(activeResolved, getCurrentBackend(), ctxStore.getStore()?.tool);
+}
+
+/**
+ * The context the broker gives one request of a managed profile: its context_window, or PROVISIONAL_LOCAL_CTX per
+ * slot when it sets none. ONE expression for localBroker (which starts the server with it) and the P7 sizing (round 3,
+ * M1), so the input budget can never assume a larger context than the server really has.
+ */
+export function brokerSlotCtx(contextWindow: number): number {
+  return contextWindow > 0 ? contextWindow : PROVISIONAL_LOCAL_CTX;
+}
+
+/**
+ * Per-command memo of the P7 sizing: usage context (one object per dispatchCallTool), then profile name and tool (review m4).
+ * The name is part of the key so a per-walk object made over another profile (makeProviderDeps, TRDD-78LZFUVJ) never reads the sizing memoized for the
+ * active one in the same command.
+ */
+const localSizingMemo = new WeakMap<object, Map<string, LocalSizing | null>>();
+
+/**
+ * P7: the calibrated input budget and max_tokens of the running command on a local llama.cpp or Locals profile
+ * (local-input-budget.ts planLocalSizing), or null when nothing changes (a remote route, another local api, a command
+ * not in the task-kind table, or no command at all). Every model the command may send to is sized together: the
+ * head, its fallbacks and its ensemble members, the same ids localEnsembleMemberCount counts; a managed member gets
+ * the broker's slot context (brokerSlotCtx), an unmanaged one the profile context_window (0: the record's window).
+ * Read once per command, profile and tool (spec 6) and memoized, so each stderr note is printed once. A too-small context or
+ * an unfit kind throws (spec 6: the command fails at once). `fresh` reads the records again (after waiting for a
+ * calibration) and replaces the memo. Outside a command (--estimate) nothing is memoized and nothing waits.
+ * `profile` is the profile whose members are sized: the active one for localSizingForCommand, the target for a per-walk object.
+ */
+function localSizingFor(profile: ResolvedProfile | null, tool: string | undefined, fresh = false): LocalSizing | null {
+  if (tool === undefined) return null;
+  const r = profile;
+  if (r === null) return null;
+  const ctx = ctxStore.getStore();
+  const memo = ctx !== undefined ? (localSizingMemo.get(ctx) ?? new Map<string, LocalSizing | null>()) : null;
+  if (memo !== null && ctx !== undefined) localSizingMemo.set(ctx, memo);
+  const memoKey = `${r.name}\u0000${tool}`;
+  if (!fresh && memo?.has(memoKey)) return memo.get(memoKey) ?? null;
+  const ids = [...new Set([r.model, r.secondModel, r.thirdModel, ...(r.reservedSlots ?? []).map((s) => s.modelId)].filter((x) => typeof x === "string" && x.length > 0))];
+  const members: LocalMember[] = ids.map((model) => {
+    const route = r.routeForModel(model);
+    // Managed exactly as localBroker decides: the profile starts a server and the model is on its own primary group.
+    const managed = r.server !== null && route?.primary === true;
+    return { model, engine: route !== null ? localEngineOf(route.api) : null, managed, ctx: managed ? brokerSlotCtx(r.contextWindow) : r.contextWindow };
+  });
+  const sizing = planLocalSizing({ dir: getConfigDir(), tool, members, userMaxOutput: resolveRequestOptions(r.requestOptions, tool)?.maxOutputTokens });
+  if (sizing?.state === "default" && sizing.note !== null) process.stderr.write(sizing.note);
+  if (sizing?.state === "calibrated") for (const n of sizing.notes) process.stderr.write(n);
+  memo?.set(memoKey, sizing);
+  return sizing;
+}
+
+/** localSizingFor over the ACTIVE profile (the one the running command was started with). */
+function localSizingForCommand(tool: string | undefined, fresh = false): LocalSizing | null {
+  // tool first: outside a command nothing reads activeResolved (a module-init call would hit its TDZ).
+  if (tool === undefined) return null;
+  return localSizingFor(activeResolved, tool, fresh);
+}
+
+/**
+ * The bytes a request carries besides its file blocks: the caller's instructions, its inline input_files_content, its instruction files, and the
+ * shared system-prompt fragments every file-reading tool appends (FILE_FORMAT_EXAMPLE, BREVITY_RULES). Reserved from
+ * the calibrated budget before it is injected as a per-file limit (round 3, M4), because the per-file sites check only
+ * the file against max_payload_kb.
+ */
+function promptReserveBytes(a: Record<string, unknown>): number {
+  let n = Buffer.byteLength(FILE_FORMAT_EXAMPLE + BREVITY_RULES, "utf-8");
+  if (typeof a.instructions === "string") n += Buffer.byteLength(a.instructions, "utf-8");
+  // Inline content goes into the same request as the files (chat, code_task).
+  if (typeof a.input_files_content === "string") n += Buffer.byteLength(a.input_files_content, "utf-8");
+  const files = typeof a.instructions_files_paths === "string" ? [a.instructions_files_paths] : Array.isArray(a.instructions_files_paths) ? a.instructions_files_paths : [];
+  for (const f of files) {
+    try {
+      if (typeof f === "string") n += statSync(f).size;
+    } catch {
+      // An unreadable instruction file fails later at its own read, with its own message.
+    }
+  }
+  return n;
+}
+
+
+/**
+ * P7 round 3 (M4): check_references sends a source file and all of its local dependencies in ONE request, while its
+ * max_payload_kb is checked per file, so the dependency count alone could carry a request past the calibrated window.
+ * Under a calibrated budget (the injected one, scan-pipeline isCalibratedBudget) the dependency blocks are kept in order
+ * while source + dependencies fit it, and the rest are left out with one stderr line; any other budget keeps them all.
+ */
+function capDependencyBlocks(filePath: string, srcBlock: string, depBlocks: readonly string[], budgetBytes: number): string[] {
+  if (!isCalibratedBudget(budgetBytes)) return [...depBlocks];
+  const kept: string[] = [];
+  let used = Buffer.byteLength(srcBlock, "utf-8");
+  for (const b of depBlocks) {
+    const n = Buffer.byteLength(b, "utf-8");
+    if (used + n > budgetBytes) break;
+    kept.push(b);
+    used += n;
+  }
+  if (kept.length < depBlocks.length) {
+    process.stderr.write(`[llm-externalizer] check_references ${filePath}: ${depBlocks.length - kept.length} of ${depBlocks.length} dependency files left out, over the calibrated input budget of ${budgetBytes} bytes\n`);
+  }
+  return kept;
+}
+
+/**
+ * Round 2 gap 1, round 3: start the calibration of managed models the way the broker does for a held job
+ * (broker/server.ts requestCalibration, design trigger 1): mark the profile used, queue each model in
+ * calibration/queue.json under the state lock (enqueueUnlocked keeps one entry per model, so a repeat is harmless), and
+ * make sure a runner works on them (ensureCalibrator starts one only when no live runner of this version exists).
+ * THROWS when the queue cannot be written or the runner cannot be started: the waiting command then fails with the
+ * reason instead of waiting for a calibration nobody runs.
+ */
+async function startCalibration(models: ReadonlyArray<{ engine: "llama" | "locals"; model: string }>): Promise<void> {
+  const dir = getConfigDir();
+  if (activeResolved !== null) markProfileUsed(dir, activeResolved.name, activeSettings.profiles);
+  const done = withStateLock(dir, 5_000, () => {
+    for (const m of models) enqueueUnlocked(dir, { engine: m.engine, model: m.model, reason: "first-use" });
+    return true;
+  });
+  if (done === undefined) throw new Error(`could not queue ${models.map((m) => `'${m.model}'`).join(", ")} for calibration: the calibration state lock stayed busy for 5 s`);
+  await ensureCalibrator({ dir, version: brokerClientVersion(), entry: defaultBrokerEntry() });
+}
 // ── Profile-based settings (~/.llm-externalizer/settings.yaml) ───────
 // YAML settings file with named profiles, persists across reinstalls.
 // Stores per-provider configuration (openrouter, lmstudio, ollama) with
@@ -255,11 +394,12 @@ import {
 // + provider/lmstudio.ts), so index.ts only sets up the usage CONTEXT here.
 import {
   calibratedOutputTokens,
+  ctxStore,
   withUsageContext,
   summarizeParams,
 } from "./usage-history.js";
 import { installUsageRule } from "./rule-install.js";
-import { resolveEnsembleModelLimits } from "./ensemble-limits.js";
+import { resolveEnsembleModelLimits, type ModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/security-triage/index.js";
 import { buildCheckImportsExtractMessages } from "./check-imports/prompt.js";
 import { compareFilesSystemPrompt } from "./compare-files/prompt.js";
@@ -287,6 +427,7 @@ import {
 // its imports — the dynamic maintainer owns every one of those reads now.
 import { getActiveBillableForModel } from "./config.js";
 import { getDynamicProfileRecord } from "./default-profiles-state.js";
+import { freeFailureCauseToError } from "./free-failure-cause.js";
 import { readCandidates } from "./dynamic-candidates.js";
 import {
   AllFreeModelsExhaustedError,
@@ -312,6 +453,7 @@ import {
 
 import { clearEndpointFlavorCache } from "./provider/endpoint-flavor.js";
 import { OUTPUT_LIMIT_PREFIX, resolveRequestOptions } from "./provider/request-options.js";
+import { localEngineOf, planLocalSizing, taskEntryOf, waitForCalibration, type LocalMember, type LocalSizing } from "./local-input-budget.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -484,21 +626,15 @@ let activeResolved: ResolvedProfile | null = (() => {
     process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
     return null;
   }
-  if (verdict.exempt) {
-    // A machine-owned dynamic profile ('free' | 'paid') that has never been
-    // benchmarked yet is EXPECTED to fail validateProfile
-    // (an empty pool / a placeholder model id genuinely cannot serve a
-    // request) — that is not a user misconfiguration, it is the self-healing
-    // "not populated yet" state. Booting anyway lets the dispatch pre-flight's
-    // dynamic maintainer populate it on first real use. Gating boot here on
-    // validateProfile's verdict would
-    // send every fresh install into NOT CONFIGURED with no path forward. A
-    // genuinely misconfigured user profile (any other invalid shape) still
-    // falls through to the NOT CONFIGURED branch above, unchanged.
-    process.stderr.write(
-      `[llm-externalizer] '${targetName}' has not been benchmarked yet — it will populate on first use.\n`,
-    );
-  }
+  // WHY nothing is printed for `verdict.exempt` here: a machine-owned dynamic profile ('free' | 'paid') that has
+  // never been benchmarked is EXPECTED to fail validateProfile (an empty pool / a placeholder model id cannot serve a
+  // request) -- that is not a user misconfiguration, it is the self-healing "not populated yet" state. Booting anyway is
+  // intended: the dispatch pre-flight's dynamic maintainer populates it on first real use, and gating boot on
+  // validateProfile's verdict would send every fresh install into NOT CONFIGURED with no path forward. A genuinely
+  // misconfigured user profile (any other invalid shape) still falls through to the NOT CONFIGURED branch above.
+  // The "not benchmarked yet" notice is printed at that first use (unbenchmarkedProfileNotice, dispatch pre-flight), not
+  // here: this IIFE runs at import time, and the CLI imports the engine for every command, including a classify command
+  // that never reads the text profile.
   settingsValid = true;
   const profile = activeSettings.profiles[targetName];
   const resolved = resolveProfile(targetName, profile);
@@ -1576,7 +1712,7 @@ const STATS_FILE = "/tmp/claude/llm-externalizer-stats.json";
 
 function writeStatsFile(): void {
   try {
-    mkdirSync("/tmp/claude", { recursive: true, mode: 0o700 });
+    // TRDD-B07E5M93: the directory guards (symlink, owner uid, no-follow) live in writeStatsJsonGuarded, matching the statusline.
     // T2.7 — snapshot backend once for atomic (model, type) tuple
     const backend = getCurrentBackend();
     const stats = {
@@ -1591,10 +1727,8 @@ function writeStatsFile(): void {
       model: backend.model ?? "",
       backend: backend.type,
     };
-    // Atomic write: temp file + rename to prevent partial reads
-    const tmpStats = STATS_FILE + ".tmp";
-    writeFileSync(tmpStats, JSON.stringify(stats), { encoding: "utf-8", mode: 0o600 });
-    renameSync(tmpStats, STATS_FILE);
+    // Atomic, guarded write (temp file + rename, no-follow, owner check); a refusal throws into the catch below.
+    writeStatsJsonGuarded(dirname(STATS_FILE), basename(STATS_FILE), JSON.stringify(stats));
   } catch {
     // Stats file must never crash the MCP
   }
@@ -1670,18 +1804,16 @@ function assertSafeHeaderValue(name: string, v: string): string {
   return v;
 }
 
-function apiHeaders(): Record<string, string> {
-  // T2.7 — snapshot once. apiKey + type read consistently.
-  const backend = getCurrentBackend();
+function apiHeaders(profile: ResolvedProfile | null, backend: BackendConfig): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (backend.apiKey)
     h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", backend.apiKey)}`;
   // OpenRouter requires HTTP-Referer and X-Title headers for ranking/attribution
   if (backend.type === "openrouter") {
-    if (activeResolved?.httpReferer)
-      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", activeResolved.httpReferer);
-    if (activeResolved?.appName)
-      h["X-Title"] = assertSafeHeaderValue("X-Title", activeResolved.appName);
+    if (profile?.httpReferer)
+      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", profile.httpReferer);
+    if (profile?.appName)
+      h["X-Title"] = assertSafeHeaderValue("X-Title", profile.appName);
   }
   return h;
 }
@@ -1692,7 +1824,7 @@ function apiHeaders(): Record<string, string> {
  *  Authorization key at all) and the protocol-gated attribution headers were only
  *  ever exercised through a MOCK in connection.test.ts, never the real function. */
 export function __routeHeadersForTests(route: ResolvedRoute): Record<string, string> {
-  return routeHeaders(route);
+  return routeHeaders(activeResolved, route);
 }
 
 /** Test-only exports of getEnsembleModels/activeFreePool --
@@ -1762,6 +1894,15 @@ export function __ensureNotServiceAbortForTests(resp: StreamingResult): Streamin
   return ensureNotServiceAbort(resp);
 }
 
+/** Test-only export of ensembleStreaming (KP4DWUF9): reaches the fan-out and its all-failed wiring with a seeded retry clock. */
+export function __ensembleStreamingForTests(
+  messages: ChatMessage[],
+  options: Parameters<typeof ensembleStreaming>[1],
+  retryClock: RetryClock,
+): Promise<StreamingResult> {
+  return ensembleStreaming(messages, options, true, undefined, retryClock);
+}
+
 /**
  * Headers for ONE route of a multi-provider profile — its own key, its own
  * attribution. Deliberately NOT apiHeaders(), which reads the primary backend:
@@ -1771,15 +1912,15 @@ export function __ensureNotServiceAbortForTests(resp: StreamingResult): Streamin
  * b.ai route does not get HTTP-Referer/X-Title (meaningless there), and an
  * OpenRouter route still does even when the profile's primary is b.ai.
  */
-function routeHeaders(route: ResolvedRoute): Record<string, string> {
+function routeHeaders(profile: ResolvedProfile | null, route: ResolvedRoute): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (route.authToken)
     h["Authorization"] = `Bearer ${assertSafeHeaderValue("Authorization", route.authToken)}`;
   if (route.protocol === "openrouter_api") {
-    if (activeResolved?.httpReferer)
-      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", activeResolved.httpReferer);
-    if (activeResolved?.appName)
-      h["X-Title"] = assertSafeHeaderValue("X-Title", activeResolved.appName);
+    if (profile?.httpReferer)
+      h["HTTP-Referer"] = assertSafeHeaderValue("HTTP-Referer", profile.httpReferer);
+    if (profile?.appName)
+      h["X-Title"] = assertSafeHeaderValue("X-Title", profile.appName);
   }
   return h;
 }
@@ -1804,58 +1945,83 @@ function routeHeaders(route: ResolvedRoute): Record<string, string> {
 // the selected profile's own chain instead, and classifyError never
 // referenced the constant.
 // Grep gate: both are 0 hits in src outside a comment or a test asserting absence.
-const providerDeps: CompletionDeps = {
-  getBackend: () => getCurrentBackend(),
-  apiHeaders: () => apiHeaders(),
-  // Read through activeResolved on EVERY call, never captured — a settings
-  // reload replaces the profile, and a stale route table would keep sending to
-  // the provider the user just removed.
-  routeForModel: (model: string) => activeResolved?.routeForModel(model) ?? null,
-  routeHeaders: (route) => routeHeaders(route),
-  getSoftTimeoutMs: () => SOFT_TIMEOUT_MS,
-  isFreeOnly: () => activeResolved?.freeOnly ?? false,
-  isLMStudioProvider: () => activeResolved?.protocol === "lmstudio_api",
-  // TRDD-FDI9NYAS D3b: read through activeResolved on EVERY call, same reload
-  // reason as routeForModel above — a stale manualModels set would keep
-  // exempting an id from a profile the user just switched away from.
-  isManualModel: (model: string) => activeResolved?.manualModels?.has(model) ?? false,
-  // TRDD-FDI9NYAS D3c: reads the on-disk catalog cache synchronously (no live
-  // fetch per send) — see readCachedModelPrice's own doc for why this file,
-  // not the in-memory openRouterModelCache (which is only warm after a call
-  // that happened to list models; the disk cache is kept warm by the
-  // detached per-dispatch detector regardless of what the current command is).
-  getModelPricePerMillion: (model: string) => readCachedModelPrice(model),
-  // Read through loadSettings-backed activeSettings on EVERY call, same
-  // reload-safety reason as isManualModel above.
-  getEnsemblePriceCeilingUsd: () => getEnsemblePriceCeiling(activeSettings),
-  defaultTemperature: DEFAULT_TEMPERATURE,
-  getDefaultMaxTokens: () => resolveDefaultMaxTokens(),
-  // TRDD-1OOAH3LD: read through activeResolved on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
-  getRequestOptions: (tool) => resolveRequestOptions(activeResolved?.requestOptions ?? null, tool),
-  getActiveProtocol: () => activeResolved?.protocol ?? "openai_api",
-  // TRDD-1OOAH3LD broker: read through activeResolved on EVERY call
-  // (reload-safe, like routeForModel above). Only the profile's own primary
-  // (reload-safe, like routeForModel above). Only the profile's own primary
-  // group is managed (the validator requires its api to be llamacpp-local or
-  // locals-local; r.server names the engine); a providers[] route is sent
-  // directly, as before.
-  localBroker: async ({ route }) => {
-    const r = activeResolved;
-    if (!r || r.server === null || (route && !route.primary)) return null;
-    const ep = await ensureBroker({ dir: getConfigDir(), version: brokerClientVersion() });
-    // P6: a profile that sent a request is "used": trigger 2 then watches its model ids.
-    markProfileUsed(getConfigDir(), r.name, activeSettings.profiles);
-    // F11: no context_window means the provisional per-slot context, never the model's whole default (a huge KV cache).
-    return {
-      ...ep,
-      engine: r.server,
-      ctx: r.contextWindow > 0 ? r.contextWindow : PROVISIONAL_LOCAL_CTX,
-      queueTimeoutMs: brokerQueueTimeoutMs(),
-      // P6 (review F1): after a broker exit gave a held job back, the call submits it to the current broker.
-      reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true }),
-    };
-  },
-};
+// ONE field list for every profile (TRDD-78LZFUVJ). `getProfile` and `getBackend` run on EVERY field read and their
+// result is never kept, which is what the two reasons above require of the boot object (reload-safe, TDZ-safe); the
+// same list over a fixed profile is makeProviderDeps below. The fields that read the settings file or a constant
+// (getModelPricePerMillion, getEnsemblePriceCeilingUsd, defaultTemperature) do not depend on the profile.
+function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: () => BackendConfig): CompletionDeps {
+  return {
+    getBackend,
+    apiHeaders: () => apiHeaders(getProfile(), getBackend()),
+    // Read through the profile on EVERY call, never captured — a settings
+    // reload replaces the profile, and a stale route table would keep sending to
+    // the provider the user just removed.
+    routeForModel: (model: string) => getProfile()?.routeForModel(model) ?? null,
+    routeHeaders: (route) => routeHeaders(getProfile(), route),
+    // The profile's own timeout: the SOFT_TIMEOUT_MS global is (activeResolved?.timeout ?? 300) * 1000, assigned only at
+    // its declaration and in the settings swap right after activeResolved, so for the boot object the two are equal.
+    getSoftTimeoutMs: () => (getProfile()?.timeout ?? 300) * 1000,
+    isFreeOnly: () => getProfile()?.freeOnly ?? false,
+    isLMStudioProvider: () => getProfile()?.protocol === "lmstudio_api",
+    // TRDD-FDI9NYAS D3b: read through the profile on EVERY call, same reload
+    // reason as routeForModel above — a stale manualModels set would keep
+    // exempting an id from a profile the user just switched away from.
+    isManualModel: (model: string) => getProfile()?.manualModels?.has(model) ?? false,
+    // TRDD-FDI9NYAS D3c: reads the on-disk catalog cache synchronously (no live
+    // fetch per send) — see readCachedModelPrice's own doc for why this file,
+    // not the in-memory openRouterModelCache (which is only warm after a call
+    // that happened to list models; the disk cache is kept warm by the
+    // detached per-dispatch detector regardless of what the current command is).
+    getModelPricePerMillion: (model: string) => readCachedModelPrice(model),
+    // Read through loadSettings-backed activeSettings on EVERY call, same
+    // reload-safety reason as isManualModel above.
+    getEnsemblePriceCeilingUsd: () => getEnsemblePriceCeiling(activeSettings),
+    defaultTemperature: DEFAULT_TEMPERATURE,
+    getDefaultMaxTokens: () => maxTokensFor(getProfile(), getBackend(), ctxStore.getStore()?.tool),
+    // TRDD-1OOAH3LD: read through the profile on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
+    getRequestOptions: (tool) => resolveRequestOptions(getProfile()?.requestOptions ?? null, tool),
+    getActiveProtocol: () => getProfile()?.protocol ?? "openai_api",
+    // TRDD-1OOAH3LD broker: read through the profile on EVERY call
+    // (reload-safe, like routeForModel above). Only the profile's own primary
+    // group is managed (the validator requires its api to be llamacpp-local or
+    // locals-local; r.server names the engine); a providers[] route is sent
+    // directly, as before.
+    localBroker: async ({ route }) => {
+      const r = getProfile();
+      if (!r || r.server === null || (route && !route.primary)) return null;
+      const ep = await ensureBroker({ dir: getConfigDir(), version: brokerClientVersion() });
+      // P6: a profile that sent a request is "used": trigger 2 then watches its model ids. The name is the one of the
+      // profile these deps were made for (TRDD-78LZFUVJ), so a per-walk object marks its own profile.
+      markProfileUsed(getConfigDir(), r.name, activeSettings.profiles);
+      // F11: no context_window means the provisional per-slot context, never the model's whole default (a huge KV cache).
+      return {
+        ...ep,
+        engine: r.server,
+        ctx: brokerSlotCtx(r.contextWindow),
+        queueTimeoutMs: brokerQueueTimeoutMs(),
+        // P6 (review F1): after a broker exit gave a held job back, the call submits it to the current broker.
+        reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true }),
+      };
+    },
+  };
+}
+
+/**
+ * The provider deps of ONE fixed profile and backend (TRDD-78LZFUVJ): every field of providerDeps, read from `profile`
+ * and `backend` instead of the module's active ones. Nothing calls it with another profile yet (the local fallback of
+ * TRDD-WSPV40Y5 will); the module globals and the published spend and free state keep describing the active profile.
+ */
+export function makeProviderDeps(profile: ResolvedProfile | null, backend: BackendConfig): CompletionDeps {
+  return providerDepsFrom(() => profile, () => backend);
+}
+
+// The boot object: the same field list over the module's active profile and backend, read at call time.
+const providerDeps: CompletionDeps = providerDepsFrom(() => activeResolved, getCurrentBackend);
+
+/** Test-only export of the boot providerDeps, for comparing it with makeProviderDeps over the active profile. */
+export function __providerDepsForTests(): CompletionDeps {
+  return providerDeps;
+}
 
 // The completion layer — chatCompletionSimple / chatCompletionJSON /
 // chatCompletionWithRetry, the reasoning ladder, the supported-params filter and
@@ -1895,7 +2061,7 @@ async function listModelsRaw(): Promise<ModelInfo[]> {
   // T2.7 — snapshot for atomic baseUrl read
   const backend = getCurrentBackend();
   const res = await fetchWithTimeout(`${backend.baseUrl}/v1/models`, {
-    headers: apiHeaders(),
+    headers: apiHeaders(activeResolved, backend),
   });
   if (!res.ok) throw new Error(`Failed to list models: ${res.status}`);
   const data = await safeReadJson<{ data: ModelInfo[] }>(res);
@@ -1972,7 +2138,7 @@ function formatFooter(
 // the argument the override silently disappears (Issue #5 — fixed by
 // threading the param through every callsite).
 
-import { defaultOutputDir } from "./project-root.js";
+import { defaultOutputDir, defaultScratchDir, mergePieceDir } from "./project-root.js";
 
 /** Test-only: reset the cached default so a test that sets
  *  CLAUDE_PROJECT_DIR / LLM_EXT_OUTPUT_DIR mid-run gets the recomputed value. */
@@ -2074,19 +2240,6 @@ function saveResponse(
 function causeText(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
-
-/** Network error codes that mean "the provider could not be reached or did not answer in time" (http.ts networkCodeOf). */
-const OUTAGE_NETWORK_CODES: ReadonlySet<string> = new Set([
-  "ECONNREFUSED",
-  "ECONNRESET",
-  "ENOTFOUND",
-  "EAI_AGAIN",
-  "ETIMEDOUT",
-  "ETIMEDOUT-LOCAL",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "ENETUNREACH",
-  "EHOSTUNREACH",
-]);
 
 /** One short observation per cause ("503", "ECONNREFUSED") when EVERY cause is a provider-side failure, else undefined. */
 /** One short observation ("503", "ECONNREFUSED") plus the chain entry of a cause that is a provider-side failure; undefined for anything else. */
@@ -2243,23 +2396,29 @@ function failDynamicProfile(
   profileName: DynamicProfileName,
   causes: readonly unknown[],
   actionable: (causes: readonly unknown[]) => Error,
+  // TRDD-3CG178O7 (a message-only increment): the causes the routing DECISION below reads, when they must differ from the causes
+  // carried on the resulting error. Only freeRotationExhausted passes it (the last model detail alone, exactly what it decided on
+  // before typed causes existed); every other caller decides on all of `causes`, unchanged. Whether every cause should drive
+  // routing for the free pool is a 1d decision (TRDD-WSPV40Y5), with its own tests.
+  decisionCauses?: readonly unknown[],
 ): Error {
-  const texts = causes.map(causeText);
+  const decision = decisionCauses ?? causes;
+  const texts = decision.map(causeText);
   const is401 = (m: string) => /API error 401\b/.test(m);
   const certain402 = (m: string) => paymentErrorCertainty(m) === "certain";
   if (texts.length > 0) {
     if (texts.some(is401) && texts.every((m) => is401(m) || certain402(m))) {
-      return actionable(causes.filter((_, i) => is401(texts[i])));
+      return actionable(decision.filter((_, i) => is401(texts[i])));
     }
-    if (profileName === "paid" && texts.every(certain402)) return actionable(causes);
+    if (profileName === "paid" && texts.every(certain402)) return actionable(decision);
     if (texts.every((m) => NON_TRANSIENT_4XX_RE.test(m)) && texts.some((m) => !SERVICE_LEVEL_STATUS_RE.test(m))) {
-      return actionable(causes);
+      return actionable(decision);
     }
   }
   // TRDD-VAORGKVF (COORDINATOR DEFAULT, not a USER ruling): an IRON RULE refusal is a $0 ledger verdict reached before anything is sent. The paid/free populate writes only the rank-0 keyword ledger (benchmark/index.ts recordGeneralKeywordPasses; measure r2 item 2), so for a tool ranked above 0 no update can cure it and "an update is underway" would be false. This EXTENDS the principle in the doc comment above ("an update cannot fix every failure, and then the actionable error wins"). Rank-0 tools, and any refusal whose tool name cannot be read from its text, fall through to the update branch.
   if (texts.length > 0 && texts.every((m) => m.startsWith(IRON_RULE_REFUSAL_PREFIX))) {
     const refusedTools = texts.map((m) => /is not validated for (\S+?)\. /.exec(m)?.[1]);
-    if (refusedTools.every((t) => t !== undefined && !profileUpdateCanValidate(t))) return actionable(causes);
+    if (refusedTools.every((t) => t !== undefined && !profileUpdateCanValidate(t))) return actionable(decision);
   }
   // WHY: a command stopped by --command_timeout starts no profile update: a detached updater would be spawned for a
   // command that no longer runs, and a retry-later answer would promise a repair nobody waits for. The file is reported
@@ -2515,6 +2674,7 @@ interface FileProcessResult {
   backupPath?: string;
   error?: string;
   noChange?: boolean;
+  usage?: FileUsage;
 }
 
 function sanitizeFilename(filePath: string): string {
@@ -2790,13 +2950,20 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
           { id: hq.id, maxOutput: resolveEnsembleModelLimits(hq.id, undefined).maxOutput },
         ];
       }
+      // P7 round 3 (M5): an estimate sends nothing, so it never waits for or queues a calibration: it sizes from the
+      // records that exist, and says so when a managed model has none yet (its cap is then the profile default).
+      const local = localSizingForCommand(toolName);
+      if (local?.state === "await") {
+        process.stderr.write(`[llm-externalizer] this estimate is provisional: ${local.models.map((m) => m.model).join(", ")} not calibrated yet, so its output cap is the profile default until calibration\n`);
+      }
+      const localCap = local?.state === "calibrated" ? local.maxTokens : null;
       const ensemble = getEnsembleModels();
       if (ensemble.length > 0)
-        return ensemble.map((m) => ({ id: m.id, maxOutput: m.maxOutput }));
+        return ensemble.map((m) => ({ id: m.id, maxOutput: localCap ?? m.maxOutput }));
       // Single-model mode: the backend's configured model with its default cap.
       const backend = getCurrentBackend();
       if (!backend.model) return [];
-      return [{ id: backend.model, maxOutput: resolveDefaultMaxTokens() }];
+      return [{ id: backend.model, maxOutput: localCap ?? resolveDefaultMaxTokens() }];
     },
     pricingFor(modelId) {
       const m = openRouterModelCache.find((x) => x.id === modelId);
@@ -2814,6 +2981,11 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
     calibratedOutputTokens(toolName, modelId) {
       // The output-EWMA sidecar (task #188) — self-calibrating EXPECTED line.
       return calibratedOutputTokens(toolName, modelId);
+    },
+    slotRefusal(toolName, modelId) {
+      // Same gates as resolveConnection (TRDD-4TTFUIL0), one function; the tool name
+      // is the dispatchCallTool name a real send puts in ctxStore.
+      return sendRefusal(modelId, toolName, providerDeps);
     },
   };
 }
@@ -3028,6 +3200,14 @@ export function profileGateRefusal(toolName: string): ReturnType<typeof dynamicP
   const effective = effectiveProfileName(activeSettings);
   return isDynamicProfileName(effective) ? dynamicProfileGate(effective, toolName, { settings: activeSettings }) : null;
 }
+// WHY a function and not an inline write (and why here, not at boot): the notice says the profile "will populate on first use", so it is
+// printed where the dispatch pre-flight starts that population for the ACTIVE text profile. Only the machine-owned remote
+// profiles ('free' | 'paid') are populated by the maintainer this way; 'local' has its own rescan message.
+export function unbenchmarkedProfileNotice(profile: string): string | null {
+  return profile === "free" || profile === "paid"
+    ? `[llm-externalizer] '${profile}' has not been benchmarked yet — it will populate on first use.\n`
+    : null;
+}
 async function runModelReconcile(): Promise<void> {
   await reconcileModelsBeforeWork({
     now: () => Date.now(),
@@ -3148,9 +3328,26 @@ async function runModelReconcile(): Promise<void> {
  *  -- before D2 this path triggered no update at all (C5b "Row 27 free").
  *  A static free_only profile keeps the exhaustion as it was. */
 function freeRotationExhausted(err: unknown): unknown {
-  const name = activeResolved?.name;
+  return exhaustedFreeRotation(activeResolved?.name, err);
+}
+
+/** freeRotationExhausted with the active profile name given, so a test can reach it without a resolved profile. */
+function exhaustedFreeRotation(name: string | undefined, err: unknown): unknown {
   if (!(err instanceof AllFreeModelsExhaustedError) || name === undefined || !isDynamicProfileName(name)) return err;
-  return failDynamicProfile(name, [new Error(err.lastDetail)], () => err);
+  // TRDD-3CG178O7: one typed cause per model the rotation tried is CARRIED on the resulting error, so the fallback decision (1d) can
+  // read each model status and networkCode. The causes are Errors whose message is that model detail, because failDynamicProfile
+  // and classifyError read causes as text.
+  // WHY the routing decision reads the LAST cause only: before typed causes this site passed one bare Error built from lastDetail,
+  // and the key/credit/request-specific/update branches were decided on it. This increment changes messages only, so the decision
+  // input is unchanged ([429, then 402] on paid is still the credit verdict). Whether every cause should drive routing is a 1d
+  // decision (TRDD-WSPV40Y5), with its own tests.
+  const causes = err.causes.map(freeFailureCauseToError);
+  return failDynamicProfile(name, causes, () => err, causes.slice(-1));
+}
+
+/** Test-only export of the free-rotation exhaustion conversion (TRDD-3CG178O7), same convention as __classifyErrorForTests. */
+export function __freeRotationExhaustedForTests(name: string | undefined, err: unknown): unknown {
+  return exhaustedFreeRotation(name, err);
 }
 
 
@@ -3328,6 +3525,9 @@ async function walkProfileChainOnce(
       const endpointKind = endpointFailureKind(unwrapped, msg);
       const isEndpointModelDead = endpointKind === "endpoint-model";
       const isEndpointDead = endpointKind === "endpoint";
+      // --stop_on_errors (TRDD-SWNIIFTF): the first failure that would start a fallback ends the command instead.
+      // After endpointKind on purpose: a dead broker job or endpoint is a typed verdict the stop reads, not a text it matches.
+      stopIfStopOnErrors(modelId, err, endpointKind !== null);
       // D4 (design section 6): a CERTAIN payment error is the KEY's credit,
       // not the model — the walk marks `url + keyRef` dead and continues
       // with the SAME id's next group (a different key). keyRef is
@@ -3446,6 +3646,9 @@ async function ensembleStreaming(
   },
   ensemble: boolean,
   fileLineCount?: number,
+  // Test seam: production callers omit it (a fresh clock per dispatch). A test seeds a short deadlineAt so a
+  // retry window closes in ~1s instead of the real five minutes.
+  retryClock: RetryClock = {},
 ): Promise<StreamingResult> {
   // T2.7 — snapshot once for the type gating below. The old
   // `backend.type !== "openrouter"` ensemble gate is GONE (D-L): the gate is
@@ -3454,7 +3657,7 @@ async function ensembleStreaming(
   // One retry clock for this whole dispatch (TRDD-YG72CYY7): every rotated
   // model, chain entry and ensemble slot below spreads `options`, so all of
   // them share one five-minute window instead of getting a fresh one each.
-  const options = { ...callerOptions, retryClock: {} as RetryClock };
+  const options = { ...callerOptions, retryClock };
 
   // Model override: skip the ensemble, use the specified model.
   //
@@ -3509,19 +3712,23 @@ async function ensembleStreaming(
     }
   }
 
-  // Single-model path: ensemble off, not remote-ensemble (and no reserved
-  // slots — D-L), or no models configured. D-L (design §7): the old
-  // `backend.type !== "openrouter"` gate is replaced by "every member has a
-  // route" — a local/other-backend profile with reserved slots fans out to
-  // them (each member's send rides its own serving group), and a member
-  // without a route cannot be fanned out at all.
+  // Single-model path: ensemble off, not a fan-out profile (see canFanOut), or no models configured. D-L (design §7): the
+  // old `backend.type !== "openrouter"` gate is replaced by "every member has a route" — a local/other-backend profile with
+  // reserved slots fans out to them (each member's send rides its own serving group). A profile whose members are not all
+  // routed fans out only when the USER declared it a remote-ensemble profile; any other such profile sends to one model.
   const ensembleModels = getEnsembleModels();
-  const everyMemberHasRoute =
-    ensembleModels.length > 0 && ensembleModels.every((m) => m.route !== undefined);
+  const canFanOut =
+    ensembleModels.length > 0 &&
+    // TRDD-7H5MGN34: a USER-declared remote-ensemble profile reaches one endpoint for all members, so its non-reserved
+    // members (model/second_model/third_model, which carry no route) still fan out; requiring a route here collapsed every
+    // plain remote ensemble onto the single-model path. NOT the built-in dynamic profiles (free, paid, local): the benchmark
+    // and the maintainer may write mode remote-ensemble into them, but they have always sent one model at a time (free
+    // rotates, paid walks its chain), and fanning them out would triple the requests and the bill of every file.
+    ((activeResolved?.mode === "remote-ensemble" && activeResolved.dynamic !== true) || ensembleModels.every((m) => m.route !== undefined));
   if (
     !ensemble ||
     ensembleModels.length === 0 ||
-    !everyMemberHasRoute
+    !canFanOut
   ) {
     // Free mode ONLY: one model at a time is still ONE model at a time —
     // rotation is failover, not ensembling — so a rate-limited free model hands
@@ -3625,6 +3832,11 @@ async function ensembleStreaming(
           retryClock: options.retryClock,
         });
       }
+      // P8 decision 5 (TRDD-1OOAH3LD): a local ensemble answers as late as its slowest member (a 3B GGUF at ~35 tok/s
+      // next to a 1.7B at ~115), and neither the report nor stderr showed where the time went: one line per local
+      // member. Remote members print nothing, so remote stderr is unchanged. It is a progress line, so it follows
+      // --quiet the way the progress lines do: options.onProgress is undefined when progress is off (makeProgressFn).
+      const startedAt = m.route?.isLocal === true && options.onProgress !== undefined ? Date.now() : null;
       try {
         const resp = await callOne(m.id, m.maxOutput);
         // chatCompletionWithRetry RETURNS (does not throw) the circuit
@@ -3642,6 +3854,10 @@ async function ensembleStreaming(
           error: isError,
         };
       } catch (err) {
+        // --stop_on_errors (TRDD-SWNIIFTF): a dead member of the fan-out ends the command. WHY here: this catch turns the
+        // failure into a slot result, so the other members answering would otherwise hide it (exit 0 with one of three dead).
+        // Thrown, the stop rejects Promise.all and the command ends at once, siblings still in flight included.
+        stopIfStopOnErrors(m.id, err, endpointFailureKind(err instanceof RetryDeadlineError ? err.cause : err, failureText(err)) !== null);
         return {
           model: m.id,
           content: slotErrorContent(err),
@@ -3650,6 +3866,8 @@ async function ensembleStreaming(
           error: true,
           cause: err,
         };
+      } finally {
+        if (startedAt !== null) process.stderr.write(`[llm-externalizer] Ensemble member ${m.id}: ${((Date.now() - startedAt) / 1000).toFixed(1)}s elapsed, including any wait in the local-model broker queue\n`);
       }
     }),
   );
@@ -3717,7 +3935,8 @@ async function ensembleStreaming(
       0,
     ),
     total_tokens: succeeded.reduce((s, r) => s + (r.usage?.total_tokens ?? 0), 0),
-    cost: succeeded.reduce((s, r) => s + (r.usage?.cost ?? 0), 0),
+    // WHY undefined, not 0: a slot that sent no cost must not turn "unknown" into a free run in the scan totals (TRDD-RPLLP8CF).
+    cost: succeeded.some((r) => typeof r.usage?.cost === "number") ? succeeded.reduce((s, r) => s + (r.usage?.cost ?? 0), 0) : undefined,
   };
 
   const anyTruncated = succeeded.some((r) => r.truncated);
@@ -3803,12 +4022,27 @@ async function processFileCheck(
 
   const footer = formatFooter(resp, "code_task", filePath);
 
+  // WHY computed before the rejection returns below: a reply the response checks reject (finish_reason=error, empty,
+  // echoed) still spent paid tokens; each failed result carries them so the scan totals count every file that reported usage.
+  const usage: FileUsage | undefined = resp.usage
+    ? { promptTokens: resp.usage.prompt_tokens, completionTokens: resp.usage.completion_tokens, costUsd: resp.usage.cost }
+    : undefined;
+
+  // TRDD-PN84WC1L part C: a reply the provider ended with finish_reason=error (a mid-stream
+  // failure after partial text, labelled UPSTREAM ERROR by the retry layer) is a failed file,
+  // not a report. WHY here: this scan is one model per file, so no other model covers the gap
+  // the way a failed ensemble slot is covered (the ensemble returns finishReason "stop" for its
+  // combined text, so it never reaches this branch).
+  if (resp.finishReason === "error") {
+    return { filePath, success: false, error: "The provider ended the answer with finish_reason=error after partial output; the partial text is not saved as a report", usage };
+  }
+
   // Shared response gate (TRDD-P4ULUV1R): empty AND echoed responses are
   // failures — "the model printed something" is not success.
   {
     const verdict = gateLLMResponse(resp.content, perFileUserContent);
     if (verdict !== null) {
-      return { filePath, success: false, error: gateFailureMessage(verdict) };
+      return { filePath, success: false, error: gateFailureMessage(verdict), usage };
     }
   }
 
@@ -3833,7 +4067,13 @@ async function processFileCheck(
   // a foreground repair) from one that got nowhere (retried once). Every multi-file tool funnels through here.
   const exhaustionStore = dynamicExhaustionStore.getStore();
   if (exhaustionStore) exhaustionStore.itemsSucceeded = (exhaustionStore.itemsSucceeded ?? 0) + 1;
-  return { filePath, success: true, reportPath };
+  // TRDD-RPLLP8CF: carry the reply's usage so the scan summary sums one source. cost stays undefined when the provider sent none.
+  return {
+    filePath,
+    success: true,
+    reportPath,
+    usage,
+  };
 }
 
 // ── Tool definitions ─────────────────────────────────────────────────
@@ -3849,7 +4089,11 @@ export function limitsBlock(): string {
   const throughput =
     backend.type === "openrouter"
       ? "• PARALLEL (answer_mode=0 + max_retries>1 only): rate-limited dispatch (RPS auto-detected from balance). Many requests in-flight simultaneously. Default (answer_mode=2 or max_retries=1): sequential batches."
-      : "• SEQUENTIAL: 1 call at a time.";
+      : localEnsembleMemberCount(activeResolved) >= 2
+        // P8 review: a local profile with two or more models fans out (ensembleAllowed); the old text called every
+        // non-openrouter backend SEQUENTIAL, which the local ensemble no longer is.
+        ? "• LOCAL ENSEMBLE: each file goes to every model of the profile, all members at once. On a managed profile (server: managed) one local-model broker serves one model at a time, so members queue behind model loads."
+        : "• SEQUENTIAL: 1 call at a time.";
   return (
     "\n\nLIMITS:\n" +
     throughput +
@@ -3939,11 +4183,17 @@ export type EnsembleSlotEntry = {
 /** The `content` of an ensemble slot that threw. A RetryDeadlineError keeps its
  *  neutral sentence AND names the real cause (N1): its message alone hides
  *  "API error 503 ...", so every consumer reading the slot text saw a defect-less
- *  timeout. Any other error reads exactly as before (failureText == message). */
-function slotErrorContent(err: unknown): string {
-  return err instanceof RetryDeadlineError && err.cause !== undefined
-    ? `ERROR: ${err.message} ${err.causeLabel} ${failureText(err)}`
-    : `ERROR: ${failureText(err)}`;
+ *  timeout. Any other error reads exactly as before (failureText == message).
+ *  The provider-state line (OKK9JVK6) is appended the same way classifyError does
+ *  for a single-model call: this function flattens the error to text and the
+ *  all-failed message / "Unavailable models" section are built from that text, so
+ *  the line carried on the error's failure fields would otherwise be lost here. */
+export function slotErrorContent(err: unknown): string {
+  const text =
+    err instanceof RetryDeadlineError && err.cause !== undefined
+      ? `ERROR: ${err.message} ${err.causeLabel} ${failureText(err)}`
+      : `ERROR: ${failureText(err)}`;
+  return withStates(text, [stateOf(err)]);
 }
 
 /** What ensembleStreaming throws when no slot answered. Pure: no classifyError
@@ -4060,6 +4310,47 @@ export async function callEnsembleSlotWithRotation(
   }
 }
 
+/** Distinct model ids a mode-local profile declares as ensemble members (model, second_model, third_model and
+ *  reserved slots); 0 for any other mode. */
+function localEnsembleMemberCount(r: ResolvedProfile | null): number {
+  if (r?.mode !== "local") return 0;
+  const ids = [r.model, r.secondModel, r.thirdModel, ...(r.reservedSlots ?? []).map((s) => s.modelId)];
+  return new Set(ids.filter((x) => typeof x === "string" && x.length > 0)).size;
+}
+
+/**
+ * P8 (TRDD-1OOAH3LD): the ONE ensemble gate every ensemble command reads; it replaced ten copies of
+ * `backend.type === "openrouter"`. True for the openrouter backend exactly as before, and for a mode-local profile
+ * that declares two or more members (the built-ins local_llama and locals-mlx declare three). WHY keyed on `mode`
+ * and not on `backend.type`: a remote openai_api preset (b.ai) resolves to backend type "local" while being a remote
+ * endpoint, so reading the type would turn its ensemble on. A local profile with one member keeps the single-model
+ * path. getEnsembleModels and canFanOut still decide what actually fans out.
+ */
+export function ensembleAllowed(backend: Pick<BackendConfig, "type">, resolved: ResolvedProfile | null): boolean {
+  return backend.type === "openrouter" || localEnsembleMemberCount(resolved) >= 2;
+}
+
+/**
+ * P8 review decision 1: a local ensemble member is sized EXACTLY like a single local request of the same model: the
+ * output budget the single-model path asks for (resolveDefaultMaxTokens: with an ok calibration record, the P7 output
+ * cap shared by every member, else the profile's context window or the fallback), and no input-line filter (the
+ * single-model path has none). The P7 input budget covers every member at once (localSizingForCommand).
+ */
+function localMemberLimits(): ModelLimits {
+  return { maxOutput: resolveDefaultMaxTokens(), maxInputLines: Number.POSITIVE_INFINITY };
+}
+
+/**
+ * P8 review decision 2: every member of a local ensemble must carry a route. canFanOut's "every member has a route" arm
+ * would otherwise be false, and the call would silently send ONE model (the TRDD-7H5MGN34 symptom). Fail fast instead,
+ * naming the members.
+ */
+export function assertLocalMembersRouted(members: ReadonlyArray<{ id: string; route?: ResolvedRoute }>): void {
+  const unrouted = members.filter((m) => m.route === undefined).map((m) => m.id);
+  if (unrouted.length > 0) {
+    throw new Error(`local ensemble member(s) with no serving route: ${unrouted.join(", ")} — no provider group of the active profile serves them; fix the profile's providers or remove the model`);
+  }
+}
 /** Build ensemble model list from the active profile's model + second_model + third_model.
  *  D5 (TRDD-90DM5YHO, design §2.3): `members = reservedSlots` first, in written
  *  order, at most 2; the remaining `3 - members.length` come from the profile's
@@ -4079,7 +4370,9 @@ function getEnsembleModels(): Array<{
   // with reserved slots is no longer inert, and a `remote-ensemble` profile
   // without slots behaves exactly as before.
   const hasReserved = (activeResolved?.reservedSlots?.length ?? 0) > 0;
-  if (!activeResolved || !(activeResolved.mode === "remote-ensemble" || hasReserved)) return [];
+  // P8 (TRDD-1OOAH3LD): a mode-local profile declaring two or more distinct members (model, second_model, third_model
+  // and reserved slots, localEnsembleMemberCount) fans out too; without reserved slots it returned [] here before P8.
+  if (!activeResolved || !(activeResolved.mode === "remote-ensemble" || hasReserved || localEnsembleMemberCount(activeResolved) >= 2)) return [];
   // Read the warm 1h-TTL catalog cache synchronously -- empty when cold, in which
   // case resolveEnsembleModelLimits falls back to the calibrated table.
   const catalogById = new Map(openRouterModelCache.map((m) => [m.id, m]));
@@ -4095,7 +4388,8 @@ function getEnsembleModels(): Array<{
   const members: Array<{ id: string; maxOutput: number; maxInputLines: number; route?: ResolvedRoute }> = reserved.map((s) => {
     const catalogMaxOutput = catalogById.get(s.modelId)?.top_provider?.max_completion_tokens;
     const limits = resolveEnsembleModelLimits(s.modelId, catalogMaxOutput);
-    return { id: s.modelId, ...limits, route: s.routes[0] };
+    // P8 review: a reserved LOCAL member is sized like a single local request too (localMemberLimits).
+    return { id: s.modelId, ...(activeResolved?.mode === "local" ? localMemberLimits() : limits), route: s.routes[0] };
   });
   // D5 spend guard (design §6 D5; §7 R-4 is WHY `local` is in scope): under
   // allow_paid_models:false a REMOTE profile is force-free, so the free-mode
@@ -4200,15 +4494,28 @@ function getEnsembleModels(): Array<{
     if (activeResolved.secondModel) models.push(activeResolved.secondModel);
     if (activeResolved.thirdModel) models.push(activeResolved.thirdModel);
   }
-  return [
+  // P8 (TRDD-1OOAH3LD): a mode-local member carries its route, from the same routeForModel a single local request
+  // reads in resolveConnection, so canFanOut's "every member has a route" arm passes and each send reaches the server
+  // that serves it (a managed primary goes through the broker, keyed by model id). It is sized like a single local
+  // request (localMemberLimits). A remote member is built exactly as before (no route, catalog limits), so remote
+  // behaviour is byte-for-byte unchanged (remote-ensemble-fanout.test.ts).
+  const resolved = activeResolved;
+  const all = [
     ...members,
     ...models.map((id) => {
+      if (resolved.mode === "local") {
+        const route = resolved.routeForModel(id);
+        return { id, ...localMemberLimits(), ...(route ? { route } : {}) };
+      }
       const catalogMaxOutput =
         catalogById.get(id)?.top_provider?.max_completion_tokens;
       const limits = resolveEnsembleModelLimits(id, catalogMaxOutput);
       return { id, ...limits };
     }),
   ];
+  // P8 review: a local ensemble whose member has no route must fail, never collapse to one model (TRDD-7H5MGN34 symptom).
+  if (localEnsembleMemberCount(resolved) >= 2) assertLocalMembersRouted(all);
+  return all;
 }
 
 /**
@@ -4441,6 +4748,9 @@ async function dispatchCallToolInner(
             // updater for a command that no longer runs); the tool does not run, so the answer is the stop reason.
             const stoppedBefore = commandStopReason();
             if (stoppedBefore !== null) return { content: [{ type: "text", text: stoppedBefore }], isError: true };
+            // First use of an unbenchmarked free/paid profile: this is where it starts to populate (see unbenchmarkedProfileNotice).
+            const firstUseNotice = unbenchmarkedProfileNotice(effective);
+            if (firstUseNotice) process.stderr.write(firstUseNotice);
             // Before the spawn, for the same reason as in failDynamicProfile.
             const baseline = takeUpdateBaseline();
             const update = requestProfileUpdate({ profile: effective, log: (m) => process.stderr.write(m) });
@@ -4654,6 +4964,66 @@ async function dispatchCallToolInner(
     // a single tool call.
     const backend = getCurrentBackend();
 
+    // P7 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG): size this command's input from the calibration record when its model is a
+    // local llama.cpp or Locals model with an ok record (local-input-budget.ts). Computed ONCE here, before any tool
+    // runs, so a too-small context or an unfit kind fails the command before anything is read or sent. WHY injected
+    // into args.max_payload_kb: nine commands read `max_payload_kb ?? 400`, four of them inside their own core modules
+    // (scan-folder, code-task, search-existing, check-specs), so filling the argument the caller left out is the one
+    // place that reaches all of them; a remote route returns null and never gets here. max_payload_kb is a PER-FILE
+    // limit at most sites (one file per request, or two plus their diff in compare_files), so what is injected is the
+    // budget minus this command's instructions and system prompt, divided by the files one request carries
+    // (taskEntryOf().filesPerRequest); check_references caps its dependency total itself (capDependencyBlocks). An
+    // explicit max_payload_kb wins up to the window bound (window - cap - overhead), above which it is capped; one
+    // stderr line says either.
+    let localSizing = localSizingForCommand(name);
+    if (localSizing?.state === "await") {
+      // Round 2 gap 1, round 3 M2: every managed member with no record is calibrated first and the command sizes from
+      // the records; grouping now with the 400 KB default would overflow the calibrated window once the jobs run.
+      const waitFor = localSizing.models;
+      await waitForCalibration({
+        dir: getConfigDir(),
+        models: waitFor,
+        head: localSizing.head,
+        start: () => startCalibration(waitFor),
+        sleep: stoppableSleep,
+        stopReason: commandStopReason,
+        write: (line) => process.stderr.write(line),
+      });
+      localSizing = localSizingForCommand(name, true);
+    }
+    const sizedEntry = taskEntryOf(name);
+    if (localSizing?.state === "calibrated" && sizedEntry?.sizesInput === true && args !== undefined) {
+      const sizedArgs = args as Record<string, unknown>;
+      // Round 3 (M4): what one file may take so that the request (the prompt plus filesPerRequest file blocks) stays
+      // within `bytes`. readAndGroupFiles sites subtract the prompt again: on the safe side by under 1 KB.
+      const reserve = promptReserveBytes(sizedArgs);
+      const perFileOf = (bytes: number): number => Math.floor((bytes - reserve) / (sizedEntry.filesPerRequest ?? 1));
+      const perFile = perFileOf(localSizing.budgetBytes);
+      const windowPerFile = perFileOf(localSizing.windowBudgetBytes);
+      if (perFile <= 0) throw new Error(`the instructions of this command (${reserve} bytes with the system prompt) leave no room in the calibrated input budget of ${localSizing.models.join(", ")} (${localSizing.budgetBytes} bytes)`);
+      const explicitKb = sizedArgs.max_payload_kb;
+      if (typeof explicitKb === "number") {
+        if (explicitKb * 1024 > windowPerFile) {
+          // Round 3 (M7): above the window bound the request would pass the window; cap it there.
+          process.stderr.write(
+            `[llm-externalizer] max_payload_kb ${explicitKb} is above the window of ${localSizing.models.join(", ")} (${windowPerFile} bytes per file after the ${localSizing.maxTokens}-token output cap and the prompt); capped there\n`,
+          );
+          sizedArgs.max_payload_kb = windowPerFile / 1024;
+          registerCalibratedBudget(windowPerFile);
+        } else if (explicitKb * 1024 > perFile) {
+          process.stderr.write(
+            `[llm-externalizer] max_payload_kb ${explicitKb} is above the calibrated input budget of ${localSizing.models.join(", ")} (${perFile} bytes per file, ${localSizing.inputTokens} tokens for ${localSizing.kind} tasks); using it as asked\n`,
+          );
+        }
+      } else {
+        sizedArgs.max_payload_kb = perFile / 1024;
+        // Gap 3: only an injected budget is exempt from readAndGroupFiles' 10 KB clamp; an explicit value keeps it.
+        // perFile / 1024 * 1024 === perFile exactly (an integer over a power of two), and the four core modules pass
+        // (max_payload_kb ?? 400) * 1024 unchanged, so isCalibratedBudget's equality holds there (review m1).
+        registerCalibratedBudget(perFile);
+      }
+    }
+
     try {
     switch (name) {
       case "chat": {
@@ -4696,8 +5066,8 @@ async function dispatchCallToolInner(
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        // Ensemble always ON for remote backends, OFF for local
-        const useEnsemble = backend.type === "openrouter";
+        // Ensemble ON for the openrouter backend and for a mode-local profile with two or more members (P8, ensembleAllowed)
+        const useEnsemble = ensembleAllowed(backend, activeResolved);
         const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
 
         // Validate redact_regex upfront — fail fast on invalid patterns
@@ -4857,17 +5227,17 @@ async function dispatchCallToolInner(
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               // Follow-up review M1/m2: once stopped, every non-success file (skipped ones too) is listed, and the abort reason is the stop.
-              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", failedHeader(rpResult.failed.length, fgPaths.length), ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
               lines.push(...unfinishedFileLines(rpResult.results));
               if (rpResult.aborted) lines.push("", `ABORTED: ${abortReasonText(rpResult.abortReason)}`);
-              return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+              return { content: [{ type: "text", text: lines.join("\n") }], ...runOutcome(rpResult.aborted, rpResult.failed.length, rpResult.succeeded.length) };
             }
             // Simple sequential path (max_retries=1, no retry)
             // Follow-up review M2: a file whose call THROWS (a --command_timeout stop
             // above all) is recorded as "FAILED: <file> — <reason>" and the loop goes
             // on; before, the first throw dropped every finished report path.
             const perFileResults: string[] = [];
-            let threw = false;
+            let failedFiles = 0;
             for (const fp of fgPaths) {
               let result: Awaited<ReturnType<typeof processFileCheck>>;
               try {
@@ -4881,20 +5251,21 @@ async function dispatchCallToolInner(
                   modelOverride, outputDir,
                 });
               } catch (err) {
-                threw = true;
+                failedFiles++;
                 perFileResults.push(`FAILED: ${fp} — ${(err as Error).message}`);
                 continue;
               }
+              if (!(result.success && result.reportPath)) failedFiles++;
               perFileResults.push(
                 result.success && result.reportPath
                   ? result.reportPath
                   : `FAILED: ${fp} — ${result.error}`,
               );
             }
-            // A thrown failure used to end the command as an error; it still does, now with the finished paths listed.
+            // Any failed file (a thrown call or a failed result) is an error with the finished paths listed (TRDD-PN84WC1L: a failed result used to exit 0).
             return {
               content: [{ type: "text", text: perFileResults.join("\n") }],
-              isError: threw,
+              ...runOutcome(false, failedFiles, perFileResults.length - failedFiles),
             };
           }
 
@@ -4975,7 +5346,7 @@ async function dispatchCallToolInner(
             allGroupReports.push(`[group:${labelId}] ${savedPath}`);
           } else {
             // Single unnamed group — return directly (mode 0/2 backward compat)
-            return { content: [{ type: "text", text: [savedPath, ...chatFailedLines].join("\n") }], isError: chatFailedLines.length > 0 };
+            return { content: [{ type: "text", text: [savedPath, ...chatFailedLines].join("\n") }], ...runOutcome(false, chatFailedLines.length, 1) };
           }
         }
 
@@ -4986,7 +5357,7 @@ async function dispatchCallToolInner(
             isError: true,
           };
         }
-        return { content: [{ type: "text", text: [...allGroupReports, ...chatFailedLines].join("\n") }], isError: chatFailedLines.length > 0 };
+        return { content: [{ type: "text", text: [...allGroupReports, ...chatFailedLines].join("\n") }], ...runOutcome(false, chatFailedLines.length, allGroupReports.length) };
       }
 
       case "code_task": {
@@ -4998,7 +5369,7 @@ async function dispatchCallToolInner(
         // and ensembleStreaming are the per-file-call and multi-model seams;
         // robustPerFileProcess carries the parallel+retry+circuit-breaker path.
         const ctDeps: CodeTaskDeps = {
-          useEnsemble: backend.type === "openrouter",
+          useEnsemble: ensembleAllowed(backend, activeResolved), // P8: one predicate (see ensembleAllowed)
           defaultTemperature: DEFAULT_TEMPERATURE,
           normalizePaths,
           resolveFolderPath,
@@ -5027,7 +5398,7 @@ async function dispatchCallToolInner(
         // mirroring code-task/core.ts — this case only wires the
         // server-stateful seams.
         const ttDeps: TextToolsDeps = {
-          useEnsemble: backend.type === "openrouter",
+          useEnsemble: ensembleAllowed(backend, activeResolved), // P8: one predicate (see ensembleAllowed)
           defaultTemperature: DEFAULT_TEMPERATURE,
           ensembleStreaming: (messages, options, ensemble) =>
             ensembleStreaming(messages as ChatMessage[], options, ensemble),
@@ -5672,7 +6043,9 @@ async function dispatchCallToolInner(
         );
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
-          const targetDir = outputDir || defaultOutputDir();
+          // TRDD-PNU8XECB: a copy of settings.yaml is tool configuration (it can name keys and private
+          // endpoints), never a final report, so it goes to the gitignored scratch root, not reports/.
+          const targetDir = outputDir || defaultScratchDir();
           mkdirSync(targetDir, { recursive: true });
           const copyPath = join(targetDir, "settings_edit.yaml");
           writeFileSync(copyPath, raw, "utf-8");
@@ -5870,27 +6243,21 @@ async function dispatchCallToolInner(
         // with the biggest context memory" available today. The whole
         // ordered list (minus whatever lacks a usable completion ceiling)
         // is handed to the driver as a fallback chain — see driver.ts.
+        // TRDD-TYHKAKCB: the selection (remote free models first, the first fit managed local model last, local-only
+        // under a local profile) lives in session_summary/local-model.ts; index.ts only injects what lives here.
         let eligible;
+        let ssLocal;
         try {
-          eligible = (await selectModels({ minContext: ssMinContext })).filter(
-            (m) => m.maxCompletionTokens > 0,
-          );
+          ({ models: eligible, local: ssLocal } = await resolveSessionSummaryChain({
+            active: activeResolved, profiles: activeSettings.profiles, minContext: ssMinContext, dir: getConfigDir(), slotCtx: brokerSlotCtx,
+            selectRemote: (minContext) => selectModels({ minContext }),
+            depsFor: (p) => makeProviderDeps(p, makeBackendFromProfile(p)),
+            startCalibrationRunner: () => ensureCalibrator({ dir: getConfigDir(), version: brokerClientVersion(), entry: defaultBrokerEntry() }),
+            waitForCalibration: (models, head) => waitForCalibration({ dir: getConfigDir(), models, head, start: () => startCalibration(models), sleep: stoppableSleep, stopReason: commandStopReason, write: (l) => process.stderr.write(l) }),
+          }));
         } catch (err) {
           return {
             content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
-            isError: true,
-          };
-        }
-        if (eligible.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `FAILED: every eligible free model reports no max_completion_tokens on the ` +
-                  `OpenRouter catalog — cannot size the summarization prompt safely.`,
-              },
-            ],
             isError: true,
           };
         }
@@ -5918,7 +6285,7 @@ async function dispatchCallToolInner(
         // The injected model-call seam driver.ts requires (see its own header):
         // pure core + thin IO shell. This is the only place session-summary
         // touches the network — driver.ts and its tests never do.
-        const callModel: CallModelFn = async (prompt, modelId, maxOutputTokens) => {
+        const callModel: CallModelFn = async (prompt, modelId, maxOutputTokens, signal) => {
           const resp = await chatCompletionWithRetry(
             [{ role: "user", content: prompt }],
             {
@@ -5943,8 +6310,13 @@ async function dispatchCallToolInner(
               // retry window and can run 5 minutes past its own timeout.
               deadlineAt: Date.now() + ssPerChunkTimeoutMs,
               timeoutMs: ssPerChunkTimeoutMs,
+              // Issue 19 / TRDD-3SNQAGIC: the driver cancels a losing racer through this signal once its
+              // chunk is committed, so the request, its deadline timer and its retry backoff stop at once
+              // instead of keeping the process alive to the 600 s chunk deadline.
+              signal,
             },
-            providerDeps,
+            // TRDD-TYHKAKCB: the local model goes through its own profile deps (its broker, which holds the governor lease).
+            ssLocal !== null && ssLocal.modelId === modelId ? ssLocal.deps : providerDeps,
           );
           if (resp.finishReason === "error") {
             throw new Error(`model call to '${modelId}' failed (finishReason=error): ${resp.content || "no detail"}`);
@@ -6020,6 +6392,8 @@ async function dispatchCallToolInner(
               modelId: model.id,
               modelMaxContext: model.contextLength,
               modelMaxCompletionTokens: model.maxCompletionTokens,
+              // TRDD-TYHKAKCB: a local-only chain (remote selection failed, or a local profile) starts on the local model.
+              modelLocal: model.local,
               fallbackModels,
               callModel,
               pruneLevel: prune as "aggressive" | "moderate" | "none",
@@ -6048,7 +6422,8 @@ async function dispatchCallToolInner(
                 `[llm-externalizer] --until-done: retrying in ${Math.round(backoffMs / 1000)}s ` +
                 `(resumes from the checkpoint; completed chunks are not recomputed)\n`,
             );
-            await new Promise((r) => setTimeout(r, backoffMs));
+            // WHY stoppableSleep: this backoff can be minutes; a stop must end it at once (the next pass fails with the stop reason).
+            await stoppableSleep(backoffMs);
           }
         }
 
@@ -6166,7 +6541,7 @@ async function dispatchCallToolInner(
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const bcUseEnsemble = backend.type === "openrouter";
+        const bcUseEnsemble = ensembleAllowed(backend, activeResolved); // P8: one predicate (see ensembleAllowed)
         const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
         const bcMode = resolveAnswerMode(bcRawMode, 0);
 
@@ -6266,7 +6641,10 @@ async function dispatchCallToolInner(
                   const result = await processFileCheck(filePath, gTask, {
                     maxTokens: resolveDefaultMaxTokens(),
                     batchId: gBatchId, fileIndex: idx,
-                    redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride, outputDir,
+                    redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride,
+                    // TRDD-PNU8XECB: a grouped run always merges these per-file pieces into one report per group,
+                    // so the pieces are intermediate (reports_dev) and only the merged report lands in reports/.
+                    outputDir: mergePieceDir(outputDir, true),
                   });
                   gRecentOutcomes.push(result.success);
                   return result;
@@ -6393,7 +6771,10 @@ async function dispatchCallToolInner(
                 onProgress,
                 ensemble: bcUseEnsemble,
                 maxBytes: bcBudgetBytes,
-                modelOverride, outputDir,
+                modelOverride,
+                // TRDD-PNU8XECB: modes 1/2 merge these per-file pieces into one final report, so the
+                // pieces are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
+                outputDir: mergePieceDir(outputDir, bcMode === 1 || bcMode === 2),
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress
@@ -6488,7 +6869,7 @@ async function dispatchCallToolInner(
               outputDir,
             );
             const bcSummary: string[] = [
-              `BATCH CHECK COMPLETE — ${succeeded.length} succeeded (${uniqueFiles.length} total)`,
+              `BATCH CHECK COMPLETE — ${succeeded.length} succeeded (${uniqueFiles.length} total) — ${formatUsageTotals(batchResults)}`,
               `Batch UUID: ${batchId}`,
               `MERGED REPORT: ${mergedPath}`,
             ];
@@ -6498,7 +6879,7 @@ async function dispatchCallToolInner(
 
         // Mode 0 (default): list individual report paths
         const summaryLines: string[] = [
-          `BATCH CHECK COMPLETE — ${succeeded.length} succeeded, ${failed.length} failed, ${skipped.length} skipped (${uniqueFiles.length} total)`,
+          `BATCH CHECK COMPLETE — ${succeeded.length} succeeded, ${failed.length} failed, ${skipped.length} skipped (${uniqueFiles.length} total) — ${formatUsageTotals(batchResults)}`,
           `Batch UUID: ${batchId}`,
           "",
         ];
@@ -6516,7 +6897,7 @@ async function dispatchCallToolInner(
         }
         // Follow-up review M1/m2: once stopped, every non-success file is named (skipped ones too), instead of FAILED and a SKIPPED count.
         if (failed.length > 0 && !isCommandStopped()) {
-          summaryLines.push("", "FAILED:");
+          summaryLines.push("", failedHeader(failed.length, uniqueFiles.length));
           for (const r of failed) {
             summaryLines.push(`  ${r.filePath}: ${r.error}`);
           }
@@ -6533,7 +6914,7 @@ async function dispatchCallToolInner(
         }
         return {
           content: [{ type: "text", text: summaryLines.join("\n") }],
-          isError: aborted,
+          ...runOutcome(aborted, failed.length, succeeded.length),
         };
       }
 
@@ -6547,7 +6928,7 @@ async function dispatchCallToolInner(
         // is injected as the per-file-call seam (the scan_folder analogue of
         // search_existing's callModel).
         const sfDeps: ScanFolderDeps = {
-          useEnsemble: backend.type === "openrouter",
+          useEnsemble: ensembleAllowed(backend, activeResolved), // P8: one predicate (see ensembleAllowed)
           backendModel: backend.model,
           processFileCheck,
           classifyError,
@@ -6604,7 +6985,7 @@ async function dispatchCallToolInner(
         // A6/B1 increment) so the benchmark runner can execute the REAL
         // pipeline in-process; this case only wires the server-stateful deps.
         const seiDeps: SeiDeps = {
-          useEnsemble: backend.type === "openrouter",
+          useEnsemble: ensembleAllowed(backend, activeResolved), // P8: one predicate (see ensembleAllowed)
           backendModel: backend.model,
           callModel: async (messages) =>
             ensembleStreaming(
@@ -6615,7 +6996,7 @@ async function dispatchCallToolInner(
                 onProgress,
                 modelOverride, // honours --free and credit-exhausted auto-fallback
               },
-              backend.type === "openrouter",
+              ensembleAllowed(backend, activeResolved), // P8: one predicate (see ensembleAllowed)
             ),
           classifyError,
           saveResponse,
@@ -6654,7 +7035,7 @@ async function dispatchCallToolInner(
           max_payload_kb?: number;
         };
         const cfBudgetBytes = (cfMaxPayloadKb ?? 400) * 1024;
-        const cfUseEnsemble = backend.type === "openrouter";
+        const cfUseEnsemble = ensembleAllowed(backend, activeResolved); // P8: one predicate (see ensembleAllowed)
 
         // ── Helper: compare a single pair and return report content ──
         const comparePair = async (fARaw: string, fBRaw: string, prompt: string): Promise<{ content: string; model: string } | { error: string }> => {
@@ -6675,7 +7056,9 @@ async function dispatchCallToolInner(
           const diffResult = spawnSync("diff", ["-u", "--label", fA, "--label", fB, "--", fA, fB], { encoding: "utf-8", timeout: 30000 });
           if (diffResult.status === 2 || diffResult.error) return { error: `diff error: ${diffResult.error?.message || diffResult.stderr}` };
           let diffOutput = diffResult.stdout?.trim() ? diffResult.stdout : "(files are identical)";
-          if (diffOutput.length > 200_000) { diffOutput = diffOutput.slice(0, 200_000); }
+          // P7 round 3 (M4): the same calibrated diff share as the single-pair path below.
+          const cfDiffMax = isCalibratedBudget(cfBudgetBytes) ? Math.min(200_000, 2 * cfBudgetBytes) : 200_000;
+          if (diffOutput.length > cfDiffMax) { diffOutput = diffOutput.slice(0, cfDiffMax); }
           if (cfRedact) diffOutput = redactSecrets(diffOutput).redacted;
           let sourceBlocks = "";
           try {
@@ -6949,7 +7332,9 @@ async function dispatchCallToolInner(
           : "(files are identical — no differences found)";
 
         // Truncate huge diffs to avoid overwhelming the LLM context window
-        const MAX_DIFF_CHARS = 200_000; // ~50K tokens
+        // P7 round 3 (M4): under a calibrated local budget the diff gets two of the four per-file shares compare_files
+        // is sized with (TASK_KIND_BY_TOOL filesPerRequest 4): diff + A + B then stay within the request budget.
+        const MAX_DIFF_CHARS = isCalibratedBudget(cfBudgetBytes) ? Math.min(200_000, 2 * cfBudgetBytes) : 200_000; // ~50K tokens
         let diffTruncated = false;
         if (diffOutput.length > MAX_DIFF_CHARS) {
           diffOutput = diffOutput.slice(0, MAX_DIFF_CHARS);
@@ -7058,7 +7443,7 @@ async function dispatchCallToolInner(
           follow_symlinks?: boolean;
           max_files?: number;
         };
-        const crUseEnsemble = backend.type === "openrouter";
+        const crUseEnsemble = ensembleAllowed(backend, activeResolved); // P8: one predicate (see ensembleAllowed)
         const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
 
         let crRegexRedact: RegexRedactOpts | null = null;
@@ -7134,6 +7519,8 @@ async function dispatchCallToolInner(
               const depBlocks: string[] = [];
               for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
               const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
+              // P7 round 3 (M4): one request carries the source AND every dependency, so under a calibrated budget the total is capped.
+              depBlocks.splice(0, depBlocks.length, ...capDependencyBlocks(filePath, srcBlock, depBlocks, crBudgetBytes));
               const msgs: ChatMessage[] = [
                 { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES },
                 { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
@@ -7190,6 +7577,8 @@ async function dispatchCallToolInner(
           }
 
           const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
+          // P7 round 3 (M4): one request carries the source AND every dependency, so under a calibrated budget the total is capped.
+          depBlocks.splice(0, depBlocks.length, ...capDependencyBlocks(filePath, srcBlock, depBlocks, crBudgetBytes));
           const crMessages: ChatMessage[] = [
             {
               role: "system",
@@ -7639,7 +8028,7 @@ async function dispatchCallToolInner(
         // (answer_mode 0's one-call-per-file path and the FFD-batched path alike)
         // goes through ensembleStreaming, so that is the single LLM seam.
         const csDeps: CheckSpecsDeps = {
-          useEnsemble: backend.type === "openrouter",
+          useEnsemble: ensembleAllowed(backend, activeResolved), // TRDD-1OOAH3LD P8: one predicate, local ensembles too
           normalizePaths,
           resolveFolderPath,
           ensembleStreaming,

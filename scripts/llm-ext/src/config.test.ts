@@ -18,6 +18,7 @@ import {
   validateUserOwnedKeys,
   validateSettings,
   settingsLevelErrors,
+  localGovernorErrors,
   isInvalidOnlyBecauseUnpopulated,
   resolveHighQualityModel,
   HIGH_QUALITY_MODEL_DEFAULTS,
@@ -163,6 +164,175 @@ describe("fix-queue 74: loadSettings copies paid_benchmark_daily_cap_usd from th
   });
 });
 
+describe("governor D13 (TRDD-ZTO9K8EK unit 6): the local_governor section of settings.yaml", () => {
+  let cfg: string;
+  let prevCfgDir: string | undefined;
+  beforeEach(() => {
+    cfg = mkdtempSync(join("/tmp", "govcfg-"));
+    prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfg;
+  });
+  afterEach(() => {
+    if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+    rmSync(cfg, { recursive: true, force: true });
+  });
+  const BASE = "active: p\nprofiles:\n  p:\n    mode: remote\n    api: openrouter-remote\n    model: x/y\n";
+
+  it("absent or within range is valid: every key at both ends of its range", () => {
+    expect(localGovernorErrors(undefined)).toEqual([]);
+    expect(localGovernorErrors(null)).toEqual([]);
+    expect(localGovernorErrors({ enabled: false, ram_limit_pct: 50, cpu_limit_pct: 10, max_inferences: 1, server_threads: 0 })).toEqual([]);
+    expect(localGovernorErrors({ enabled: true, ram_limit_pct: 99, cpu_limit_pct: 100, max_inferences: 256, server_threads: 64 })).toEqual([]);
+  });
+
+  it.each([
+    [{ ram_limit_pct: 49 }, "local_governor.ram_limit_pct must be an integer from 50 to 99"],
+    [{ ram_limit_pct: 100 }, "local_governor.ram_limit_pct must be an integer from 50 to 99"],
+    [{ cpu_limit_pct: 9 }, "local_governor.cpu_limit_pct must be an integer from 10 to 100"],
+    [{ cpu_limit_pct: 85.5 }, "local_governor.cpu_limit_pct must be an integer from 10 to 100"],
+    [{ max_inferences: 0 }, "local_governor.max_inferences must be an integer from 1 to 256"],
+    [{ max_inferences: "8" }, "local_governor.max_inferences must be an integer from 1 to 256"],
+    [{ server_threads: -1 }, "local_governor.server_threads must be an integer of at least 0"],
+    [{ enabled: "yes" }, "local_governor.enabled must be true or false"],
+    [{ ram_limt_pct: 80 }, "local_governor.ram_limt_pct is not a known key"],
+    [[90], "local_governor must be a mapping"],
+    [90, "local_governor must be a mapping"],
+  ])("%j fails with %s", (raw, message) => {
+    const errors = localGovernorErrors(raw);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain(message);
+  });
+
+  it("a malformed section in settings.yaml fails validateSettings and settingsLevelErrors through the real load path", () => {
+    writeFileSync(getSettingsPath(), `${BASE}local_governor:\n  ram_limit_pct: 30\n  bogus: 1\n`, "utf-8");
+    const settings = loadSettings();
+    expect(settings?.local_governor).toEqual({ ram_limit_pct: 30, bogus: 1 });
+    const res = validateSettings(settings!);
+    expect(res.valid).toBe(false);
+    expect(res.errors.filter((e) => e.startsWith("local_governor."))).toHaveLength(2);
+    expect(settingsLevelErrors(settings!).filter((e) => e.startsWith("local_governor."))).toHaveLength(2);
+  });
+
+  it("a valid section loads and validates", () => {
+    writeFileSync(getSettingsPath(), `${BASE}local_governor:\n  enabled: true\n  ram_limit_pct: 95\n`, "utf-8");
+    const settings = loadSettings();
+    expect(validateSettings(settings!).errors.filter((e) => e.startsWith("local_governor"))).toEqual([]);
+  });
+});
+describe("local decider fallback (mlx-decision increment 1): the local_fallback section of settings.yaml", () => {
+  let cfg: string;
+  let prevCfgDir: string | undefined;
+  beforeEach(() => {
+    cfg = mkdtempSync(join("/tmp", "lfcfg-"));
+    prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfg;
+  });
+  afterEach(() => {
+    if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+    rmSync(cfg, { recursive: true, force: true });
+  });
+  const BASE = "active: p\nprofiles:\n  p:\n    mode: remote\n    api: openrouter-remote\n    model: x/y\n";
+
+  it("a complete valid block loads raw and validates clean", () => {
+    writeFileSync(
+      getSettingsPath(),
+      `${BASE}local_fallback:\n  enabled: true\n  url: http://127.0.0.1:57455\n  startTimeoutMs: 120000\n  attemptTimeoutMs: 200000\n  requestTimeoutMs: 400000\n  maxAttempts: 50\n`,
+      "utf-8",
+    );
+    const settings = loadSettings();
+    // RAW, like local_governor: validateSettings needs the user's own value to quote it.
+    expect(settings?.local_fallback).toEqual({
+      enabled: true,
+      url: "http://127.0.0.1:57455",
+      startTimeoutMs: 120000,
+      attemptTimeoutMs: 200000,
+      requestTimeoutMs: 400000,
+      maxAttempts: 50,
+    });
+    expect(validateSettings(settings!).errors.filter((e) => e.startsWith("local_fallback"))).toEqual([]);
+    expect(settingsLevelErrors(settings!).filter((e) => e.startsWith("local_fallback"))).toEqual([]);
+  });
+
+  it("an unknown key is refused by name, through the real load path and through settingsLevelErrors", () => {
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  url: http://127.0.0.1:57455\n  urlz: http://127.0.0.1:1\n`, "utf-8");
+    const settings = loadSettings();
+    const res = validateSettings(settings!);
+    expect(res.valid).toBe(false);
+    expect(res.errors).toContain(
+      "local_fallback.urlz is not a known key (known: enabled, url, startTimeoutMs, attemptTimeoutMs, requestTimeoutMs, maxAttempts)",
+    );
+    expect(settingsLevelErrors(settings!).filter((e) => e.startsWith("local_fallback.")).length).toBeGreaterThan(0);
+  });
+
+  it("a retired start-path key in settings.yaml is a load error naming it, never silently ignored", () => {
+    // contextTokens, minFreeMemoryGb and maxCpuLoad belonged to the removed start path and never shipped in a tag,
+    // so there is no migration: a settings.yaml that still carries one fails loudly through the real load path.
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  minFreeMemoryGb: 4\n  maxCpuLoad: 90\n  contextTokens: 16384\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.valid).toBe(false);
+    for (const key of ["minFreeMemoryGb", "maxCpuLoad", "contextTokens"]) {
+      expect(res.errors.some((e) => e.startsWith(`local_fallback.${key} was removed: llm-ext no longer starts the mlx-decision decider`))).toBe(true);
+    }
+  });
+  it("a lone requestTimeoutMs below the default startTimeoutMs loads clean: no cross-check on a key the user never wrote", () => {
+    // The outer deadline cuts the load wait anyway (min(startTimeoutMs, remaining request budget)), so a start/request cross-check
+    // would only fail the load on the merged default.
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  requestTimeoutMs: 100000\n  attemptTimeoutMs: 50000\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.errors.filter((e) => e.startsWith("local_fallback"))).toEqual([]);
+  });
+
+  it("a non-boolean enabled is refused by name", () => {
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  enabled: "yes"\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.valid).toBe(false);
+    expect(res.errors).toContain('local_fallback.enabled must be true or false, got "yes"');
+  });
+
+  it("a non-loopback url is refused by name, because the local sender sends no auth at all", () => {
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  url: https://decider.example.com:443\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes("local_fallback.url") && e.includes("refused: not a loopback decider url"))).toBe(true);
+  });
+
+  it("a url whose real host is remote is refused even when its prefix looks loopback", () => {
+    // Regression: the prefix regex this validation used accepted `http://127.0.0.1:57455@evil.example.com`, whose
+    // RFC 3986 userinfo makes the real host evil.example.com. The local sender attaches no Authorization header,
+    // so that url would have posted the classification state to a remote host unauthenticated.
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  url: http://127.0.0.1:57455@evil.example.com\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes("local_fallback.url") && e.includes("refused: not a loopback decider url"))).toBe(true);
+  });
+
+  // TRDD-O93LFMF3: the sender appends /v1/systemone to the url, so only a bare origin names the decider.
+  it.each([
+    ["a /v1/systemone path (the sender would double the segment)", "http://127.0.0.1:8123/v1/systemone"],
+    ["a query (it would swallow the appended path)", "http://127.0.0.1:8123?x=1"],
+    ["a fragment (it would be silently dropped)", "http://127.0.0.1:8123#f"],
+  ])("a url with %s is refused by name", (_what, url) => {
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  url: ${JSON.stringify(url)}\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.valid).toBe(false);
+    expect(res.errors.some((e) => e.includes("local_fallback.url") && e.includes("with no path, query or fragment") && e.includes("http://127.0.0.1:<port>"))).toBe(true);
+  });
+
+  it.each(["http://127.0.0.1:8123", "http://127.0.0.1:8123/"])("a bare loopback origin %s is accepted, with or without a trailing slash", (url) => {
+    writeFileSync(getSettingsPath(), `${BASE}local_fallback:\n  url: ${url}\n`, "utf-8");
+    const res = validateSettings(loadSettings()!);
+    expect(res.errors.filter((e) => e.startsWith("local_fallback"))).toEqual([]);
+  });
+
+  it("an absent section is no error (the defaults apply)", () => {
+    writeFileSync(getSettingsPath(), BASE, "utf-8");
+    const settings = loadSettings();
+    expect(settings?.local_fallback).toBeUndefined();
+    expect(validateSettings(settings!).errors.filter((e) => e.startsWith("local_fallback"))).toEqual([]);
+  });
+});
 describe("fix-queue 75: settingsLevelErrors — every settings-level error validateSettings can produce", () => {
   const baseProfiles: Settings["profiles"] = {
     p: { mode: "remote", api: "openrouter-remote", model: "x/y" } as Settings["profiles"][string],

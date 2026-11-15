@@ -41,6 +41,16 @@ export interface CaseScore {
   trueNegatives: number;
   /** Scanned files whose section was missing or unparseable. */
   unscored: number;
+  /**
+   * Scanned files with NO verdict at all (no report / no section: the request
+   * failed or never ran) — the subset of `unscored` that is an unanswered file,
+   * as opposed to an answer that did not follow the output contract
+   * ("unparseable", which is the model's own failure and stays scored).
+   * Optional: ledger rows written before TRDD-90BXJ2KO do not carry it.
+   */
+  unanswered?: number;
+  /** The expected-YES files among `unanswered` (each is also a falseNegatives). */
+  unansweredExpectedYes?: number;
   scannedFiles: number;
   precision: number;
   recall: number;
@@ -79,6 +89,8 @@ export function scoreCase(
   let fn = 0;
   let tn = 0;
   let unscored = 0;
+  let unanswered = 0;
+  let unansweredExpectedYes = 0;
   for (const file of scannedFiles) {
     const verdict = verdicts.get(file);
     const expectYes = expectedYes.has(file);
@@ -91,6 +103,12 @@ export function scoreCase(
     } else {
       unscored++;
       if (expectYes) fn++;
+      // No entry at all (not "unparseable"): the request failed or never ran, so
+      // the file is UNANSWERED, not answered wrongly (TRDD-90BXJ2KO).
+      if (verdict === undefined) {
+        unanswered++;
+        if (expectYes) unansweredExpectedYes++;
+      }
     }
   }
   const precision = safePrecision(tp, fp);
@@ -102,6 +120,8 @@ export function scoreCase(
     falseNegatives: fn,
     trueNegatives: tn,
     unscored,
+    unanswered,
+    unansweredExpectedYes,
     scannedFiles: scannedFiles.length,
     precision,
     recall,
@@ -147,6 +167,40 @@ export function aggregateScores(cases: readonly CaseScore[]): SearchExistingScor
         : cases.reduce((sum, c) => sum + c.f1, 0) / cases.length,
     coverage: scanned === 0 ? 0 : (scanned - unscored) / scanned,
   };
+}
+
+/**
+ * The score over ANSWERED files only (TRDD-90BXJ2KO): every file with no verdict
+ * at all (request failed / never ran) leaves the denominator, and an expected-YES
+ * among them stops counting as a false negative. An unparseable answer stays: it
+ * is an answer that broke the output contract, and still costs coverage/recall.
+ * A case without the `unanswered` fields (a ledger row written before them)
+ * cannot be separated, so it is returned as stored.
+ */
+export function answeredOnlyScore(score: SearchExistingScore): SearchExistingScore {
+  // A ledger row is untrusted JSON: one without a cases list cannot be separated
+  // and is judged as stored.
+  // Nothing to drop: keep the stored aggregate rather than re-deriving it from `cases`.
+  if (!Array.isArray(score.cases) || !score.cases.some((c) => (c.unanswered ?? 0) > 0)) return score;
+  return aggregateScores(
+    score.cases.map((c) => {
+      if (typeof c.unanswered !== "number" || typeof c.unansweredExpectedYes !== "number") return c;
+      const falseNegatives = c.falseNegatives - c.unansweredExpectedYes;
+      const precision = safePrecision(c.truePositives, c.falsePositives);
+      const recall = safeRecall(c.truePositives, falseNegatives);
+      return {
+        ...c,
+        falseNegatives,
+        unscored: c.unscored - c.unanswered,
+        scannedFiles: c.scannedFiles - c.unanswered,
+        unanswered: 0,
+        unansweredExpectedYes: 0,
+        precision,
+        recall,
+        f1: f1Of(precision, recall),
+      };
+    }),
+  );
 }
 
 export interface SearchExistingThresholds {

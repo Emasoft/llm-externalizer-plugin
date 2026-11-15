@@ -5,6 +5,7 @@ import { noul } from "../l1/questions.js";
 import { DEFAULT_POLICY, type NoulAnswer } from "../l1/validate.js";
 import { IdError, checkItemIds, indexKey } from "../l2/ids.js";
 import { PolicyError, band } from "../l2/policy-kit.js";
+import { clip, f2, type RenderOptions, type TextRender } from "../l2/render-text.js";
 import { dataGuard, isBlank } from "./shared.js";
 import type { Answers, Built, BuiltUnit, DecisionSpec, Thresholds } from "./spec.js";
 
@@ -157,10 +158,43 @@ export function collapseRepeats(rows: readonly FilterRow[], maxNumbers = 300): C
   });
 }
 
+// IN-07 (qs filter): a row id that ends in `:<line>` is a --lines item, and a synthesized `item_N` / `proposition_N` id names nothing readable; only those rows print their text. A whole-file row prints just its path.
+const LINE_ID = /:\d+$/;
+const showsText = (id: string): boolean => LINE_ID.test(id) || /^(item|proposition)_\d+$/.test(id);
+const rowLabel = (r: FilterRow): string => (showsText(r.id) ? `${r.id}  ${clip(r.text, 100)}` : r.id);
+
+function renderRows(rows: readonly FilterRow[], collapse: boolean): string[] {
+  // WHY only when EVERY id ends in :<line>: collapseRepeats needs the line numbers of the repeats, and files or propositions have none; guessing would print a wrong "also lines".
+  if (!collapse || !rows.every((r) => LINE_ID.test(r.id))) return rows.map((r) => `${f2(r.p)}  ${rowLabel(r)}`);
+  // WHY two array entries and not one string with a newline: `lines` is one entry per output line, so a test or a later renderer can count and index them.
+  return collapseRepeats(rows).flatMap((c) => (c.count === 1 ? [`${f2(c.row.p)}  ${rowLabel(c.row)}`] : [`${f2(c.row.p)}  ×${c.count}  ${rowLabel(c.row)}`, `        also lines ${c.also}`]));
+}
+
+/**
+ * IN-07 text form (qs filter): the sure matches, then the borderline ones under a header, then `(no matches)` when both are empty.
+ * E128: a p in [threshold, threshold + band) is in BOTH lists (matched, and inside the band); the count line counts p >= threshold, as `matched_count`.
+ */
+function renderText(r: FilterResult, opts: RenderOptions): TextRender {
+  const collapse = opts.noCollapse !== true;
+  const lines = [
+    ...renderRows(r.sure, collapse),
+    ...(r.borderline.length > 0 ? [`? borderline (${f2(r.threshold - r.band)}–${f2(r.threshold + r.band)}) — check these yourself:`, ...renderRows(r.borderline, collapse)] : []),
+  ];
+  if (r.sure.length === 0 && r.borderline.length === 0) lines.push("(no matches)");
+  for (const x of r.invalid) lines.push(`? no answer: ${x.id} (${x.reason})`);
+  lines.push(`— ${r.matched_count} matched, ${r.borderline.length} borderline`);
+  const save = opts.save;
+  return { lines, ...(typeof save === "string" ? { files: [{ path: save, content: JSON.stringify(r.rows.map((x) => ({ id: x.id, p: x.p })), null, 2) }] } : {}) };
+}
 export const spec: DecisionSpec<FilterInput, FilterResult> = {
   id: "filter",
   // IN-01: the first positional is the question; every collected file or line is a text item.
   cli: { positional: [{ name: "question", field: "question" }], itemsField: "items" },
+  // IN-07: output options, not inputs (render: true), so the strict input schema never sees them.
+  flags: [
+    { flag: "--no-collapse", property: "no_collapse", field: "noCollapse", type: "boolean", render: true, help: "Print every row of a --lines run; by default rows whose text differs only in numbers are shown once as ×N with their line numbers.", parse: () => true },
+    { flag: "--save", property: "save", field: "save", render: true, help: "Write every answered row ([{id, p}], JSON, best first) to this file.", parse: (raw) => raw },
+  ],
   input,
   thresholds: {
     threshold: { default: 0.5, min: 0, max: 1, help: "p at or above which an item is matched" },
@@ -173,4 +207,5 @@ export const spec: DecisionSpec<FilterInput, FilterResult> = {
   build,
   project,
   attention: (r) => r.invalid.length > 0 || r.rows.some((x) => !x.auto || x.borderline),
+  renderText,
 };

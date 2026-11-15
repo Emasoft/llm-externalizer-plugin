@@ -1,10 +1,10 @@
 ---
 trdd-id: OMVQCY68
 title: RL-07 Existing-settings migration test
-column: backburner
+column: todo
 status: tasked
 created: 2026-10-07T20:41:14+0200
-updated: 2026-10-07T20:41:19+0200
+updated: 2026-10-31T17:16:43+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -25,6 +25,7 @@ Run the migration on an existing settings file and check the result.
 ## Approval log
 
 - 2026-10-07T20:41:14+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-31T17:16:43+0100 — column → todo by main-agent@llm-externalizer-plugin. release checklist for 14.3.0
 
 ## Plan refs
 
@@ -55,3 +56,7 @@ read the code at card start
 ## Out of scope
 
 Fresh install (RL-06).
+
+## Coordinator note 2026-10-31
+
+Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker release. These cards are the 14.3.0 release checklist; RL-10 publish is authorized by the user goal of 2026-10-31 (publish and install when all TRDDs are complete).

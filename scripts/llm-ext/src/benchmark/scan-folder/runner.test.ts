@@ -159,9 +159,32 @@ describe("runScanFolder — hermetic, real pipeline", () => {
     expect(result.isError).toBe(true);
     const text = result.content.map((p) => p.text).join("\n");
     expect(text).toContain("ABORTED:");
-    expect(text).toContain("FAILED:");
+    expect(text).toContain("FAILED (");
   });
 
+it.each([0, 1, 2])(
+    "mode %i: a non-aborted run with a failed file is an error and names each failure with its cause (TRDD-PN84WC1L)",
+    async (mode) => {
+      // b.ts fails with a recorded cause (the per-file result, as a 503 would give); the other
+      // files succeed, so the batch is NOT aborted — the exit code must still be non-zero.
+      const ok = fakeProcessFileCheck();
+      const deps = baseDeps({
+        processFileCheck: async (filePath, task, options) =>
+          filePath.endsWith("b.ts")
+            ? ({ filePath, success: false, error: "API error 503: upstream down" } as ScanFolderFileResult)
+            : ok.fn(filePath, task, options),
+      });
+      const result = await runScanFolder(baseArgs({ answer_mode: mode }), deps);
+
+      expect(result.isError).toBe(true);
+      const text = result.content.map((p) => p.text).join("\n");
+      expect(text).toContain("FAILED (1 of 3):");
+      expect(text).toMatch(/b\.ts: API error 503: upstream down/);
+      expect(text).not.toContain("ABORTED:");
+    },
+  );
+
+  
   it("returns a validation error without ever calling the per-file seam", async () => {
     const { fn, calls } = fakeProcessFileCheck();
     const deps = baseDeps({ processFileCheck: fn });

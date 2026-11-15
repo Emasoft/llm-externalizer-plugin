@@ -33,7 +33,7 @@ import {
 } from "../benchmark/discover.js";
 import { qualifyModelForTool, registeredTools } from "./registry.js";
 import { localIsoTimestamp } from "../usage-history.js";
-import { defaultOutputDir } from "../project-root.js";
+import { defaultScratchDir } from "../project-root.js";
 
 /** A configured model and the tools whose requirements it must satisfy. */
 export interface ConfiguredModel {
@@ -404,7 +404,7 @@ export function renderModelHealthMarkdown(report: ModelHealthReport): string {
 }
 
 export interface RunCheckModelHealthOptions extends CheckModelHealthOptions {
-  /** Report output dir override. Default <main-project-dir>/reports/model-health/. */
+  /** Report output dir override. Default <main-project-dir>/reports_dev/llm-externalizer/model-health/. */
   outputDir?: string;
   /** Profile override (tests/CLI). Default: the active profile from settings.yaml. */
   profile?: Pick<ResolvedProfile, "name" | "model" | "secondModel" | "thirdModel" | "toolModels">;
@@ -412,7 +412,7 @@ export interface RunCheckModelHealthOptions extends CheckModelHealthOptions {
 
 /**
  * Top-level orchestrator for the 3 surfaces: resolve the active profile, run the
- * health check, write a Markdown report under reports/model-health/, and return
+ * health check, write a Markdown report under reports_dev/llm-externalizer/model-health/, and return
  * both the report and the file path. Advisory only — never writes settings.
  */
 export async function runCheckModelHealth(
@@ -424,7 +424,9 @@ export async function runCheckModelHealth(
   // defaultOutputDir() so it lands under reports/llm-externalizer/model-health
   // (the USER-approved tree) and honors LLM_EXT_OUTPUT_DIR like every other
   // report writer; an explicit outputDir still wins verbatim.
-  const dir = opts.outputDir ?? join(defaultOutputDir(), "model-health");
+  // TRDD-PNU8XECB: model-health output describes llm-ext's own model pool (tool configuration), so it is
+  // scratch output for the gitignored reports_dev/llm-externalizer/, not a final tracked report.
+  const dir = opts.outputDir ?? join(defaultScratchDir(), "model-health");
   mkdirSync(dir, { recursive: true });
   const reportPath = join(dir, `${compactStamp()}-model-health-${profile.name}.md`);
   writeFileSync(reportPath, renderModelHealthMarkdown(report));

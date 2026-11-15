@@ -34,7 +34,7 @@ import type { Profile } from "../config.js";
 import { freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
 import type { PhaseContext } from "./runner.js";
 import { enqueueUnlocked, loadProgress, saveProgress, type MemoryWait, type TrialRecord } from "./state.js";
-import { timingsFromEnv } from "../broker/scheduler.js";
+import { freeFloorPct } from "../governor/settings.js";
 
 /** The records of a fixture body, split at each frontmatter block. */
 const recordsOf = (fx: ScoutFixture): string[] => fx.body.split(/^---\nname: /m).slice(1);
@@ -240,7 +240,7 @@ describe("the ok record (spec 7) from the three phase summaries", () => {
         unfit_reasons: JSON.stringify({ bug: "window 12352 too small for thinking on output" }),
       },
     },
-    { step: "C/summary", data: { main_slots: 2, main_slot_ctx: 13056, aggregate_tps: 180.5, load_avg: 3.2, scout_candidates: "[]" } },
+    { step: "C/summary", data: { main_slots: 2, main_slot_ctx: 13056, aggregate_tps: 180.5, load_avg: 3.2, scout_candidates: "[]", load_weight_bytes: 2 ** 30, load_kv_bytes_per_token: 16_384 } },
   ];
   it("is schema-valid; thinking_works.off comes from Phase B, window_tokens from the smallest W, no scouting candidate kept", () => {
     const r = okRecordFrom(base, trials);
@@ -296,7 +296,8 @@ describe("the ok record (spec 7) from the three phase summaries", () => {
 describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns the run", () => {
   let server: Server | null = null;
   let dir = "";
-  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  // Unit 6: the memory floor is 100 - ram_limit_pct, so the tests set the governor RAM limit and restore it.
+  const ramEnv = process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
   afterEach(async () => {
     if (server) {
       server.closeAllConnections();
@@ -305,8 +306,8 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
     server = null;
     if (dir) rmSync(dir, { recursive: true, force: true });
     dir = "";
-    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
-    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+    if (ramEnv === undefined) delete process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
+    else process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = ramEnv;
   });
 
   const fill = { fact: 2048, aggregate: 2048, bug: 2048 };
@@ -387,16 +388,42 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
   /** A wait that has already counted MEMORY_WAIT_MAX_MS of checks: the next check skips the candidate for the pass. */
   const expiredWait = (): MemoryWait => ({ ...memoryWaitTick(undefined, 1, Date.now() - MEMORY_WAIT_MAX_MS), waited_ms: MEMORY_WAIT_MAX_MS, seen: new Date().toISOString() });
 
-  /** A memory floor that leaves room for n slots in total RAM but not in the free memory now (wait, not skip). */
-  const waitFloorPct = (gguf: string, slots: number): number => {
-    const need = weightBytes([gguf]) + kvBytes(modelKvLayers("llama", [gguf]), slots * mainSlotCtx(fill, minOut, "off")) + WINDOW_HEADROOM_BYTES;
-    return Math.floor((100 * (totalmem() - need - 1024 ** 3)) / totalmem());
+  /** KV bytes per token of a 1-block synthetic GGUF, and what every candidate needs beside its KV (weights + headroom). */
+  const probeKv = (): { head: number; perToken: number } => {
+    const probe = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-probe-"));
+    try {
+      const gguf = join(probe, "m.gguf");
+      writeModel(gguf, 1);
+      return { head: weightBytes([gguf]) + WINDOW_HEADROOM_BYTES, perToken: kvBytes(modelKvLayers("llama", [gguf]), 1) };
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  };
+
+  /**
+   * Unit 6: the floor is 100 - ram_limit_pct, so at most 50 % (ram_limit_pct 50) and at least 1 % (99). The synthetic KV
+   * per token (`blocks`) is sized from this machine's reading so that the least candidate misses the free memory above a
+   * 50 % floor while the largest fits the free memory above a 1 % floor (and total RAM above 50 %): a wait, then memory
+   * back, whatever is in use (coordinator decision 5), as long as free memory spans that gap.
+   */
+  const halfFloorBlocks = async (tokens: { least: number; most: number }): Promise<number> => {
+    const total = totalmem();
+    const { free } = await freeMemory(1);
+    const { head, perToken } = probeKv();
+    const lo = free - 0.5 * total - head;
+    const hi = Math.min(free - 0.01 * total, 0.5 * total) - head;
+    const blocks = Math.max(1, Math.floor(lo / (perToken * tokens.least)) + 1);
+    expect(blocks * perToken * tokens.most, `the largest candidate must fit free memory above a 1 % floor (free ${Math.round(free / 2 ** 20)} MiB)`).toBeLessThanOrEqual(hi);
+    return blocks;
   };
 
   it("a candidate short of free memory waits (paused, the start saved); after 30 min every one is skipped for now: paused, not failed", async () => {
     const { url } = await serve(0);
-    const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] });
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = String(waitFloorPct(ctx.identity.files[0]!, 2));
+    const main1 = mainSlotCtx(fill, minOut, "off");
+    const scout4 = 4 * scoutSlotCtx(2048);
+    const blocks = await halfFloorBlocks({ least: Math.min(main1, scout4), most: Math.max(2 * main1, scout4) });
+    const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] }, {}, blocks);
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "50";
     const first = await phaseC.run(ctx);
     expect(first).toMatchObject({ passed: false, paused: true, step: "C/main/1" });
     expect(Object.keys(ctx.progress.memoryWait ?? {})).toEqual(["C/main/1"]);
@@ -416,7 +443,7 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
     expect(trials.some((t) => t.step === "C/summary")).toBe(false);
 
     // A resume with memory back measures both again (the skips were not terminal) and Phase C passes.
-    delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     const third = await phaseC.run(ctx);
     expect(third).toEqual({ passed: true });
     expect(trials.filter((t) => t.step.startsWith("C/main/") && typeof t.data?.aggregate_tps === "number").map((t) => t.step)).toEqual(["C/main/1", "C/main/2"]);
@@ -424,11 +451,15 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
 
   it("every main candidate over total RAM: too big for this machine's memory (rule 1), judged against total RAM, the floor and the trained context; the old wait entry is cleared", async () => {
     const { url } = await serve(0);
-    const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] }, { "C/main/1": memoryWaitTick(undefined, 1, Date.now()) });
+    // Unit 6: the floor can no longer be raised to 99 % (ram_limit_pct is at least 50), so the synthetic KV is made larger
+    // than all of RAM instead: one main slot needs more than total RAM under any floor.
+    const { head, perToken } = probeKv();
+    const blocks = Math.ceil((totalmem() - head) / (perToken * mainSlotCtx(fill, minOut, "off"))) + 1;
+    const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] }, { "C/main/1": memoryWaitTick(undefined, 1, Date.now()) }, blocks);
     trials.push({ step: "A/capabilities", seed: 0, outcome: "pass", at: "t", data: { n_ctx_train: 4096 } });
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "99";
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     const r = await phaseC.run(ctx);
-    expect(r).toMatchObject({ passed: false, step: "C/main", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: 99, n_ctx_train: 4096 } } });
+    expect(r).toMatchObject({ passed: false, step: "C/main", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: 1, n_ctx_train: 4096 } } });
     expect((r as { message: string }).message).toMatch(/^the model is too big for this machine's memory: no main-slot candidate fits/);
     expect(r).not.toHaveProperty("paused");
     expect(ctx.progress.memoryWait).toEqual({});
@@ -479,20 +510,11 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
    * reading-dependent precondition: the 1 GiB headroom fits free memory above the floor (nothing can run otherwise).
    */
   const waitSlots = async (slotCtx: number): Promise<{ blocks: number; n: number }> => {
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    // Unit 6: a 1 % floor is ram_limit_pct 99 (the floor is the free memory the governor RAM limit leaves).
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     const total = totalmem();
     const { free, floor } = await freeMemory(1);
-    const probe = mkdtempSync(join(osTmpdir(), "llm-ext-phase-c-probe-"));
-    let head: number;
-    let perToken: number;
-    try {
-      const gguf = join(probe, "m.gguf");
-      writeModel(gguf, 1);
-      head = weightBytes([gguf]) + WINDOW_HEADROOM_BYTES;
-      perToken = kvBytes(modelKvLayers("llama", [gguf]), 1);
-    } finally {
-      rmSync(probe, { recursive: true, force: true });
-    }
+    const { head, perToken } = probeKv();
     const runCtx = Math.max(mainSlotCtx(fill, minOut, "off"), scoutSlotCtx(2048));
     // KV bytes available: F above the floor in free memory now, T in total RAM.
     const F = free - floor - head;
@@ -585,8 +607,10 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
   it("an over-total-RAM skip stands only under the floor it was judged against: a changed floor measures it again (review of 2411e6dc, finding 11)", async () => {
     const { url } = await serve(0);
     const { ctx, trials } = context(url, { mainSlots: [1], scoutShares: [2048], scoutSlots: [4, 8] });
-    delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
-    const floorNow = timingsFromEnv(process.env).memoryFloorPct;
+    // Unit 6: a 1 % floor (ram_limit_pct 99), set rather than left to the default 10 %, so the candidates that must be
+    // measured fit the free memory of a busy machine; the skip of the other floor is what the test is about.
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
+    const floorNow = freeFloorPct();
     const skip = (n: number, floorPct: number): TrialRecord => ({ step: `C/scout/2048/${n}`, seed: n, outcome: "pass", at: "t", data: { share: 2048, slots: n, slot_ctx: scoutSlotCtx(2048), skipped: "memory", floor_pct: floorPct } });
     trials.push(skip(4, floorNow === 99 ? 98 : 99), skip(8, floorNow));
     expect(await phaseC.run(ctx)).toEqual({ passed: true });

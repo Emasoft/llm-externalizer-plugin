@@ -43,5 +43,8 @@ export function recordFixture(engine: BrokerEngine, model: string, failed?: { st
     main: { slots: 2, slot_ctx: 1024 },
     scouting_candidates: [],
     speed: { prefill_tps: 1, decode_tps: 1, aggregate_tps: 1, load_avg: 0 },
+    // Governor round 2 #4: a current ok record carries Phase C load figures; without them (and with no weight files on
+    // disk for the fake blob above) readRecordStatus reads the record as missing. Small, like the test models.
+    load_estimate: { weight_bytes: 64 * 2 ** 20, kv_bytes_per_token: 16_384 },
   };
 }

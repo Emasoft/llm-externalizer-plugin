@@ -14,6 +14,7 @@ import { spec as reviewSpec } from "./review.js";
 import { spec as checkSpec } from "./check.js";
 import { spec as findingsSpec } from "./findings.js";
 import { spec as testOutputSpec } from "./test-output.js";
+import { spec as requirementsSpec } from "./requirements.js";
 
 const SPLITS: readonly SplitClass[] = ["per-item", "whole-result"];
 const INJECTIONS: readonly Injection[] = ["index-scoped", "params-in-instructions"];
@@ -51,7 +52,7 @@ export function defineRegistry(specs: readonly AnySpec[]): readonly AnySpec[] {
   return specs;
 }
 
-export const DECISION_SPECS: readonly AnySpec[] = defineRegistry([verifySpec, screenSpec, filterSpec, labelSpec, rankSpec, findSpec, decideSpec, compareSpec, extractSpec, auditSpec, reviewSpec, checkSpec, findingsSpec, testOutputSpec]);
+export const DECISION_SPECS: readonly AnySpec[] = defineRegistry([verifySpec, screenSpec, filterSpec, labelSpec, rankSpec, findSpec, decideSpec, compareSpec, extractSpec, auditSpec, reviewSpec, checkSpec, findingsSpec, testOutputSpec, requirementsSpec]);
 
 export function getSpec(id: string): AnySpec {
   const s = DECISION_SPECS.find((x) => x.id === id);

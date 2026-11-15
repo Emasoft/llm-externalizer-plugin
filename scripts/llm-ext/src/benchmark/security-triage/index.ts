@@ -77,7 +77,7 @@ export interface SecurityTriageBenchmarkOptions {
   /** Explicit model ids to assess. When absent, auto-discover the candidate pool. */
   models?: string[];
   datasetPath?: string;
-  /** Report dir. Default `<main-repo-root>/reports/security-triage-benchmark/`. */
+  /** Report dir. Default `<main-repo-root>/reports_dev/llm-externalizer/security-triage-benchmark/`. */
   outputDir?: string;
   mainRoot?: string;
   /** Ignore the per-model-per-day cache and re-run every model. */

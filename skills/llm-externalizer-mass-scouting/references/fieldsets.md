@@ -47,15 +47,15 @@ Pass `--fields_file bundled:<name>` to use a plugin-shipped fieldset:
 | `bundled:security-audit` | has_secrets, uses_eval, input_validation, severity, vulnerabilities[], cwe_categories[] |
 | `bundled:pr-review` | summary, category, needs_review, breaks_api, test_coverage, risks[] |
 
-Run `llm-ext mass-scout-list-bundled-fieldsets --json` to get the
+Run `llm-ext scout list-fieldsets --json` to get the
 field-by-field breakdown without opening the JSON.
 
 ## Build-fieldset shorthand
 
-For ad-hoc fieldsets, use the shorthand parser via `mass-scout-build-fieldset`:
+For ad-hoc fieldsets, use the shorthand parser via `scout build-fieldset`:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" mass-scout-build-fieldset --name code-audit \
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" scout build-fieldset --name code-audit \
   --field 'summary:string(200)=One-sentence summary of this file.' \
   --field 'has_tests:bool=True if file contains test cases.' \
   --field 'complexity:enum(low,medium,high)=Estimated code complexity.' \
@@ -78,14 +78,14 @@ names, hardware tags, severity labels): `array_string` lets the model emit
 any string so values drift off your intended set, while `array_enum`
 constrains them to the listed values.
 
-For `array_object`, write the JSON by hand or use `mass-scout-propose-fieldset`.
+For `array_object`, write the JSON by hand or use `scout propose-fieldset`.
 
 ## Propose-fieldset
 
 If you don't know what fields to capture, ask the LLM to propose them:
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" mass-scout-propose-fieldset \
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" scout propose-fieldset \
   --goal "find every Python module that talks to a database" \
   --samples /path/sample1.py,/path/sample2.py \
   --out /tmp/proposed.json

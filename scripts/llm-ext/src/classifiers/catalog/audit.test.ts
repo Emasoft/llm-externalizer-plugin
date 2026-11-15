@@ -69,6 +69,12 @@ describe("SP-10 audit: build", () => {
       instructions: `\`units[0].value\` breaks a format or constraint implied by \`units[0].request\` (for example a date format, a unit or an allowed set of values). ${dataGuard("`shared.sources[0]` and `units[0]`", "audit")}`,
       criteria: { true: "The value breaks the implied format or constraint", false: "The value meets the implied format and constraints" },
     });
+    // Prompt-only fix (jev release fix plan section 2): off_target now names the outdated-or-superseded case; true label states what failed.
+    expect(b.units[0]!.questions.off_target_i0).toEqual({
+      type: "noul",
+      instructions: `\`shared.sources[0]\` does not really provide what \`units[0].request\` asks for, so \`units[0].value\` came from incidental text, from a part of the source that answers a different question, or from an outdated or superseded value the source still states. ${dataGuard("`shared.sources[0]` and `units[0]`", "audit")}`,
+      criteria: { true: "This is not the answer the source gives to this request", false: "The source truly provides this value" },
+    });
     expect(b.truncated).toBe(false);
   });
   it("an empty (or blank) value gets only the omission question (jev-mcp 1322-1327, 1397-1403)", () => {
@@ -187,6 +193,10 @@ describe("SP-10 audit: project", () => {
     expect(r.records[0]).toMatchObject({ action: "wrong", p_wrong: 0.7 });
     expect(r.records[0]!.reason).toContain(name);
     expect(r).toMatchObject({ action: "escalate", summary: { flagged: 1 } });
+  });
+  it("several gated checks: the reason names only the highest one, with its value (quality eval of run 20261031_191133)", () => {
+    const r = run(ans(0, { hallucinated: 0.8, off_target: 0.95, format: 0.9 }));
+    expect(r.records[0]!.reason).toBe("off_target 0.95 at or above 0.7");
   });
   it("an empty value is judged by the omission question alone", () => {
     const i = input([{ value: "" }]);

@@ -478,6 +478,7 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 - Each fixer DOES run as a background agent (Claude Code 2.1.232), but the loop is still serial: it dispatches one and waits for that agent's completion notification before the next iteration. Ending the parent session between iterations stops the loop cleanly; ending it while a fixer is mid-flight abandons that fixer's turn, and any edits it had already written to disk stay written.
 - No commits.
 - All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.fix-found-bugs.*` prefix.
+- Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 
 ## Three-surface compliance: by-design slash-only (GAP-12)
 

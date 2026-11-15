@@ -53,7 +53,7 @@ import { runBrokerMain } from "./server.ts";
 import { runCalibratorMain } from "../calibration/runner.ts";
 import { phaseA } from "../calibration/phase-a.ts";
 import { totalmem } from "node:os";
-import { timingsFromEnv } from "./scheduler.ts";
+import { freeFloorPct } from "../governor/settings.ts";
 import { memoryWaitCheck, WaitForMemory } from "../calibration/memory-wait.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
 const [mode, arg] = process.argv.slice(2);
@@ -71,7 +71,7 @@ if (mode === "__broker") {
   // or "too-big" (rule 1, judged against this runner's total RAM and memory floor).
   const phases = env.TEST_MEMORY_PHASE
     ? [{ name: "A", run: async () => env.TEST_MEMORY_PHASE === "too-big"
-        ? { passed: false, step: "A/memory", message: "the model is too big for this machine's memory (test)", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: timingsFromEnv(env).memoryFloorPct, n_ctx_train: 128 } } }
+        ? { passed: false, step: "A/memory", message: "the model is too big for this machine's memory (test)", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: freeFloorPct(), n_ctx_train: 128 } } }
         : { passed: false, step: "A/memory", message: "it only waited for free memory (test)", memory: { kind: "memory-limited" } } }]
     // TEST_WAIT_PHASE (coordinator decision 2026-10-30): a phase "A" that records one trial on its first run, then waits
     // for twice this machine's RAM through the real memoryWaitCheck: the model pauses with its wait saved, never a verdict.
@@ -291,6 +291,13 @@ async function cleanup(dir: string): Promise<void> {
 
 // 300 s: one cleanup per dir (2 process snapshots + a settle wait each), and the CLI-flag test makes 30 dirs; 60 s was borderline on a loaded machine.
 afterEach(async () => {
+  while (dirs.length) await cleanup(dirs.pop()!);
+}, 300_000);
+
+// Round 2 #12: a describe whose beforeAll creates a dir with newDir() (the end-to-end suite's `warm`) and then fails
+// runs none of its tests, so no afterEach ever cleans that dir: it leaked as /tmp/llm-ext-broker-cfg-*. The last
+// file-level hook cleans whatever is left, with the same process checks.
+afterAll(async () => {
   while (dirs.length) await cleanup(dirs.pop()!);
 }, 300_000);
 
@@ -1339,27 +1346,28 @@ describe("calibration runner (P6 step 2)", () => {
 
   it("rule 1 (coordinator decision 2026-10-29): a too-big record stores what it was judged against; it stands under the same floor and is judged again under another", async () => {
     const dir = newDir();
-    // The broker judges under this floor whatever the shell sets.
-    await runClient(dir, jobsOf(A, 1), { LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    // The broker judges under this floor whatever the shell sets. Unit 6: the floor is 100 - ram_limit_pct; 99 and 98 keep
+    // the governor out of the way of loads on a busy machine while still being two different floors (1 % and 2 %).
+    await runClient(dir, jobsOf(A, 1), { LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "99" });
     rmSync(recordPath(dir, "llama", B));
     queueB(dir);
-    const pid = spawnRunner(dir, { TEST_MEMORY_PHASE: "too-big", LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    const pid = spawnRunner(dir, { TEST_MEMORY_PHASE: "too-big", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "99" });
     await waitFor("the runner to finish", () => !alive(pid), 180_000);
     const rec = readRecord(dir, "llama", B)!;
     expect(rec.status).toBe("calibration-failed");
-    expect(rec.memory_judged).toEqual({ total_ram_bytes: totalmem(), floor_pct: 10, n_ctx_train: 128 });
+    expect(rec.memory_judged).toEqual({ total_ram_bytes: totalmem(), floor_pct: 1, n_ctx_train: 128 });
     // The same floor: the verdict stands (the request fails at once) and a queued model is not measured again.
     const r = await runClient(dir, jobsOf(B, 1));
     expect(r.results[0].error).toMatch(/too big for this machine's memory/);
     queueB(dir);
-    const same = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_BROKER_MEMORY_FLOOR: "10" });
+    const same = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "99" });
     await waitFor("the runner to finish", () => !alive(same), 180_000);
     expect(runnerLogOf(dir)).toMatch(/already has a valid, current record \(calibration-failed\)/);
     // Another floor: the record no longer holds; the runner measures the model again.
     queueB(dir);
-    const other = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_BROKER_MEMORY_FLOOR: "11" });
+    const other = spawnRunner(dir, { TEST_PASS_PHASE_A: "1", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "98" });
     await waitFor("the runner to finish", () => !alive(other), 180_000);
-    expect(runnerLogOf(dir)).toMatch(/calibrated again: the memory floor changed from 10 % to 11 %/);
+    expect(runnerLogOf(dir)).toMatch(/calibrated again: the RAM limit changed from ram_limit_pct 99 % to 98 %/);
   }, 300_000);
 
   /** A record of B calibrated on an older engine build, with progress from that build (A and B passed). */
@@ -1532,7 +1540,7 @@ describe("the cal-server orphan sweep (P6)", () => {
   const spawnCal = async (dir: string, ownerPid: number): Promise<number> => {
     const parsed = parseManagedModel(A);
     if ("error" in parsed) throw new Error(parsed.error);
-    const target = { port: await freePort(), model: A, ctx: 1024 };
+    const target = { port: await freePort(), model: A, ctx: 1024, threads: 1 };
     const saved = process.env.LLAMA_CACHE;
     process.env.LLAMA_CACHE = LLAMA_CACHE;
     try {
@@ -1884,73 +1892,6 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
 });
 
 /**
- * A stand-in broker on loopback for the two client paths the real broker
- * cannot be made to take (a 500 or non-JSON poll reply, a slow 202): a real
- * HTTP server, the real client code. Runs LAST in the file: m1 calls
- * cancelAllBrokerJobs, which stops this process's client for good.
- */
-describe("client against a misbehaving broker (review m4, m1)", () => {
-  const serve = async (handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ ep: BrokerEndpoint; close: () => Promise<void> }> => {
-    const srv = createServer(handler);
-    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
-    const port = (srv.address() as { port: number }).port;
-    return {
-      ep: { url: `http://127.0.0.1:${port}`, token: "t", pid: process.pid },
-      close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
-    };
-  };
-  const req = { engine: "llama" as const, body: JSON.stringify({ model: "m" }), model: "m", ctx: 0, timeoutMs: 5000 };
-
-  it("m4: a poll reply other than 200/204/404, or one that is not a job result, is BrokerUnavailableError (endpoint)", async () => {
-    for (const [status, body] of [[500, "boom"], [401, "{}"], [200, "not json"], [200, "{}"]] as const) {
-      const s = await serve((rq, rs) => {
-        if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "j" })); return; }
-        if (rq.method === "DELETE") { rs.writeHead(204); rs.end(); return; }
-        rs.writeHead(status); rs.end(body);
-      });
-      try {
-        const err = await brokerExchange(s.ep, req).then(() => null, (e: unknown) => e);
-        expect(err, `${status} ${body}`).toBeInstanceOf(BrokerUnavailableError);
-        expect(endpointFailureKind(err, (err as Error).message)).toBe("endpoint");
-      } finally {
-        await s.close();
-      }
-    }
-  });
-
-  it("m1: --command_timeout cancels a job whose POST was still in flight; follow-up m1: only confirmed DELETEs are counted, a refused one is named", async () => {
-    const deleted: string[] = [];
-    const s = await serve((rq, rs) => {
-      if (rq.method === "POST") {
-        setTimeout(() => { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "slow-job" })); }, 600);
-        return;
-      }
-      if (rq.method === "DELETE") { deleted.push(rq.url ?? ""); rs.writeHead(204); rs.end(); return; }
-      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
-    });
-    // A second broker endpoint that refuses the DELETE (500): its job must not be counted as cancelled.
-    const bad = await serve((rq, rs) => {
-      if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "stuck-job" })); return; }
-      if (rq.method === "DELETE") { rs.writeHead(500); rs.end("no"); return; }
-      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
-    });
-    try {
-      const call = brokerExchange(s.ep, req).catch((e: unknown) => e);
-      const stuck = brokerExchange(bad.ep, req).catch((e: unknown) => e);
-      await new Promise((r) => setTimeout(r, 100));
-      const result = await cancelAllBrokerJobs("test stop");
-      expect(result).toEqual({ cancelled: 1, failed: ["stuck-job"] });
-      expect(deleted).toContain("/v1/jobs/slow-job");
-      expect(await call).toBeInstanceOf(Error);
-      expect(await stuck).toBeInstanceOf(Error);
-    } finally {
-      await s.close();
-      await bad.close();
-    }
-  });
-});
-
-/**
  * Follow-up review M3 + M2: a --command_timeout stop on a profile with NO
  * broker (a non-managed OpenAI-compatible endpoint, the transport every remote
  * profile shares: sendChat -> fetchWithRetry429). The endpoint is a local fake
@@ -2071,13 +2012,20 @@ describe("a stopped command on a non-broker profile starts no new request (follo
  * llama-server caps every slot at the training context, so the ~710-token
  * prompt a real command sends cannot fit. The tests run on copies whose
  * context_length is patched (u32 metadata, same size, nothing else changed)
- * to 1024 / 2048, and each profile's context_window equals it. These models
- * never emit EOS, so every reply runs to its slot limit: every request fills a
- * whole context_window, which is what the slot-sizing test below relies on.
+ * to E2E_CTX (3584), and each profile's context_window equals it. These models
+ * never emit EOS, so every reply runs to its slot limit or to the 2048-token P7 output cap, whichever comes first; the
+ * slot-sizing test below uses files large enough that the slot limit comes first.
  * No request_options on the profiles:
  * with them a finish_reason=length reply is a hard OutputLimitError.
  */
 describe("end to end through real llm-ext commands (P1' item 1)", () => {
+  /**
+   * P7 (design section 6): the context every profile here runs at, and the patched training context of its GGUF. It is
+   * the smallest that holds the 1024-token input minimum beside the 2048-token fact output cap and the 512-token
+   * overhead of the fixture record (2048 + 512 + 1024); a smaller context_window fails the command before any broker
+   * job (the test "context_window 1024 fails at once" below).
+   */
+  const E2E_CTX = 3584;
   let cli: string;
   let modelsDir: string;
   const modelA = (): string => join(modelsDir, "ctx-stories15M-q4_0.gguf");
@@ -2097,8 +2045,8 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     const r = await runClient(warm, [...jobsOf(A, 1), ...jobsOf(B, 1)]);
     expect(r.results.every((x) => x.status === 200)).toBe(true);
     modelsDir = mkdtempSync(join(tmpdir(), "llm-ext-broker-models-"));
-    // stories260K has a 512-token vocabulary, so the same prompt is ~1,700 tokens there: it gets 2048-token slots.
-    for (const [file, slot] of [["stories15M-q4_0.gguf", 1024], ["stories260K.gguf", 2048]] as const) {
+    // stories260K has a 512-token vocabulary, so the same prompt is ~1,700 tokens there; E2E_CTX holds it too.
+    for (const [file, slot] of [["stories15M-q4_0.gguf", E2E_CTX], ["stories260K.gguf", E2E_CTX]] as const) {
       const b = readFileSync(realpathSync(cachedGguf(file)));
       const key = Buffer.from("llama.context_length");
       const at = b.indexOf(key);
@@ -2124,7 +2072,7 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
       `    context_window: ${ctx}`,
       "    server: managed",
     ];
-    writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), 1024), "  tinyb:", ...profile(modelB(), 2048), ""].join("\n"));
+    writeFileSync(join(cfg, "settings.yaml"), ["active: tinya", "profiles:", "  tinya:", ...profile(modelA(), E2E_CTX), "  tinyb:", ...profile(modelB(), E2E_CTX), ""].join("\n"));
     for (const m of [modelA(), modelB()]) markCalibrated(cfg, "llama", m);
   };
 
@@ -2160,12 +2108,17 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     const res = await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } });
     return (await res.json()) as { queued: number; running: number };
   };
-  const workDir = (files: number): { dir: string; src: string; files: string[] } => {
+  const workDir = (files: number, bytes = 0): { dir: string; src: string; files: string[] } => {
     const dir = newDir();
     const src = join(dir, "src");
     mkdirSync(src);
     const list = Array.from({ length: files }, (_, i) => join(src, `f${i + 1}.txt`));
-    list.forEach((f, i) => writeFileSync(f, `Once upon a time there was cat number ${i + 1}.\n`));
+    // bytes 0 = the one-line story; otherwise the same line repeated to about `bytes` bytes.
+    const text = (i: number): string => {
+      const line = `Once upon a time there was cat number ${i + 1}.\n`;
+      return bytes === 0 ? line : line.repeat(Math.max(1, Math.floor(bytes / line.length)));
+    };
+    list.forEach((f, i) => writeFileSync(f, text(i)));
     return { dir, src, files: list };
   };
   const reports = (dir: string): string[] => (existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".md")) : []);
@@ -2201,12 +2154,42 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     expect(spawnLines(cfg).some((l) => l.includes(modelB()))).toBe(true);
     expect(await brokerHealth(cfg)).toMatchObject({ queued: 0, running: 0 });
   }, 600_000);
+  it("P7: a context_window too small for the input minimum (1024) fails the command at once, naming the smallest context that works, before any broker job", async () => {
+    const cfg = newDir();
+    writeFileSync(join(cfg, "settings.yaml"), ["active: small", "profiles:", "  small:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:18431", `    model: ${modelA()}`, "    context_window: 1024", "    server: managed", ""].join("\n"));
+    markCalibrated(cfg, "llama", modelA());
+    const w = workDir(1);
+    const ask = await runCli(cfg, ["llm", "ask", w.files[0], "--instructions", "continue the story", "-o", join(w.dir, "ask")], w.dir);
+    expect(ask.code, ask.out).not.toBe(0);
+    expect(ask.out).toMatch(/input budget -1536 tokens is below 1024 for fact tasks \(context 1024, .*output cap 2048.*the smallest context that works is 3584 tokens/);
+    // No broker job: the broker was never started.
+    expect(existsSync(join(cfg, "broker-local.log"))).toBe(false);
+  }, 300_000);
 
+  it("P7 round 2: a managed model with no record is calibrated BEFORE the command sizes its input; a failed calibration ends the wait with the record's message, and no broker job is sent", async () => {
+    const cfg = newDir();
+    // The unpatched tiny GGUF (context 128): its calibration fails fast at Phase A, so the wait ends without a broker.
+    const model = join(cfg, "m.gguf");
+    writeFileSync(model, readFileSync(realpathSync(cachedGguf("stories260K.gguf"))));
+    writeFileSync(join(cfg, "settings.yaml"), ["active: fresh", "profiles:", "  fresh:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:18431", `    model: ${model}`, `    context_window: ${E2E_CTX}`, "    server: managed", ""].join("\n"));
+    const w = workDir(1);
+    const ask = await runCli(cfg, ["llm", "ask", w.files[0], "--instructions", "continue the story", "-o", join(w.dir, "ask")], w.dir);
+    expect(ask.code, ask.out).not.toBe(0);
+    expect(ask.out.match(/waiting for the calibration of .*m\.gguf \(llama\) before sizing this command/g)?.length, ask.out).toBe(1);
+    expect(ask.out).toMatch(/calibration-failed at phase-a\/context: the model's context is 128 tokens/);
+    expect(existsSync(join(cfg, "broker-local.log"))).toBe(false);
+    // The runner exits after writing the record; wait for it so the temp dir is not removed under it.
+    const runnerDone = (): boolean => existsSync(calibratorLogPath(cfg)) && readFileSync(calibratorLogPath(cfg), "utf8").includes("calibration runner exiting: done");
+    for (const end = Date.now() + 120_000; !runnerDone() && Date.now() < end; ) await new Promise((r) => setTimeout(r, 500));
+    expect(runnerDone(), "the calibration runner did not finish").toBe(true);
+  }, 300_000);
   it("slot sizing: MAIN_SLOTS concurrent requests that each fill a whole context_window all succeed, never a 500 (llama.cpp splits -c across slots)", async () => {
     const cfg = newDir();
     writeSettings(cfg);
-    // 2 x MAIN_SLOTS files: the broker keeps every slot busy, each reply running to the slot limit.
-    const w = workDir(2 * MAIN_SLOTS);
+    // 2 x MAIN_SLOTS files: the broker keeps every slot busy, each reply running to the 2048-token P7 output cap. Each
+    // file is about 2800 bytes, under the P7 per-file budget of the fixture record at E2E_CTX (round 3: 1024 tokens x 4
+    // chars per token x 0.88 = 3604 bytes, less the ~675-byte prompt reserve = 2929 bytes).
+    const w = workDir(2 * MAIN_SLOTS, 2800);
     const scan = await runCli(cfg, ["scan", "folder", w.src, "--instructions", "continue the story", "--answer_mode", "0", "-o", join(w.dir, "scan")], w.dir);
     expect(scan.code, scan.out).toBe(0);
     expect(scan.out).not.toMatch(/API error 500|Context size has been exceeded/);
@@ -2214,11 +2197,14 @@ describe("end to end through real llm-ext commands (P1' item 1)", () => {
     const main = readRegistry(cfg, "llama").find((e) => e.role === "main")!;
     const flag = (f: string): string => main.argv[main.argv.indexOf(f) + 1];
     expect(flag("-np")).toBe(String(MAIN_SLOTS));
-    expect(flag("-c")).toBe(String(1024 * MAIN_SLOTS));
+    expect(flag("-c")).toBe(String(E2E_CTX * MAIN_SLOTS));
     expect(brokerLog(cfg).join("\n")).toMatch(new RegExp(`slots ${MAIN_SLOTS}\\b`));
-    // Every reply filled its slot: the server log shows each task stopped at the full 1024-token context.
-    const full = readFileSync(join(cfg, "llama-server-main.log"), "utf8").split("\n").filter((l) => /stop processing: n_tokens = 102[0-4]\b/.test(l));
-    expect(full.length).toBeGreaterThanOrEqual(2 * MAIN_SLOTS);
+    // Every slot held more than an even split of ONE E2E_CTX would give it: each task ran past E2E_CTX / 2 tokens
+    // (prompt + the 2048-token reply), so -c is E2E_CTX per slot, not E2E_CTX shared. Round 3: the P7 budget now keeps
+    // prompt + cap inside E2E_CTX, so a reply ends at the cap, no longer at the full context.
+    const tasks = readFileSync(join(cfg, "llama-server-main.log"), "utf8").split("\n").map((l) => /stop processing: n_tokens = (\d+)\b/.exec(l)?.[1]).filter((x): x is string => x !== undefined).map(Number);
+    expect(tasks.filter((t) => t > E2E_CTX / 2).length, tasks.join(",")).toBeGreaterThanOrEqual(2 * MAIN_SLOTS);
+    expect(Math.max(...tasks)).toBeLessThanOrEqual(E2E_CTX);
   }, 600_000);
 
   it("--command_timeout on a multi-file command (spec 15, review m3, follow-up M1): finished reports are written, EVERY unfinished file is named (those that never started too), exit 124, nothing left queued", async () => {
@@ -2326,6 +2312,9 @@ describe("Locals engine helpers (pure)", () => {
       "--host", "127.0.0.1", "--port", "50123", "--model", LOCALS_MODEL, "--slots", String(LOCALS_MAIN_SLOTS), "--max-context", "2048",
     ]);
     expect(buildLocalsArgv("/v/bin/python", { ...t, ctx: 0 }, "/m")).not.toContain("--max-context");
+    // Governor D11: the prompt cache bound, only when the broker gives one (a cal server is started without it).
+    expect(buildLocalsArgv("/v/bin/python", t, "/m", 2.5).slice(-2)).toEqual(["--cache-gb", "2.5"]);
+    expect(buildLocalsArgv("/v/bin/python", t, "/m")).not.toContain("--cache-gb");
   });
 
   it("isLocalsServerArgv: only a Python running locals.server WITH llm-ext's marker", () => {
@@ -2501,7 +2490,9 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
         // Binds nothing under the broker; required by the preset (its natural default would collide with a user's Locals port).
         "    url: http://127.0.0.1:18433",
         `    model: ${LOCALS_MODEL}`,
-        "    context_window: 2048",
+        // P7: the smallest context that holds the 1024-token input minimum beside the 2048-token fact output cap and the
+        // 512-token overhead (design section 6); below it the command fails before any broker job.
+        "    context_window: 3584",
         "    server: managed",
         "",
       ].join("\n"),
@@ -2549,22 +2540,27 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
     expect(health).toMatchObject({ queued: 0, running: 0 });
   }, 600_000);
 
-  it("memory floor: forced above 100% (proves the gate, not real pressure), Locals never holds more than one request and every job completes; at the default floor it holds several", async () => {
-    // Control: at the default floor (10%, the machine has far more free) the
-    // sampler DOES see several requests at once, so the forced run's 1 is the
-    // gate's doing, not a sampler that cannot see overlap.
+  it("governor: with max_inferences 1 Locals never holds more than one request and every job completes; at the default it holds several; its prompt cache is bounded", async () => {
+    // Control: at the default max_inferences (8) the sampler DOES see several requests at once, so the limited run's 1 is
+    // the governor's doing, not a sampler that cannot see overlap. The governor replaced the Locals memory floor (D11).
     const ctl = newDir();
     const cw = watchLocalsActive(ctl);
-    const c = await runClient(ctl, localsJobs(8, { maxTokens: 200 }), localsEnv(ctl));
+    // A short settle interval: the window opens one step per interval, and a 2 s step would hide overlap behind it.
+    const c = await runClient(ctl, localsJobs(8, { maxTokens: 200 }), localsEnv(ctl, { LLM_EXT_GOVERNOR_SETTLE_MS: "100" }));
     expect(c.results.filter((r) => r.status !== 200)).toEqual([]);
     expect(cw.stop()).toBeGreaterThanOrEqual(2);
+    // D11: the main server is started with --cache-gb, at most 4, so Locals' own prompt cache cannot fill RAM by itself.
+    const argv = readRegistry(ctl, "locals").find((e) => e.role === "main")!.argv;
+    const gb = Number(argv[argv.indexOf("--cache-gb") + 1]);
+    expect(argv).toContain("--cache-gb");
+    expect(gb).toBeGreaterThanOrEqual(0);
+    expect(gb).toBeLessThanOrEqual(4);
 
     const dir = newDir();
     const w = watchLocalsActive(dir);
-    const r = await runClient(dir, localsJobs(6, { maxTokens: 64 }), localsEnv(dir, { LLM_EXT_BROKER_MEMORY_FLOOR: "101" }));
+    const r = await runClient(dir, localsJobs(6, { maxTokens: 64 }), localsEnv(dir, { LLM_EXT_GOVERNOR_MAX_INFERENCES: "1" }));
     expect(r.results.filter((x) => x.status !== 200)).toEqual([]);
     expect(w.stop()).toBe(1);
-    expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(/waiting for memory: \d+% free < floor 101%/);
   }, 600_000);
 
   it("kill safety: a real Locals server without llm-ext's marker (the user's kind) is never signalled; a non-Python process with the marker survives the sweep", async () => {
@@ -2737,4 +2733,71 @@ describe.skipIf(process.env.RUN_REAL_LOCAL_MODELS !== "1")("real models of the b
       expect(spawns[0]).toContain(`engine ${c.engine} model '${c.main}'`);
     }, 900_000);
   }
+});
+
+/**
+ * A stand-in broker on loopback for the two client paths the real broker
+ * cannot be made to take (a 500 or non-JSON poll reply, a slow 202): a real
+ * HTTP server, the real client code. Runs LAST in the file: m1 calls
+ * cancelAllBrokerJobs, which stops this process's client for good.
+ */
+describe("client against a misbehaving broker (review m4, m1)", () => {
+  const serve = async (handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ ep: BrokerEndpoint; close: () => Promise<void> }> => {
+    const srv = createServer(handler);
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const port = (srv.address() as { port: number }).port;
+    return {
+      ep: { url: `http://127.0.0.1:${port}`, token: "t", pid: process.pid },
+      close: () => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); }),
+    };
+  };
+  const req = { engine: "llama" as const, body: JSON.stringify({ model: "m" }), model: "m", ctx: 0, timeoutMs: 5000 };
+
+  it("m4: a poll reply other than 200/204/404, or one that is not a job result, is BrokerUnavailableError (endpoint)", async () => {
+    for (const [status, body] of [[500, "boom"], [401, "{}"], [200, "not json"], [200, "{}"]] as const) {
+      const s = await serve((rq, rs) => {
+        if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "j" })); return; }
+        if (rq.method === "DELETE") { rs.writeHead(204); rs.end(); return; }
+        rs.writeHead(status); rs.end(body);
+      });
+      try {
+        const err = await brokerExchange(s.ep, req).then(() => null, (e: unknown) => e);
+        expect(err, `${status} ${body}`).toBeInstanceOf(BrokerUnavailableError);
+        expect(endpointFailureKind(err, (err as Error).message)).toBe("endpoint");
+      } finally {
+        await s.close();
+      }
+    }
+  });
+
+  it("m1: --command_timeout cancels a job whose POST was still in flight; follow-up m1: only confirmed DELETEs are counted, a refused one is named", async () => {
+    const deleted: string[] = [];
+    const s = await serve((rq, rs) => {
+      if (rq.method === "POST") {
+        setTimeout(() => { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "slow-job" })); }, 600);
+        return;
+      }
+      if (rq.method === "DELETE") { deleted.push(rq.url ?? ""); rs.writeHead(204); rs.end(); return; }
+      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
+    });
+    // A second broker endpoint that refuses the DELETE (500): its job must not be counted as cancelled.
+    const bad = await serve((rq, rs) => {
+      if (rq.method === "POST") { rs.writeHead(202, { "content-type": "application/json" }); rs.end(JSON.stringify({ job: "stuck-job" })); return; }
+      if (rq.method === "DELETE") { rs.writeHead(500); rs.end("no"); return; }
+      rs.writeHead(204, { [STATE_HEADER]: "queued" }); setTimeout(() => rs.end(), 200);
+    });
+    try {
+      const call = brokerExchange(s.ep, req).catch((e: unknown) => e);
+      const stuck = brokerExchange(bad.ep, req).catch((e: unknown) => e);
+      await new Promise((r) => setTimeout(r, 100));
+      const result = await cancelAllBrokerJobs("test stop");
+      expect(result).toEqual({ cancelled: 1, failed: ["stuck-job"] });
+      expect(deleted).toContain("/v1/jobs/slow-job");
+      expect(await call).toBeInstanceOf(Error);
+      expect(await stuck).toBeInstanceOf(Error);
+    } finally {
+      await s.close();
+      await bad.close();
+    }
+  });
 });

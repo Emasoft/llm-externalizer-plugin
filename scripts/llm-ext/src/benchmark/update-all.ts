@@ -30,7 +30,7 @@
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { defaultOutputDir } from "../project-root.js";
+import { defaultScratchDir } from "../project-root.js";
 
 import {
   rankByQualityIndex,
@@ -194,8 +194,8 @@ export interface UpdateAllOptions {
   force: boolean;
   /**
    * Explicit report-root override. Optional (review of 43e3694, S5):
-   * writeReport()'s defaultOutputDir(mainRoot) treats ANY non-empty value
-   * here as an override that BYPASSES the LLM_EXT_OUTPUT_DIR env check — the
+   * writeReport()'s defaultScratchDir(mainRoot) treats ANY non-empty value
+   * here as an override that BYPASSES the LLM_EXT_SCRATCH_DIR/OUTPUT_DIR env check — the
    * real CLI (runUpdateAllPhase in index.ts) now leaves this unset so
    * --update-all honours LLM_EXT_OUTPUT_DIR exactly like --auto-replace does;
    * only a test that wants a fixed report root injects one directly.
@@ -1013,12 +1013,14 @@ export function renderUpdateAllReport(r: UpdateAllResult, opts: UpdateAllOptions
 /**
  * The report directory writeReport() writes into. Exported (review of
  * 43e3694, S4) so a unit test can prove the path nests under
- * <root>/reports/llm-externalizer/update-all/ without spawning the CLI —
+ * <root>/reports_dev/llm-externalizer/update-all/ without spawning the CLI —
  * the same direct-import pattern report-dir.test.ts uses for
  * benchmarkSubReportDir.
  */
 export function updateAllReportDir(mainRoot?: string): string {
-  return join(defaultOutputDir(mainRoot), "update-all");
+  // TRDD-PNU8XECB: update-all is model-pool maintenance (tool configuration), so its report is
+  // intermediate output for the gitignored reports_dev/, not a final report for reports/.
+  return join(defaultScratchDir(mainRoot), "update-all");
 }
 
 function writeReport(r: UpdateAllResult, opts: UpdateAllOptions): string {

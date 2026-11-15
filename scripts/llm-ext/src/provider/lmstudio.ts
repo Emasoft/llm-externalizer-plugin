@@ -12,6 +12,7 @@
  */
 
 import { fetchWithTimeout } from "./http.js";
+import { releaseDirectLease, takeDirectLease } from "../governor/direct.js";
 import { safeReadText, safeReadJson } from "../safe-body.js";
 import { recordRequest } from "../usage-history.js";
 import { type ProgressFn } from "../rate-limiter.js";
@@ -152,6 +153,8 @@ export async function chatCompletionNative(
     onProgress?: ProgressFn;
   },
   deps: ProviderDeps,
+  // chatCompletionWithRetry's call object: the governor wait is recorded on it, so its retry deadline does not count the wait (design D9).
+  call?: { brokerQueuedMs?: number },
 ): Promise<StreamingResult> {
   // Convert ChatMessage[] to LM Studio input format:
   // system_prompt is extracted from system messages, input is the user message(s)
@@ -202,6 +205,14 @@ export async function chatCompletionNative(
     options.onProgress(5, 100, "Sending request to LM Studio…");
   }
 
+  // Governor design D9: a loopback LM Studio takes one lease per request, held to the end of its body read, taken
+  // before startTime so the wait neither counts toward conn.timeout nor toward the recorded duration.
+  const leaseOptions = {
+    onWaited: (ms: number) => {
+      if (call) call.brokerQueuedMs = (call.brokerQueuedMs ?? 0) + ms;
+    },
+  };
+  let lease = await takeDirectLease(conn.url, conn.timeout, leaseOptions);
   // Periodic progress while waiting for response
   const startTime = Date.now();
   let progressTimer: ReturnType<typeof setInterval> | undefined;
@@ -231,6 +242,11 @@ export async function chatCompletionNative(
           "[llm-externalizer] Model does not support reasoning parameter, retrying without it\n",
         );
         delete body.reasoning;
+        // One lease per request: the rejected one is over (its body was read above), so its lease goes back before the
+        // retry takes its own. Held across both, it outlived the one request its expiry was sized for.
+        releaseDirectLease(lease);
+        lease = null;
+        lease = await takeDirectLease(conn.url, conn.timeout, leaseOptions);
         res = await fetchWithTimeout(
           conn.url,
           { method: "POST", headers: conn.headers, body: JSON.stringify(body) },
@@ -280,5 +296,6 @@ export async function chatCompletionNative(
     throw e;
   } finally {
     if (progressTimer) clearInterval(progressTimer);
+    releaseDirectLease(lease);
   }
 }

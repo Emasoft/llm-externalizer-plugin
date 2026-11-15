@@ -356,7 +356,15 @@ export async function brokerExchange(
         // instead of leaving it queued until the abandon rule drops it.
         const target = cur;
         const post = (async (): Promise<string> => {
-          const res = await fetch(`${target.url}/v1/jobs`, { method: "POST", headers: h, body: req.body, signal: opts.signal }).catch((e: unknown) => {
+          // WHY the POST takes NO caller signal (TRDD-3SNQAGIC): aborted mid-POST, the client never learns the job id, so
+          // it cannot DELETE a job the broker already accepted, and the abandon rule drops only QUEUED jobs
+          // (scheduler.ts:166 dropAbandoned): a dispatched one would hold the local server until its timeout. The POST is
+          // answered at once (202); the abort is honoured right after it (below), when the id is known and the finally
+          // cancels the job. Hence a catch here is always a network failure. Running jobs end only by DELETE or broker
+          // exit (server.ts:1349-1351, :1040); a poll socket close (:1320) only ends the wait. Limit: a broker that
+          // accepts the connection but never answers the POST holds an aborted caller as long as it did before for an
+          // unaborted one (the POST has no timeout of its own).
+          const res = await fetch(`${target.url}/v1/jobs`, { method: "POST", headers: h, body: req.body }).catch((e: unknown) => {
             networkFailure = true;
             throw e;
           });
@@ -375,6 +383,8 @@ export async function brokerExchange(
           submitting.delete(post);
         }
         pending.set(reuseKey, id);
+        // An abort that landed during the POST ends the call here: id is set and networkFailure false, so the finally DELETEs the job.
+        opts.signal?.throwIfAborted();
       }
       const res = await fetch(`${cur.url}/v1/jobs/${id}?wait=${POLL_WAIT_S}`, { headers, signal: opts.signal }).catch((e: unknown) => {
         networkFailure = !opts.signal?.aborted;

@@ -4,7 +4,7 @@ title: SP-14 findings
 column: blocked
 status: tasked
 created: 2026-10-07T19:50:50+0200
-updated: 2026-10-10T04:43:19+0200
+updated: 2026-11-05T03:16:09+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -15,11 +15,11 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:50:50+0200
-implementation-commits: [643d7887, 67649b69]
-blocked-by: [O4MSZIG5]
-unblock-when: [trdd:O4MSZIG5]
+implementation-commits: [643d7887, 67649b69, 79a4bf0d]
+blocked-by: [KNSQAQ1S]
+unblock-when: [trdd:KNSQAQ1S]
 pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md
+blocker-probe: test -f design/tasks/TRDD-20261104_100811+0100-KNSQAQ1S-classifier-tests-replace-forbidden-test-doubles-with-real-in.md
 blocker-holds-if: exit-0
 ---
 
@@ -32,6 +32,8 @@ The findings decision as one catalog file: input schema, question texts, state s
 - 2026-10-07T19:50:50+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T04:27:55+0200 — column → dev by main-agent@llm-externalizer-plugin. wave 9 code committed; acceptance boxes ticked by evidence, remaining boxes owed
 - 2026-10-10T04:42:56+0200 — column → blocked by main-agent@llm-externalizer-plugin. remaining work waits on: O4MSZIG5
+- 2026-10-31T12:12:25+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
+- 2026-11-04T10:09:16+0100 — column → blocked by main-agent@llm-externalizer-plugin. waits on TRDD-KNSQAQ1S (forbidden test doubles)
 
 ## Plan refs
 
@@ -72,7 +74,7 @@ L2-06
 - [x] E71 passes (done when)
 - [x] E71: findings: file/line no longer exists → empty window; keep_low
 - [x] golden snapshot of `build` output
-- [ ] `project` on this card's captured live reply
+- [x] `project` on this card's captured live reply
 - [x] injection placement as planned (index-scoped), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered
@@ -87,3 +89,7 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10: findings spec registered, tested in catalog/findings.test.ts (E71), committed in 643d7887; boxes 1 to 3 and 5 to 7 ticked. box 'project on this card's captured live reply' unticked: no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only (needs a capture card, none exists); definition-of-done box (text: tests in the vitest include list, typecheck, lint and npx eslint . --quiet clean, full npm test green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules) stays unticked: met are the include-list entry and the clean typecheck, lint and full suite at 643d7887 (4620 tests) and 67649b69 (4635 tests); unmet is 'one commit with the TRDD id in its subject' (the subjects carry TRDD-ZB41KG62); commit traceability: implementation-commits on this card; 643d7887's body names the card id; open owner decision: thresholds reachable 0.7 and already-handled 0.4 versus the claude-jev reference pairing them the other way (plan order kept). Report: docs_dev/20261010-SP-14-17-report.md
 2026-10-10: 67649b69 changed attention for this card: DELIBERATE DEVIATION from the plan row and step 6 ('any keep'): attention is keep OR invalid OR some severity null, so a finding nobody could judge (no source supplied, line past the end, window too large, unanswered) also raises it and --strict-exit cannot pass a run in which findings went unexamined (test 'follow-up 4' in findings.test.ts). The 20,000-token window cap is the worker's own number, not the plan's. 67649b69's body names this card id. Report: docs_dev/20261010-wave9-final-fixes-report.md
 2026-10-10 BLOCKED (pre-block-column dev): the remaining work is the live reply capture, owned by TRDD-O4MSZIG5 (unblock-when trdd:O4MSZIG5). The definition-of-done clause 'one commit with the TRDD id in its subject' is an open owner decision on TRDD-ZB41KG62, not work on this card. validate's probe requirement is met by 'test -f <blocker card file>', which also reads cleared if the blocker card is renamed, superseded or cancelled; unblock-when is the real condition.
+2026-11-04: definition of done not met: the card's tests use test doubles outside the 2026-10-31 ruling; the rework is TRDD-KNSQAQ1S.
+2026-11-04T13:19:41+0100 KNSQAQ1S judgment: stays blocked. findings.test.ts hand-built Profile and settings (:390-391) are fixed (79a4bf0d), but scripts/llm-ext/src/classifiers/catalog/findings.test.ts:233 vi.spyOn(String.prototype, split) is still present (reported by KNSQAQ1S as not fixed; created by 643d7887). Also still unmet: one commit with this card id in its subject (643d7887 and 67649b69 carry TRDD-ZB41KG62 only; 79a4bf0d names OHLMZONY without TRDD- and is not in implementation-commits).
+2026-11-04T13:32:20+0100 79a4bf0d added to implementation-commits; its subject names OHLMZONY, which meets the commit clause under R1. Still open: findings.test.ts:233 spyOn String.prototype.split.
+2026-11-05T03:15+0100 WHY-comment scan of 643d7887 (2026-11-05, run for TRDD-BUL4EEBP): uncommented rules in this card's file, catalog/findings.ts:20 and :177 (lines at df6c89bb), are recorded on TRDD-AFX6CR8K; ownership inferred from the card slug, not from blame.

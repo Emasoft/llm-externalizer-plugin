@@ -41,7 +41,7 @@ import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
 // The confusion-matrix aggregate is the shared one (see score.ts's header) — a skipped
 // model still needs a well-formed, empty score object.
-import { aggregateScores } from "../search-existing/score.js";
+import { aggregateScores, answeredOnlyScore } from "../search-existing/score.js";
 import { readFileAsCodeBlock, DEFAULT_MAX_PAYLOAD_BYTES } from "../../scan-pipeline.js";
 import { CHECK_SPECS_SYSTEM_PROMPT } from "../../check-specs/core.js";
 import type { BenchmarkWorkload } from "../workload-types.js";
@@ -66,11 +66,13 @@ import {
 } from "./score.js";
 import {
   CHECK_SPECS_CRITERIA,
+  judgeCheckSpecs,
   selectCheckSpecsModel,
   type CheckSpecsCandidate,
   type CheckSpecsSelectionResult,
 } from "./select.js";
 import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+import { evidenceQualityPass, isUnansweredFilesNonEvidence, recordQualityPass } from "../quality-evidence.js";
 
 /**
  * check_against_specs has no per-tool default model of its own — it runs on the active
@@ -88,7 +90,7 @@ export interface CheckSpecsBenchmarkOptions {
   apiKey?: string;
   /** Explicit model ids to assess. When absent, auto-discover the candidate pool. */
   models?: string[];
-  /** Report dir. Default `<main-repo-root>/reports/check-specs-benchmark/`. */
+  /** Report dir. Default `<main-repo-root>/reports_dev/llm-externalizer/check-specs-benchmark/`. */
   outputDir?: string;
   mainRoot?: string;
   /** Ignore the per-model-per-day cache and re-run every model. */
@@ -449,7 +451,7 @@ export async function runCheckSpecsBenchmark(
   // field that gives a ':free' model a verdict in the evidence fold — is never
   // backfilled, despite the note at the write site promising it would be.
   // Judging those rows from the score they already carry costs no model call.
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isUnansweredFilesNonEvidence, "check-specs-results.json");
   if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: CheckSpecsAssessment[] = [];
   let totalCost = 0;
@@ -524,7 +526,11 @@ export async function runCheckSpecsBenchmark(
 
     // Persist the golden-dataset verdict on the ledger row (backfills legacy
     // rows on cache hits too) — see code-task's CacheEntry.qualityPass note.
-    cache[key].qualityPass = passesThresholds(score, thresholds).pass;
+    // Cases the model never answered (API error, empty reply) are unscored: the verdict
+    // is computed over the answered cases only, and a run with over a quarter of them
+    // unanswered stores NO verdict (the row reads untested; a same-day cache-hit row
+    // loses its earlier false) — see quality-evidence.ts (TRDD-90BXJ2KO).
+    recordQualityPass(cache[key], evidenceQualityPass(score, isUnansweredFilesNonEvidence, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass), `check-specs-results.json row ${key}`);
 
     totalCost += costUsd;
     assessments.push({
@@ -539,7 +545,7 @@ export async function runCheckSpecsBenchmark(
       failureReasons,
       costUsd,
     });
-    const thr = passesThresholds(score, thresholds);
+    const thr = judgeCheckSpecs(score, thresholds);
     progress(
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} ` +
         `microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} ` +
@@ -584,7 +590,7 @@ export async function runCheckSpecsBenchmark(
     reason: selection.reason,
     costUsd: totalCost,
     assessments: assessments.map((a) => {
-      const thr = passesThresholds(a.score, thresholds);
+      const thr = judgeCheckSpecs(a.score, thresholds);
       return {
         modelId: a.modelId,
         qualified: a.qualified,
@@ -718,7 +724,7 @@ function buildReportMarkdown(args: {
   lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
   const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
   for (const a of sorted) {
-    const thr = passesThresholds(a.score, args.thresholds);
+    const thr = judgeCheckSpecs(a.score, args.thresholds);
     lines.push(
       `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ` +
         `${a.score.microF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ` +
@@ -778,7 +784,7 @@ export function backfillOwnLedger(): { tool: string; upgraded: number } {
   const thresholds = DEFAULT_CHECK_SPECS_THRESHOLDS;
 
   const cache = loadCache();
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isUnansweredFilesNonEvidence, "check-specs-results.json");
   if (upgraded > 0) saveCache(cache);
   return { tool: "check_against_specs", upgraded };
 }

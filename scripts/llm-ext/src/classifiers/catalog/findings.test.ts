@@ -1,9 +1,10 @@
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Profile } from "../../config.js";
+import { stringify } from "yaml";
+import { loadSettings } from "../../config.js";
 import { replayFixture, type RecordedReply } from "../l0/test-fetch.js";
 import type { GlobalFetch } from "../l0/transport.js";
 import { runDecision, type RunDeps } from "../run-decision.js";
@@ -387,8 +388,17 @@ afterEach(() => {
   for (const [k, v] of Object.entries(prevEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true });
 });
-const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$SP14_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile;
-const depsOf = (fetch: GlobalFetch): RunDeps => ({ settings: { active: "c", active_classifier: "c", profiles: { c: profile } }, fetch, catalogOptions: { path: join(tmp, "catalog.json") }, sigint: new EventEmitter() });
+// WHY a real settings.yaml read back by loadSettings (precedent 441ce3fa, TRDD-4Q1IVJOE): a hand-built object cast to Settings skips the production loader. LLM_EXT_CONFIG_DIR is `tmp` (beforeEach), removed with it in afterEach.
+const profileDoc = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$SP14_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 };
+const depsOf = (fetch: GlobalFetch): RunDeps => {
+  writeFileSync(join(tmp, "settings.yaml"), stringify({ active: "c", active_classifier: "c", profiles: { c: profileDoc } }));
+  const settings = loadSettings();
+  if (settings === null) throw new Error("settings.yaml was not loaded");
+  // WHY the local decider is OFF here: these tests pin findings behaviour on a served reply, and a local answer
+  // would hide it. WHY off explicitly and not merely left out: an absent section means ENABLED by default, so a
+  // failing remote call would reach — or start — the real 15 GB decider.
+  return { settings, fetch, catalogOptions: { path: join(tmp, "catalog.json") }, sigint: new EventEmitter(), localFallback: { enabled: false } };
+};
 // Each finding's severity answer is its own finding index, so a mixed-up mapping shows in the severity level.
 const answerEach = (qs: Asked): Record<string, unknown> =>
   Object.fromEntries(Object.entries(qs).map(([k, q]) => {

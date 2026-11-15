@@ -62,7 +62,7 @@ import {
   hasNamedGroups,
   autoGroupByHeuristic,
 } from "../grouping.js";
-import { abortReasonText, isCommandStopped, unfinishedFileLines } from "../command-stop.js";
+import { abortReasonText, failedHeader, isCommandStopped, runOutcome, unfinishedFileLines } from "../command-stop.js";
 import type { ProgressFn } from "../rate-limiter.js";
 
 export type CodeTaskChatMessage = {
@@ -73,6 +73,8 @@ export type CodeTaskChatMessage = {
 export type CodeTaskToolResult = {
   content: { type: "text"; text: string }[];
   isError?: boolean;
+  /** Some files delivered results although isError is set: the CLI prints the summary on stdout (runOutcome). */
+  partial?: boolean;
 };
 
 /**
@@ -476,17 +478,17 @@ export async function runCodeTask(
               });
               const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
               // Follow-up review M1/m2: once stopped, every non-success file (skipped ones too) is listed, and the abort reason is the stop.
-              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", "FAILED:", ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
+              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", failedHeader(rpResult.failed.length, fgPaths.length), ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
               lines.push(...unfinishedFileLines(rpResult.results));
               if (rpResult.aborted) lines.push("", `ABORTED: ${abortReasonText(rpResult.abortReason)}`);
-              return { content: [{ type: "text", text: lines.join("\n") }], isError: rpResult.aborted };
+              return { content: [{ type: "text", text: lines.join("\n") }], ...runOutcome(rpResult.aborted, rpResult.failed.length, rpResult.succeeded.length) };
             }
             // Simple sequential path (max_retries=1, no retry)
             // Follow-up review M2: a file whose call THROWS (a --command_timeout stop
             // above all) is recorded as "FAILED: <file> — <reason>" and the loop goes
             // on; before, the first throw dropped every finished report path.
             const perFileResults: string[] = [];
-            let threw = false;
+            let failedFiles = 0;
             for (const fp of fgPaths) {
               let result: Awaited<ReturnType<typeof deps.processFileCheck>>;
               try {
@@ -501,20 +503,21 @@ export async function runCodeTask(
                   modelOverride: deps.modelOverride, outputDir: deps.outputDir,
                 });
               } catch (err) {
-                threw = true;
+                failedFiles++;
                 perFileResults.push(`FAILED: ${fp} — ${(err as Error).message}`);
                 continue;
               }
+              if (!(result.success && result.reportPath)) failedFiles++;
               perFileResults.push(
                 result.success && result.reportPath
                   ? result.reportPath
                   : `FAILED: ${fp} — ${result.error}`,
               );
             }
-            // A thrown failure used to end the command as an error; it still does, now with the finished paths listed.
+            // Any failed file (a thrown call or a failed result) is an error with the finished paths listed (TRDD-PN84WC1L: a failed result used to exit 0).
             return {
               content: [{ type: "text", text: perFileResults.join("\n") }],
-              isError: threw,
+              ...runOutcome(false, failedFiles, perFileResults.length - failedFiles),
             };
           }
 
@@ -582,7 +585,7 @@ export async function runCodeTask(
             const labelId = fgId || "auto";
             ctAllGroupReports.push(`[group:${labelId}] ${savedPath}`);
           } else {
-            return { content: [{ type: "text", text: [savedPath, ...ctFailedLines].join("\n") }], isError: ctFailedLines.length > 0 };
+            return { content: [{ type: "text", text: [savedPath, ...ctFailedLines].join("\n") }], ...runOutcome(false, ctFailedLines.length, 1) };
           }
         }
 
@@ -590,5 +593,5 @@ export async function runCodeTask(
         if (ctAllGroupReports.length === 0) {
           return { content: [{ type: "text", text: ctFailedLines.length > 0 ? ctFailedLines.join("\n") : "FAILED: LLM returned empty response for all groups." }], isError: true };
         }
-        return { content: [{ type: "text", text: [...ctAllGroupReports, ...ctFailedLines].join("\n") }], isError: ctFailedLines.length > 0 };
+        return { content: [{ type: "text", text: [...ctAllGroupReports, ...ctFailedLines].join("\n") }], ...runOutcome(false, ctFailedLines.length, ctAllGroupReports.length) };
 }

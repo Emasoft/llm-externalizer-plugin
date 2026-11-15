@@ -35,9 +35,10 @@ import {
   resolveAnswerMode,
   buildPerFileSectionPrompt,
   walkDir,
+  sanitizeInputPath,
   type FileData,
 } from "./scan-pipeline.js";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, realpathSync } from "node:fs";
 
 // One real temp root under cwd (an allowed sanitizeInputPath root); per-test
 // files go inside it and are removed after the suite.
@@ -325,5 +326,35 @@ describe("readAndGroupFiles — FFD bin-packing over real temp files", () => {
     const bigPrompt = readAndGroupFiles([a, b], promptBytes, false, budget);
     expect(bigPrompt.groups.length).toBeGreaterThan(noPrompt.groups.length);
     expect(bigPrompt.autoBatched).toBe(true);
+  });
+});
+
+describe("sanitizeInputPath — rejection names the allowed roots (TRDD-1FJAUVBU)", () => {
+  it("lists cwd, home and /tmp and says how to proceed", () => {
+    // WHY a private HOME: with HOME=/ (some CI images) /etc/hosts is inside the home root and is
+    // allowed, so the test would fail for the wrong reason (same class as commit 2fcbb1df).
+    const fakeHome = mkdtempSync(join(realpathSync("/tmp"), "llm-ext-home-"));
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = fakeHome;
+    process.env.USERPROFILE = fakeHome;
+    let message = "";
+    try {
+      sanitizeInputPath("/etc/hosts");
+    } catch (e) {
+      message = (e as Error).message;
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      rmSync(fakeHome, { recursive: true, force: true });
+    }
+    // The refusal must come from the traversal check, not be absent because cwd is an ancestor of /etc.
+    expect(message).toContain("Path traversal blocked");
+    expect(message).toContain(realpathSync(process.cwd()));
+    expect(message).toContain(fakeHome);
+    expect(message).toContain(realpathSync("/tmp"));
+    expect(message).toMatch(/parent directory/);
+    expect(message).toMatch(/copy/);
   });
 });

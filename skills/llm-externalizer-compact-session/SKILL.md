@@ -41,6 +41,7 @@ are in is the point when preparing for `/clear`.
 
 It prints the report PATH to stdout — Read that, do not echo the transcript. With no `-o`
 the report lands in `<project-root>/reports/llm-externalizer/`.
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). Scratch copies of the session go to the `*_dev` folders (gitignored).
 
 ### When the summary MUST eventually exist
 

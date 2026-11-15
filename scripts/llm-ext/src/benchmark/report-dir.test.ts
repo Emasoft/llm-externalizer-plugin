@@ -7,19 +7,21 @@
 // USER-approved write root (write-roots rule, 2026-09-18). This test would
 // have failed red against that old join() (it asserts "llm-externalizer" is
 // on the path, which the old shape never had).
+// TRDD-PNU8XECB (2026-11-15): benchmark output is model-pool tool configuration, so the
+// default moved from the tracked reports/ tree to the gitignored reports_dev/ tree.
 import { describe, it, expect } from "vitest";
 
 import { benchmarkSubReportDir } from "./report-dir.js";
 
 describe("benchmarkSubReportDir (C9 write-roots sweep)", () => {
-  it("nests the sub-dir under <mainRoot>/reports/llm-externalizer/, not <mainRoot>/reports/ directly", () => {
+  it("nests the sub-dir under <mainRoot>/reports_dev/llm-externalizer/, not <mainRoot>/reports/ directly", () => {
     const dir = benchmarkSubReportDir("scan-folder-benchmark", "/tmp/fake-project-root");
-    expect(dir).toBe("/tmp/fake-project-root/reports/llm-externalizer/scan-folder-benchmark");
+    expect(dir).toBe("/tmp/fake-project-root/reports_dev/llm-externalizer/scan-folder-benchmark");
   });
 
   it("uses a distinct sub-dir per caller-supplied name", () => {
     const dir = benchmarkSubReportDir("text-tools-benchmark", "/tmp/fake-project-root");
-    expect(dir).toBe("/tmp/fake-project-root/reports/llm-externalizer/text-tools-benchmark");
+    expect(dir).toBe("/tmp/fake-project-root/reports_dev/llm-externalizer/text-tools-benchmark");
   });
 
   // c9b (2026-09-18): pins the exact `sub` string each of the six
@@ -34,8 +36,8 @@ describe("benchmarkSubReportDir (C9 write-roots sweep)", () => {
     ["check-specs-benchmark", "check-specs/index.ts"],
     ["text-tools-benchmark", "text-tools/index.ts"],
     ["security-triage-benchmark", "security-triage/index.ts"],
-  ])("pins %s (%s) to <mainRoot>/reports/llm-externalizer/<sub>", (sub) => {
+  ])("pins %s (%s) to <mainRoot>/reports_dev/llm-externalizer/<sub>", (sub) => {
     const dir = benchmarkSubReportDir(sub, "/tmp/fake-project-root");
-    expect(dir).toBe(`/tmp/fake-project-root/reports/llm-externalizer/${sub}`);
+    expect(dir).toBe(`/tmp/fake-project-root/reports_dev/llm-externalizer/${sub}`);
   });
 });

@@ -55,6 +55,7 @@ import {
   unpopulatedDefaultProfile,
   validateClassifierProfile,
   withinPriceCeiling,
+  writeBackupExclusive,
   type DynamicProfileName,
   type MarkedProfileName,
   type Profile,
@@ -1028,23 +1029,23 @@ export function backupSettingsFile(
       `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_` +
       `${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}` +
       `${sign}${pad(Math.floor(offAbs / 60))}${pad(offAbs % 60)}`;
-    const backupPath = join(backupsDir, `${prefix}-${name}-${ts}.yaml`);
-    const content = readFileSync(settingsPath, "utf-8");
+    const backupStem = join(backupsDir, `${prefix}-${name}-${ts}`);
+    const content = readFileSync(settingsPath); // Buffer: byte-exact backup and compare
     if (opts.dedupe) {
       // WHY: a step that re-runs on every pass (a file a sync tool keeps reverting) would otherwise add one backup per pass; a byte-identical earlier backup already restores this content.
       // WHY the read is guarded: an unreadable or non-file entry with the prefix must count as "not identical", not abort the migration of the user's file; the real write below stays unguarded.
       const same = readdirSync(backupsDir).find((f) => {
         if (!f.startsWith(`${prefix}-${name}-`)) return false;
         try {
-          return readFileSync(join(backupsDir, f), "utf-8") === content;
+          return readFileSync(join(backupsDir, f)).equals(content);
         } catch {
           return false;
         }
       });
       if (same) return join(backupsDir, same);
     }
-    writeFileSync(backupPath, content, "utf-8");
-    return backupPath;
+    // WHY exclusive: names have one-second resolution; a plain write let a same-second backup replace another and lose the user's bytes (TRDD-GRCE2QUQ).
+    return writeBackupExclusive(backupStem, ".yaml", content);
   } catch (err) {
     throw opts.wrapError ? opts.wrapError(err) : err;
   }

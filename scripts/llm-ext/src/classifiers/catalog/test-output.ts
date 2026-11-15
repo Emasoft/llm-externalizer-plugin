@@ -117,6 +117,8 @@ export interface TestOutputResult {
 
 export const spec: DecisionSpec<TestOutputInput, TestOutputResult> = {
   id: "test-output",
+  // IN-06: `classify test-output FILE` (or `-`) reads the log whole from a file or stdin; matches and context stay JSON-only.
+  cli: { document: { field: "log" } },
   input: testOutputInput,
   thresholds: {
     regression: { default: 0.5, min: 0, max: 1, help: "--regression: lowest p that the failure is a code regression; at or above it the run needs attention" },

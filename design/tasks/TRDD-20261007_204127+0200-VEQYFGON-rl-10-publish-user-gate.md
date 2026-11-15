@@ -1,10 +1,10 @@
 ---
 trdd-id: VEQYFGON
 title: RL-10 Publish (USER gate)
-column: backburner
+column: todo
 status: tasked
 created: 2026-10-07T20:41:27+0200
-updated: 2026-10-07T20:41:31+0200
+updated: 2026-10-31T17:16:48+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -20,11 +20,12 @@ approval-datetime: 2026-10-07T20:41:27+0200
 # RL-10 Publish (USER gate)
 
 ## Goal
-Publish 14.2.0, only on the USER's word.
+Publish 14.3.0, only on the USER's word.
 
 ## Approval log
 
 - 2026-10-07T20:41:27+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-10-31T17:16:48+0100 — column → todo by main-agent@llm-externalizer-plugin. release checklist for 14.3.0
 
 ## Plan refs
 
@@ -44,7 +45,7 @@ read the code at card start
 
 ## Steps
 
-1. USER gate: this step waits for the USER's word (D13: the 14.2.0 publish stays the USER's). Do not publish before it.
+1. USER gate: this step waits for the USER's word (D13: the 14.3.0 publish stays the USER's). Do not publish before it.
 2. On the USER's word, publish and record the command output on the card.
 
 ## Acceptance
@@ -55,3 +56,7 @@ read the code at card start
 ## Out of scope
 
 Install (RL-11).
+
+## Coordinator note 2026-10-31
+
+Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker release. These cards are the 14.3.0 release checklist; RL-10 publish is authorized by the user goal of 2026-10-31 (publish and install when all TRDDs are complete).

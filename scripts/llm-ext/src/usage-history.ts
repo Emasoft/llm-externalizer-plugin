@@ -34,9 +34,9 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, fstatSync, mkdirSync, openSync, readFileSync, readSync, renameSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { getConfigDir } from "./config.js";
 import { redactSecrets } from "./security_scan/intake.js";
@@ -206,10 +206,15 @@ export function formatHistoryLine(fields: {
   opId: string;
   /** Wire endpoint of the request (L1-10), e.g. `decisions`; omitted for calls that have none. */
   endpoint?: string;
+  /** MEASURED input tokens the reply reported (C4-12); omitted when the call has none. Never an estimate. */
+  inputTokens?: number;
 }): string {
   // WHY a strict name: the reader finds this field from the right of the line, so it must never contain the " - " separator.
   if (fields.endpoint !== undefined && !ENDPOINT_RE.test(fields.endpoint)) {
     throw new RangeError(`endpoint must match ${ENDPOINT_RE}, got ${JSON.stringify(fields.endpoint)}`);
+  }
+  if (fields.inputTokens !== undefined && !(Number.isSafeInteger(fields.inputTokens) && fields.inputTokens >= 0)) {
+    throw new RangeError(`inputTokens must be a non-negative integer, got ${fields.inputTokens}`);
   }
   const toolField = fields.params
     ? `${fields.tool}(${fields.params})`
@@ -224,7 +229,22 @@ export function formatHistoryLine(fields: {
     fields.opId,
     // WHY an optional 8th field and not a new column in place: lines without it stay byte-identical to the 7-field format already on disk.
     ...(fields.endpoint === undefined ? [] : [`endpoint=${fields.endpoint}`]),
+    // WHY after the endpoint and optional: lines written before C4-12 stay valid, and lifetime token totals sum only what a reply measured.
+    ...(fields.inputTokens === undefined ? [] : [`tokens=${fields.inputTokens}`]),
   ].join(" - ");
+}
+
+/**
+ * The endpoint label of a decision served by the LOCAL decider (classifiers/l0/local-transport.ts). WHY a
+ * named constant and not a literal at the call site: `lifetimeJevTotals` must EXCLUDE it from the Jev spend
+ * totals (a local call costs nothing), and the producer and the exclusion have to agree on the exact text.
+ */
+export const LOCAL_ENDPOINT = "systemone-local";
+
+/** Is this history endpoint a Jev (remote decisions) call? Absent, and the local decider label, are not: the
+ * ones without an endpoint are chat completions, and a local decision is free. */
+function isJevEndpoint(endpoint: string | undefined): boolean {
+  return endpoint !== undefined && endpoint !== LOCAL_ENDPOINT;
 }
 
 const ENDPOINT_RE = /^[a-z][a-z0-9-]*$/;
@@ -232,7 +252,7 @@ const OP_ID_RE = /^op-[0-9a-f]{8}$/;
 // WHY the (direct) alternative: recordRequest labels a call made outside any invocation context `(direct)`.
 const TOOL_START_RE = /^(?:\(direct\)|[^\s()]+)\(/;
 
-/** One parsed history line. `endpoint` is absent on lines written before L1-10 and on calls without an endpoint. */
+/** One parsed history line. `endpoint` is absent on lines written before L1-10 and on calls without an endpoint; `inputTokens` on lines written before C4-12. */
 export interface HistoryEntry {
   timestamp: string;
   project: string;
@@ -242,13 +262,22 @@ export interface HistoryEntry {
   costUsd: number;
   opId: string;
   endpoint?: string;
+  /** Measured input tokens of the reply (C4-12). */
+  inputTokens?: number;
 }
 
-/** Parses a 7-field (old) or 8-field (with endpoint) history line; throws on anything else. */
+/** Parses a 7-field (old), 8-field (with endpoint) or 9-field (with endpoint and tokens) history line; throws on anything else. */
 export function parseHistoryLine(line: string): HistoryEntry {
   const bad = (why: string): Error => new Error(`not a history line (${why}): ${JSON.stringify(line.slice(0, 120))}`);
   const f = line.split(" - ");
   let endpoint: string | undefined;
+  let inputTokens: number | undefined;
+  // WHY tokens first: it is written after the endpoint, so it is the last field when present.
+  if ((f[f.length - 1] ?? "").startsWith("tokens=")) {
+    const t = /^tokens=(\d+)$/.exec(f.pop()!);
+    if (!t) throw bad("bad tokens");
+    inputTokens = Number(t[1]);
+  }
   const last = f[f.length - 1] ?? "";
   if (last.startsWith("endpoint=")) {
     endpoint = last.slice("endpoint=".length);
@@ -285,6 +314,7 @@ export function parseHistoryLine(line: string): HistoryEntry {
     opId,
   };
   if (endpoint !== undefined) entry.endpoint = endpoint;
+  if (inputTokens !== undefined) entry.inputTokens = inputTokens;
   return entry;
 }
 
@@ -321,7 +351,151 @@ export function countByEndpoint(entries: readonly HistoryEntry[]): Record<string
   return out;
 }
 
-// ── Atomic append ────────────────────────────────────────────────────────
+/**
+ * Lifetime totals of the Jev (decisions) calls in a history (C4-12, D31: the totals live in the existing usage history, no separate status command).
+ * WHY only entries with an endpoint: calls without one are chat completions, not Jev. WHY only measured tokens: a line without `tokens=` (written before C4-12) adds none, and nothing here is an estimate, so a chart over these numbers never mixes in the receipt "not read" figure.
+ */
+export interface JevLifetimeTotals {
+  runs: number;
+  requests: number;
+  inputTokens: number;
+  costUsd: number;
+  /** Timestamp of the first Jev call, or null when there is none. */
+  since: string | null;
+}
+
+export function lifetimeJevTotals(entries: readonly HistoryEntry[]): JevLifetimeTotals {
+  // WHY the LOCAL_ENDPOINT exclusion: a local decider call is a real request with a real endpoint, but it is
+  // not a Jev call — counting it would put free local runs in the Jev spend and request totals.
+  const jev = entries.filter((e) => isJevEndpoint(e.endpoint));
+  return {
+    runs: new Set(jev.map((e) => e.opId)).size,
+    requests: jev.length,
+    inputTokens: jev.reduce((n, e) => n + (e.inputTokens ?? 0), 0),
+    costUsd: jev.reduce((n, e) => n + e.costUsd, 0),
+    since: jev[0]?.timestamp ?? null,
+  };
+}
+
+// ── Lifetime Jev totals, incremental ─────────────────────────────────────
+/** Chunk size of the incremental history read. */
+const LIFETIME_CHUNK_BYTES = 1024 * 1024;
+/** How many leading bytes of history.log are looked at for the first line, so a replaced file (not only a shorter one) is noticed. */
+const LIFETIME_HEAD_BYTES = 512;
+/** A Jev run never spans this long; its op id is dropped from the sidecar this long after the newest entry. */
+const LIFETIME_RUN_HORIZON_MS = 24 * 60 * 60 * 1000;
+
+interface LifetimeState {
+  /** Bytes of history.log consumed: always just after a newline. */
+  offset: number;
+  /** Lines consumed, empty ones included (the line number of an error message). */
+  lines: number;
+  /** The first line of the log (at most LIFETIME_HEAD_BYTES bytes) when the state was written. */
+  head: string;
+  requests: number;
+  inputTokens: number;
+  costUsd: number;
+  since: string | null;
+  /** Distinct Jev runs counted so far (op ids). A running counter: the ids themselves are pruned. */
+  runs: number;
+  /** Op id -> last-seen time (ms) of the runs that may still get lines; ids last seen over LIFETIME_RUN_HORIZON_MS before `newest` are dropped. */
+  recent: Record<string, number>;
+  /** The newest entry time (ms) processed. */
+  newest: number;
+}
+
+const emptyLifetimeState = (): LifetimeState => ({ offset: 0, lines: 0, head: "", requests: 0, inputTokens: 0, costUsd: 0, since: null, runs: 0, recent: {}, newest: 0 });
+
+/** Path of the running-sum sidecar, next to history.log. */
+export function getLifetimeSidecarPath(): string {
+  return join(dirname(getHistoryPath()), "jev-lifetime.json");
+}
+
+function readLifetimeState(): LifetimeState {
+  let text: string;
+  try {
+    text = readFileSync(getLifetimeSidecarPath(), "utf-8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return emptyLifetimeState();
+    throw e;
+  }
+  // WHY a damaged sidecar restarts from 0 and is not an error: it is a cache derived from history.log, which is the record; recounting the log repairs it.
+  try {
+    const s = JSON.parse(text) as LifetimeState;
+    if (Number.isInteger(s.offset) && s.offset >= 0 && Number.isInteger(s.lines) && typeof s.head === "string" && typeof s.recent === "object" && s.recent !== null && [s.requests, s.inputTokens, s.costUsd, s.runs, s.newest].every(Number.isFinite)) return s;
+  } catch {
+    // fall through to the restart
+  }
+  return emptyLifetimeState();
+}
+
+/**
+ * Review of 4acc83bb, round 2 (major 2): the lifetime Jev totals of the whole history.log without re-reading it. A sidecar keeps the totals and the byte offset consumed; each call reads only the bytes appended since, adds them, and rewrites the sidecar atomically (temp file, rename).
+ * WHY not a window of the last N MB (round 1): a log bigger than the window silently dropped old runs from a total that is called lifetime.
+ * Restart from 0 when the log is shorter than the stored offset or its first bytes differ (truncated or replaced). A last line without its newline (a writer in the middle of its append) is left for the next call: the offset stops after the last newline.
+ * A line that does not parse throws exactly what readHistory throws (`history.log line N: ...`) and the sidecar is not written, so the reason shows again on the next call, as before.
+ */
+export function lifetimeJevTotalsIncremental(): JevLifetimeTotals {
+  let fd: number;
+  try {
+    fd = openSync(getHistoryPath(), "r");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return lifetimeJevTotals([]);
+    throw e;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    let state = readLifetimeState();
+    // WHY the first line and not the first N bytes: later lines may be edited without the file being a different file, but the first line is what a replaced or rotated log changes (it carries the timestamp of its first request).
+    const headBuf = Buffer.alloc(Math.min(LIFETIME_HEAD_BYTES, size));
+    readSync(fd, headBuf, 0, headBuf.length, 0);
+    const nl0 = headBuf.indexOf(10);
+    const head = headBuf.subarray(0, nl0 === -1 ? headBuf.length : nl0).toString("latin1");
+    if (state.offset > size || (state.offset > 0 && head !== state.head)) state = emptyLifetimeState();
+    if (state.offset === 0) state.head = head;
+    let pos = state.offset;
+    let pending: Buffer = Buffer.alloc(0);
+    const chunk = Buffer.alloc(LIFETIME_CHUNK_BYTES);
+    while (pos < size) {
+      const n = readSync(fd, chunk, 0, Math.min(LIFETIME_CHUNK_BYTES, size - pos), pos);
+      if (n === 0) break;
+      pos += n;
+      pending = Buffer.concat([pending, chunk.subarray(0, n)]);
+      for (let nl = pending.indexOf(10); nl !== -1; nl = pending.indexOf(10)) {
+        const line = pending.subarray(0, nl).toString("utf8");
+        pending = pending.subarray(nl + 1);
+        state.offset += nl + 1;
+        state.lines++;
+        if (line.length === 0) continue;
+        let e: HistoryEntry;
+        try {
+          e = parseHistoryLine(line);
+        } catch (err) {
+          throw new Error(`history.log line ${state.lines}: ${(err as Error).message}`, { cause: err });
+        }
+        if (!isJevEndpoint(e.endpoint)) continue; // not a Jev call (lifetimeJevTotals)
+        // WHY the last-seen time is refreshed on every line: a run whose lines straddle two reads is found again in `recent` and counted once. A timestamp that does not parse is treated as the newest so far (kept, never pruned early).
+        const at = Date.parse(e.timestamp);
+        const seenAt = Number.isNaN(at) ? state.newest : at;
+        if (!Object.hasOwn(state.recent, e.opId)) state.runs++;
+        state.recent[e.opId] = seenAt;
+        state.newest = Math.max(state.newest, seenAt);
+        state.requests++;
+        state.inputTokens += e.inputTokens ?? 0;
+        state.costUsd += e.costUsd;
+        state.since ??= e.timestamp;
+      }
+    }
+    // WHY pruned (round 2b): without it the id set grows by one entry per run for the life of the log. A run's lines are close in time, so an id last seen more than 24 hours before the newest entry processed cannot get another line; `runs` is its own counter and keeps what was counted.
+    for (const [id, seen] of Object.entries(state.recent)) if (seen < state.newest - LIFETIME_RUN_HORIZON_MS) delete state.recent[id];
+    const tmp = `${getLifetimeSidecarPath()}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(state));
+    renameSync(tmp, getLifetimeSidecarPath());
+    return { runs: state.runs, requests: state.requests, inputTokens: state.inputTokens, costUsd: state.costUsd, since: state.since };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * Append one already-formatted line to the history log. Best-effort: any
@@ -331,14 +505,19 @@ export function countByEndpoint(entries: readonly HistoryEntry[]): Record<string
  */
 export function appendHistoryLine(line: string): void {
   try {
-    const dir = getConfigDir();
-    mkdirSync(dir, { recursive: true });
-    // Reuse getHistoryPath() so the log filename lives in exactly one place
-    // (single source of truth) instead of being re-derived inline here.
-    appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
+    appendHistoryLineStrict(line);
   } catch {
     // Fail-open on LOGGING only — never on the actual work.
   }
+}
+
+/** The same append, but a failure propagates. WHY (round 2, minor d): `classify ping` is a paid call the user asked for by name; a lost history entry must be said, not swallowed. */
+export function appendHistoryLineStrict(line: string): void {
+  const dir = getConfigDir();
+  mkdirSync(dir, { recursive: true });
+  // Reuse getHistoryPath() so the log filename lives in exactly one place
+  // (single source of truth) instead of being re-derived inline here.
+  appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
 }
 
 // ── Per-request recorder ─────────────────────────────────────────────────
@@ -355,6 +534,10 @@ export function recordRequest(req: {
   costUsd: number;
   /** Wire endpoint (L1-10); callers that have none omit it and write the 7-field line. */
   endpoint?: string;
+  /** Measured input tokens of the reply (C4-12); omitted when unknown. */
+  inputTokens?: number;
+  /** true: a failed write throws instead of being swallowed (classify ping). */
+  strict?: boolean;
 }): void {
   try {
     const ctx = ctxStore.getStore();
@@ -368,10 +551,13 @@ export function recordRequest(req: {
       costUsd: req.costUsd,
       opId: ctx?.opId ?? newOpId(),
       endpoint: req.endpoint,
+      inputTokens: req.inputTokens,
     });
-    appendHistoryLine(line);
-  } catch {
-    // Logging must never propagate.
+    if (req.strict === true) appendHistoryLineStrict(line);
+    else appendHistoryLine(line);
+  } catch (e) {
+    // Logging must never propagate, except where the caller asked to be told (strict).
+    if (req.strict === true) throw e;
   }
 }
 

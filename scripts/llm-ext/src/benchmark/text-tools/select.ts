@@ -23,7 +23,27 @@
 import { TOOL_MODEL_REGISTRY } from "../../model-qualification/registry.js";
 import type { ModelCriteria } from "../discover.js";
 import { selectSameOrCheaper, type GenericCandidate } from "../select-common.js";
-import { passesTextToolThresholds, type TextToolScore } from "./score.js";
+import {
+  answeredOnlyTextToolScore,
+  passesTextToolThresholds,
+  type TextToolScore,
+  type TextToolThresholds,
+} from "./score.js";
+import { isTextToolNonEvidence, NON_EVIDENCE_REASON } from "../quality-evidence.js";
+
+/**
+ * The benchmark verdict for display and selection: the SAME judgement the ledger
+ * qualityPass uses (answered cases only; a run with over a quarter of its cases
+ * unanswered is not evidence and cannot qualify) so selection and the stored
+ * verdict cannot disagree (TRDD-90BXJ2KO).
+ */
+export function judgeTextTool(
+  score: TextToolScore,
+  thresholds?: TextToolThresholds,
+): { pass: boolean; reason: string } {
+  if (isTextToolNonEvidence(score)) return { pass: false, reason: NON_EVIDENCE_REASON };
+  return passesTextToolThresholds(answeredOnlyTextToolScore(score), thresholds);
+}
 import type { TextToolName } from "./bench-runner.js";
 
 /** Per-tool requirements, read from the single source of truth (registry.ts). */
@@ -68,7 +88,7 @@ export interface TextToolSelectionResult {
 }
 
 function toGeneric(c: TextToolCandidate): GenericCandidate {
-  const thr = passesTextToolThresholds(c.score);
+  const thr = judgeTextTool(c.score);
   return {
     modelId: c.modelId,
     qualified: c.qualified,

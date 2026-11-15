@@ -6,6 +6,7 @@ import type { ChoiceAnswer } from "../l1/validate-choice.js";
 import type { ScoreAnswer } from "../l1/validate-score.js";
 import { buildEvidence } from "../l2/evidence.js";
 import { IdError, indexKey } from "../l2/ids.js";
+import { InputError } from "../l2/input-error.js";
 import { PolicyError } from "../l2/policy-kit.js";
 import { assertFits, cutToTokens } from "./audit.js";
 import { dataGuard, isBlank, noulOf, positionalIds, renumberByPosition } from "./shared.js";
@@ -99,6 +100,15 @@ const input = z
   });
 export type ReviewInput = z.output<typeof input>;
 
+/**
+ * IN-05: the claims of `--claims FILE`: one claim per non-empty line, trimmed. WHY a file with no claim line is refused and not read as []: the flag was given to switch the gate half on, and an empty list would silently run the review half alone and look like a clean gate (E70 is for the flag being absent). The 16-claim cap and the evidence rule are the input schema's.
+ */
+export function parseClaimLines(text: string): { text: string }[] {
+  const claims = text.split(/\r?\n/).map((l) => l.trim()).filter((l) => l !== "").map((t) => ({ text: t }));
+  if (claims.length === 0) throw new InputError("--claims holds no claim: write one claim per line");
+  return claims;
+}
+
 // The files that are actually reviewed, in input order, under their caller ids; build and project must agree on this list because question keys are positions in it.
 function reviewable(i: ReviewInput): { id: string; text: string }[] {
   const files = i.files ?? [];
@@ -143,8 +153,8 @@ function reviewQuestions(key: (name: string) => string, change: string, withClai
   const guard = ` ${dataGuard(`${change}, \`shared.request\` and \`shared.tests\``, "review")}${claimsNote}`;
   const ask = (rubric: Rubric, text: string, levels: [string, string, string]): [string, Question] => [key(ASKED[rubric].key), score(`${text}${guard}`, levels)];
   return Object.fromEntries([
-    ask("correctness", `How likely is it that ${change} is functionally wrong for \`shared.request\`?`, ["Looks correct for the request", "Uncertain; needs a closer look or tests", "Clearly wrong, or breaks the stated behavior"]),
-    ask("spec_match", `How far does ${change} depart from \`shared.request\`: part of it missing, or extra work added?`, ["Matches the request", "Partial match; important pieces missing or extra work added", "Misses the request or solves a different problem"]),
+    ask("correctness", `How likely is it that ${change} is functionally wrong for \`shared.request\`?`, ["Looks correct for the request", "Uncertain; needs a closer look or tests", "Clearly wrong, or breaks the stated behavior, including an off-by-one or comparison-operator error"]),
+    ask("spec_match", `How far does ${change} depart from \`shared.request\`: part of it missing, extra work added, or a stated constraint violated (the most serious departure)?`, ["Matches the request", "Partial match: important pieces missing, or extra work added — but the change still does what the request asks", "Misses the request, solves a different problem, or breaks a stated behavior constraint of the request — the change does not do what the request requires"]),
     ask("test_gap", `How large is the test gap for ${change}, judged with \`shared.tests\` (null means no test output was reported)?`, ["Covered, or tests do not apply to this change", "Some gaps remain on less critical paths", "Likely untested on the risky path"]),
     ask("blast_radius", `How wide is the blast radius if ${change} lands?`, ["Tiny local change", "Moderate; a few modules", "Wide, shared or production-facing"]),
     [key(UNSAFE), noul(`${change} should be held for a person before it is applied.${guard}`, { true: "Hold for review or more tests", false: "Low risk and ready" })],
@@ -300,6 +310,14 @@ function halfOf(get: (name: string) => Answers[string] | undefined, p: Policy, t
   const incomplete = truncated || chunkInfo.chunked;
   const action = requireComplete(raw, incomplete);
   // Reason codes cover every action path; limiting names the rubric(s) that bound the decision, ties included (server.ts:1693-1727).
+  // WHY a rubric at confidence 0 never limits (quality eval of run 20261031_191133): confidence 0 is the model saying it could not judge that rubric, so naming it hid the rubric that really bound the result (test_gap and blast_radius at 0 were named while correctness scored 0 at confidence 1). When the confidence rule then names nothing, the rubric with the lowest favourability is named instead.
+  const judged = RUBRICS.filter((r) => scores[r].confidence !== 0);
+  const judgedMin = Math.min(...judged.map((r) => scores[r].confidence ?? Infinity));
+  const byConfidence = (limit: number): Rubric[] => (judgedMin < limit ? judged.filter((r) => scores[r].confidence === judgedMin) : []);
+  const byFavorability = (): Rubric[] => {
+    const lowest = Math.min(...judged.map((r) => favorability[r]));
+    return judged.filter((r) => Math.abs(favorability[r] - lowest) <= 1e-12);
+  };
   const reasons: string[] = [];
   let limiting: Rubric[] = [];
   if (minConfidence === null) {
@@ -307,19 +325,20 @@ function halfOf(get: (name: string) => Answers[string] | undefined, p: Policy, t
     limiting = RUBRICS.filter((r) => scores[r].confidence === null);
   } else if (minConfidence < p.reviewAt) {
     reasons.push("confidence_below_review");
-    limiting = RUBRICS.filter((r) => scores[r].confidence === minConfidence);
+    limiting = byConfidence(p.reviewAt);
+    if (limiting.length === 0) limiting = byFavorability();
   }
   if (safeToApply < p.reviewAt) reasons.push("safe_to_apply_below_review");
   if (raw !== "escalate") {
     if (safeToApply < p.autoAccept) reasons.push("safe_to_apply_below_auto_accept");
     if (minConfidence !== null && minConfidence < p.autoAccept) {
       reasons.push("confidence_below_auto_accept");
-      if (limiting.length === 0) limiting = RUBRICS.filter((r) => scores[r].confidence === minConfidence);
+      if (limiting.length === 0) limiting = byConfidence(p.autoAccept);
+      if (limiting.length === 0) limiting = byFavorability();
     }
     if (composite < p.compositeFloor) {
       reasons.push("composite_below_floor");
-      const lowest = Math.min(...RUBRICS.map((r) => favorability[r]));
-      if (limiting.length === 0) limiting = RUBRICS.filter((r) => Math.abs(favorability[r] - lowest) <= 1e-12);
+      if (limiting.length === 0) limiting = byFavorability();
     }
   }
   if (incomplete) reasons.push("incomplete_context");
@@ -416,6 +435,10 @@ function project(answers: Answers, i: ReviewInput, t: Thresholds, ctx: ProjectCt
 
 export const spec: DecisionSpec<ReviewInput, ReviewResult> = {
   id: "review",
+  // IN-05 (Q1 decided by the coordinator under the USER autonomy grant): --claims FILE holds one claim per non-empty line, `-` reads stdin. No `cli` block: `cli` switches the command to file mode and review keeps its JSON input; the claims overlay the JSON like check --preset. Without the flag claims stay [] and the review half runs alone (E70).
+  flags: [
+    { flag: "--claims", property: "claims", field: "claims", file: true, help: "File with one claim per non-empty line (- reads stdin), judged against the evidence; up to 16. Needs evidence in the JSON input; without --claims only the review half runs.", parse: parseClaimLines },
+  ],
   input,
   thresholds: {
     "auto-accept": { default: 0.8, min: 0, max: 1, help: "--auto-accept: safe_to_apply, minimum score confidence and every claim's confidence at or above this may stand as auto" },

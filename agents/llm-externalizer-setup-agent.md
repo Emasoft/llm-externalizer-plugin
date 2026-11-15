@@ -70,6 +70,8 @@ Keep all wizard state under `$CLAUDE_PLUGIN_DATA/setup/` so a re-invocation can 
 
 `mkdir -p "$CLAUDE_PLUGIN_DATA/setup"` once at the start. Always write atomically (`> file.tmp && mv -f file.tmp file`) so a Ctrl-C mid-write does not leave a half-baked JSON file.
 
+Scratch vs final files: wizard state is scratch and never goes in a git-tracked project folder; if a temporary file must live inside the project, put it in a `*_dev` folder (gitignored).
+
 ### Idempotency / resume
 
 Before running each Step's command, check whether its output file already exists and is fresh (mtime within the last hour). If so, offer the user the choice:

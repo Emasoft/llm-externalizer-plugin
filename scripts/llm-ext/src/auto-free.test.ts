@@ -23,7 +23,7 @@ import {
   FREE_FLOOR_MIN_CONTEXT_TOKENS,
   selectFreeEnsembleModels,
 } from "./index";
-import { FREE_POOL_SEED } from "./config";
+import { FREE_POOL_SEED, localsPlatformSupported } from "./config";
 
 describe("resolveAutoFreePool — the profile's own free_models, copied (Rule 5 TRDD-90DM5YHO)", () => {
   it("an empty profile pool resolves to [] and never falls back to FREE_POOL_SEED (Rule 5, never dark)", () => {
@@ -203,7 +203,14 @@ describe("model tools on a managed local profile (TRDD-N0S2UL0K)", () => {
       ] as const) {
         const text = textOf(await idx.dispatchCallTool(tool, { ...args }));
         expect(text, tool).not.toContain(FREE_MODE_ERROR);
-        expect(text, tool).toContain(marker);
+        // Locals runs MLX models only on macOS/Apple silicon: anywhere else the dispatch honestly refuses the
+        // profile, so assert that refusal (not a skip) instead of the tool's own success line.
+        if (p.api === "locals-local" && !localsPlatformSupported()) {
+          expect(text, tool).toContain("NOT CONFIGURED");
+          expect(text, tool).toContain("needs macOS on Apple silicon");
+        } else {
+          expect(text, tool).toContain(marker);
+        }
       }
     }, 120_000);
   }

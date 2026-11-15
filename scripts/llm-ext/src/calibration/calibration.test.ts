@@ -72,10 +72,10 @@ describe("calibration record (spec section 7)", () => {
 });
 
 describe("memory outcomes of a record (coordinator decisions 2026-10-29: rules 1 and 2, item 3)", () => {
-  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  const ramEnv = process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
   afterEach(() => {
-    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
-    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+    if (ramEnv === undefined) delete process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
+    else process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = ramEnv;
   });
   const profiles = { p: managed("a/b:Q4") };
 
@@ -97,12 +97,13 @@ describe("memory outcomes of a record (coordinator decisions 2026-10-29: rules 1
     expect(recordSchemaErrors(rec)).toEqual([]);
     expect(recordSchemaErrors({ ...recordFixture("llama", "a/b:Q4"), memory_judged: judged })).toEqual(["memory_judged (a calibration-failed record only)"]);
     writeRecord(dir, rec);
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "10";
+    // Unit 6: the floor is 100 - ram_limit_pct: ram_limit_pct 90 is the floor of 10 % the record was judged under.
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "90";
     expect(readRecordStatus(dir, "llama", "a/b:Q4").state).toBe("failed");
     expect(queueManual(dir, profiles, "a/b:Q4", false)).toHaveProperty("error");
     expect(memoryVerdictStale(rec, 10, totalmem() + 1)).toBe(`the total RAM changed from ${totalmem()} to ${totalmem() + 1} bytes`);
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "11";
-    expect(memoryVerdictStale(rec)).toBe("the memory floor changed from 10 % to 11 %");
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "89";
+    expect(memoryVerdictStale(rec)).toBe("the RAM limit changed from ram_limit_pct 90 % to 89 %");
     expect(readRecordStatus(dir, "llama", "a/b:Q4")).toEqual({ state: "missing" });
     expect(queueManual(dir, profiles, "a/b:Q4", false)).not.toHaveProperty("error");
     // A calibration-failed record without a memory judgment never goes stale this way.
@@ -277,6 +278,8 @@ describe("main-agent decisions of 2026-10-29: harness id (D4), schema 2 (D6), le
       4: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
       // 5: aggregate_tps rename, transport failures inconclusive, memory-wait entries as objects; same JSON.
       5: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
+      // 6: load_estimate required on an ok record, memory judged on the vm_stat reading (governor unit 4); same JSON.
+      6: "7b381abe948cae14e6dd12998f4161909536ee4d4254db249bd936b6affcb257",
     };
     expect(createHash("sha256").update(JSON.stringify(PRODUCTION_HARNESS)).digest("hex")).toBe(PINNED[HARNESS_VERSION]);
   });

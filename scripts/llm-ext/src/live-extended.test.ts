@@ -6,7 +6,7 @@
  * Run with: npx vitest run src/live-extended.test.ts
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolveTestConfig, runCli, type CliResult } from './test-helpers';
@@ -28,7 +28,12 @@ const LIVE =
 
 // requireLiveBackend opts into the user's configured backend (cost-safety
 // default is a local, unreachable one).
-const testConfig = resolveTestConfig({ testName: 'extended', timeout: 300, requireLiveBackend: true });
+if (!LIVE) console.warn('[live-extended] skipped: set LIVE_TESTS=1 and OPENROUTER_API_KEY to run the paid extended tests');
+// WHY lazy: see live.test.ts - module-level resolution fails collection when the suite is not opted in.
+let testConfig: ReturnType<typeof resolveTestConfig>;
+beforeAll(() => {
+  if (LIVE) testConfig = resolveTestConfig({ testName: 'extended', timeout: 300, requireLiveBackend: true });
+});
 
 function cleanDir(dir: string) {
   rmSync(dir, { recursive: true, force: true });

@@ -264,6 +264,31 @@ def _run_check(
     return True
 
 
+def tracked_shell_files(repo_root: Path) -> list[Path]:
+    """Return the git-tracked *.sh files under repo_root.
+
+    WHY git and not a tree walk: the old rglob("*.sh") also linted gitignored
+    scratch scripts (e.g. reports/**/probe.sh) that never ship, which turned
+    the local gate and the pre-push hook red on any dev tree (TRDD-CV2OAB7D).
+    Git is the single source of truth for what ships, so no exclusion list.
+    """
+    # WHY timeout=60: a local index read takes ~0.015 s (3 runs: 0.015-0.016 s), so
+    # 60 s is wide headroom. Unlike the generic runner above (no upper bound by design)
+    # this call has a known bound: a hang must raise TimeoutExpired and fail fast
+    # instead of stalling the publish gate forever.
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--", "*.sh"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    ).stdout
+    # A tracked file deleted in the worktree is not lintable; shellcheck on a
+    # missing path would fail the gate for a file that is not there.
+    return [repo_root / p for p in out.split("\0") if p and (repo_root / p).is_file()]
+
+
 REQUIRED_TOOLS: list[tuple[str, str]] = [
     ("git", "https://git-scm.com/"),
     ("node", "https://nodejs.org/ (>= 18)"),
@@ -379,26 +404,8 @@ def run_checks(repo_root: Path) -> bool:
     if not _run_check("ruff", ["ruff", "check", "scripts/"], str(repo_root), repo_root):
         return False
 
-    # 7. Shellcheck on every .sh file in the main tree (mandatory).
-    exclude_dirs = {
-        "node_modules",
-        ".git",
-        "scripts_dev",
-        "docs_dev",
-        "samples_dev",
-        "examples_dev",
-        "tests_dev",
-        "downloads_dev",
-        "libs_dev",
-        "builds_dev",
-        ".claude",
-        "dist",
-        "reports_dev",
-    }
-    sh_files: list[Path] = []
-    for f in repo_root.rglob("*.sh"):
-        if not any(part in exclude_dirs for part in f.relative_to(repo_root).parts):
-            sh_files.append(f)
+    # 7. Shellcheck on every git-tracked .sh file (mandatory).
+    sh_files = tracked_shell_files(repo_root)
     if sh_files:
         if not _run_check(
             "shellcheck",
@@ -411,7 +418,7 @@ def run_checks(repo_root: Path) -> bool:
         # Absence of .sh files is not a failure — there's nothing to check.
         # This is NOT a skip of the check tool; the tool is installed and
         # would run if there were files.
-        print("  OK: shellcheck (no .sh files in main tree)")
+        print("  OK: shellcheck (no tracked .sh files)")
 
     # 8. Plugin manifest JSON check
     plugin_json = repo_root / ".claude-plugin" / "plugin.json"
@@ -809,6 +816,31 @@ def _cpv_strict_fail(report: Path, cpv_result: subprocess.CompletedProcess) -> b
     return False
 
 
+def sync_package_lock_version(lock_path: Path, new_version: str) -> None:
+    # npm ci refuses a lockfile whose root version differs from package.json;
+    # publish.py runs npm ci before the bump, so a bump that skips the lock
+    # passes this release and breaks the next one (TRDD-NQMW9AK5).
+    # Validate everything before writing so a failure leaves the file byte-unchanged.
+    if not lock_path.is_file():
+        print(f"ERROR: {lock_path} does not exist", file=sys.stderr)
+        sys.exit(1)
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        print(f"ERROR: {lock_path} is not valid JSON: {exc}", file=sys.stderr)
+        sys.exit(1)
+    packages = lock.get("packages") if isinstance(lock, dict) else None
+    if not isinstance(packages, dict) or not isinstance(packages.get(""), dict):
+        print(f'ERROR: {lock_path} has no packages[""] root entry', file=sys.stderr)
+        sys.exit(1)
+    lock["version"] = new_version
+    packages[""]["version"] = new_version
+    lock_path.write_text(
+        json.dumps(lock, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Publish a new release")
     group = parser.add_mutually_exclusive_group()
@@ -999,6 +1031,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             encoding="utf-8",
         )
         print(f"  Synced version to {pkg_json.relative_to(repo_root)}")
+        pkg_lock = repo_root / "scripts" / "llm-ext" / "package-lock.json"
+        sync_package_lock_version(pkg_lock, new_version)
+        print(f"  Synced version to {pkg_lock.relative_to(repo_root)}")
 
     # NOTE: mcp-server/server.json (the MCP registry manifest) was deleted with
     # the server in the CLI migration. Its sync block is gone with it — it was
@@ -1172,6 +1207,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         files_to_stage.append(str(readme))
     if pkg_json_path.exists():
         files_to_stage.append(str(pkg_json_path))
+        # Must be the SAME file step 5 rewrote (sync_package_lock_version), or the
+        # lock bump is left unstaged and the release commit ships a stale lock.
+        files_to_stage.append(str(repo_root / "scripts" / "llm-ext" / "package-lock.json"))
     # Must be the SAME file the version-sync block above rewrote, or the bump
     # is left unstaged: the release commit ships without it and the very next
     # publish starts on a dirty tree. (server.json was the MCP registry
@@ -1218,12 +1256,22 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("── 10. Push ──")
     push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
     if push_result.returncode != 0:
-        print("ERROR: push failed. Rolling back commit and tag.", file=sys.stderr)
+        # WHY: a failed push must preserve local work and recovery evidence.
+        # The previous branch ran `git reset --hard HEAD~1` and deleted both
+        # tags, DESTROYING the release commit and the exact refs needed to
+        # diagnose the failure — a network blip became permanent lost work.
+        # Now everything is kept and the operator is told to inspect before
+        # retrying: remote refs may be PARTIALLY updated (the push is not
+        # atomic across refs), so a blind rerun can collide with whatever
+        # the remote did receive.
+        print("ERROR: push failed. Release commit and both tags are preserved locally.", file=sys.stderr)
         if push_result.stderr:
             print(f"  {push_result.stderr.strip()}", file=sys.stderr)
-        run(["git", "reset", "--hard", "HEAD~1"], check=False, capture=False)
-        run(["git", "tag", "-d", tag], check=False, capture=False)
-        run(["git", "tag", "-d", resolver_tag], check=False, capture=False)
+        print(
+            "  Remote refs may be partially updated — inspect remote and local "
+            "state (including the retained tags) BEFORE any retry; do not blind-rerun.",
+            file=sys.stderr,
+        )
         sys.exit(1)
     print()
 

@@ -18,7 +18,7 @@ approval-datetime: 2026-10-07T19:30:56+0200
 implementation-commits: [97847fe3, e8d7d255, 0421472e, bf6bdbbd, 21875b8b]
 blocked-by: [3ZVURQ58]
 pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261007_193121+0200-3ZVURQ58-pf-06-settings-commands-for-classifier-profiles.md
+blocker-probe: test -f design/tasks/TRDD-20261007_193121+0200-3ZVURQ58-pf-06-settings-commands-for-classifier-profiles.md
 blocker-holds-if: exit-0
 unblock-when: [trdd:3ZVURQ58]
 ---

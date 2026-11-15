@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\n  \"model\": \"typesafe/jev-1.14-20261014\",\n  \"answers\": {\n    \"real_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.25\n    },\n    \"reachable_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.47\n    },\n    \"handled_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.02\n    },\n    \"severity_i0\": {\n      \"type\": \"score\",\n      \"score\": 1.15,\n      \"legend\": {\n        \"0\": \"Cosmetic: only wording, formatting or style; behaviour is unchanged.\",\n        \"1\": \"Minor: output or logs degrade, but the caller still gets a usable result.\",\n        \"2\": \"Major: an ordinary input gives a wrong result or an unhandled error.\",\n        \"3\": \"Critical: data is lost or corrupted, or an attacker gains access.\"\n      },\n      \"probabilities\": {\n        \"0\": 0.41,\n        \"1\": 0.04,\n        \"2\": 0.54,\n        \"3\": 0.01\n      },\n      \"confidence\": 0.13\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 895,\n    \"output_tokens\": 73,\n    \"cost\": 0.00003759\n  }\n}\n"
+}

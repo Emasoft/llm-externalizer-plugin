@@ -287,7 +287,7 @@ after reload. Back up before editing; one indent typo breaks every profile.
 | `LM_API_TOKEN` | LM Studio / generic-local auth |
 | `VLLM_API_KEY` | vLLM auth |
 | `LLM_EXT_CONFIG_DIR` | Override settings dir (default `~/.llm-externalizer`) |
-| `LLM_EXT_OUTPUT_DIR` | Override report output dir (default `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim) |
+| `LLM_EXT_OUTPUT_DIR` | Override report output dir (default `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim); intermediate output follows it too unless `LLM_EXT_SCRATCH_DIR` is set (default `<main-project-dir>/reports_dev/llm-externalizer/`, TRDD-PNU8XECB) |
 | `LLM_EXT_FREE_BELOW_USD` | No longer used — the automatic free mode on low balance is removed (14.1.0). A paid profile falls back only within its own pool; free is used only when explicitly selected with `--profile free` or `active: free`. |
 | `LLM_EXT_FREE_MODEL_ID` | No longer used — the `free: true` flag resolves to the selected profile's own first `:free` chain entry now, never a single hard-coded id (14.1.0, fix-queue 98(2)). |
 | `LLM_EXT_REASONING_EFFORT` | Reasoning effort for OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). Reasoning tokens are billed even though the trace is discarded; `mass_scout` / `cluster_synonyms` never reason. |

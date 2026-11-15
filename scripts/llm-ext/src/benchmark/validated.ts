@@ -26,46 +26,62 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { getConfigDir } from "../config.js";
+import { ensureLedgersBackfilled } from "./backfill-ledgers.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "./free-mode.js";
 
 // ── Ledger readers (latest-wins, conclusive-pass only) ────────────────────
 
 /** Generic reader for a `modelId::date::datasetHash`-keyed ledger. For each model
- *  it keeps the MOST RECENT entry (by ISO date, which sorts lexically) and adds
- *  the model to the result set when `isPass(entry)` holds. A missing/corrupt file
- *  is an EMPTY set (→ the gate refuses; never "all pass"). Loosely typed so it
- *  serves every tool's differently-shaped entry. */
-function latestEntriesFromKeyedLedger(fileName: string): Map<string, Record<string, unknown>> {
-  let cache: Record<string, unknown>;
+ *  it keeps the MOST RECENT entry (by ISO date, which sorts lexically) among the
+ *  entries `admit` accepts. A missing/corrupt file is an EMPTY map (→ the gate
+ *  refuses; never "all pass"). Loosely typed so it serves every tool's
+ *  differently-shaped entry. */
+function latestEntriesFromKeyedLedger(
+  fileName: string,
+  admit: (entry: Record<string, unknown>) => boolean = () => true,
+): Map<string, Record<string, unknown>> {
+  let cache: unknown;
   try {
-    const raw = readFileSync(join(getConfigDir(), fileName), "utf-8");
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
-    cache = parsed as Record<string, unknown>;
+    cache = JSON.parse(readFileSync(join(getConfigDir(), fileName), "utf-8")) as unknown;
   } catch {
     return new Map(); // missing / unreadable / corrupt → no proof of any pass
   }
+  const out = new Map<string, Record<string, unknown>>();
+  for (const [modelId, { entry }] of latestRowsByModel(cache, admit)) out.set(modelId, entry);
+  return out;
+}
+
+/** The ONE latest-row fold of a `modelId::…`-keyed ledger, pure over its parsed
+ *  JSON: per model, the newest entry `admit` accepts (a date tie keeps the first).
+ *  Exported so profiles/verdicts.ts reads the S1/S2 ledgers through the same fold
+ *  instead of a copy that could drift (TRDD-SZ7TO9FW increment 2, inc-1 report P10).
+ *  `admit` runs BEFORE the fold: a row the reader cannot judge (a legacy row with
+ *  no boolean qualityPass) must not hide an older row that it can judge. */
+export function latestRowsByModel(
+  cache: unknown,
+  admit: (entry: Record<string, unknown>) => boolean = () => true,
+): Map<string, { date: string; entry: Record<string, unknown> }> {
   const latest = new Map<string, { date: string; entry: Record<string, unknown> }>();
-  for (const [key, value] of Object.entries(cache)) {
+  if (!cache || typeof cache !== "object" || Array.isArray(cache)) return latest;
+  for (const [key, value] of Object.entries(cache as Record<string, unknown>)) {
     if (!value || typeof value !== "object") continue;
     const entry = value as Record<string, unknown>;
     const modelId = key.split("::")[0];
-    if (!modelId) continue;
+    if (!modelId || !admit(entry)) continue;
     const date = typeof entry.date === "string" ? entry.date : "";
     const prev = latest.get(modelId);
     if (!prev || date > prev.date) latest.set(modelId, { date, entry });
   }
-  const out = new Map<string, Record<string, unknown>>();
-  for (const [modelId, { entry }] of latest) out.set(modelId, entry);
-  return out;
+  return latest;
 }
 
 function passedModelsFromKeyedLedger(
   fileName: string,
   isPass: (entry: Record<string, unknown>) => boolean,
+  admit?: (entry: Record<string, unknown>) => boolean,
 ): Set<string> {
   const passed = new Set<string>();
-  for (const [modelId, entry] of latestEntriesFromKeyedLedger(fileName)) {
+  for (const [modelId, entry] of latestEntriesFromKeyedLedger(fileName, admit)) {
     if (isPass(entry)) passed.add(modelId);
   }
   return passed;
@@ -80,14 +96,26 @@ function passedSecurityTriage(): Set<string> {
   });
 }
 
+/** A deterministic-ledger row carries the threshold verdict stored at write time. */
+export function hasQualityVerdict(entry: Record<string, unknown>): boolean {
+  return typeof entry.qualityPass === "boolean";
+}
+
 /** The four DETERMINISTIC per-tool ledgers store no `score.pass`; a run PASSED the
- *  thresholds iff its `failureReasons` list is empty (an errored/empty/429 run has
- *  a non-empty list — so mimo-v2.5's empty result is correctly NOT a pass). */
+ *  thresholds iff its latest row with a boolean `qualityPass` has it true.
+ *  WHY not "failureReasons is empty" (TRDD-SZ7TO9FW increment 2, owner D2 "all must
+ *  pass the benchmarks"): failureReasons lists only the cases that failed to RUN, so
+ *  a live code-task row with an empty list and qualityPass false was served as a pass.
+ *  qualityPass is the rule profiles/verdicts.ts uses, so the send gate and the
+ *  resolution chain now agree. A legacy row with no boolean qualityPass proves
+ *  nothing and is skipped. validatedModelsForTool runs the zero-call backfill first
+ *  (ensureLedgersBackfilled, once per process per config dir), which gives every legacy row
+ *  of the current dataset hash its qualityPass from its own score. A run in which more than a
+ *  quarter of the cases got no answer (quality-evidence.ts) gets NO qualityPass and is skipped, so
+ *  an older judged row decides; with none the model is unvalidated and stays excluded.
+ *  A run with fewer unanswered cases is judged on its answered cases only. */
 function passedDeterministic(fileName: string): Set<string> {
-  return passedModelsFromKeyedLedger(fileName, (e) => {
-    const fr = e.failureReasons;
-    return Array.isArray(fr) && fr.length === 0;
-  });
+  return passedModelsFromKeyedLedger(fileName, (e) => e.qualityPass === true, hasQualityVerdict);
 }
 
 /** The rank-0 ACCUMULATING ledger — keyed `modelId::date` like the five per-tool
@@ -98,7 +126,7 @@ export const GENERAL_KEYWORD_LEDGER = "general-keyword-results.json";
  *  the accumulating ledger and the legacy snapshot. `schemaCompliant !== false`
  *  matches --apply-free-pool's own filter (index.ts) — before this there were two
  *  competing definitions, and the looser one guarded the send gate. */
-function isGeneralKeywordPass(row: {
+export function isGeneralKeywordPass(row: {
   ok?: unknown;
   pass?: unknown;
   schemaCompliant?: unknown;
@@ -267,6 +295,11 @@ export function validatedModelsForTool(toolName: string): Set<string> {
   const hit = validatedMemo.get(key);
   const now = Date.now();
   if (hit && now - hit.at < VALIDATED_MEMO_TTL_MS) return hit.set;
+  // WHY here (TRDD-SZ7TO9FW increment 3): passedDeterministic counts only rows with a boolean
+  // qualityPass, and legacy rows lack it. Without this zero-call backfill (the score is already
+  // on the row; current dataset hash only) a legacy pass stays unreadable until a paid
+  // re-benchmark. Once per process per config dir, before the first ledger read; never throws.
+  ensureLedgersBackfilled();
   const min = rankForTool(toolName);
   const out = new Set<string>();
   for (const ledger of LEDGERS) {

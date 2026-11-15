@@ -513,11 +513,12 @@ describe("a resume keeps Phase B while the hard W is the same (main-agent decisi
  * derived from the readings themselves (item 5: no test may depend on how much memory is in use).
  */
 describe("Phase B memory: the bound and rule A of Phase C; memory-limited and too-big outcomes (coordinator decisions 2026-10-29)", () => {
-  const floorEnv = process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
+  // Unit 6: the memory floor is 100 - ram_limit_pct (a 1 % floor is ram_limit_pct 99), so the tests set the governor RAM limit.
+  const ramEnv = process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
   const cleanups: Array<() => void> = [];
   afterEach(() => {
-    if (floorEnv === undefined) delete process.env.LLM_EXT_BROKER_MEMORY_FLOOR;
-    else process.env.LLM_EXT_BROKER_MEMORY_FLOOR = floorEnv;
+    if (ramEnv === undefined) delete process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT;
+    else process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = ramEnv;
     while (cleanups.length) cleanups.pop()!();
   });
   const minWindow = Math.ceil(2048 / 0.4);
@@ -590,7 +591,7 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     const { dir, gguf, need } = model(Math.max(1, Math.round(((free + total) / 2 - floor - one.need(0)) / perBlock)));
     const margin = Math.min(need(minWindow) - (free - floor), total - floor - need(minWindow));
     expect(margin, `half the memory in use (${Math.round((total - free) / 2 ** 21)} MiB) less one KV block must keep the smallest window between free memory and total RAM above the floor`).toBeGreaterThan(0);
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = String(floorPct);
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = String(100 - floorPct);
     const { ctx, trials } = context(dir, gguf, "http://127.0.0.1:1");
 
     expect(await phaseB.run(ctx)).toMatchObject({ passed: false, paused: true, step: "B/window" });
@@ -622,7 +623,7 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     const perBlock = kvBytes(modelKvLayers("llama", [model(1).gguf]), minWindow);
     const { dir, gguf, need } = model(Math.ceil(totalmem() / perBlock));
     expect(need(minWindow)).toBeGreaterThan(totalmem());
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     const { ctx } = context(dir, gguf, "http://127.0.0.1:1");
     const r = await phaseB.run(ctx);
     expect(r).toMatchObject({ passed: false, step: "B/window", memory: { kind: "too-big", judged: { total_ram_bytes: totalmem(), floor_pct: 1, n_ctx_train: 0 } } });
@@ -648,7 +649,7 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     const top = steps[0]! + CAP_OFF + 64;
     const perBlock = one.need(top) - one.need(0);
     const m = model(Math.max(1, Math.round(((free + total) / 2 - floor - one.need(0)) / perBlock)));
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     // The server reports more context than any window here: only memory decides.
     return { ...m, steps, url: await props(1 << 20), floor };
   };
@@ -711,7 +712,7 @@ describe("Phase B memory: the bound and rule A of Phase C; memory-limited and to
     // the server reports 6144 tokens of context, so the 13107 and 8192 steps (plus the 2112-token output) miss only that.
     // No free memory clears it: before the decision they waited, expired by prechecks and ended memory-limited.
     const { dir, gguf, need } = model(1);
-    process.env.LLM_EXT_BROKER_MEMORY_FLOOR = "1";
+    process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "99";
     const { ctx, trials } = context(dir, gguf, await props(6144));
     ctx.harness = { ...ctx.harness, steps: [13107, 8192] };
     const probe = await measureWindow(ctx, 0, 8192 + 256);

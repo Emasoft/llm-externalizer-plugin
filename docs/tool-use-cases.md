@@ -156,7 +156,7 @@ self-checks the model(s) your active profile is **already configured** to use
 deprecated = **CRITICAL**), cost drift vs a seeded baseline at
 `~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool
 requirements regression (**WARN**). Advisory only — never writes settings; emits
-a report to `reports/model-health/`. **Use when** you want a periodic "are my
+a report to `reports_dev/llm-externalizer/model-health/`. **Use when** you want a periodic "are my
 configured models still good?" check — caught a removed model, a price hike, or a
 capability the model lost. Acting on findings is user-only (edit settings.yaml +
 `reset`).
@@ -183,7 +183,7 @@ and, only when it has — or when you pass `force` for an explicit audit — run
 tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a
 healthy/empty ledger NO benchmark runs and every recommendation is "keep the
 incumbent" (zero false positives, zero spend). Writes a report to
-`reports/llm-externalizer/auto-replace/` and NEVER touches settings — `llm-ext` is read-only and
+`reports_dev/llm-externalizer/auto-replace/` and NEVER touches settings — `llm-ext` is read-only and
 cannot rewrite its own config. **To adopt a recommendation**, hand-edit
 `~/.llm-externalizer/settings.yaml` with the recommended model id, then run
 `llm-ext reset` (configuration stays user-only — see

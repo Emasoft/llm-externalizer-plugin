@@ -3,17 +3,22 @@ import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Profile } from "../config.js";
+import { stringify } from "yaml";
+import { loadSettings, type Settings } from "../config.js";
 import { classifyArgv } from "../cli/launcher.js";
+import { readAllFrom } from "../cli/read-all.js";
 import { spec as checkSpec } from "./catalog/check.js";
 import { spec as filterSpec } from "./catalog/filter.js";
 import { spec as findSpec } from "./catalog/find.js";
 import { spec as labelSpec } from "./catalog/label.js";
 import { spec as rankSpec } from "./catalog/rank.js";
+import { spec as requirementsSpec } from "./catalog/requirements.js";
 import { classifyCliUsage, type AnySpec } from "./catalog/spec.js";
 import { assembleFileInput } from "./input-args.js";
 import { INPUT_FLAGS } from "./shared-flags.js";
+import { estimateTokens } from "./l1/estimate.js";
 import { replayFixture, type RecordedReply } from "./l0/test-fetch.js";
 import type { GlobalFetch } from "./l0/transport.js";
 import { runDecisionArgv, type ArgvDeps } from "./run-decision.js";
@@ -38,6 +43,8 @@ afterEach(() => {
   if (prevKey === undefined) delete process.env.IN01_TEST_KEY; else process.env.IN01_TEST_KEY = prevKey;
   if (prevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR; else process.env.LLM_EXT_CONFIG_DIR = prevCfg;
   rmSync(tmp, { recursive: true, force: true });
+  // WHY last and from a copy: the cleanup above must run even when this fails, and a failure must not leak streams into the next test.
+  for (const s of unreadStreams.splice(0)) expect(s.readableDidRead).toBe(false);
 });
 
 const put = (rel: string, content: string | Buffer): string => {
@@ -48,7 +55,21 @@ const put = (rel: string, content: string | Buffer): string => {
 };
 const work = (): string => join(tmp, "work");
 const git = (...args: string[]): void => { execFileSync("git", args, { cwd: work(), stdio: "ignore" }); };
-const noStdin = async (): Promise<Buffer> => { throw new Error("stdin must not be read"); };
+// WHY real streams (TRDD-S3QEQBYV, sites A4 and A6): stdin is read by the production reader readAllFrom over a real PassThrough, so no stdin double is left in this file.
+// Data sites: stdinBytes builds a fresh ENDED stream inside the closure on every call, because an ended stream can be read once; nothing is asserted on it.
+// Never-called sites: unreadStdin makes one ENDED stream holding a byte per call (never shared, never at describe scope) and registers it; afterEach asserts readableDidRead === false after the test body, so a read that leaves the outcome unchanged also fails. The registry is module-level, so this relies on tests running one at a time (no it.concurrent).
+// Measured with a stderr marker in the old throwing double (58 tests, positive control through run() printed the marker): no test reaches the old never-called double noStdin (the three data sites read their bytes by design), and the old `-` plus `--items -` data double was also never called (refused at input-args.ts:129 before the read). Calls through run() go through the catch returns at run-decision.ts:531, :543 and :550, which turn a read error into exit 1; direct assembleFileInput calls get the reader without that catch.
+const stdinBytes = (text: string) => async (): Promise<Buffer> => { const s = new PassThrough(); s.end(text); return readAllFrom(s); };
+const unreadStreams: PassThrough[] = [];
+const unreadStdin = (): (() => Promise<Buffer>) => { const s = new PassThrough(); s.end("x"); unreadStreams.push(s); return () => readAllFrom(s); };
+// WHY a real settings.yaml read back by loadSettings (precedent 441ce3fa, TRDD-4Q1IVJOE): a hand-built object cast to Settings skips the production loader. LLM_EXT_CONFIG_DIR is `tmp` (beforeEach), removed with it in afterEach.
+const classifierSettings = (): Settings => {
+  const profileDoc = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$IN01_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 };
+  writeFileSync(join(tmp, "settings.yaml"), stringify({ active: "c", active_classifier: "c", profiles: { c: profileDoc } }));
+  const settings = loadSettings();
+  if (settings === null) throw new Error("settings.yaml was not loaded");
+  return settings;
+};
 
 // The real P-01 noul reply re-labeled to the keys of the request, as run-decision.test.ts does.
 function noulReply(questions: Record<string, unknown>): Response {
@@ -69,11 +90,11 @@ function serve(): { fetch: GlobalFetch; questions: Record<string, unknown>[] } {
   };
   return { fetch, questions };
 }
-function run(spec: AnySpec, argv: string[], fetch: GlobalFetch = async () => { throw new Error("network must not be reached"); }, stdin: () => Promise<Buffer> = noStdin) {
+function run(spec: AnySpec, argv: string[], fetch: GlobalFetch = async () => { throw new Error("network must not be reached"); }, stdin: () => Promise<Buffer> = unreadStdin()) {
   const out: string[] = [];
   const err: string[] = [];
   const deps: ArgvDeps = {
-    settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$IN01_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 } as unknown as Profile } },
+    settings: classifierSettings(),
     fetch,
     catalogOptions: { path: join(tmp, "catalog.json") },
     sigint: new EventEmitter(),
@@ -94,7 +115,7 @@ describe("assembleFileInput over real files", () => {
     put("ignored.txt", "never sent\n");
     git("init", "-q");
     git("add", "a.txt");
-    const r = await assembleFileInput(filterSpec as AnySpec, ["Does it fail?", work()], {}, noStdin);
+    const r = await assembleFileInput(filterSpec as AnySpec, ["Does it fail?", work()], {}, unreadStdin());
     const input = r.input as { question: string; items: { id: string; text: string }[] };
     expect(input.question).toBe("Does it fail?");
     expect(baseNames(input.items)).toEqual([".gitignore", "a.txt", "sub/b.txt"]);
@@ -106,7 +127,7 @@ describe("assembleFileInput over real files", () => {
     put("node_modules/x.txt", "dep\n");
     put(".hidden/y.txt", "hid\n");
     put(".env", "TOKEN=1\n");
-    const r = await assembleFileInput(filterSpec as AnySpec, ["q", work()], {}, noStdin);
+    const r = await assembleFileInput(filterSpec as AnySpec, ["q", work()], {}, unreadStdin());
     expect(baseNames((r.input as { items: { id: string }[] }).items)).toEqual(["keep.txt"]);
     expect(r.warnings).toContain(`skipped ${join(work(), ".env")}: secret-like, never sent`);
   });
@@ -114,35 +135,35 @@ describe("assembleFileInput over real files", () => {
   it("--lines gives ids name:N; --ext, --limit and --max-bytes reach collectInputs", async () => {
     const log = put("app.log", "one\n\nthree\n");
     put("b.md", "md\n");
-    const lines = await assembleFileInput(filterSpec as AnySpec, ["q", log], { lines: true }, noStdin);
+    const lines = await assembleFileInput(filterSpec as AnySpec, ["q", log], { lines: true }, unreadStdin());
     expect((lines.input as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([`${log}:1`, `${log}:3`]);
-    const ext = await assembleFileInput(filterSpec as AnySpec, ["q", work()], { ext: "md" }, noStdin);
+    const ext = await assembleFileInput(filterSpec as AnySpec, ["q", work()], { ext: "md" }, unreadStdin());
     expect(baseNames((ext.input as { items: { id: string }[] }).items)).toEqual(["b.md"]);
-    await expect(assembleFileInput(filterSpec as AnySpec, ["q", work()], { limit: 1 }, noStdin)).rejects.toThrow(/more than 1 items/);
-    const big = await assembleFileInput(filterSpec as AnySpec, ["q", work()], { maxBytes: 2 }, noStdin).catch((e: Error) => e);
+    await expect(assembleFileInput(filterSpec as AnySpec, ["q", work()], { limit: 1 }, unreadStdin())).rejects.toThrow(/more than 1 items/);
+    const big = await assembleFileInput(filterSpec as AnySpec, ["q", work()], { maxBytes: 2 }, unreadStdin()).catch((e: Error) => e);
     expect(big).toBeInstanceOf(Error);
     expect((big as Error).message).toMatch(/^nothing to filter: 2 inputs skipped \(.*over 2 bytes/);
   });
 
   it("stdin is read only for `-` and `--items -`: one item `stdin`; a JSONL items file follows E127", async () => {
-    const r = await assembleFileInput(filterSpec as AnySpec, ["q", "-"], {}, async () => Buffer.from("from stdin\n"));
+    const r = await assembleFileInput(filterSpec as AnySpec, ["q", "-"], {}, stdinBytes("from stdin\n"));
     expect((r.input as { items: unknown[] }).items).toEqual([{ id: "stdin", text: "from stdin\n" }]);
     const jl = put("items.jsonl", '{"id":"x","text":"first"}\nplain line\n');
-    const items = await assembleFileInput(filterSpec as AnySpec, ["q"], { items: jl }, noStdin);
+    const items = await assembleFileInput(filterSpec as AnySpec, ["q"], { items: jl }, unreadStdin());
     expect((items.input as { items: unknown[] }).items).toEqual([{ id: "x", text: "first" }, { id: "2", text: "plain line" }]);
-    const viaStdin = await assembleFileInput(filterSpec as AnySpec, ["q"], { items: "-" }, async () => Buffer.from('{"id":"s","text":"t"}\n'));
+    const viaStdin = await assembleFileInput(filterSpec as AnySpec, ["q"], { items: "-" }, stdinBytes('{"id":"s","text":"t"}\n'));
     expect((viaStdin.input as { items: unknown[] }).items).toEqual([{ id: "s", text: "t" }]);
     const bad = put("bad.jsonl", '{"id": \n');
-    await expect(assembleFileInput(filterSpec as AnySpec, ["q"], { items: bad }, noStdin)).rejects.toThrow(/--items line 1 is not valid JSON/);
+    await expect(assembleFileInput(filterSpec as AnySpec, ["q"], { items: bad }, unreadStdin())).rejects.toThrow(/--items line 1 is not valid JSON/);
   });
 
   it("a glob works; below Node 22 it is refused with `pass a directory instead` (E121)", async () => {
     put("g1.txt", "one\n");
     put("g2.txt", "two\n");
     put("g3.md", "three\n");
-    const r = await assembleFileInput(filterSpec as AnySpec, ["q", join(work(), "*.txt")], {}, noStdin);
+    const r = await assembleFileInput(filterSpec as AnySpec, ["q", join(work(), "*.txt")], {}, unreadStdin());
     expect(baseNames((r.input as { items: { id: string }[] }).items)).toEqual(["g1.txt", "g2.txt"]);
-    await expect(assembleFileInput(filterSpec as AnySpec, ["q", join(work(), "*.txt")], { nodeMajor: 20 }, noStdin)).rejects.toThrow(/pass a directory instead/);
+    await expect(assembleFileInput(filterSpec as AnySpec, ["q", join(work(), "*.txt")], { nodeMajor: 20 }, unreadStdin())).rejects.toThrow(/pass a directory instead/);
   });
 
   it("a named secret, binary, empty file or directory given to --items is refused (E33, E36, E40, E41, E124)", async () => {
@@ -150,22 +171,22 @@ describe("assembleFileInput over real files", () => {
     const bin = put("b.bin", Buffer.from([0x61, 0x00, 0x62]));
     const empty = put("e.txt", "");
     for (const [f, re] of [[secret, /looks like a secret/], [bin, /is binary/], [empty, /empty input/], [work(), /is a directory/]] as const) {
-      await expect(assembleFileInput(filterSpec as AnySpec, ["q"], { items: f }, noStdin)).rejects.toThrow(re);
+      await expect(assembleFileInput(filterSpec as AnySpec, ["q"], { items: f }, unreadStdin())).rejects.toThrow(re);
     }
   });
 
   it("rank and find run in files mode (candidates / items); find refuses --lines", async () => {
     const f = put("r.txt", "text\n");
-    const rank = await assembleFileInput(rankSpec as AnySpec, ["query", f], {}, noStdin);
+    const rank = await assembleFileInput(rankSpec as AnySpec, ["query", f], {}, unreadStdin());
     expect(rank.input).toMatchObject({ query: "query", mode: "files", candidates: [{ id: f, text: "text\n" }] });
-    const find = await assembleFileInput(findSpec as AnySpec, ["query", f], {}, noStdin);
+    const find = await assembleFileInput(findSpec as AnySpec, ["query", f], {}, unreadStdin());
     expect(find.input).toMatchObject({ query: "query", mode: "files", items: [{ id: f }] });
-    await expect(assembleFileInput(findSpec as AnySpec, ["query", f], { lines: true }, noStdin)).rejects.toThrow(/--lines is not supported/);
+    await expect(assembleFileInput(findSpec as AnySpec, ["query", f], { lines: true }, unreadStdin())).rejects.toThrow(/--lines is not supported/);
   });
 
   it("no inputs at all: qs wording; a missing leading positional: usage", async () => {
-    await expect(assembleFileInput(filterSpec as AnySpec, ["q"], {}, noStdin)).rejects.toThrow("nothing to filter: pass files, directories, globs, --items FILE, or - for stdin");
-    await expect(assembleFileInput(filterSpec as AnySpec, [], { lines: true }, noStdin)).rejects.toThrow(/^usage: llm-ext classify filter "<question>"/);
+    await expect(assembleFileInput(filterSpec as AnySpec, ["q"], {}, unreadStdin())).rejects.toThrow("nothing to filter: pass files, directories, globs, --items FILE, or - for stdin");
+    await expect(assembleFileInput(filterSpec as AnySpec, [], { lines: true }, unreadStdin())).rejects.toThrow(/^usage: llm-ext classify filter "<question>"/);
   });
 
   it("the usage line names the leading positionals (shared by the parser error and --help); a JSON-only spec has none", () => {
@@ -183,8 +204,10 @@ describe("runDecisionArgv file mode", () => {
     put("a.txt", "alpha\n");
     put("b.txt", "beta\n");
     const s = serve();
-    const { code, out, err } = await run(filterSpec as AnySpec, ["Does it fail?", work(), "--profile", "c"], s.fetch);
-    expect(err).toEqual([]);
+    // IN-07: --json keeps this parsing the envelope; the text form has its own tests in catalog/filter.test.ts.
+    const { code, out, err } = await run(filterSpec as AnySpec, ["Does it fail?", work(), "--profile", "c", "--json"], s.fetch);
+    // C4-12: under --json the receipt lines (start with "— ") go to stderr; nothing else may.
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.questions).toHaveLength(2);
     expect((JSON.parse(out[0]!) as { decision: { rows: unknown[] } }).decision.rows).toHaveLength(2);
@@ -203,7 +226,7 @@ describe("runDecisionArgv file mode", () => {
     put("a.txt", "alpha\n");
     put(".env", "T=1\n");
     const s = serve();
-    const { out } = await run(filterSpec as AnySpec, ["q", work(), "--profile", "c"], s.fetch);
+    const { out } = await run(filterSpec as AnySpec, ["q", work(), "--profile", "c", "--json"], s.fetch);
     const env = JSON.parse(out[0]!) as { warnings: { message: string }[] };
     expect(env.warnings.some((w) => /^skipped .*\.env: secret-like, never sent$/.test(w.message))).toBe(true);
   });
@@ -261,7 +284,7 @@ describe("runDecisionArgv file mode", () => {
     const ddash = await run(filterSpec as AnySpec, ["--", "q", "-x.txt"]);
     expect(ddash.err[0]).toMatch(/no such file or directory: -x\.txt/);
     const f = put("--weird.txt", "w\n");
-    const rest = await assembleFileInput(filterSpec as AnySpec, ["q", f], {}, noStdin);
+    const rest = await assembleFileInput(filterSpec as AnySpec, ["q", f], {}, unreadStdin());
     expect((rest.input as { items: unknown[] }).items).toHaveLength(1);
   });
 
@@ -270,7 +293,7 @@ describe("runDecisionArgv file mode", () => {
     const s = serve();
     const viaFile = await run(filterSpec as AnySpec, ["--input", f, "--profile", "c"], s.fetch);
     expect(viaFile.code).toBe(0);
-    const viaStdin = await run(filterSpec as AnySpec, ["--profile", "c"], s.fetch, async () => Buffer.from(JSON.stringify({ question: "q", items: [{ text: "t" }] })));
+    const viaStdin = await run(filterSpec as AnySpec, ["--profile", "c"], s.fetch, stdinBytes(JSON.stringify({ question: "q", items: [{ text: "t" }] })));
     expect(viaStdin.code).toBe(0);
   });
 });
@@ -296,7 +319,7 @@ describe("file options reach collectInputs end to end", () => {
     expect(over.err[0]).toMatch(/more than 1 items \(--limit 1\)/);
     put("big.txt", "x".repeat(50));
     const s = serve();
-    const { code, out } = await run(filterSpec as AnySpec, ["q", work(), "--max-bytes", "5", "--profile", "c"], s.fetch);
+    const { code, out } = await run(filterSpec as AnySpec, ["q", work(), "--max-bytes", "5", "--profile", "c", "--json"], s.fetch);
     expect(code).toBe(0);
     expect(s.questions).toHaveLength(2);
     const env = JSON.parse(out[0]!) as { warnings: { message: string }[] };
@@ -310,7 +333,7 @@ describe("file options reach collectInputs end to end", () => {
     put("keep.txt", "keep\n");
     symlinkSync(target, join(work(), "link.txt"));
     const plain = serve();
-    const a = await run(filterSpec as AnySpec, ["q", work(), "--profile", "c"], plain.fetch);
+    const a = await run(filterSpec as AnySpec, ["q", work(), "--profile", "c", "--json"], plain.fetch);
     expect(plain.questions).toHaveLength(1);
     expect((JSON.parse(a.out[0]!) as { warnings: { message: string }[] }).warnings.some((w) => /link\.txt: symlink, never followed$/.test(w.message))).toBe(true);
     const followed = serve();
@@ -320,7 +343,7 @@ describe("file options reach collectInputs end to end", () => {
   });
 
   it("`-` together with `--items -` is refused: stdin can be read once", async () => {
-    const { code, err } = await run(filterSpec as AnySpec, ["q", "-", "--items", "-"], undefined, async () => Buffer.from("x\n"));
+    const { code, err } = await run(filterSpec as AnySpec, ["q", "-", "--items", "-"], undefined, unreadStdin());
     expect(code).toBe(1);
     expect(err[0]).toMatch(/both read stdin, which can be read once/);
   });
@@ -395,8 +418,8 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
     const long = put("long.txt", "x".repeat(5000));
     const short = put("short.txt", "short text");
     const s = serveRank();
-    const { code, out, err } = await run(rankSpec as AnySpec, ["q", long, short, "--head", "100", "--profile", "c"], s.fetch);
-    expect(err).toEqual([]);
+    const { code, out, err } = await run(rankSpec as AnySpec, ["q", long, short, "--head", "100", "--profile", "c", "--json"], s.fetch);
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.units.map((u) => (u as string).length).sort((a, b) => a - b)).toEqual([10, 100]);
     expect(s.units).toContain("short text");
@@ -416,23 +439,23 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
   it("--all lists every candidate: 12 candidates with the default top of 10 give 10 rows without --all and 12 with it", async () => {
     // JSON mode: 12 file-mode candidates would be 12 requests, over the profile request limit of 8; packed candidates stay in one.
     const input = put("twelve.json", JSON.stringify({ query: "q", candidates: Array.from({ length: 12 }, (_, n) => ({ id: `f${n}`, text: `text ${n}` })) }));
-    const cut = await run(rankSpec as AnySpec, ["--input", input, "--profile", "c"], serveRank().fetch);
-    expect(cut.err).toEqual([]);
+    const cut = await run(rankSpec as AnySpec, ["--input", input, "--profile", "c", "--json"], serveRank().fetch);
+    expect(cut.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(cut.out)).toMatchObject({ total: 12 });
     expect(rankDecision(cut.out).rows).toHaveLength(10);
-    const all = await run(rankSpec as AnySpec, ["--all", "--input", input, "--profile", "c"], serveRank().fetch);
-    expect(all.err).toEqual([]);
+    const all = await run(rankSpec as AnySpec, ["--all", "--input", input, "--profile", "c", "--json"], serveRank().fetch);
+    expect(all.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(all.out).rows).toHaveLength(12);
   });
 
   it("--all in files mode: 5 files with --top 3 give 3 rows without --all and 5 with it", async () => {
     const files = Array.from({ length: 5 }, (_, n) => put(`g${n}.txt`, `text ${n}`));
-    const cut = await run(rankSpec as AnySpec, ["q", ...files, "--top", "3", "--profile", "c"], serveRank().fetch);
-    expect(cut.err).toEqual([]);
+    const cut = await run(rankSpec as AnySpec, ["q", ...files, "--top", "3", "--profile", "c", "--json"], serveRank().fetch);
+    expect(cut.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(cut.out)).toMatchObject({ total: 5 });
     expect(rankDecision(cut.out).rows).toHaveLength(3);
-    const all = await run(rankSpec as AnySpec, ["q", ...files, "--top", "3", "--all", "--profile", "c"], serveRank().fetch);
-    expect(all.err).toEqual([]);
+    const all = await run(rankSpec as AnySpec, ["q", ...files, "--top", "3", "--all", "--profile", "c", "--json"], serveRank().fetch);
+    expect(all.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(all.out).rows).toHaveLength(5);
   });
   it("parser: in `--head 1500 file.txt` the 1500 is the flag value, not an input path, and the file after it is still an input", async () => {
@@ -444,28 +467,28 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
     expect(s.units).toHaveLength(1);
     expect(s.units[0]).toHaveLength(1500);
     // `--all` takes no value: the token after it stays a positional input.
-    const all = await run(rankSpec as AnySpec, ["q", "--all", f, "--profile", "c"], serveRank().fetch);
-    expect(all.err).toEqual([]);
+    const all = await run(rankSpec as AnySpec, ["q", "--all", f, "--profile", "c", "--json"], serveRank().fetch);
+    expect(all.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(all.out).rows.map((r) => r.id)).toEqual([f]);
   });
 
   it("--head 1500 --keep-at 0.5 (D27 form): head reaches the request (1500 bytes sent), keep-at reaches the result (0.95 drops the 0.9325 candidate, 0.5 keeps it)", async () => {
     const f = put("a.txt", "y".repeat(3000));
     const s = serveRank();
-    const kept = await run(rankSpec as AnySpec, ["q", f, "--head", "1500", "--keep-at", "0.5", "--profile", "c"], s.fetch);
-    expect(kept.err).toEqual([]);
+    const kept = await run(rankSpec as AnySpec, ["q", f, "--head", "1500", "--keep-at", "0.5", "--profile", "c", "--json"], s.fetch);
+    expect(kept.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(kept.code).toBe(0);
     expect(s.units[0]).toHaveLength(1500);
     expect(rankDecision(kept.out).rows).toHaveLength(1);
-    const dropped = await run(rankSpec as AnySpec, ["q", f, "--head", "1500", "--keep-at", "0.95", "--profile", "c"], serveRank().fetch);
+    const dropped = await run(rankSpec as AnySpec, ["q", f, "--head", "1500", "--keep-at", "0.95", "--profile", "c", "--json"], serveRank().fetch);
     expect(rankDecision(dropped.out)).toMatchObject({ total: 1, rows: [] });
   });
 
   it("both flags also work with JSON input as an overlay; a JSON input that already holds the field is refused", async () => {
     const json = put("in.json", JSON.stringify({ query: "q", candidates: [{ id: "a", text: "abcdefghij" }, { id: "b", text: "klmnopqrst" }] }));
     const s = serveRank();
-    const ok = await run(rankSpec as AnySpec, ["--head", "4", "--all", "--top", "1", "--input", json, "--profile", "c"], s.fetch);
-    expect(ok.err).toEqual([]);
+    const ok = await run(rankSpec as AnySpec, ["--head", "4", "--all", "--top", "1", "--input", json, "--profile", "c", "--json"], s.fetch);
+    expect(ok.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(s.units).toHaveLength(2);
     expect(s.units).toEqual(expect.arrayContaining([{ id: "a", text: "abcd" }, { id: "b", text: "klmn" }]));
     expect(rankDecision(ok.out).rows).toHaveLength(2);
@@ -501,11 +524,11 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
 
   it("rank --keep-at still parses as a threshold in files mode: 0.9 keeps the 0.9325 candidate, 0.95 drops it (owed from IN-01)", async () => {
     const f = put("a.txt", "alpha");
-    const kept = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.9", "--profile", "c"], serveRank().fetch);
-    expect(kept.err).toEqual([]);
+    const kept = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.9", "--profile", "c", "--json"], serveRank().fetch);
+    expect(kept.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(kept.out)).toMatchObject({ total: 1, rows: [{ id: f }] });
-    const dropped = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.95", "--profile", "c"], serveRank().fetch);
-    expect(dropped.err).toEqual([]);
+    const dropped = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.95", "--profile", "c", "--json"], serveRank().fetch);
+    expect(dropped.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(dropped.out)).toMatchObject({ total: 1, rows: [] });
   });
 
@@ -533,8 +556,8 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
     const a = put("a.txt", "alpha\n");
     const b = put("b.txt", "beta\n");
     const s = serveLabel();
-    const { code, out, err } = await run(labelSpec as AnySpec, ["--labels", "bug,other", a, b, "--profile", "c"], s.fetch);
-    expect(err).toEqual([]);
+    const { code, out, err } = await run(labelSpec as AnySpec, ["--labels", "bug,other", a, b, "--profile", "c", "--json"], s.fetch);
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.bodies).toHaveLength(2);
     expect(rowsOf(out).map((r) => [r.id, r.label])).toEqual([[a, "bug"], [b, "bug"]]);
@@ -634,8 +657,8 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
   it("a label with a space (\"bug report,feature\") is accepted (class ids are free text) and is sent as typed", async () => {
     const f = put("a.txt", "alpha\n");
     const s = serveLabel(() => ({ label: "bug report", top: 0.9 }));
-    const r = await run(labelSpec as AnySpec, ["--labels", "bug report,feature", f, "--profile", "c"], s.fetch);
-    expect(r.err).toEqual([]);
+    const r = await run(labelSpec as AnySpec, ["--labels", "bug report,feature", f, "--profile", "c", "--json"], s.fetch);
+    expect(r.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(classesSent(s).map((c) => c.id)).toEqual(["bug report", "feature"]);
     expect(rowsOf(r.out)).toMatchObject([{ id: f, label: "bug report" }]);
   });
@@ -645,8 +668,8 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
     const f = put("big.txt", `${filler}\nNEEDLE finding here\n${filler}\n`);
     // `other` (the last label, so the default) is the confident answer of every chunk without the needle; without the rule 0.95 would beat the bug chunk at 0.7.
     const s = serveLabel((state) => (state.includes("NEEDLE") ? { label: "bug", top: 0.85 } : { label: "other", top: 0.975 }));
-    const { code, out, err } = await run(labelSpec as AnySpec, ["--labels", "bug,other", f, "--chunk-chars", "1000", "--profile", "c"], s.fetch);
-    expect(err).toEqual([]);
+    const { code, out, err } = await run(labelSpec as AnySpec, ["--labels", "bug,other", f, "--chunk-chars", "1000", "--profile", "c", "--json"], s.fetch);
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.bodies.length).toBeGreaterThan(2);
     expect(rowsOf(out)).toMatchObject([{ id: f, label: "bug" }]);
@@ -665,6 +688,119 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
   });
 });
 
+// TRDD-WYY3SPDX increment A: `classify label --context FILE` (the same flag as `classify requirements`). `classify filter` has no such flag yet, on purpose.
+type CtxBody = { state: { shared: { context: string | null } }; questions: Record<string, { instructions: string }> };
+const ctxBodies = (s: ReturnType<typeof serveLabel>): CtxBody[] => s.bodies as unknown as CtxBody[];
+const CTX_SENTENCE = "Use `shared.context` as background.";
+const CTX_TEXT = "Earlier the user asked for a dark mode toggle and a faster login page.";
+
+describe("label --context FILE (TRDD-WYY3SPDX)", () => {
+  it("--context ctx.txt --labels a,b <files>: every request carries the file text as state.shared.context and every question names it as background", async () => {
+    const a = put("a.txt", "alpha\n");
+    const b = put("b.txt", "beta\n");
+    const c = put("ctx.txt", CTX_TEXT);
+    const s = serveLabel();
+    const r = await run(labelSpec as AnySpec, ["--labels", "bug,other", a, b, "--context", c, "--profile", "c"], s.fetch);
+    expect([r.code, r.err.filter((l) => !l.startsWith("— "))]).toEqual([0, []]);
+    expect(s.bodies).toHaveLength(2);
+    for (const body of ctxBodies(s)) {
+      expect(body.state.shared.context).toBe(CTX_TEXT);
+      const questions = Object.values(body.questions);
+      expect(questions.length).toBeGreaterThan(0);
+      for (const q of questions) expect(q.instructions).toContain(CTX_SENTENCE);
+    }
+  });
+
+  it("a JSON input that already holds `context` plus --context is refused with the overlay message, nothing is sent", async () => {
+    const c = put("ctx.txt", CTX_TEXT);
+    const input = put("in.json", JSON.stringify({ items: [{ id: "t1", text: "x" }], classes: [{ id: "a" }, { id: "b" }], context: "from the json" }));
+    const s = serveLabel();
+    const r = await run(labelSpec as AnySpec, ["--input", input, "--context", c, "--profile", "c"], s.fetch);
+    expect([r.code, r.err[0]]).toEqual([1, "llm-ext: --context sets context, which the JSON input already holds; give it in one place"]);
+    expect(s.bodies).toHaveLength(0);
+  });
+
+  it("--context given twice and --context with no value are refused, nothing is sent", async () => {
+    const f = put("a.txt", "alpha\n");
+    const c = put("ctx.txt", CTX_TEXT);
+    const s = serveLabel();
+    const twice = await run(labelSpec as AnySpec, ["--labels", "a,b", f, "--context", c, "--context", c, "--profile", "c"], s.fetch);
+    expect([twice.code, twice.err[0]]).toEqual([1, "llm-ext: --context is given twice"]);
+    const bare = await run(labelSpec as AnySpec, ["--labels", "a,b", f, "--context"], s.fetch);
+    expect([bare.code, bare.err[0]]).toEqual([1, "llm-ext: --context needs a value"]);
+    expect(s.bodies).toHaveLength(0);
+  });
+
+  it("--context follows the named-file rules: a missing file, a directory, an empty file and a binary file are refused, nothing is sent", async () => {
+    const f = put("a.txt", "alpha\n");
+    const empty = put("empty.txt", "");
+    const bin = put("b.bin", Buffer.from([0x61, 0x00, 0x62]));
+    for (const [target, re] of [[join(work(), "none.txt"), /no such file/], [work(), /is a directory/], [empty, /empty input/], [bin, /is binary/]] as const) {
+      const s = serveLabel();
+      const r = await run(labelSpec as AnySpec, ["--labels", "a,b", f, "--context", target, "--profile", "c"], s.fetch);
+      expect(r.code, target).toBe(1);
+      expect(r.err[0], target).toMatch(re);
+      expect(s.bodies, target).toHaveLength(0);
+    }
+  });
+
+  it("--context - reads the piped text next to a file input; together with a - input it is refused: stdin can be read once", async () => {
+    const f = put("a.txt", "alpha\n");
+    const ok = serveLabel();
+    const r = await run(labelSpec as AnySpec, ["--labels", "a,b", f, "--context", "-", "--profile", "c"], ok.fetch, stdinBytes(CTX_TEXT));
+    expect([r.code, r.err.filter((l) => !l.startsWith("— "))]).toEqual([0, []]);
+    expect(ctxBodies(ok)[0]!.state.shared.context).toBe(CTX_TEXT);
+    const both = serveLabel();
+    const refused = await run(labelSpec as AnySpec, ["--labels", "a,b", "-", "--context", "-", "--profile", "c"], both.fetch, stdinBytes(CTX_TEXT));
+    expect(refused.code).toBe(1);
+    expect(refused.err[0]).toMatch(/stdin can be read once/);
+    expect(both.bodies).toHaveLength(0);
+  });
+
+  it("--estimate counts the context in every planned request: the input tokens grow by at least the context tokens times the requests, and nothing is sent", async () => {
+    const a = put("a.txt", "alpha\n");
+    const b = put("b.txt", "beta\n");
+    const ctxText = Array.from({ length: 200 }, (_, k) => `message ${k} says hello.`).join(" ");
+    const c = put("ctx.txt", ctxText);
+    const estimate = async (extra: string[]) => {
+      const s = serveLabel();
+      const r = await run(labelSpec as AnySpec, ["--labels", "bug,other", a, b, "--profile", "c", "--estimate", "--json", ...extra], s.fetch);
+      expect([r.code, r.err]).toEqual([0, []]);
+      expect(s.bodies).toHaveLength(0);
+      return (JSON.parse(r.out[0]!) as { estimate: { requests: number; input_tokens: number } }).estimate;
+    };
+    const without = await estimate([]);
+    const withCtx = await estimate(["--context", c]);
+    expect(without.requests).toBe(2);
+    expect(withCtx.requests).toBe(without.requests);
+    expect(withCtx.input_tokens - without.input_tokens).toBeGreaterThanOrEqual(estimateTokens(ctxText) * without.requests);
+  });
+
+  it("a context too large for the model window is refused with the planner message, nothing is sent", async () => {
+    const f = put("a.txt", "alpha\n");
+    const c = put("big-ctx.txt", "word ".repeat(100_000));
+    const s = serveLabel();
+    const r = await run(labelSpec as AnySpec, ["--labels", "a,b", f, "--context", c, "--profile", "c"], s.fetch);
+    expect(r.code).toBe(1);
+    expect(r.err.join("\n")).toMatch(/does not fit one request even in chunks of 1000 chars with the shared state, against \d+ tokens/);
+    expect(s.bodies).toHaveLength(0);
+  });
+});
+
+describe("requirements --context FILE at argv level (TRDD-WYY3SPDX)", () => {
+  it("--context ctx.txt reaches every request as state.shared.context and every question names it as background", async () => {
+    const prompt = put("prompt.txt", "Add a dark mode toggle. Keep the login page fast.");
+    const c = put("ctx.txt", CTX_TEXT);
+    const s = serveLabel();
+    const r = await run(requirementsSpec as AnySpec, [prompt, "--context", c, "--profile", "c"], s.fetch);
+    expect([r.code, r.err.filter((l) => !l.startsWith("— "))]).toEqual([0, []]);
+    expect(s.bodies.length).toBeGreaterThan(0);
+    for (const body of ctxBodies(s)) {
+      expect(body.state.shared.context).toBe(CTX_TEXT);
+      for (const q of Object.values(body.questions)) expect(q.instructions).toContain(CTX_SENTENCE);
+    }
+  });
+});
 // IN-04 (TRDD-AQ82IO1T): check has no `cli`, so --preset works with --input JSON only. The reply is the real P-01 choice reply re-keyed to the request; `bodies` records what reached the fetch seam.
 function serveCheck(): { fetch: GlobalFetch; bodies: { state: { shared: { preset: string } }; questions: Record<string, { criteria: Record<string, unknown> }> }[] } {
   const bodies: ReturnType<typeof serveCheck>["bodies"] = [];

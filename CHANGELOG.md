@@ -1,6 +1,47 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+### Highlights
+
+Curated notes for 14.3.0; the generated entry is the section above.
+
+**Local inference fallback**
+
+- Classifier requests are answered by a local model when the remote model fails. One machine-wide local decision server serves them: llm-ext adopts the server that is already running and never starts a second one, and the server can be installed as a login agent. The result records that the local model answered, and a warning names the remote error that caused the fallback.
+- A governor caps the RAM and CPU that local requests may use, 80 % of each by default. Every local request takes a lease from it and waits, then resumes, under memory or CPU pressure instead of failing; a saturated governor makes later lease waits fail fast for 60 seconds.
+- The fallback address must be a bare loopback origin; a URL whose real host is remote is refused.
+- Session summaries fall back to a calibrated managed local model after the remote free models. A request that loses a race, or is aborted, cancels its job at the local broker.
+
+**Local profiles**
+
+- The `local_llama` and `locals-mlx` profiles size each local request from the model calibration record. The governor accounts for the llama-servers and Locals servers they start, and pauses a model swap when there is no cache room for it.
+
+**Classifier commands**
+
+- `classify label --context FILE` takes earlier messages as background, and a new classify requirements spec picks the explicit requirements of a prompt.
+- `ping --no_call` says the key was accepted, not that the credit balance was checked, and names the model call it skipped; `ping` asks the local decider when its remote call times out.
+- Help lists `--estimate` on the decision commands and only the dry-run flags each command accepts. Repeated array flags accumulate instead of keeping the last value, and a bare `--` can no longer turn `--profile` into an input.
+- Audit names its top check, review limiting skips rubrics that were not judged, and the spec match breaks a stated behavior constraint at the worst level.
+
+**Command timeout and stop**
+
+- When a command is stopped, for example by `--command_timeout`, the local decider tier ends too, and `ping` says it was stopped. The stop notice says finished results are kept, and names only the jobs and results that exist.
+
+**Benchmarks**
+
+- A run that was only partly answered is scored on the answered cases only, and a run with more than 25 % of its cases unanswered abstains instead of counting them as wrong. A run with no usable answer is not a quality verdict.
+- `--hq-scan-quality` runs the hq scan quality benchmark; it respects the budget and the daily cap, and an outage makes the result inconclusive.
+- A read-only unified benchmark verdict per model and command kind feeds one quality rule for the send gate.
+
+**Reports**
+
+- Intermediate output now defaults to `reports_dev`; final reports stay in `reports`.
+
+**Security**
+
+- zod is bumped from 4.4.3 to 4.6.7, which fixes an advisory in the shipped CLI, and the lockfile is bumped for the critical and high Dependabot alerts.
+
 ## [14.2.0] - 2026-10-31
 
 ### Added
@@ -306,7 +347,7 @@ Curated notes for 14.2.0; the generated entries are the sections above.
 
 ### Fixed
 
-- Fix: 14.1.2 - a profile rewrite with one passing model now writes single-model mode instead of an ensemble the settings check rejects (this broke every command), --estimate refuses runs the real command would refuse, a call refused before anything is sent is no longer retried and no longer trips the circuit breaker (when every cause is such a refusal, the "all failing" message drops "retry later"), and a 401 stops same-model retries
+- Fix: 14.1.2 - a profile rewrite with one passing model now writes single-model mode instead of an ensemble the settings check rejects (this broke every command), --estimate refuses runs the real command would refuse, a call refused before anything is sent is no longer retried and no longer trips the circuit breaker (when every cause is such a refusal, the "all failing" message drops "retry later" except where a profile update is started), and a 401 stops same-model retries
 
 ## [14.1.1] - 2026-10-22
 

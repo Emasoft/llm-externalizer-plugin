@@ -15,6 +15,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
+import { totalmem } from "node:os";
 import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync } from "node:fs";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import {
@@ -26,18 +27,25 @@ import {
   totalSlots,
   waitReady,
   SPAWN_MARKER,
+  MAIN_SLOTS,
 } from "../local-llama-server.js";
 import {
   LOCALS_MAIN_SLOTS,
   localsModelIds,
   localsOutgoingModel,
-  memoryFreePercent,
   parseLocalsModel,
   spawnLocalsServer,
   waitLocalsReady,
 } from "../local-locals-server.js";
 import { claimAndSpawn, releaseEntry, roleLogFile, serverLabel, SlotBusyError, stopOwnServer, sweepEngine, type RegistryEntry } from "./registry.js";
 import { queueKey, Scheduler, timingsFromEnv, type BrokerTimings, type Job } from "./scheduler.js";
+import * as gov from "../governor/client.js";
+import { neverFits, pollDelayMs, type Denial } from "../governor/controller.js";
+import { governorConfig } from "../governor/settings.js";
+import { estimateFromFiles, loadBounds, weightFilesOnDisk } from "../governor/estimate.js";
+import { afterBreach, BREACHES_TO_FAIL, LOAD_LEASE_MS, LOCALS_CACHE_MAX_GB, LOCALS_CACHE_MIN_GB, loadFigures, localsCacheGb, neverFitsMessage, readyBooking, reloadAfterUnloadMs, swapHeld, watchLoad, type Learned, type LoadPlan, type LoadWatch } from "../governor/load.js";
+import { readRam } from "../governor/ram.js";
+import type { GovernorLimits } from "../governor/state.js";
 import { getConfigDir } from "../config.js";
 import { readRecord, readRecordStatus, recordPath, type RecordStatus } from "../calibration/record.js";
 import { loadedIdentity, staleness } from "../calibration/fingerprint.js";
@@ -115,6 +123,15 @@ interface RunningServer {
   modelIds: string[];
   /** Locals: the fresh empty working directory it was started in, removed after it stops. */
   cwd?: string;
+  /** Round 4: RAM the governor's books add for it (Locals: its projection; llama: 0, the reading has it as wired). */
+  bookedBytes: number;
+  /** Round 4: RAM stopping it gives back for sure, the outgoing share of a swap (Locals: booked; llama: weights, 0 unknown). */
+  residentBytes: number;
+  /**
+   * Governor D10: the threads every inference lease on it carries, so the budget counts this server once, by T: a
+   * llama-server's -t/-tb (written in `argv`), Locals' measured constant (it has no thread option).
+   */
+  threads: number;
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -167,6 +184,12 @@ function postJson(port: number, apiKey: string, body: string, signal: AbortSigna
 
 export async function runBroker(o: BrokerOptions): Promise<void> {
   const t = o.timings;
+  /** D11: how long a server stopped for its RAM waits before it may load again. Read once: a malformed value ends the broker. */
+  const reloadMs = reloadAfterUnloadMs(process.env);
+  // Round 2 M5: a malformed or out-of-budget server_threads (settings.yaml or its env override), or any malformed
+  // governor setting, ends the broker at start, like reloadMs,
+  // instead of failing every model's jobs at its first spawn. swapTo reads it again per spawn, as limits may change.
+  gov.spawnThreads("llama");
   const sched = new Scheduler();
   const jobs = new Map<string, Job>();
   /** P6: jobs held for calibration, by id. Never in `sched`: no deadline, no rotation, no main server start. */
@@ -204,61 +227,209 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let busyTries = 0;
   /** The spawn of a server that is not `server` yet (claimAndSpawn to ready), with its engine: shutdown stops it too (review M5). */
   let loading: { engine: BrokerEngine; promise: Promise<RegistryEntry> } | null = null;
-  /**
-   * Locals memory floor (TRDD-ZGSGGHQG L3.4): the last `memory_pressure` free
-   * percentage, null = no fresh reading yet. One reading allows ONE further
-   * dispatch (pump clears it), so memory is checked before every new request.
-   */
-  let memFree: number | null = null;
-  let memAt = 0;
-  let memReading: Promise<void> | null = null;
-  let memWaitLoggedAt = 0;
-  /**
-   * Review F-7: bumped at every Locals dispatch. A reading started before a
-   * dispatch is discarded when it lands after it, so the next dispatch is
-   * gated only by memory read AFTER the previous one.
-   */
-  let memGen = 0;
-  const refreshMemory = (): void => {
-    if (memReading) return;
-    const gen = memGen;
-    let stale = false;
-    memReading = memoryFreePercent()
-      .then((v) => {
-        if (gen !== memGen) {
-          stale = true;
-          return;
-        }
-        memFree = v;
-        memAt = Date.now();
-        if (v === null && Date.now() - memWaitLoggedAt >= 30_000) {
-          memWaitLoggedAt = Date.now();
-          o.log("memory_pressure gave no reading: Locals runs one request at a time until it does");
-        }
-      })
-      .finally(() => {
-        memReading = null;
-        // A discarded reading is taken again at once; a real one re-pumps; an
-        // unreadable memory_pressure is retried by the 1 s tick, never in a loop.
-        if (stale) refreshMemory();
-        else if (memFree !== null) pump();
-      });
+  /** Every lease this broker holds, so shutdown can return them all. */
+  const govLeases = new Set<gov.Lease>();
+  /** The kinds this broker has a place for in the governor queue. tryAcquire keeps that place until a grant or a withdraw. */
+  const govWaiting = new Set<gov.LeaseKind>();
+  let govTimer: NodeJS.Timeout | null = null;
+  /** Since when, or since the last credit to the scheduler, inferences are denied with nothing running on the server. */
+  let deniedSince: number | null = null;
+  /** A release wakes nobody (D7): while waiting, this timer is what brings the next attempt. */
+  const govRetry = (rank: number): void => {
+    govTimer ??= setTimeout(() => {
+      govTimer = null;
+      pump();
+    }, pollDelayMs(rank));
   };
-  /** A fresh reading at or above the floor. Below it, the job waits (never an error); logged at most every 30 s. */
-  const memoryAllows = (s: RunningServer): boolean => {
-    // A reading older than 2 s is no reading: a leftover from a drained queue must not admit a new batch.
-    if (memFree === null || Date.now() - memAt > 2000) {
-      refreshMemory();
+  /** Give up every queue place but those in `keep`. Waiting with nothing on the server is denied time, which is not run time (D8). */
+  const govSettle = (keep: ReadonlySet<gov.LeaseKind>, now: number): void => {
+    for (const kind of [...govWaiting]) {
+      if (keep.has(kind)) continue;
+      govWaiting.delete(kind);
+      gov.withdraw(kind);
+    }
+    if (govWaiting.size === 0 && govTimer) {
+      clearTimeout(govTimer);
+      govTimer = null;
+    }
+    deniedSince = govWaiting.has("inference") && running.size === 0 ? (deniedSince ?? now) : null;
+  };
+  const govRelease = (lease: gov.Lease): void => {
+    if (govLeases.delete(lease)) gov.release(lease);
+  };
+  /** The last reason a load was denied, so the broker log names a new reason once, not every pump (D6: the waiter says what blocks it). */
+  let loadDenial: string | null = null;
+  /** One attempt, never waiting. Below the head it only reads the file: one lock pass per waiter would be the herd of D7. */
+  const govAttempt = (req: gov.AcquireRequest & { kind: gov.LeaseKind }, key: string): gov.Lease | null => {
+    let rank = 0;
+    // Review M1, m1: the enabled check comes first, before snapshot (it reads the directory): a disabled broker goes straight
+    // to attemptLease, which needs no directory (D2) and never waits behind a head (D13). Called inside govLease's try, so a
+    // malformed setting fails the jobs, never the broker.
+    if (governorConfig().enabled && govWaiting.has(req.kind)) {
+      const same = gov.snapshot().waiters.filter((w) => w.kind === req.kind);
+      rank = Math.max(same.findIndex((w) => w.holder.pid === process.pid), 0);
+      if (gov.waitBehindHead(same, rank, Date.now())) {
+        govRetry(rank);
+        return null;
+      }
+    }
+    const { lease, denial } = gov.attemptLease(req);
+    if (!lease) {
+      if (req.kind === "load" && denial !== null && denial !== "stale") {
+        const why = `${key.split("\u0000")[0]}: ${denial}`;
+        // Round 4: a load marked alone was judged on its lower bound, so the RAM text names that figure.
+        if (why !== loadDenial) o.log(`model '${key.split("\u0000")[0]}' waits for a load grant (${denialText(denial, req.alone === true ? (req.minBytes ?? 0) : (req.bytes ?? 0))}); the loaded server keeps serving its queue`);
+        loadDenial = why;
+      }
+      govWaiting.add(req.kind);
+      govRetry(rank);
+      return null;
+    }
+    if (req.kind === "load") loadDenial = null;
+    govWaiting.delete(req.kind);
+    govLeases.add(lease);
+    return lease;
+  };
+  /**
+   * A governor that cannot work fails the jobs of `key` with its own error,
+   * which names the path. Never ungoverned: running them anyway is the machine
+   * overload the limits exist to stop. Never a crash: the other models, and
+   * this broker once the directory is fixed, still work.
+   */
+  const govLease = (key: string, req: gov.AcquireRequest & { kind: gov.LeaseKind }): gov.Lease | null => {
+    try {
+      return govAttempt(req, key);
+    } catch (err) {
+      const msg = `the local inference governor failed: ${(err as Error).message}`;
+      o.log(`model '${key.split("\u0000")[0]}': ${msg}; its queued jobs fail`);
+      // Never left waiting: a stored failure is thrown before attempt touches the state, so the place would outlive this
+      // catch, and a live head that stops polling makes every process behind it wait. withdraw can throw on its own,
+      // in governorDir, and that must not stop the failed jobs from failing.
+      if (govWaiting.delete(req.kind)) {
+        try {
+          gov.withdraw(req.kind);
+        } catch (withdrawErr) {
+          o.log(`could not give up the governor queue place: ${(withdrawErr as Error).message}`);
+        }
+      }
+      failQueued(key, msg);
+      return null;
+    }
+  };
+  /**
+   * D8 takes the lease before `take`, so no job is known yet. The longest
+   * execution timeout keeps the expiry backstop behind every job the lease can
+   * serve; the shortest queue timeout is the one that may shorten the CPU floor.
+   */
+  const leaseLimits = (key: string): { timeoutMs: number; queueTimeoutMs: number | null } => {
+    let timeoutMs = 0;
+    let queueTimeoutMs: number | null = null;
+    for (const j of sched.allQueued(key)) {
+      timeoutMs = Math.max(timeoutMs, j.timeoutMs);
+      queueTimeoutMs = Math.min(queueTimeoutMs ?? Infinity, j.queueTimeoutMs);
+    }
+    return { timeoutMs, queueTimeoutMs };
+  };
+  /**
+   * D11, round 4 #1: what breaches of a model taught, by key, since its last good load: a lower bound (learnedLowerBound)
+   * and the count. Never an upper bound: the growth the watchdog saw is the machine's, not attributable to the load, so
+   * raising the projection on it would fail a model that fits as never-fits. A model with an entry loads only alone; at
+   * BREACHES_TO_FAIL in a row its jobs fail. Cleared by a load that reaches ready. Kept for the broker's life.
+   */
+  const learned = new Map<string, Learned>();
+  /** D11: when the governor last had a server of this key stopped for its RAM; no reload of it for RELOAD_AFTER_UNLOAD_MS. */
+  const unloadedAt = new Map<string, number>();
+  /** Round 5 M2(b): until when a swap to this key waits after it found no room for the Locals prompt cache. */
+  const cacheWaitUntil = new Map<string, number>();
+  /**
+   * What a main server for `key` needs to load (D11): `bytes` the upper bound
+   * (weights, KV for the slots and context the broker starts it with, Locals'
+   * bounded prompt cache, the headroom), `minBytes` the lower bound (weights
+   * and headroom, or what a breach taught), `weightBytes` the weights alone,
+   * from the record's load_estimate (round 4 #8: required; a record without
+   * one is read as missing and recalibrated). `bytes` 0 means the upper bound
+   * is unknown (no context known before the load): the load then runs alone,
+   * as it does when `alone` (a breach of this model) is set.
+   *
+   * Round 4 #12(a), verified: llama-server gets `-c ctx * slots` (buildServerArgv)
+   * and splits it across `-np` slots, so `ctx * MAIN_SLOTS` is the total KV the
+   * server allocates; with ctx 0 it gets one slot at the model's own context.
+   */
+  const loadPlan = (key: string): (LoadPlan & { model: string; engine: BrokerEngine }) | null => {
+    const first = sched.allQueued(key)[0];
+    if (!first) return null;
+    const rec = readRecord(o.dir, first.engine, first.model, o.log);
+    const est = rec?.load_estimate ?? null;
+    const slots = first.engine === "llama" ? (first.ctx > 0 ? MAIN_SLOTS : 1) : LOCALS_MAIN_SLOTS;
+    // ctx 0 starts the server at the model's own context: the trained one is its upper bound.
+    const tokens = (first.ctx > 0 ? first.ctx : (rec?.capabilities?.n_ctx_train ?? 0)) * slots;
+    const locals = first.engine === "locals";
+    // Round 5 M2(a): a Locals lower bound includes the smallest prompt cache, so its grant implies cache room.
+    const bounds = est === null ? { bytes: 0, minBytes: 0 } : loadBounds(est, tokens, locals ? LOCALS_CACHE_MAX_GB * 1024 ** 3 : 0, locals ? LOCALS_CACHE_MIN_GB * 1024 ** 3 : 0);
+    const taught = learned.get(key);
+    return { bytes: bounds.bytes, minBytes: Math.max(bounds.minBytes, taught?.minBytes ?? 0), weightBytes: est?.weight_bytes ?? 0, alone: taught !== undefined, est, tokens, model: first.model, engine: first.engine };
+  };
+  /**
+   * The limits of this broker, or null when a governor setting (settings.yaml or env, D13) is malformed: govLease then
+   * fails the jobs with that error.
+   * Round 5 n2: the error is logged here too (once per distinct message), never swallowed.
+   */
+  let limitsError: string | null = null;
+  const ownLimits = (): GovernorLimits | null => {
+    try {
+      const limits = governorConfig().limits;
+      limitsError = null;
+      return limits;
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg !== limitsError) o.log(`the local inference governor settings are invalid: ${msg}; loads are refused and their jobs fail`);
+      limitsError = msg;
+      return null;
+    }
+  };
+  /**
+   * D8: with requests still running on the current server, a swap first lets
+   * them drain, and the server is idle until the swap. Worth it only when the
+   * load could start: a load denied anyway (RAM, another load, a load waiter
+   * ahead) keeps the server serving its queue. No reading yet is no verdict,
+   * so it drains, as before the governor. Round 5 n2: a governor that cannot
+   * answer fails the jobs of `key` the way govLease does, and the current
+   * server keeps serving; never a silent drain.
+   */
+  const loadWouldWait = (key: string, bytes: number, minBytes: number, alone: boolean, outgoingBytes: number): boolean => {
+    try {
+      const denial = gov.loadVerdict({ timeoutMs: LOAD_LEASE_MS, bytes, minBytes, alone, outgoingBytes });
+      return denial !== null && denial !== "stale";
+    } catch (err) {
+      const msg = `the local inference governor failed: ${(err as Error).message}`;
+      o.log(`model '${key.split("\u0000")[0]}': ${msg}; its queued jobs fail`);
+      failQueued(key, msg);
+      return true;
+    }
+  };
+  const forgetServer = (pid: number): void => {
+    try {
+      gov.unregisterServer(pid);
+    } catch (e) {
+      o.log(`could not remove server pid ${pid} from the governor: ${(e as Error).message}`);
+    }
+  };
+  const unloadAsked = (pid: number): boolean => {
+    try {
+      return gov.unloadWanted(pid);
+    } catch (e) {
+      // An unusable dir is reported by the next lease attempt; a read here must not crash the tick.
+      o.log(`could not read the governor state: ${(e as Error).message}`);
       return false;
     }
-    if (memFree >= t.memoryFloorPct) return true;
-    const now = Date.now();
-    if (now - memWaitLoggedAt >= 30_000) {
-      memWaitLoggedAt = now;
-      o.log(`waiting for memory: ${memFree}% free < floor ${t.memoryFloorPct}% (${running.size} in flight on ${s.model}, ${sched.allQueued(s.key).length} queued)`);
+  };
+  /** /v1/health must answer whatever the directory looks like: that is how a broken governor gets seen. */
+  const governorStatus = (): gov.GovernorSnapshot | { error: string } => {
+    try {
+      return gov.snapshot();
+    } catch (err) {
+      return { error: (err as Error).message };
     }
-    memFree = null;
-    return false;
   };
   const token = randomBytes(24).toString("hex");
   mkdirSync(o.dir, { recursive: true });
@@ -284,17 +455,21 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     // Review M8: identity-checked stop (dead pid = release only). Review M4:
     // the stop is tracked, so pump and shutdown wait for it; an idle exit 1 s
     // after an idle stop used to exit mid-stop and leave the server running.
-    const p = stopOwnServer(o.dir, s.engine, s, o.log).then((how) => {
-      o.log(`stopped main ${serverLabel(s.engine)} pid ${s.pid} model '${s.model}' (${why}): ${how}`);
-      // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
-      if (s.cwd !== undefined) {
-        try {
-          rmdirSync(s.cwd);
-        } catch (e) {
-          o.log(`left the Locals working directory ${s.cwd}: ${(e as Error).message}`);
+    const p = stopOwnServer(o.dir, s.engine, s, o.log)
+      .then((how) => {
+        o.log(`stopped main ${serverLabel(s.engine)} pid ${s.pid} model '${s.model}' (${why}): ${how}`);
+        // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
+        if (s.cwd !== undefined) {
+          try {
+            rmdirSync(s.cwd);
+          } catch (e) {
+            o.log(`left the Locals working directory ${s.cwd}: ${(e as Error).message}`);
+          }
         }
-      }
-    });
+      })
+      // Round 4 #5: forgotten whatever the stop's outcome. In the .then only, a stop that threw left the entry booked and
+      // offered for unloading although this broker no longer tracks the server: a phantom in the governor's books.
+      .finally(() => forgetServer(s.pid));
     stopping = p;
     try {
       await p;
@@ -480,19 +655,63 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
   };
 
-  const swapTo = async (key: string): Promise<void> => {
+  const swapTo = async (key: string, load: gov.Lease, plan: LoadPlan): Promise<void> => {
     swapping = true;
     let spawned: RegistryEntry | null = null;
     let spawnedEngine: BrokerEngine = "llama";
     // Hoisted so a failed start can remove the Locals cwd too.
     let cwd: string | undefined;
     let repump = true;
+    /** D11: the watchdog from the grant to ready, and the growth it saw if it stopped the load at the RAM limit. */
+    let watch: LoadWatch | null = null;
+    let breach: number | null = null;
+    let stopForBreach: (() => void) | null = null;
+    /** Round 2 #3: the watchdog could not read RAM; the load is stopped and its jobs fail with this error (fail fast). */
+    let watchFailure: Error | null = null;
+    /** Round 2 #5: no room for a bounded Locals prompt cache; the load is given up and its jobs wait. */
+    let noCacheRoom = false;
+    /**
+     * Review M2: the limits this load was judged by, read once inside the try and hoisted, so the catch below names the
+     * ram_limit_pct without calling the resolver: settings.yaml is re-read when it changes, so a resolver call in the
+     * catch would throw on a half-saved edit, out of a fire-and-forget swapTo, and kill the broker (unhandledRejection).
+     */
+    let loadLimits: GovernorLimits | null = null;
+    const { minBytes } = plan;
     try {
-      if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
       const first = sched.allQueued(key)[0];
-      if (!first) return;
+      if (!first) {
+        if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
+        return;
+      }
       const engine = first.engine;
       spawnedEngine = engine;
+      // Governor D10: the T of this server, fixed at its start; a malformed server_threads throws here, before anything is
+      // stopped or spawned, and the catch below fails the jobs with it (fail fast).
+      const threads = gov.spawnThreads(engine);
+      const limits = governorConfig().limits;
+      loadLimits = limits;
+      // Round 4 #2, #3: the server's two RAM figures, and the rest a Locals prompt cache must leave room for (loadFigures).
+      const figures = loadFigures(engine, plan, limits);
+      let booked = figures.bookedBytes;
+      let resident = figures.residentBytes;
+      // Locals' prompt cache: at most 4 GB, and only the room the rest of the load leaves under the limit (D11). Round 4
+      // #3: judged BEFORE the outgoing server is stopped, so a load that cannot start never leaves the broker with nothing
+      // loaded. The room is the books after the swap: the reading, plus every booked Locals server, minus what the
+      // outgoing one gives back for sure.
+      let cacheGb: number | undefined;
+      if (engine === "locals") {
+        const committed = (await readRam()).usedBytes + gov.bookedBytesNow() - (server?.residentBytes ?? 0);
+        const gb = localsCacheGb(committed, figures.cacheRestBytes, limits);
+        if (gb === null) {
+          // Round 2 #5: --cache-gb 0 would unbound the cache (Locals reads 0 as "not set"), so too little room is a wait.
+          noCacheRoom = true;
+          // Round 5 M2(b): this key's swap waits one settle interval; the loaded server serves its queue meanwhile.
+          cacheWaitUntil.set(key, Date.now() + governorConfig().settleMs);
+          throw new Error(`under ${LOCALS_CACHE_MIN_GB} GiB of RAM is left for its prompt cache`);
+        }
+        cacheGb = gb;
+      }
+      if (server) await stopServer(`swap to '${key.split("\u0000")[0]}'`);
       // One local model at a time ACROSS engines (TRDD-ZGSGGHQG): this broker's
       // single `server` guarantees it for its own servers. The other engine's
       // registry is swept first (claimAndSpawn sweeps only its own engine): a
@@ -525,8 +744,19 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         const parsed = parseLocalsModel(first.model);
         if ("error" in parsed) throw new ManagedServerError(parsed.error);
       }
+      // D11: watched from here, before anything is spawned, so the baseline is the machine without this load.
+      watch = await watchLoad(limits, (observed, failure) => {
+        if (failure !== null) {
+          watchFailure = failure;
+          o.log(`model '${first.model}': the load was stopped: ${failure.message}`);
+        } else {
+          breach = observed;
+          o.log(`model '${first.model}': the load was stopped at the RAM limit (${limits.ramLimitPct}%) after ${Math.round(observed / 2 ** 20)} MiB of growth; it waits for more room`);
+        }
+        stopForBreach?.();
+      });
       const port = await freePort();
-      const target = { port, model: first.model, ctx: first.ctx };
+      const target = { port, model: first.model, ctx: first.ctx, threads };
       const logFile = roleLogFile(o.dir, "main", engine);
       let exited = false;
       const loadStartedAt = Date.now();
@@ -544,7 +774,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           let s: { pid: number; argv: string[]; child: ChildProcess };
           if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
           else {
-            const l = await spawnLocalsServer(target, logFile, logFile);
+            const l = await spawnLocalsServer(target, logFile, logFile, cacheGb);
             cwd = l.cwd;
             s = l;
           }
@@ -557,6 +787,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         },
       });
       loading = { engine, promise: loadingNow };
+      stopForBreach = () => void loadingNow.then((e) => stopOwnServer(o.dir, engine, e, o.log)).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+      if (breach !== null) stopForBreach();
       const entry = await loadingNow;
       spawned = entry;
       if (exiting) throw new ManagedServerError("broker exiting");
@@ -564,14 +796,35 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (busyLogged) o.log(`main slot free after ${busyTries} busy attempts`);
       busyLogged = false;
       busyTries = 0;
-      if (engine === "llama") {
-        await waitReady(target, entry.pid, () => exited, logFile, apiKey);
-        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: await totalSlots(port, apiKey), modelIds: [] };
-      } else {
-        await waitLocalsReady(target, entry.pid, () => exited, logFile);
-        // Locals exposes no slot count: C is the --slots value the broker passed.
-        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: LOCALS_MAIN_SLOTS, modelIds: await localsModelIds(port), cwd };
+      if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
+      else await waitLocalsReady(target, entry.pid, () => exited, logFile);
+      // D11: the load is over at ready, so the watch ends here. Round 2 #8: a breach seen before this point already
+      // stopped the server, even if it answered ready first; that is the breach path (a learned lower bound, jobs wait), not
+      // a dead server found later with nothing learned.
+      const growth = watch.stop();
+      if (breach !== null || watchFailure !== null) throw new Error("the load was stopped by the governor watchdog");
+      // Round 5 M1: a Locals server is booked at ready by what it can really hold, never by the lower bound (or 0) an
+      // alone or unknown-size grant was judged on: an idle MLX server is invisible to the reading. The figures are read
+      // again from the weight files when the plan had none; none at all is an error, and the catch path stops it.
+      if (engine === "locals") {
+        booked = readyBooking(booked, plan.est ?? estimateFromFiles("locals", weightFilesOnDisk("locals", first.model, null)), plan.tokens, cacheGb ?? 0, growth);
+        resident = booked;
       }
+      // Round 4 #10: recorded before the grant goes and before `server` names it, and never caught: a server the governor
+      // cannot book must not run unbooked. A failure here takes the catch path below, which stops it, forgets it and fails
+      // the jobs. Before the release, so no other load is admitted on books that miss this one.
+      gov.registerServer(entry.pid, { bookedBytes: booked, residentBytes: resident, engine, role: "main", threads });
+      // A good load ends what breaches of this model taught: its bounds held this time.
+      learned.delete(key);
+      if (engine === "llama") {
+        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: await totalSlots(port, apiKey), modelIds: [], bookedBytes: booked, residentBytes: resident, threads };
+      } else {
+        // Locals exposes no slot count: C is the --slots value the broker passed.
+        server = { key, engine, model: first.model, ctx: first.ctx, port, pid: entry.pid, pgid: entry.pgid, argv: entry.argv, apiKey, slots: LOCALS_MAIN_SLOTS, modelIds: await localsModelIds(port), cwd, bookedBytes: booked, residentBytes: resident, threads };
+      }
+      // The lease goes at ready: the identity check below hashes files, it loads nothing, and every other load on the
+      // machine waits for this grant.
+      govRelease(load);
       // P6 (spec section 3, review F3): the record must still describe what this
       // server loaded (weights blob, RAM, engine build). A stale or removed record
       // re-holds the model's queued jobs and queues it for calibration; the
@@ -635,6 +888,52 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const sizing = engine === "llama" ? `; ${slotSizing(entry.argv, logFile)}` : `; ids ${server.modelIds.join(", ")}`;
       o.log(`main ${serverLabel(engine)} ready: pid ${entry.pid} model '${first.model}' port ${port} slots ${server.slots}${sizing}`);
     } catch (err) {
+      if (noCacheRoom) {
+        // Round 2 #5: nothing was spawned and nothing stopped; the jobs stay queued and the 1 s tick tries again (no
+        // re-pump: that would spin).
+        o.log(`model '${key.split("\u0000")[0]}' waits: ${(err as Error).message}`);
+        repump = false;
+        if (sched.current === key) sched.current = null;
+        return;
+      }
+      // Round 5 m1: a server spawned on this path is stopped, then forgotten by the governor whatever the stop's outcome
+      // (it is not tracked any more, so its entry would be a phantom). The llm-ext registry entry is released by
+      // stopOwnServer itself, only after a stop that succeeded or a pid proven not to be ours; a failed stop keeps it, so
+      // the next sweep finds the server.
+      const stopSpawned = async (): Promise<void> => {
+        if (spawned === null) return;
+        const s = spawned;
+        try {
+          await stopOwnServer(o.dir, spawnedEngine, s, o.log).catch((e: Error) => o.log(`stop failed: ${e.message}`));
+        } finally {
+          forgetServer(s.pid);
+        }
+      };
+      if (breach !== null && watchFailure === null) {
+        // D11, round 4 #1: stopped by the watchdog at the RAM limit. What it teaches is a lower bound, and the model loads
+        // only alone from now on; its jobs stay queued. At BREACHES_TO_FAIL in a row they fail: retries are bounded, and
+        // the bound and the alone mark stay for the next batch (round 5 m5).
+        const next = afterBreach(learned.get(key), minBytes, breach);
+        const model = key.split("\u0000")[0];
+        await stopSpawned();
+        if (cwd !== undefined) {
+          try {
+            rmdirSync(cwd);
+          } catch (e) {
+            o.log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
+          }
+        }
+        if (sched.current === key) sched.current = null;
+        learned.set(key, next.learned);
+        if (next.fail) {
+          // Review M2: no resolver call on this catch path; loadLimits is set before any spawn, and a breach needs a spawn.
+          const limitText = loadLimits === null ? "the RAM limit" : `the RAM limit (ram_limit_pct ${loadLimits.ramLimitPct}%)`;
+          const msg = `model '${model}' (${spawnedEngine}): its load was stopped at ${limitText} ${BREACHES_TO_FAIL} times in a row, the last after about ${Math.round(breach / 2 ** 20)} MiB of growth; free RAM, or raise ram_limit_pct`;
+          o.log(`${msg}; its jobs fail`);
+          failModel(spawnedEngine, model, msg);
+        }
+        return;
+      }
       // A version handover: the OLD broker still owns the main slot while it
       // drains. Waiting is not an error (spec 6/11): keep the jobs queued and
       // retry on the next tick.
@@ -645,10 +944,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         repump = false;
         return;
       }
-      if (spawned !== null) {
-        await stopOwnServer(o.dir, spawnedEngine, spawned, o.log).catch((e: Error) => o.log(`stop failed: ${e.message}`));
-      }
-      // A Locals server that failed before ready leaves its empty cwd: rmdir, never a recursive delete.
+      await stopSpawned();
       if (cwd !== undefined) {
         try {
           rmdirSync(cwd);
@@ -656,12 +952,15 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           o.log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
         }
       }
-      const msg = (err as Error).message;
+      // Round 2 #3: a load the watchdog could not see fails its jobs with the reading error itself.
+      const msg = watchFailure !== null ? (watchFailure as Error).message : (err as Error).message;
       o.log(`model '${key.split("\u0000")[0]}' failed to start: ${msg}`);
       failQueued(key, msg);
       if (sched.current === key) sched.current = null;
     } finally {
       swapping = false;
+      watch?.stop();
+      govRelease(load);
       // Review M3: never re-pump straight after a busy slot. That retried at
       // once, and every retry ran a full `ps` sweep: a busy loop for the whole
       // handover drain. The 1 s tick retries instead.
@@ -670,7 +969,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
   };
 
-  const dispatch = (job: Job, s: RunningServer): void => {
+  const dispatch = (job: Job, s: RunningServer, lease: gov.Lease): void => {
     job.state = "running";
     job.dispatchedAt = Date.now();
     // One line per job: the broker log is where a user (and the end-to-end tests) see which command's work ran, and how long it queued.
@@ -713,11 +1012,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
           server = null;
           sched.current = null;
           void releaseEntry(o.dir, s.engine, s.pid).catch(() => undefined);
+          forgetServer(s.pid);
         }
         finish(job, "failed", `${serverLabel(s.engine)} request failed (model '${job.model}'): ${err.message}`);
       })
       .finally(() => {
         running.delete(job.id);
+        govRelease(lease);
         // The linger before an empty-queue rotation counts from the last reply (review M2).
         if (job.key === sched.current) sched.touch(Date.now());
         pump();
@@ -733,6 +1034,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (exiting) return;
     exiting = true;
     clearInterval(tick);
+    // A waiter in the queue would block every process behind it until this one is reaped as dead.
+    govSettle(new Set(), Date.now());
     o.log(`broker exiting: ${why}`);
     for (const ac of running.values()) ac.abort();
     for (const j of sched.allQueued()) finish(j, "failed", `broker exiting: ${why}`);
@@ -750,6 +1053,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const e = await l.promise.catch(() => null);
       if (e) await stopOwnServer(o.dir, l.engine, e, o.log).catch((err: Error) => o.log(`stop failed: ${err.message}`));
     }
+    // Last, once the servers are really stopped: a lease must not free a place while its inference can still be running.
+    for (const lease of [...govLeases]) govRelease(lease);
     removeBrokerStateIfOwn(o.dir, process.pid);
     http.close();
     http.closeAllConnections();
@@ -788,38 +1093,96 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       sched.current = null;
       o.log(`main ${serverLabel(dead.engine)} pid ${dead.pid} (model '${dead.model}') exited on its own; it is restarted when work arrives`);
       void releaseEntry(o.dir, dead.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
+      forgetServer(dead.pid);
     }
     // Review F-1: while a pre-ZGSGGHQG broker lives, this broker runs no main
     // server (that broker sees only the llama registry and could start a llama
     // main beside ours): the running requests finish, the server stops, and
     // nothing starts until that broker drained and exited (checkLegacy).
     if (legacy) {
+      govSettle(new Set(), now);
       if (server && running.size === 0 && !stopping) void stopServer(`an older broker (pid ${legacy.pid}) is still running`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
       return;
     }
+    // Before wantRotation, on every pump: credited only at the grant, the time rule would fire in the middle of a denial.
+    if (deniedSince !== null) {
+      sched.noteDenied(now - deniedSince);
+      deniedSince = now;
+    }
     if (server && server.key !== sched.current) sched.current = server.key;
     const next = sched.wantRotation(now, running.size, t);
-    if (next !== null && running.size === 0 && (server === null || next !== server.key)) {
-      void swapTo(next);
-      return;
-    }
-    if (next === null && server && sched.current === server.key) {
-      while (running.size < server.slots) {
-        // TRDD-ZGSGGHQG L3.4: on Locals, a job beyond the first in flight needs a
-        // fresh memory reading at or above the floor; one is always allowed, as
-        // Locals' own prompt cache counts as used memory until it admits a request.
-        if (server.engine === "locals" && running.size > 0 && !memoryAllows(server)) break;
-        const job = sched.take(server.key);
-        if (!job) break;
-        dispatch(job, server);
-        // Each further dispatch waits for a NEW reading: memory is checked before every new request.
-        if (server.engine === "locals") {
-          memFree = null;
-          memGen++;
-          refreshMemory();
+    /** The places this pump still wants in the governor queue; a place nobody polls would block every process behind it. */
+    const keep = new Set<gov.LeaseKind>();
+    /**
+     * Whether the current server is served this pass. Not while a swap is due and could load: then in-flight drains to
+     * zero for it. Yes while the load is denied (the unit 2 review: a pending swap that cannot load served nothing).
+     */
+    let serveCurrent = next === null;
+    if (next !== null && (server === null || next !== server.key)) {
+      const plan = loadPlan(next);
+      const bytes = plan?.bytes ?? 0;
+      const minBytes = plan?.minBytes ?? 0;
+      const alone = plan?.alone ?? false;
+      const limits = ownLimits();
+      const held = swapHeld(now, unloadedAt.get(next), reloadMs, cacheWaitUntil.get(next));
+      // Round 2 #1: a model error only when even the lower bound (weights + headroom, or what a breach taught) is over the
+      // limit. An upper bound over it is a load that waits, then runs alone (controller decide).
+      if (plan && limits && neverFits(minBytes, limits, totalmem())) {
+        // D6: a model that could never fit is a model error at once, so the client's fallback moves on; never a wait.
+        const msg = neverFitsMessage(plan.model, minBytes, limits);
+        o.log(`${msg}; its jobs fail`);
+        failModel(plan.engine, plan.model, msg);
+        learned.delete(next);
+        serveCurrent = true;
+      } else if (held !== null) {
+        // D11: a server stopped to give RAM back does not load again at once; this rate-limits unload and reload flapping.
+        // Round 5 M2(b): a swap that found no room for the Locals prompt cache waits one settle interval the same way.
+        serveCurrent = true;
+      } else if (running.size === 0) {
+        // D8: the grant comes before swapTo stops anything, so a swap that cannot load keeps the current server. Round 4
+        // #2: the outgoing share is what the current server gives back for sure (residentBytes), never its projection.
+        const lease = govLease(next, { ...leaseLimits(next), kind: "load", timeoutMs: LOAD_LEASE_MS, bytes, minBytes, alone, outgoingBytes: server?.residentBytes ?? 0 });
+        if (lease) {
+          govSettle(new Set(), now);
+          void swapTo(next, lease, { bytes, minBytes, weightBytes: plan?.weightBytes ?? 0, alone, est: plan?.est ?? null, tokens: plan?.tokens ?? 0 });
+          return;
         }
+        keep.add("load");
+        serveCurrent = true;
+      } else {
+        serveCurrent = loadWouldWait(next, bytes, minBytes, alone, server?.residentBytes ?? 0);
       }
     }
+    // The queue check is here and not inside the loop: an idle broker with a loaded server must touch the governor not at
+    // all (D7), while a loop that drains the queue may still get a lease for nothing, which the !job branch gives back.
+    if (serveCurrent && server && sched.current === server.key && sched.queuedCount(server.key) > 0) {
+      const limits = leaseLimits(server.key);
+      // Locals' old memory gate (one request always, more only above the floor) is gone: with --cache-gb bounded its
+      // prompt cache is part of the load projection, and every request takes a governor lease, RAM included (D11).
+      while (running.size < server.slots) {
+        // D8: lease first, so a denial loses no FIFO order. D10: every lease carries the server's T and pid, so the budget
+        // counts this server once, by T, however many of its slots run.
+        const lease = govLease(server.key, { ...limits, kind: "inference", threads: server.threads, serverPid: server.pid });
+        if (!lease) {
+          if (sched.queuedCount(server.key) > 0) keep.add("inference");
+          break;
+        }
+        // D8: a grant proves the machine can run again, and only here may a near deadline use the time the denial took.
+        if (deniedSince !== null && sched.endDenial(now, t)) {
+          govRelease(lease);
+          govSettle(new Set(), now);
+          pump();
+          return;
+        }
+        const job = sched.take(server.key);
+        if (!job) {
+          govRelease(lease);
+          break;
+        }
+        dispatch(job, server, lease);
+      }
+    }
+    govSettle(keep, now);
     const idle = sched.queuedCount() === 0 && running.size === 0;
     if (idle && draining) {
       void shutdown("drained after a version handover");
@@ -862,7 +1225,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     const m = /^\/v1\/jobs\/([A-Za-z0-9-]+)$/.exec(url.pathname);
     // queued/running: what this broker still holds (tests and --command_timeout checks read "no job left queued" here).
     if (req.method === "GET" && url.pathname === "/v1/health") {
-      return reply(res, 200, { pid: process.pid, version: o.version, draining, queued: sched.allQueued().length, running: running.size, held: held.size, models: modelCounts() });
+      return reply(res, 200, { pid: process.pid, version: o.version, draining, queued: sched.allQueued().length, running: running.size, held: held.size, models: modelCounts(), governor: governorStatus() });
     }
     if (req.method === "POST" && url.pathname === "/v1/shutdown") {
       draining = true;
@@ -1028,6 +1391,9 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       return;
     }
     dirMissingSince = null;
+    // Governor D13: settings.yaml is read again when its stamp changes (governor/settings.ts). This read on the 1 s tick
+    // makes an edit reach an idle broker within 2 s too, and a broken edit is logged here at once, not at the next job.
+    ownLimits();
     // P6 (spec section 2): every 5 s, held jobs whose model now has a complete record are released.
     if (held.size > 0 && Date.now() - heldCheckedAt >= HELD_CHECK_MS) {
       heldCheckedAt = Date.now();
@@ -1042,6 +1408,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     if (Date.now() - calSweptAt >= RUNNER_RECHECK_MS) {
       calSweptAt = Date.now();
       for (const e of ["llama", "locals"] as const) void sweepEngine(o.dir, e, "cal", o.log).catch((err: Error) => o.log(`cal sweep (${e}) failed: ${err.message}`));
+    }
+    // D11: the governor asked for this server's RAM back for a load waiting elsewhere. Only when nothing runs on it, which
+    // is how it was chosen; it may not load again for RELOAD_AFTER_UNLOAD_MS, which rate-limits unload and reload. A file
+    // read, not a lock pass, and only while a server is up.
+    if (server && running.size === 0 && !swapping && !stopping && !exiting && unloadAsked(server.pid)) {
+      unloadedAt.set(server.key, Date.now());
+      void stopServer("the governor asked for its RAM back").catch((e: Error) => o.log(`stop failed: ${e.message}`));
     }
     void checkLegacy().finally(pump);
   }, TICK_MS);
@@ -1082,6 +1455,24 @@ export async function runBrokerMain(version: string): Promise<never> {
   }
 }
 
+/** Why a load waits, for the broker log (D6: a waiter names what blocks it). */
+function denialText(denial: Denial, bytes: number): string {
+  switch (denial) {
+    case "ram":
+      return bytes > 0 ? `RAM: about ${Math.round(bytes / 2 ** 20)} MiB would not fit under ram_limit_pct now` : "RAM is over ram_limit_pct";
+    case "cpu":
+      return "CPU is over cpu_limit_pct";
+    case "alone":
+      return "the model may not fit beside anything else (its size is unknown, its upper bound is over the limit, or a load of it hit the RAM limit), so it loads only when nothing else runs or is loaded";
+    case "load":
+      return "another model is loading on this machine";
+    case "queued":
+      return "another load is ahead in the governor queue";
+    default:
+      return denial;
+  }
+}
+
 /**
  * Follow-up review M4: what the slot sizing actually gave, for the ready log
  * line. The computed -np and -c come from the spawned argv; llama.cpp's own
@@ -1105,5 +1496,8 @@ function slotSizing(argv: readonly string[], logFile: string): string {
   }
   const slots = /n_slots = \d+, n_ctx_slot = \d+(?:, kv_unified = '\w+')?/.exec(log)?.[0] ?? "llama.cpp slot line not in the log";
   const kv = /KV (?:buffer|cache)[^\n]*?size\s*=\s*[\d.]+ MiB/i.exec(log)?.[0] ?? "KV size not reported by llama-server at this log verbosity";
-  return `-np ${flag("-np")} -c ${flag("-c")}; ${slots}; ${kv}`;
+  // Governor D10: the T passed and llama.cpp's own thread count, so the ready line shows they agree (measured: one line,
+  // `llama threadpool init, n_threads = N`; no line reports the batch pool).
+  const threads = /n_threads = \d+/.exec(log)?.[0] ?? "llama.cpp thread line not in the log";
+  return `-np ${flag("-np")} -c ${flag("-c")} -t ${flag("-t")}; ${slots}; ${threads}; ${kv}`;
 }

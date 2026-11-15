@@ -33,13 +33,13 @@ cost before you send anything real; skip it on a free profile (everything is $0)
 
 ```bash
 # $0 dry-run first on a paid profile — prints the predicted cost, sends nothing.
-llm-ext scan-folder --estimate \
+llm-ext scan folder --estimate \
   --folder_path /path/to/src \
   --extensions .ts,.py \
   --instructions "Find security vulnerabilities. This is a Node.js REST API using Express."
 
 # Once the ceiling fits the budget, drop --estimate to run for real.
-llm-ext scan-folder \
+llm-ext scan folder \
   --folder_path /path/to/src \
   --extensions .ts,.py \
   --instructions "Find security vulnerabilities. This is a Node.js REST API using Express."
@@ -48,18 +48,18 @@ llm-ext scan-folder \
 ## Analyze multiple files in parallel
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --instructions "Compare these configs and list differences" \
   --input_files_paths /path/a.yaml,/path/b.yaml
 ```
 
 ## Apply same check to each file independently
 
-> **Note**: the `batch-check` command is **deprecated**. Use any content command with
+> **Note**: there is no separate batch command. Use any content command with
 > `--answer_mode 0 --max_retries 3` instead.
 
 ```bash
-llm-ext code-task \
+llm-ext llm code \
   --answer_mode 0 \
   --max_retries 3 \
   --instructions "Find all TODO comments and classify by urgency" \
@@ -69,7 +69,7 @@ llm-ext code-task \
 ## Compare two file versions (pair mode)
 
 ```bash
-llm-ext compare-files \
+llm-ext check diff \
   --input_files_paths /path/old.ts,/path/new.ts \
   --instructions "Focus on API breaking changes"
 ```
@@ -79,7 +79,7 @@ llm-ext compare-files \
 Compare multiple file pairs at once using the `--file_pairs` flag (JSON array of `[fileA, fileB]` pairs):
 
 ```bash
-llm-ext compare-files \
+llm-ext check diff \
   --file_pairs '[["/path/old/auth.ts","/path/new/auth.ts"],["/path/old/routes.ts","/path/new/routes.ts"],["/path/old/middleware.ts","/path/new/middleware.ts"]]' \
   --instructions "Summarize changes in each pair. This is a Node.js Express API."
 ```
@@ -87,7 +87,7 @@ llm-ext compare-files \
 Supports `---GROUP:id---` markers as single-element entries in `--file_pairs` for grouped reports:
 
 ```bash
-llm-ext compare-files \
+llm-ext check diff \
   --file_pairs '[["---GROUP:auth---"],["/path/old/auth.ts","/path/new/auth.ts"],["---/GROUP:auth---"],["---GROUP:api---"],["/path/old/routes.ts","/path/new/routes.ts"],["---/GROUP:api---"]]' \
   --instructions "Summarize changes per group"
 ```
@@ -97,7 +97,7 @@ llm-ext compare-files \
 Compare files between two git refs (commits, tags, branches):
 
 ```bash
-llm-ext compare-files \
+llm-ext check diff \
   --git_repo /path/to/repo \
   --from_ref v1.0.0 \
   --to_ref v2.0.0 \
@@ -109,7 +109,7 @@ llm-ext compare-files \
 ## Check for broken code references after refactoring
 
 ```bash
-llm-ext check-references \
+llm-ext check refs \
   --input_files_paths /path/to/file.ts \
   --instructions "This is a TypeScript MCP server. Check all symbol references are valid."
 ```
@@ -117,13 +117,13 @@ llm-ext check-references \
 ## Check for broken file imports
 
 ```bash
-llm-ext check-imports --input_files_paths /path/to/file.ts
+llm-ext check imports --input_files_paths /path/to/file.ts
 ```
 
 ## Reuse instructions across operations
 
 ```bash
-llm-ext code-task \
+llm-ext llm code \
   --answer_mode 0 \
   --max_retries 3 \
   --instructions_files_paths /path/to/review-rules.md \
@@ -133,19 +133,19 @@ llm-ext code-task \
 ## Simple task with ensemble off (save tokens)
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --instructions "What is the main export of this module?" \
   --input_files_paths /path/to/file.ts
 ```
 
-(`ensemble: false` has no CLI flag — `chat` always uses the active profile's configured
+(`ensemble: false` has no CLI flag — `llm ask` always uses the active profile's configured
 ensemble. The closest lever is `--free`, which routes the call to a single free model instead
 of the 3-model ensemble.)
 
 ## Quick factual answer with low max_tokens
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --instructions "List the function names exported from this module. One per line." \
   --input_files_paths /path/to/file.ts
 ```
@@ -156,7 +156,7 @@ sampling are controlled by the active profile's model configuration, not per-cal
 ## Code review with persona
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --instructions "Review this Python CLI script for error handling gaps." \
   --input_files_paths /path/to/cli.py \
   --system "Senior Python CLI developer"
@@ -165,7 +165,7 @@ llm-ext chat \
 ## Scan folder with gitignore + excluded dirs
 
 ```bash
-llm-ext scan-folder \
+llm-ext scan folder \
   --folder_path /path/to/project \
   --extensions .py \
   --use_gitignore true \
@@ -175,12 +175,12 @@ llm-ext scan-folder \
 
 ## Use folder_path on any tool
 
-All content commands (except `scan-folder`, which requires it, and `compare-files`, which has
+All content commands (except `scan folder`, which requires it, and `check diff`, which has
 its own modes) accept `--folder_path` to auto-discover files from a directory. Can be combined
 with `--input_files_paths`:
 
 ```bash
-llm-ext code-task \
+llm-ext llm code \
   --folder_path /path/to/src \
   --extensions .ts \
   --recursive true \
@@ -193,7 +193,7 @@ llm-ext code-task \
 Combining `--folder_path` with explicit files:
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --folder_path /path/to/src/utils \
   --extensions .ts \
   --input_files_paths /path/to/src/index.ts \
@@ -205,7 +205,7 @@ llm-ext chat \
 Use `--redact_regex` to redact matching strings before they reach the LLM:
 
 ```bash
-llm-ext chat \
+llm-ext llm ask \
   --instructions "Review this configuration for best practices" \
   --input_files_paths /path/to/config.ts \
   --redact_regex "https?://[a-zA-Z0-9._:/-]+"
@@ -216,7 +216,7 @@ Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches beco
 ## Check source against specification
 
 ```bash
-llm-ext check-against-specs \
+llm-ext check specs \
   --spec_file_path /path/to/api-spec.md \
   --input_files_paths /path/to/impl.ts \
   --instructions "Check compliance with the API contract"
@@ -225,7 +225,7 @@ llm-ext check-against-specs \
 ## Check entire folder against specification
 
 ```bash
-llm-ext check-against-specs \
+llm-ext check specs \
   --spec_file_path /path/to/rules.md \
   --folder_path /path/to/src \
   --extensions .ts \
@@ -236,7 +236,7 @@ llm-ext check-against-specs \
 ## Grouped file processing (isolated reports)
 
 ```bash
-llm-ext code-task \
+llm-ext llm code \
   --instructions "Find bugs and security issues. This is a Node.js API." \
   --input_files_paths '["---GROUP:auth---","/path/to/auth.ts","/path/to/auth.test.ts","---/GROUP:auth---","---GROUP:api---","/path/to/routes.ts","/path/to/middleware.ts","---/GROUP:api---"]'
 ```
@@ -250,10 +250,10 @@ Returns one report per group:
 ## Code-optimized analysis
 
 ```bash
-llm-ext code-task \
+llm-ext llm code \
   --instructions "Audit for security vulnerabilities" \
   --input_files_paths /path/to/file.ts
 ```
 
-(`ensemble: true` has no CLI flag — `code-task` always uses the active profile's configured
+(`ensemble: true` has no CLI flag — `llm code` always uses the active profile's configured
 ensemble unless `--free` is passed, which routes to a single free model instead.)

@@ -247,7 +247,7 @@ Semantically deduplicate a list of phrases (TRDD-SYEH38AV): phrases that mean th
 
 INPUT: one phrase per line, a JSON string array, or a comma-separated line — via input_file or input_content.
 
-For 10k+ item corpora use cluster_synonyms instead (checkpointed 3-phase pipeline); this is the light single-call path for bounded lists.
+For 10k+ item corpora use `llm-ext llm cluster` instead (checkpointed multi-phase pipeline); this is the light single-call path for bounded lists.
 
 OUTPUT: Saved to .md file (survivors + removed audit), returns only the file path.
 

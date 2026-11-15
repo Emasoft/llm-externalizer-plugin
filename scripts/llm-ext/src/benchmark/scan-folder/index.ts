@@ -41,7 +41,7 @@ import type { FetchImpl } from "../../security_scan/judge.js";
 import { DEFAULT_MODEL } from "../../security_scan/types.js";
 // The confusion-matrix aggregate is the shared one (see score.ts's header) — a
 // skipped model still needs a well-formed, empty score object.
-import { aggregateScores } from "../search-existing/score.js";
+import { aggregateScores, answeredOnlyScore } from "../search-existing/score.js";
 import type { BenchmarkWorkload } from "../workload-types.js";
 // Same helpers bench-runner.ts's processFileCheck seam uses to assemble the real
 // per-file prompt — imported here too so describeWorkload() reproduces the exact
@@ -73,11 +73,13 @@ import {
 } from "./score.js";
 import {
   SCAN_FOLDER_CRITERIA,
+  judgeScanFolder,
   selectScanFolderModel,
   type ScanFolderCandidate,
   type ScanFolderSelectionResult,
 } from "./select.js";
 import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+import { evidenceQualityPass, isUnansweredFilesNonEvidence, recordQualityPass } from "../quality-evidence.js";
 
 /**
  * scan_folder has no per-tool default model of its own — it runs on the active
@@ -92,7 +94,7 @@ export interface ScanFolderBenchmarkOptions {
   apiKey?: string;
   /** Explicit model ids to assess. When absent, auto-discover the candidate pool. */
   models?: string[];
-  /** Report dir. Default `<main-repo-root>/reports/scan-folder-benchmark/`. */
+  /** Report dir. Default `<main-repo-root>/reports_dev/llm-externalizer/scan-folder-benchmark/`. */
   outputDir?: string;
   mainRoot?: string;
   /** Ignore the per-model-per-day cache and re-run every model. */
@@ -446,7 +448,7 @@ export async function runScanFolderBenchmark(
   // field that gives a ':free' model a verdict in the evidence fold — is never
   // backfilled, despite the note at the write site promising it would be.
   // Judging those rows from the score they already carry costs no model call.
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isUnansweredFilesNonEvidence, "scan-folder-results.json");
   if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: ScanFolderAssessment[] = [];
   let totalCost = 0;
@@ -515,7 +517,11 @@ export async function runScanFolderBenchmark(
 
     // Persist the golden-dataset verdict on the ledger row (backfills legacy
     // rows on cache hits too) — see code-task's CacheEntry.qualityPass note.
-    cache[key].qualityPass = passesThresholds(score, thresholds).pass;
+    // Cases the model never answered (API error, empty reply) are unscored: the verdict
+    // is computed over the answered cases only, and a run with over a quarter of them
+    // unanswered stores NO verdict (the row reads untested; a same-day cache-hit row
+    // loses its earlier false) — see quality-evidence.ts (TRDD-90BXJ2KO).
+    recordQualityPass(cache[key], evidenceQualityPass(score, isUnansweredFilesNonEvidence, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass), `scan-folder-results.json row ${key}`);
 
     totalCost += costUsd;
     assessments.push({
@@ -529,7 +535,7 @@ export async function runScanFolderBenchmark(
       failureReasons,
       costUsd,
     });
-    const thr = passesThresholds(score, thresholds);
+    const thr = judgeScanFolder(score, thresholds);
     progress(
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} ` +
         `microF1=${score.microF1.toFixed(3)} microP=${score.microPrecision.toFixed(3)} ` +
@@ -573,7 +579,7 @@ export async function runScanFolderBenchmark(
     reason: selection.reason,
     costUsd: totalCost,
     assessments: assessments.map((a) => {
-      const thr = passesThresholds(a.score, thresholds);
+      const thr = judgeScanFolder(a.score, thresholds);
       return {
         modelId: a.modelId,
         qualified: a.qualified,
@@ -693,7 +699,7 @@ function buildReportMarkdown(args: {
   lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|");
   const sorted = [...args.assessments].sort((a, b) => b.score.microF1 - a.score.microF1);
   for (const a of sorted) {
-    const thr = passesThresholds(a.score, args.thresholds);
+    const thr = judgeScanFolder(a.score, args.thresholds);
     lines.push(
       `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ` +
         `${a.score.microF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ` +
@@ -753,7 +759,7 @@ export function backfillOwnLedger(): { tool: string; upgraded: number } {
   const thresholds = DEFAULT_SCAN_FOLDER_THRESHOLDS;
 
   const cache = loadCache();
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isUnansweredFilesNonEvidence, "scan-folder-results.json");
   if (upgraded > 0) saveCache(cache);
   return { tool: "scan_folder", upgraded };
 }

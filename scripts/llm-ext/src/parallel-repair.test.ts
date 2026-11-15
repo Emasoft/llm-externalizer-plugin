@@ -4,7 +4,7 @@
 // regenerateInvalidMarkedSection against the same invalid marked free section,
 // released together by a start-gate file.
 
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, afterEach, beforeEach } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -69,6 +69,18 @@ function runChild(script: string, args: string[], env: NodeJS.ProcessEnv): Promi
 }
 
 describe("parallel inline repair of one invalid marked section (TRDD-5Q79QZM7)", () => {
+  // regenerateInvalidMarkedSection treats a section whose $OPENROUTER_API_KEY is unset as a credential gap and
+  // answers "not-applicable" (dynamic-maintainer.ts credentialOnly case), so the in-process test needs a key
+  // in the environment; a CI runner has none. A fake one is enough: nothing is sent anywhere.
+  let prevKey: string | undefined;
+  beforeEach(() => {
+    prevKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "test-openrouter-key-not-a-real-one";
+  });
+  afterEach(() => {
+    if (prevKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevKey;
+  });
   it("two real processes racing: exactly one regenerates and backs up, the other reports placeholder-present, original bytes survive", async () => {
     const work = mkdtempSync(join("/tmp", "llm-ext-parallel-repair-"));
     created.push(work);

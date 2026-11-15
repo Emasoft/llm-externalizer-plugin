@@ -72,6 +72,10 @@ const depsOf = (fetch: GlobalFetch, over: Record<string, unknown> = {}): RunDeps
   catalogOptions: { path: join(tmp, "catalog.json") },
   sigint: new EventEmitter(),
   stderr: (l) => stderr.push(l),
+  // WHY the local decider is OFF here: these tests pin the REMOTE System One fallback, and a local answer would
+  // mask the path under test. WHY off explicitly and not merely left out: an absent section means ENABLED by
+  // default, and a test run would then reach — or start — the real 15 GB decider on the machine running the suite.
+  localFallback: { enabled: false },
 });
 const req = (): RunRequest => ({ input: { question: "Does it fail?", items: [{ id: "f.log:1", text: "line number 0" }] } });
 const gone = (): Response => syntheticResponse(404, JSON.stringify({ error: { code: 404, message: "model typesafe/jev-1.13 does not exist" } }));

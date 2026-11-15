@@ -11,13 +11,15 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext models replacements`
 - `llm-ext models calibrate`
 - `llm-ext models calibration-status`
-- `llm-ext models server-status` lists the registered managed local servers; `llm-ext models server-stop [--engine llama|locals] [--role main|cal|all]` stops them (only registered ones; the broker starts a new main server only when work arrives)
+- `llm-ext models server-status` lists the registered managed local servers (with their threads) and the local inference governor figures; `llm-ext models server-stop [--engine llama|locals] [--role main|cal|all]` stops them (only registered ones; the broker starts a new main server only when work arrives)
 - `llm-ext settings show`
 - `llm-ext settings profile`
 - `llm-ext settings profiles`
 - `llm-ext settings reset`
 - `llm-ext settings status`
 - `llm-ext settings scan-local`
+- Local inference governor (`local_governor` settings, env overrides, what is not promised)
+- Local decider fallback (`local_fallback` settings: the six keys, defaults, what it never does)
 
 ## `models` group
 
@@ -101,7 +103,7 @@ READ-ONLY advisory auto-replacement planner (TRDD-828238b5 A7) — for every LLM
 | `--allow_paid_models_tests` | boolean | Opt-in to benchmarking PAID (non-free) models when a degraded incumbent triggers a... |
 | `--force` | boolean | Run every benchmarked tool's benchmark even when its incumbent is NOT degraded — an explicit... |
 | `--models` | array | Explicit candidate model id(s) forwarded to each benchmark that runs. When omitted, each... |
-| `--output_dir` | string | Report dir; defaults to <main-root>/reports/llm-externalizer/auto-replace/. |
+| `--output_dir` | string | Report dir; defaults to <main-root>/reports_dev/llm-externalizer/auto-replace/. |
 | `--profile` | string | Selects the settings profile for this invocation only (a key under `profiles:` in ~/.llm-externalizer/settings.yaml). When omitted, the `active:` key in settings.yaml decides, and 'free' is used when that is missing too. Never modifies settings.yaml. An unknown name fails fast and lists the available profiles. |
 
 Example:
@@ -251,3 +253,49 @@ Both use `server: managed`: llm-ext starts and stops the model server itself. Yo
 - **Request broker.** A local broker serves all managed profiles. It runs one local model server at a time, whatever the engine (the broker never runs a llama-server and a Locals server together). The calibration runner is a separate process: it may run its own short-lived calibration server beside that one, for the model being calibrated, and pauses while the broker has work for another model. It groups the queued requests by model and rotates to the next model when the current one has had its minimum slice and another model's request is nearing `--queue_timeout`. If a model fails, the command falls back to the next model of the same profile.
 - **Calibration.** A model of a managed profile is calibrated once, automatically: on its first use, or when a model id changes in a profile that has been used (a profile nobody used is never calibrated on its own). Requests for it are held until its record is complete, which can take hours. Held requests are bounded only by `--command_timeout`. Check progress with `llm-ext models calibration-status`. Start or redo it by hand with `llm-ext models calibrate --model <id> [--force]`; `--force` is required when a record already exists.
 - Calibration pauses while the broker has work for another model and waits a bounded time for free memory; if memory stays short, the model gets a `memory-limited` record.
+
+## Local inference governor
+
+Every llm-ext process that runs a local model (the broker, a calibration run, a direct send to a model server on a loopback address: LM Studio, Ollama, llama.cpp, vLLM) asks one machine-wide governor first. Work starts only while RAM and CPU are under their limits, and never more than `max_inferences` inferences at once across all processes. Waiting is never an error: the waiter prints its reason once a minute, and only `--command_timeout` bounds the wait. A LAN or remote server is never governed.
+
+`settings.yaml` (each key has an env override, which wins; out of range or an unknown key fails at once):
+
+```yaml
+local_governor:
+  enabled: true        # LLM_EXT_GOVERNOR_ENABLED (true or false)
+  ram_limit_pct: 80    # LLM_EXT_GOVERNOR_RAM_LIMIT_PCT, 50-99
+  cpu_limit_pct: 80    # LLM_EXT_GOVERNOR_CPU_LIMIT_PCT, 10-100 (100 = no CPU limit)
+  max_inferences: 8    # LLM_EXT_GOVERNOR_MAX_INFERENCES, 1-256
+  server_threads: 0    # LLM_EXT_GOVERNOR_SERVER_THREADS, 0 = half the thread budget
+```
+
+- RAM used is anonymous + wired + compressed memory (file cache is not counted). `ram_limit_pct` also sets the free memory calibration keeps (`100 - ram_limit_pct`); setting `LLM_EXT_BROKER_MEMORY_FLOOR` is an error that names `ram_limit_pct`.
+- The thread budget is `cores x cpu_limit_pct / 100`; each managed `llama-server` gets `-t T -tb T`.
+- `llm-ext models server-status` prints the governor figures (on or off, window, running, waiters each with its own limits, RAM and CPU against the limits with the reading age, threads in use of the budget, the last denial) and the threads of each server. A machine idling near the RAM limit blocks loads: raise `ram_limit_pct` or free memory.
+- Not promised: other programs and servers you started yourself are never stopped or slowed (their threads, models and GPU use are outside the limits); a running inference runs to its end; `enabled: false` processes, a pre-governor llm-ext still running, and servers llm-ext never sends to are invisible; just-in-time model loads by LM Studio or Ollama get no load grant; Apple Silicon GPU memory is covered only through the RAM reading and discrete-GPU VRAM not at all; the Linux and Windows readings are unverified and a cgroup memory limit is not read; with full Metal offload the thread budget limits server concurrency more than CPU use; state is per user (`/tmp/llm-ext-governor-<uid>`).
+- Also not promised: a first model download holds the one load grant until it ends (up to an hour); a model that must load alone waits until no inference runs; if two config dirs set different `ram_limit_pct` values, the 30 second unload rule (a model server is asked to unload after RAM stays over the limit for 30 seconds) may never fire for the stricter one; the model servers `models calibrate` starts are counted but never asked to unload; memory growth after a model server has finished loading is not watched, and a Locals server started with context size 0 gets no `--max-context`; a request sent straight to a server you started yourself counts as a running inference, but that server's memory is not counted and it is never asked to unload; a broker started by an older llm-ext version keeps running through an upgrade, and its model servers use llama.cpp's default thread count, which is not counted; if the shell running `models calibrate` sets another `ram_limit_pct` than the broker, a too-big model may be recorded differently by the two.
+- On filesystems with coarse modification times (HFS+, FAT, some network filesystems), a same-size edit of `settings.yaml` made within about 2 seconds of the previous one may not reach a running broker until the next edit.
+- Not promised: other programs and servers you started yourself are never stopped or slowed (their threads, models and GPU use are outside the limits); a running inference runs to its end; `enabled: false` processes, a pre-governor llm-ext still running, and servers llm-ext never sends to are invisible; just-in-time model loads by LM Studio or Ollama get no load grant; Apple Silicon GPU memory is covered only through the RAM reading and discrete-GPU VRAM not at all; the Linux and Windows readings are unverified and a cgroup memory limit is not read; with full Metal offload the thread budget limits server concurrency more than CPU use; state is per user (`/tmp/llm-ext-governor-<uid>`).
+
+## Local decider fallback (`local_fallback`)
+
+When the remote decision call fails, `llm-ext llm ping` and the classify decider can answer from the local mlx-decision server instead. llm-ext never starts mlx-decision: it adopts the one running server (the machine-wide singleton). A busy machine queues local decider requests instead of failing them: the governor wait line is printed every 60 s, and only `--command_timeout` bounds the wait. `enabled: false` turns the fallback off.
+
+`settings.yaml` (the section is optional; absent keys keep their defaults; an unknown key, a removed key or a value out of range fails at once):
+
+```yaml
+local_fallback:
+  enabled: true                    # false turns the fallback off
+  url: http://127.0.0.1:8123       # loopback only, bare origin: no path, query or fragment
+  startTimeoutMs: 300000           # 1000-900000, wait for the adopted server to finish loading its model
+  attemptTimeoutMs: 200000         # 1000-600000, timeout of one attempt
+  requestTimeoutMs: 400000         # 1000-600000, overall deadline; must be >= attemptTimeoutMs
+  maxAttempts: 50                  # 1-100, POST attempts
+```
+
+- `enabled`: `true` by default; `false` makes the fallback silent and unused.
+- `url`: the first place looked at for the server; `http://127.0.0.1:<port>` or `http://localhost:<port>` only, with a real port, and no path, query or fragment (llm-ext appends `/v1/systemone` itself). Default `http://127.0.0.1:8123`, the port of the login agent. On macOS the running mlx-decision servers are also searched when this address does not answer.
+- `startTimeoutMs`: how long to wait for the adopted server to load its model. Default 300000.
+- `attemptTimeoutMs`: timeout of one decision attempt. Default 200000.
+- `requestTimeoutMs`: overall deadline of the whole escalation; must be at least `attemptTimeoutMs`. Default 400000.
+- `maxAttempts`: how many POST attempts at most. Default 50; lookups do not count.

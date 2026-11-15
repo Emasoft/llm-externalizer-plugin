@@ -24,6 +24,7 @@ function deps(overrides: Partial<EstimateDeps> = {}): EstimateDeps {
     ensembleSlots: () => [{ id: "vendor/model-paid", maxOutput: 8000 }],
     pricingFor: () => ({ inputUsdPerM: 1, outputUsdPerM: 2 }),
     defaultMaxTokens: () => 4000,
+    slotRefusal: () => null,
     ...overrides,
   };
 }

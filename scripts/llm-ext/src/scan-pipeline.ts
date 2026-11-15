@@ -6,7 +6,8 @@
  *
  * These declarations are STATELESS: they do not read getCurrentBackend() or
  * openRouterModelCache. The one stateful exception — resolveDefaultMaxTokens —
- * intentionally stays in index.ts.
+ * intentionally stays in index.ts. The P7 calibrated-budget registry below is
+ * per command (keyed on the usage context), never global state.
  */
 
 import {
@@ -20,6 +21,7 @@ import {
 import { extname, join, basename, dirname, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
+import { ctxStore } from "./usage-history.js";
 
 // ── Shared system-prompt fragments ───────────────────────────────────
 // Pure strings appended to every system prompt that receives files. They live
@@ -222,7 +224,11 @@ export function sanitizeInputPath(filePath: string): string {
     !isUnder(tmpReal, resolvedReal)
   ) {
     throw new Error(
-      `Path traversal blocked: ${filePath} resolves outside allowed directories`,
+      // WHY: the bare message named no way out; users hit it with /etc or a
+      // sibling checkout and could not tell which roots are allowed (issue 16).
+      `Path traversal blocked: ${filePath} resolves outside allowed directories. ` +
+        `Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). ` +
+        `Run from a parent directory of the files, or copy them under one of these roots.`,
     );
   }
   // Reject symlinks (follow=false check) — keep this even after the realpath
@@ -245,6 +251,27 @@ export function sanitizeInputPath(filePath: string): string {
 // ~131K token context, minus ~30K output, minus ~5K prompt ≈ 96K tokens × 4 bytes ≈ 384 KB).
 // Configurable via max_payload_kb parameter on each tool.
 export const DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024; // 400 KB
+
+/**
+ * P7 (TRDD-1OOAH3LD): the calibrated input budget index.ts set for the running command, keyed on its usage context
+ * (one object per dispatchCallTool), so the exemption below can never reach another command or a value the user typed:
+ * index.ts registers only a budget it computed (the injected one, or an explicit max_payload_kb it capped at the window
+ * bound), never an explicit value it left as asked. A registered budget also turns on the per-file skip lines and the
+ * fail-fast in readAndGroupFiles, and the calibrated caps of check_references and compare_files in index.ts.
+ */
+const calibratedBudgets = new WeakMap<object, number>();
+
+/** Register `bytes` as the calibrated budget of the running command (no-op outside a command). */
+export function registerCalibratedBudget(bytes: number): void {
+  const ctx = ctxStore.getStore();
+  if (ctx !== undefined) calibratedBudgets.set(ctx, bytes);
+}
+
+/** True when `bytes` is the calibrated budget index.ts injected for the running command. */
+export function isCalibratedBudget(bytes: number): boolean {
+  const ctx = ctxStore.getStore();
+  return ctx !== undefined && calibratedBudgets.get(ctx) === bytes;
+}
 
 export function readFileAsCodeBlock(
   filePath: string,
@@ -648,11 +675,12 @@ export function readAndGroupFiles(
   budgetBytes?: number,
   regexRedact?: RegexRedactOpts | null,
 ): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
-  // M1: Enforce minimum budget (10 KB) to avoid silent skip-all
-  const totalBudget = Math.max(
-    10 * 1024,
-    budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES,
-  );
+  // M1: Enforce minimum budget (10 KB) to avoid silent skip-all. P7: a calibrated local budget is exempt (it is the
+  // most a local model proved it takes; raising it to 10 KB would send a request past the calibrated window). The
+  // clamp stays for a user max_payload_kb and the default.
+  const requested = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const calibrated = isCalibratedBudget(requested);
+  const totalBudget = calibrated ? requested : Math.max(10 * 1024, requested);
   // H1: promptBytes is now actual byte length (computed by caller via
   // Buffer.byteLength), not a token estimate. This prevents non-ASCII
   // (CJK, emoji) from causing budget underestimation.
@@ -682,6 +710,22 @@ export function readAndGroupFiles(
     }
   }
 
+  // Round 3 (M6): under a calibrated local budget a skip is the budget's doing, not the user's: say so per file, with
+  // its size, and fail fast when nothing is left to send (a request with no file would answer about nothing).
+  if (calibrated) {
+    for (const fp of skipped) {
+      let size = "unreadable";
+      try {
+        size = `${statSync(fp).size} bytes`;
+      } catch {
+        // stays "unreadable"
+      }
+      process.stderr.write(`[llm-externalizer] skipped ${fp}: ${size}, over the ${availableForFiles} bytes the calibrated input budget leaves for files (${totalBudget} bytes with the prompt)\n`);
+    }
+    if (fileData.length === 0 && filePaths.length > 0) {
+      throw new Error(`no file fits the calibrated input budget (${availableForFiles} bytes for files after a ${promptBytes}-byte prompt); nothing to send`);
+    }
+  }
   if (fileData.length === 0) {
     return { groups: [], autoBatched: false, skipped };
   }

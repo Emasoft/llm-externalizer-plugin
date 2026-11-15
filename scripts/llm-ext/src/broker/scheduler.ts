@@ -27,13 +27,6 @@ export interface BrokerTimings {
   lingerMs: number;
   /** Load-time estimate for a model never loaded yet (60 s); after a load the measured time is used. */
   defaultLoadMs: number;
-  /**
-   * Locals only (TRDD-ZGSGGHQG L3.4): a job beyond the first in flight is
-   * dispatched only while macOS `memory_pressure` reports at least this free
-   * percentage; otherwise it waits (never an error). Provisional 10, to be
-   * calibrated (P6). A tunable like the others, though not a time.
-   */
-  memoryFloorPct: number;
 }
 
 export const DEFAULT_TIMINGS: BrokerTimings = {
@@ -46,7 +39,6 @@ export const DEFAULT_TIMINGS: BrokerTimings = {
   idleExitMs: 2 * 3_600_000,
   lingerMs: 1000,
   defaultLoadMs: 60_000,
-  memoryFloorPct: 10,
 };
 
 /** Environment names of the overrides, one per field (LLM_EXT_ prefix, like every llm-ext variable). */
@@ -60,7 +52,6 @@ export const TIMING_ENV: Record<keyof BrokerTimings, string> = {
   idleExitMs: "LLM_EXT_BROKER_IDLE_EXIT_MS",
   lingerMs: "LLM_EXT_BROKER_LINGER_MS",
   defaultLoadMs: "LLM_EXT_BROKER_DEFAULT_LOAD_MS",
-  memoryFloorPct: "LLM_EXT_BROKER_MEMORY_FLOOR",
 };
 
 /** The defaults with every valid positive integer override applied; a malformed value is an error, never silently ignored (fail fast). */
@@ -131,6 +122,8 @@ export class Scheduler {
   queuedAtLoad = 0;
   /** Last submit/take/finish on the current model (the linger before an empty-queue rotation). */
   lastActivityAt = 0;
+  /** Time noteDenied credited to this run. */
+  private deniedInRun = 0;
 
   enqueue(job: Job): void {
     let byCmd = this.queues.get(job.key);
@@ -266,11 +259,43 @@ export class Scheduler {
     return minimumServed ? this.dueKey(now, t) : null;
   }
 
+  /**
+   * Time a denied broker served nothing (local-inference-governor-design.md D8).
+   * Without this rule 3 fires after minRunMs whatever the reason nothing ran, and
+   * a machine-wide denial would stop one model and load another: a RAM and CPU
+   * spike that serves nothing. The count half of the minimum slice is untouched,
+   * so a near deadline can still rotate its model in while denied.
+   */
+  noteDenied(ms: number): void {
+    this.deniedInRun += ms;
+    this.runStartedAt += ms;
+  }
+
+
+  /**
+   * The first grant after a denial. The credit of noteDenied exists so that a
+   * denial swaps nothing: a swap in the middle of one serves nothing. Once a
+   * grant shows work can run, keeping it would strand a near deadline: with
+   * nothing served in this run the count half is false too, so wantRotation
+   * stays null however long the denial was, and the current model takes the
+   * grant (D8: a near deadline must win the next grant). So the time half is
+   * asked again on the wall clock. true: the credit is given back, wantRotation
+   * now names the model, and the caller returns its grant and rotates. A denial
+   * shorter than the minimum run changes nothing: rule 3 as without a governor.
+   */
+  endDenial(now: number, t: BrokerTimings): boolean {
+    if (this.deniedInRun === 0 || now - this.runStartedAt + this.deniedInRun < t.minRunMs || this.dueKey(now, t) === null) return false;
+    this.runStartedAt -= this.deniedInRun;
+    this.deniedInRun = 0;
+    return true;
+  }
+
   /** Make `key` current and restart its run counters; `queued` = its queued count at load (the minimum slice is min(B, queued)). */
   startRun(key: string, now: number, queued = this.queuedCount(key)): void {
     this.current = key;
     this.servedInRun = 0;
     this.runStartedAt = now;
+    this.deniedInRun = 0;
     this.queuedAtLoad = queued;
     this.lastActivityAt = now;
   }

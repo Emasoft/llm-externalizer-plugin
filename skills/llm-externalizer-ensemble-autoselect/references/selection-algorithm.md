@@ -73,7 +73,7 @@ search, or accept fewer than three models.
    `--include` baselines.
 4. Run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext-benchmark" --from-cache --pick-top-n 3 --apply-profile <active>`.
 5. Tell the user what changed (old → new model IDs, F1, cost, latency) and
-   that they should run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` to reload.
+   that they should run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" settings reset` to reload.
 6. Do **not** ask the user to pick — the user has delegated this decision.
 
 ## Where the rules live (single source of truth)

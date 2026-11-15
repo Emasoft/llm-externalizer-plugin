@@ -24,7 +24,8 @@ export function findLeaks(text: string): string[] {
 }
 
 function fixtureFiles(): string[] {
-  return ["p01", "p02"].flatMap((d) => readdirSync(join(DIR, d)).map((f) => join(DIR, d, f)));
+  // o4: the per-spec live replies of TRDD-O4MSZIG5, scanned like the probe fixtures.
+  return ["p01", "p02", "o4"].flatMap((d) => readdirSync(join(DIR, d)).map((f) => join(DIR, d, f)));
 }
 
 describe("classifier fixtures carry no account or request identity", () => {

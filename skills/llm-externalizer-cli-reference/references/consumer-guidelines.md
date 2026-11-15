@@ -1,0 +1,99 @@
+# Guidelines for projects that call the llm-ext CLI
+
+For a project whose Claude session, scripts, hooks or CI run `llm-ext`. Nine questions, each answered as imperative guidance plus the reason. Every claim was checked against the v14.2.0 release tree and the source at HEAD; the latest release is 14.2.0.
+
+Marker: "(since 14.2.0)" means the behaviour is in the 14.2.0 release. "(next release after 14.2.0: TRDD-xxxx)" means it is in the committed source at HEAD but not in 14.2.0. "(planned, not in 14.2.0 or HEAD: TRDD-xxxx)" means it is only designed or still in progress. The v14.2.0 tag and HEAD are on different history lines, so each marker was decided by comparing the code, not commit ancestry. If `llm-ext --version` prints less than 14.2.0, do not rely on a "(since 14.2.0)" behaviour; do not rely on a "next release" or "planned" behaviour until a release is documented to carry it. Live `llm-ext <group> <action> --help` always wins over this file.
+
+## 1. Which profile to pass, and the missing `active:` key
+
+Being redesigned (TRDD-SZ7TO9FW): until it ships, pass `--profile` explicitly and do not script against model lists in settings.yaml; they are rewritten by the benchmark.
+
+True today:
+
+- Pass `--profile <name>` in every script, hook and CI call, after the group and action (`llm-ext scan folder ./src --profile free`). Reason: the profile is chosen by `--profile`, then by the `active:` key of the user's settings.yaml, then by the built-in `free`. A user edit of `active:` would otherwise change what your script runs on.
+- A settings.yaml with no `active:` key is valid and means the built-in `free` profile. It is not an error.
+- Do not hard-code a profile name the user may not have. The names `free`, `paid`, `local`, `scouting`, `or-jev` are built in and reserved (do not name your own profile after them). `local_llama` and `locals-mlx` are added to a settings.yaml once, so they may be absent. Any other name is user-defined. `llm-ext settings profiles` lists what exists and sends no model request.
+- Each action's `--help` lists its accepted profile types. A wrong type is refused at once, exit 1, nothing spent. Text commands accept local, free and paid; `scan quality` and `scan security` accept only paid; classify commands use a classifier profile; `session compact` accepts only free and paid today (planned, not in 14.2.0 or HEAD: TRDD-TYHKAKCB, which plans a local path).
+- The paid profile is gated by `allow_paid_models: true` in settings.yaml. While it is not true, a remote profile runs in free mode and the paid profile does not populate itself.
+- A command never switches profile after it starts. When the models of the selected profile fail, it falls back only inside that profile and then fails. If your script needs a second choice, retry it yourself with another `--profile`.
+
+## 2. Background maintenance: what runs, how long, who waits
+
+- After any command that runs on `free`, `paid` or `local` finishes its work, llm-ext starts a detached detector for that profile. It is not started for read-only inspection commands (`settings show|profile|profiles|status|reset|scan-local`, `models info|assess|health|discover|calibrate|calibration-status|server-status|server-stop`), for scouting-type commands, or for classify commands. Reason: the spawn sits in the `finally` of the dispatcher and is never awaited.
+- The detector is a separate process with its output sent to a log file under the llm-ext config directory, not to your pipes. Your command's exit time and stdout are not delayed by it, and `$(llm-ext ...)` capture does not wait for it.
+- What the detector does: fetches the OpenRouter catalog (cached for 600 s; `LLM_EXT_CATALOG_TTL_MS`), computes a fingerprint of the profile's model pool and compares it with the stored one. If nothing changed it exits. A failed or empty catalog fetch counts as "unchanged". At most one detector claim per profile per 60 s (`MIN_DETECT_INTERVAL_MS`), so a loop of commands does not fork one per call.
+- If the pool changed, the detector hands its lock to a benchmark child. The benchmark tests models one after another, never in parallel. A keyword sweep takes about 15 minutes and a full refresh 10 to 40. When it ends it rewrites the generated part of that profile in settings.yaml. This is intended: it keeps the free and paid pools working as providers change models. The paid profile benchmarks only with `allow_paid_models: true` and inside the daily spend cap.
+- Do commands wait for it? No, when the profile already has working models: settings are read once when the command starts, so a rewrite during a run does not change that run. Exception (since 14.2.0): when a generated profile has no usable pool yet, or every one of its models fails, the command starts the update and waits for it, bounded by `LLM_EXT_FOREGROUND_REPAIR_TIMEOUT_MS` (default 600000), then retries the request once. If that fails it exits 1 with a "retry later" message.
+- In 14.1.2 and earlier the same situation answers "retry later" at once (exit 1) while the update runs in the background.
+- Set your caller's timeout above 10 minutes for the first command on a fresh machine or after a long pause, because of the foreground repair above.
+- Opt out: `LLM_EXT_DISABLE_AUTO_RECONCILE=1` stops the detector and update requests; then an empty pool is refused with its own message instead of being repaired. `LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION=1` stops the first-time population spawn. Use them only in hermetic CI with a fixed config directory.
+- Caller timeouts and `--command_timeout` (since 14.2.0): `--command_timeout <s>` (aliases `--command-timeout`, `--timeout`; whole seconds, 1 to 2147483) is accepted by every command. At expiry the command starts no new model request, cancels its jobs at the local broker, writes the results already complete, lists the unfinished files and exits 124. A request already in flight is not aborted. A command still running 30 s after the timeout is ended with exit 124. Set it a little under your harness timeout so you get a partial report and exit 124 instead of a kill. `--queue_timeout <s>` applies only to local models queued at the broker (default 300 s); waiting past it is never an error.
+- `session compact` (flat name `session-summary`) currently keeps the process alive after it has printed the summary, because losing racers are not aborted, for up to 600 s (a fix is planned, not in 14.2.0 or HEAD: TRDD-3SNQAGIC). Until it ships, read stdout as it arrives and stop the process once the summary is complete, or set the caller timeout above 600 s. The summary itself is not blocked by the benchmark.
+
+## 3. Several commands at once, overlapping benchmarks
+
+- Running several `llm-ext` processes in parallel is supported. The source has no per-command lock on remote profiles, so the limits are the provider's: free OpenRouter models have daily request caps, and a free profile rotates to its next model when one is limited. Parallel commands share those caps.
+- At most one background job per profile: the lock `background-update-<profile>.lock` covers the detector, an update request and the benchmark of that profile. A second detector or benchmark for the same profile finds the lock held and does nothing. The lock is released on exit; if its process is gone, not signalable by the same user, or the lock is older than 2 hours, the next claimer takes it over.
+- `free`, `paid` and `local` have separate locks, so their jobs may overlap each other. Writes to settings.yaml are serialized by a mkdir lock (`settings.write.lock`): a writer waits, and throws rather than write without the lock.
+- Local models: one detached broker serves every `llm-ext` process on the machine, runs one model server at a time and groups queued requests by model (since 14.2.0). A machine-wide governor admits every local load and inference (next release after 14.2.0; see question 8). More parallel local commands queue; they do not fail.
+- Give parallel runs that write reports their own `-o <dir>` so you can tell which report came from which call.
+
+## 4. The reports root
+
+- Final reports (a complete or merged result) go to `<root>/reports/llm-externalizer/<sub>/`, and the path is printed on stdout. Intermediate output goes to `<root>/reports_dev/llm-externalizer/<sub>/`: the per-file pieces of a merged run (answer mode 1 or 2, or grouped output), the per-file reports of a merged run that stopped before merging (a partial run), and llm-ext's own model-pool benchmark, health, arrivals, auto-replace and update-all reports (next release after 14.2.0: TRDD-PNU8XECB). Precedence: the command's `-o <dir>` (or `--output_dir`) receives everything the command writes; then the environment variable `LLM_EXT_OUTPUT_DIR`, which moves both kinds unless `LLM_EXT_SCRATCH_DIR` is also set (that one moves only the intermediate output); then the defaults. Default root: `$CLAUDE_PROJECT_DIR` if that directory exists, otherwise the current working directory. Git is never consulted, so a command run from a subfolder or a linked worktree writes there when `CLAUDE_PROJECT_DIR` is unset.
+- The split: `reports/` is always git tracked and sanitized of secrets before committing; it holds only final reports, complete or merged reports, and updated checklists with progress tracking. `reports_dev/` is always gitignored; it holds intermediate artifacts, partial reports and temporary scratch files. In general the `*_dev` version of a folder is the gitignored one and the version without the suffix is git tracked. Never add `reports/` or `reports/llm-externalizer/` to `.gitignore`. Reason: a final report must be in history, and reports contain model output and excerpts of the code that was sent, so sanitize before committing. Put `reports_dev/` in `.gitignore`. Tell every subagent you spawn: temporary or scratch files go to the `*_dev` folders, final files to the tracked ones.
+- Set `CLAUDE_PROJECT_DIR` (or `LLM_EXT_OUTPUT_DIR`) in hooks and CI. Reason: with neither set the report root follows the current directory, and a benchmark started in the background by your command writes its own reports under the same rule.
+- Everything else llm-ext keeps (settings.yaml, locks, state, logs, backups) is under `~/.llm-externalizer`, or `LLM_EXT_CONFIG_DIR`. It is not a project folder; never commit it.
+
+## 5. settings.yaml: who writes it, what to leave alone
+
+Being redesigned (TRDD-SZ7TO9FW): until it ships, pass `--profile` explicitly and do not script against model lists in settings.yaml; they are rewritten by the benchmark.
+
+True today:
+
+- The `llm-ext` verbs never edit settings.yaml on request: `settings show|profile|profiles|status` read it and `settings reset` only reloads it. Configuration is the user's to edit by hand.
+- Writes you did not ask for do happen: creating the default file on first run, one-time migrations of older layouts at boot (a hand-authored section is backed up under the config directory before it is replaced), a placeholder section for `free` or `paid` that does not exist yet, and the benchmark rewriting the generated keys of the built-in `free`, `paid` and `local` profiles.
+- Do not read or pin the `model`, `second_model`, `third_model`, `free_models`, `paid_models` or `tool_models` of `free`, `paid` or `local`, and do not hand-edit them: the benchmark replaces them. A profile with any other name is never rewritten by the benchmark.
+- For hermetic runs (CI, workers, tests) use a throwaway config directory so the real file and the user's global rules folder are untouched: `T=$(mktemp -d); HOME=$T LLM_EXT_CONFIG_DIR=$T/cfg LLM_EXT_INSTALL_RULE=0 llm-ext ...`. `LLM_EXT_INSTALL_RULE=0` stops the first boot from installing the usage rule into the user's global rules folder.
+
+## 6. Upgrades and version pinning
+
+- `llm-ext --version` prints the installed version. Pin your project to the plugin version (the plugin manifest and the CLI report the same number) and record it where your script can check it.
+- Detecting a mid-upgrade state: there is no explicit signal. The launcher installs the native dependency into a shared data directory under an install lock, and a second process waits for it up to 300 s, then fails with "timed out after ... waiting for install lock". Treat that exit 1 as retryable once. Do not run `llm-ext` from a hook while the plugin is being updated.
+- An upgrade can change settings.yaml (migrations with a backup), as 14.1.0 did: see "Breaking changes in 14.1.0" in the README and the CHANGELOG. Read both before moving a pinned version.
+- What is promised: the source and docs contain no semantic-versioning or compatibility statement. Only individual statements exist: the flat kebab-case command names are supported and not deprecated (`session-summary` is the supported spelling of `session_summary`), and `batch-check` is deprecated.
+- What is stable in practice, and safe to script against: the group and action verbs and flags shown by `--help`, stdout carrying only the result (a report path or the tool's text), the exit codes of question 7, and the reports root of question 4. Do not parse stderr (banner, progress, diagnostics), report contents, or the generated parts of settings.yaml.
+- Check a new flag with the bare command: `llm-ext <group> <action> --help` exits 0 and calls no model.
+
+## 7. Exit codes and what to retry
+
+- 0: success. stdout holds the report path or the text.
+- 1: the tool reported an error, the call was malformed (unknown flag, unknown profile, wrong profile type), or the run failed. A multi-file run where some files delivered and others failed (next release after 14.2.0: TRDD-PN84WC1L) prints the finished report paths on stdout plus a `FAILED (n of m):` block and the line "some files failed or the run was aborted" on stderr, and exits 1. Read stdout even when the exit is 1; in 14.2.0 and earlier a failed multi-file run prints its summary to stderr only.
+- 124: `--command_timeout` expired (since 14.2.0). stdout holds the partial report with an `UNFINISHED (n, stopped by ...)` list. Exit 124 is used even when the work had just finished.
+- 6: `--stop_on_errors` ended the command on the first model that did not answer (next release after 14.2.0: TRDD-SWNIIFTF). Kept apart from 124 so a script can tell a failure from a timeout.
+- 3, 4, 5, 130: `classify` commands only. 3 = key rejected or no credit (also a 402), 4 = request or model rejected, 5 = failed after retries (rate limit, unavailable, network, timeout, bad response), 130 = interrupted. Without `--strict-exit` a run that "needs attention" still exits 0.
+
+Retry or not:
+
+- Retry later: 5 (classify) and exit 1 whose message says `no model of the '<profile>' profile is working right now; the profile update is underway in the background ... retry later`. Non-classify commands have no machine-readable code for it; match that phrase on stderr.
+- Retry with a larger `--command_timeout` or a smaller batch: 124. Completed files are in the report; resend only the unfinished ones.
+- Do not retry unchanged: 3 and 4, and exit 1 for a refusal or a malformed call.
+- A 402 (credit exhausted on OpenRouter) is a stop, not a retry. Non-classify commands exit 1 and abort the whole batch with "Payment required (credit exhausted on OpenRouter) — add credits, or run with a different --profile. llm-ext does not switch to free models automatically." Classify exits 3. A paid wallet at zero is a reason to rerun with `--profile free` yourself, not to wait.
+
+## 8. Local servers and a project's own server
+
+- `local_llama` (llama.cpp, GGUF) and `locals-mlx` (the Locals server, MLX, Apple silicon only) are `server: managed` profiles (since 14.2.0). llm-ext starts and stops their model server itself, through one detached broker per machine, one model at a time. The addresses written in those profiles (127.0.0.1:8181 and 127.0.0.1:9090) are only keys: the broker binds an operating-system-chosen free port, so it cannot collide with a server you run on a fixed port.
+- llm-ext stops only servers it started and refuses to signal any other process. `llm-ext models server-status` lists what it manages; `llm-ext models server-stop` stops only those.
+- To avoid loading a model twice: do not start your own llama-server or Locals for a model that a managed profile also uses. Pick one owner. Either let llm-ext serve it (`--profile local_llama` or `--profile locals-mlx`), or run your own server and point an unmanaged local profile in settings.yaml at its url. A model is loaded once per server that holds it, and the broker always runs a server of its own for a managed profile.
+- mlx-decision on port 8123: llm-ext never starts it. Classify commands use it only as a last resort, when every remote decision model failed, and only if it is already running with the expected model (it looks at 127.0.0.1:8123, then on macOS searches the running processes) (next release after 14.2.0: TRDD-O93LFMF3). Leave it as your project's own login-agent singleton; to switch the fallback off set `local_fallback: {enabled: false}` in settings.yaml.
+- A machine-wide governor decides when a local model may load or run (next release after 14.2.0: TRDD-1OOAH3LD). Defaults: RAM limit 80 percent, CPU limit 80 percent, at most 8 inferences at once; set in the `local_governor:` section of settings.yaml or `LLM_EXT_GOVERNOR_RAM_LIMIT_PCT`, `LLM_EXT_GOVERNOR_CPU_LIMIT_PCT`, `LLM_EXT_GOVERNOR_MAX_INFERENCES`. A busy machine queues the request; waiting is never an error. Bound the wait with `--command_timeout`. `llm-ext models server-status` shows the figures and the last denial.
+- The first request for a model that has never been calibrated is held until calibration finishes, which can take hours (`llm-ext models calibration-status`). Do not put such a model on a CI path; calibrate it ahead with `llm-ext models calibrate --model <id>`.
+
+## 9. Cost and what never to pass
+
+- On a paid profile run the command with `--estimate` first and proceed only if the printed ceiling fits. It prints an expected cost and a ceiling that is never exceeded, calls no model and spends nothing. Not every command accepts it: a command that does not accept it refuses the flag, exits with an error and spends nothing. Classify commands take `--max_budget` instead. `--preview` lists which files would be sent, with the reason for each exclusion.
+- `--estimate` on the free profile refuses while no usable free model exists yet; it starts no work. Run the command once without it to populate the pool.
+- Pass file paths, never pasted contents. Add one or two sentences of project context in `--instructions`: the remote model knows nothing about your repository.
+- llm-ext reads files directly. It does not inherit the sandbox read-deny of the Claude Code session, and the source has no file-name filter, so a path you name is read and sent. Never pass `.env` files, credential or key files, `settings.yaml`, or logs and dumps that may hold keys or tokens. Folder scans skip git-ignored files by default (`use_gitignore`), but an explicitly named file is not filtered by that.
+- `--scan_secrets` aborts the run if secrets are found in the input. `--redact_secrets` exists but is discouraged: move the secrets out instead.
+- On a remote profile the content leaves the machine for the provider. For code that must not leave it, use a local profile, and check with `--preview` before sending.

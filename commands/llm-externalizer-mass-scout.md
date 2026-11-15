@@ -57,12 +57,12 @@ token-efficiency rules, worked example) is the
 | `register` | `--db-path <path> --folder-path <folder> [--git-diff <ref>] [--no-gitignore]` \| `--file-paths <a,b,c> [--extensions .ts,.md] [--exclude-dirs ...]` | Walk a folder / take a file list, store every body in the SQLite cache (honors `.gitignore`) → counter line `registered=N already=M skipped_too_big=K …` |
 | `preclassify` | `--db-path <path> [--reclassify] [--limit <n>]` | Script-only bucket tagger across registered files → counter line per bucket |
 | `estimate` | `--db-path <path> --fields-file <json> [--budget-usd N] [--bucket <name>] [--workers N]` | Cost / time / cap-skipped preview for a fieldset; honors `--budget-usd`; `--live-context` queries OpenRouter for the real cap → numbers + per-bucket breakdown |
-| *(bare)* | see "End-to-end scout run" below | Run the LLM scout over every eligible file → markdown report under `reports/mass_scouting/` + counter line |
+| *(bare)* | see "End-to-end scout run" below | Run the LLM scout over every eligible file → markdown report under `reports/llm-externalizer/mass_scouting/` + counter line |
 | `search` | `--db-path <path> --job-id <id> [--query "..."] [--regex "..."] [--filter '$.x:=:val'] [--json]` | Per-job search, three modes auto-routed (regex bypass / FTS5 / structured JSON1) → hit list |
 | `search-xjob` | `--db-path <path> --job-ids id1,id2,... [--query "..."] [--regex "..."] [--filter '...'] [--json]` | Cross-job federated search → merged hit list |
 | `get` | `--db-path <path> --short-id <n> [--job-id <id>]` | Print one file row by `short_id` (+ per-job result with `--job-id`) → JSON row |
 | `body-get` | `--db-path <path> --short-id <n>` | Print the cached file body — lets follow-up agents reason about the file without re-reading disk → raw body on stdout |
-| `export` | `--db-path <path> --job-id <id> [--format jsonl\|csv]` | Dump every result row of a job under `reports/mass_scouting/` → file path |
+| `export` | `--db-path <path> --job-id <id> [--format jsonl\|csv]` | Dump every result row of a job under `reports/llm-externalizer/mass_scouting/` → file path |
 | `jobs-list` | `--db-path <path> [--json]` | Enumerate every job in a DB (fieldset, model, ok/total, cost, started_at) — audit "what scouts already ran?" → markdown table or JSON |
 | `audit-sample` | `--db-path <path> --job-id <id> [--sample <N>] [--body-truncate <chars>] [--json]` | N random results next to the cached bodies — human-trust check → markdown samples or `samples[]` JSON |
 | `build-fieldset` | `--name <id> --field "name:type=desc" [--field "..."] ... [--out <path>]` | Compose a fieldset JSON from shorthand tokens (`name:bool=desc`, `name:enum(a,b,c)=desc`) → validated fieldset JSON |
@@ -83,7 +83,7 @@ For every eligible file (under the scout cap, not already done for this
 drift, validate required keys (one retry with the error fed back), and
 insert into `mass_scout_results` + FTS5. When all files are done it
 renders a markdown report to
-`<main-project-dir>/reports/mass_scouting/<TIMESTAMP>-scout-<slug>.md`
+`<main-project-dir>/reports/llm-externalizer/mass_scouting/<TIMESTAMP>-scout-<slug>.md`
 (anchored on `$CLAUDE_PROJECT_DIR`, then cwd — never derived from git).
 
 | Flag | Required | Description |

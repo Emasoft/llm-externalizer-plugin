@@ -22,11 +22,14 @@ scripts/llm-ext/logs/
 scripts/llm-ext/llm_externalizer_output/
 scripts/llm-ext/reports_dev/
 reports_dev/
-# Audit output from /llm-externalizer:* commands (and any plugin agent).
-# Reports routinely contain absolute local paths, raw LLM responses, and
-# redacted secret markers — never publish them. Agents should write to the
-# root-project ./reports/ even when running inside a git worktree.
-reports/
+# TRDD-PNU8XECB (USER directive 2026-11-15): the root reports/ folder is
+# git-TRACKED and holds only final, complete or merged reports and progress
+# checklists, sanitized (sanitize-reports) before committing. Intermediate
+# artifacts, partial reports and scratch go to the gitignored reports_dev/
+# (above) or any *_dev/ folder (below). So reports/ is deliberately NOT ignored.
+# scripts/llm-ext/reports/ is not the project reports folder: it is stray
+# output of llm-ext runs whose cwd was the package dir (tests, ad-hoc runs),
+# so it stays ignored.
 scripts/llm-ext/reports/
 
 # Build artifacts
@@ -80,7 +83,6 @@ llm_externalizer_output/
 # TLDR artifacts (added by rechecker)
 .tldr_session_*
 .publish.lock
-/reports/
 /reports_dev/
 # Dev-only working folders: scratch, drafts, abandoned-work patches. Never
 # published, never part of the source distribution — and they routinely hold

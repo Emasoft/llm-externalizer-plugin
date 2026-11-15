@@ -10,6 +10,7 @@
  * measured and reported, never a failure.
  */
 
+import { releaseDirectLease, takeDirectLease } from "../governor/direct.js";
 import { localsOutgoingModel } from "../local-locals-server.js";
 import type { Phase, PhaseContext } from "./runner.js";
 import type { TrialRecord } from "./state.js";
@@ -268,9 +269,13 @@ export interface Sender {
 
 /**
  * The calibration request sender. It reads `ctx.server` on every call, so a
- * restarted cal server (Phase B reloads it at W) is used at once.
+ * restarted cal server (Phase B reloads it at W) is used at once. Each request
+ * takes a governor lease (design D9) after its turn and before `t0`, so the wait
+ * is not in `wall_ms`; `leaseHeld` is for a step that already holds one lease
+ * for all its parallel requests (Phase C throughput), where a second lease from
+ * the same process would wait for the first.
  */
-export function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
+export function makeSender(ctx: PhaseContext, localsIds: string[], leaseHeld = false): Sender {
   return {
     chat: async (messages, o) => {
       // Spec section 2 (review m5): every calibration request first gives way to the broker's work for other models.
@@ -287,6 +292,8 @@ export function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
       if (s.engine === "llama") body.cache_prompt = true;
       // Locals selects the thinking variant by id (local-locals-server.ts); llama-server takes any model field.
       body.model = s.engine === "locals" ? (localsOutgoingModel(localsIds, body) ?? s.model) : s.model;
+      // D10 (round 2 M4): the lease carries the cal server's T and pid, so the budget counts the cal server like a broker one.
+      const lease = leaseHeld ? null : await takeDirectLease(s.baseUrl, o.timeoutMs, s.lease);
       const t0 = Date.now();
       try {
         const res = await fetch(`${s.baseUrl}/v1/chat/completions`, {
@@ -300,6 +307,8 @@ export function makeSender(ctx: PhaseContext, localsIds: string[]): Sender {
       } catch (e) {
         const timedOut = (e as Error).name === "TimeoutError";
         return { status: 0, content: "", reasoning: "", finishReason: null, promptTokens: null, completionTokens: null, timedOut, error: (e as Error).message, wallMs: Date.now() - t0 };
+      } finally {
+        releaseDirectLease(lease);
       }
     },
   };

@@ -268,6 +268,50 @@ describe("attention", () => {
 });
 
 
+// IN-08 (TRDD-M8GT4AYB): the text form, from a REAL projection (spec.project) through the real spec.renderText.
+describe("IN-08 label: text form", () => {
+  const i = parse({ items: ["a", "b", "c", "d"].map((id) => ({ id, text: id })), classes: [{ id: "bug" }, { id: "feat" }] });
+  const reply = {
+    label_i0: ans("bug", { bug: 0.95, feat: 0.05 }, 0.9),
+    label_i1: ans("bug", { bug: 0.9, feat: 0.1 }, 0.7),
+    label_i2: ans("feat", { bug: 0.1, feat: 0.9 }, 0.8),
+    label_i3: ans("feat", { bug: 0.4, feat: 0.6 }, 0.4),
+  };
+  const { result } = run(i, reply);
+  const render = (opts: Record<string, unknown> = {}, res: LabelResult = result) => spec.renderText!(res, opts);
+
+  it("prints the count line, the accepted ids per class (best first), then the low-confidence section with the runner-up", () => {
+    expect(render().lines).toEqual(["bug 2 · feat 2", "[bug] a b", "[feat] c", "? low confidence — check these yourself:", "?0.40  feat (or bug)  d"]);
+  });
+  it("--only hides the other classes and their low-confidence rows, but the count line keeps every class", () => {
+    expect(render({ only: "bug" }).lines).toEqual(["bug 2 · feat 2", "[bug] a b"]);
+  });
+  it("--only naming no class says so instead of printing an empty body", () => {
+    expect(render({ only: "nope" }).lines).toContain("? --only names no such class: nope");
+  });
+  it("--verbose lists every item with its confidence, grouped by class, and marks low ones with ?", () => {
+    expect(render({ verbose: true }).lines).toEqual(["bug 2 · feat 2", "[bug]", " 0.90  a", " 0.70  b", "[feat]", " 0.80  c", "?0.40  d"]);
+  });
+  it("a null confidence is listed as low confidence, never as a sure label", () => {
+    const r = run(parse({ items: [{ id: "a", text: "a" }], classes: [{ id: "bug" }, { id: "feat" }] }), { label_i0: ans("bug", { bug: 0.6, feat: 0.4 }, null) }).result;
+    expect(render({}, r).lines).toEqual(["bug 1 · feat 0", "? low confidence — check these yourself:", "?n/a  bug (or feat)  a"]);
+  });
+  it("names the chunks of an item that was judged in parts", () => {
+    const answers = validateAnswers(questionsOf(spec.build(i, T)), reply, DEFAULT_POLICY).answers;
+    const r = spec.project(answers, i, T, { truncated: false, chunks: { label_i0: { chunks: 3, best_chunk: 2, best_lines: [10, 20] } } }) as LabelResult;
+    expect(render({ verbose: true }, r).lines).toContain(" 0.90  a (3 chunks, best lines 10-20)");
+  });
+  it("--save: one file with every labelled item as [{id, label, confidence}], even the low-confidence one", () => {
+    const out = render({ save: "/tmp/llm-ext-in08-not-written.json" });
+    expect(out.files).toHaveLength(1);
+    expect(out.files![0]!.path).toBe("/tmp/llm-ext-in08-not-written.json");
+    expect(JSON.parse(out.files![0]!.content)).toEqual([{ id: "a", label: "bug", confidence: 0.9 }, { id: "b", label: "bug", confidence: 0.7 }, { id: "c", label: "feat", confidence: 0.8 }, { id: "d", label: "feat", confidence: 0.4 }]);
+    expect(render().files).toBeUndefined();
+  });
+  it("declares --only, --verbose and --save as render flags, so they never reach the strict input schema", () => {
+    expect(spec.flags!.filter((f) => f.render).map((f) => [f.flag, f.field, f.type ?? "string"])).toEqual([["--only", "only", "string"], ["--verbose", "verbose", "boolean"], ["--save", "save", "string"]]);
+  });
+});
 // Hardening point 6: project() must name every item the run did not answer, with the fan-out's reason, and never throw (E60 is for a lost key, not for a failed request).
 describe("partial failure through the real planner and fan-out", () => {
   const raw = { mode: "files", items: ["a", "b", "c", "d"].map((id) => ({ id, text: `text ${id}` })), classes: bare(2) };

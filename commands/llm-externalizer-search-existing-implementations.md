@@ -48,9 +48,10 @@ ${CLAUDE_PLUGIN_ROOT}/bin/llm-ext search-existing-implementations \
   [--diff_path <pre-made --diff path if given>]
 ```
 
-Repeated flags OVERWRITE rather than accumulate — combine multiple `--in`
-paths into ONE `--folder_path a,b,c` (comma-separated), never repeat the flag.
-Same for `--source_files`.
+Combine multiple `--in` paths into ONE `--folder_path a,b,c` (comma-separated).
+Repeating `--folder_path` accumulates only in releases
+that include TRDD-OK1NN5RN; llm-ext 14.2.0 keeps only the last value of a repeated array flag (measured on --input_files_paths).
+The same applies to `--source_files`: combine paths with commas; repeating accumulates only in releases that include TRDD-OK1NN5RN.
 
 Forward optional flags the user supplied:
 

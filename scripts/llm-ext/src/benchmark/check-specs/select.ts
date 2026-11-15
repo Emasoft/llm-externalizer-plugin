@@ -20,7 +20,20 @@
 import { TOOL_MODEL_REGISTRY } from "../../model-qualification/registry.js";
 import type { ModelCriteria } from "../discover.js";
 import { selectSameOrCheaper, type GenericCandidate } from "../select-common.js";
-import { passesThresholds, type CheckSpecsScore } from "./score.js";
+import { passesThresholds, type CheckSpecsScore, type CheckSpecsThresholds } from "./score.js";
+import { answeredOnlyScore } from "../search-existing/score.js";
+import { isUnansweredFilesNonEvidence, NON_EVIDENCE_REASON } from "../quality-evidence.js";
+
+/**
+ * The benchmark verdict for display and selection: the SAME judgement the ledger
+ * qualityPass uses (answered files only; a run with over a quarter of its files
+ * unanswered is not evidence and cannot qualify) so selection and the stored
+ * verdict cannot disagree (TRDD-90BXJ2KO).
+ */
+export function judgeCheckSpecs(score: CheckSpecsScore, thresholds?: CheckSpecsThresholds): { pass: boolean; failures: string[] } {
+  if (isUnansweredFilesNonEvidence(score)) return { pass: false, failures: [NON_EVIDENCE_REASON] };
+  return passesThresholds(answeredOnlyScore(score), thresholds);
+}
 
 /**
  * Per-tool requirements for check_against_specs. Single source of truth is the registry
@@ -76,7 +89,7 @@ export interface CheckSpecsSelectionResult {
  * coincide anyway and micro is the honest name for it.)
  */
 function toGeneric(c: CheckSpecsCandidate): GenericCandidate {
-  const thr = passesThresholds(c.score);
+  const thr = judgeCheckSpecs(c.score);
   return {
     modelId: c.modelId,
     qualified: c.qualified,

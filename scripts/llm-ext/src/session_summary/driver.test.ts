@@ -2668,6 +2668,76 @@ describe("driver: summarizeSession", () => {
       expect(callModel.mock.calls.length).toBe(1);
       expect(callModel.mock.calls.every((c) => c[1] === FREE_MODEL)).toBe(true);
     });
+
+    // Issue 19 / TRDD-3SNQAGIC: the winner used to commit while every loser's HTTP request
+    // ran on to its own deadline (600 s), and the open sockets/timers kept the CLI process
+    // alive long after the summary was on stdout. A loser's request must be CANCELLED the
+    // moment the chunk is committed.
+    it("aborts every losing racer's request once the winner commits (issue 19)", async () => {
+      const p = writeTranscript([userTurn("u1", "abort the loser")]);
+      let loserSignal: AbortSignal | undefined;
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId, _max, signal) => {
+        if (modelId === FREE_MODEL) {
+          loserSignal = signal;
+          // Never answers on its own: settles only when its request is aborted.
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+          return summaryFixture("LOSER SUMMARY");
+        }
+        return summaryFixture("WINNER SUMMARY");
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [SECOND_MODEL],
+        concurrency: "auto",
+        callModel,
+      });
+
+      expect(result.summary).toContain("WINNER SUMMARY");
+      expect(loserSignal).toBeDefined();
+      expect(loserSignal!.aborted).toBe(true);
+    }, 15_000);
+
+    // The abort is OUR doing, not the model's. It must not be re-sent, demoted, cooled
+    // down, or recorded as a fallback: that would punish a healthy model for losing a race.
+    it("a racer aborted by the winner's commit is no verdict: no retry, no cooldown, no fallback (issue 19)", async () => {
+      const p = writeTranscript([userTurn("u1", "silent loser")]);
+      const callModel = vi.fn<CallModelFn>(async (_prompt, modelId, _max, signal) => {
+        if (modelId === FREE_MODEL) {
+          await new Promise<void>((_resolve, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("This operation was aborted")), { once: true });
+          });
+          return summaryFixture("LOSER SUMMARY");
+        }
+        return summaryFixture("WINNER SUMMARY");
+      });
+
+      const result = await summarizeSession({
+        transcriptPath: p,
+        checkpointPath: checkpointPath(),
+        modelId: FREE_MODEL,
+        modelMaxContext: 1_000_000,
+        modelMaxCompletionTokens: 65_536,
+        fallbackModels: [SECOND_MODEL],
+        concurrency: "auto",
+        callModel,
+      });
+      // Let the aborted loser's rejection travel through callWithRetry's catch.
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(callModel.mock.calls.length).toBe(2); // the loser was NOT re-sent after the abort
+      expect(result.fallbackEvents).toHaveLength(0);
+      expect(isRunUnusable(FREE_MODEL)).toBe(false);
+      expect(getCooldownStore().models[FREE_MODEL]).toBeUndefined();
+      const persisted = JSON.parse(readFileSync(checkpointPath(), "utf-8"));
+      expect(persisted.mapSummaries[0]).toContain("WINNER SUMMARY");
+    }, 15_000);
   });
 });
 

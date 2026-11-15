@@ -21,7 +21,8 @@
 import { TOOL_MODEL_REGISTRY } from "../../model-qualification/registry.js";
 import type { ModelCriteria } from "../discover.js";
 import { selectSameOrCheaper, type GenericCandidate } from "../select-common.js";
-import { passesThresholds, type CodeAuditScore } from "./score.js";
+import { answeredOnlyScore, passesThresholds, type CodeAuditScore, type CodeAuditThresholds } from "./score.js";
+import { isFailedCasesNonEvidence, NON_EVIDENCE_REASON } from "../quality-evidence.js";
 
 /**
  * Per-tool requirements for code_task. Single source of truth is the registry
@@ -67,6 +68,20 @@ export interface CodeTaskSelectionResult {
 }
 
 /**
+ * The benchmark verdict for display and selection: the SAME judgement the ledger
+ * qualityPass uses (answered cases only; a run with over a quarter of its cases
+ * unanswered is not evidence and cannot qualify) so selection and the stored
+ * verdict cannot disagree (TRDD-90BXJ2KO).
+ */
+export function judgeCodeTask(
+  score: CodeAuditScore,
+  thresholds?: CodeAuditThresholds,
+): { pass: boolean; failures: string[] } {
+  if (isFailedCasesNonEvidence(score)) return { pass: false, failures: [NON_EVIDENCE_REASON] };
+  return passesThresholds(answeredOnlyScore(score), thresholds);
+}
+
+/**
  * Map a code-audit candidate onto the tool-agnostic GenericCandidate. The
  * ranking score is macro-F1 (the mean per-case localization F1) — NOT micro-F1:
  * the fixtures differ wildly in size (4 KB → 34 KB) and in truth-set size (0 → 2
@@ -74,7 +89,7 @@ export interface CodeTaskSelectionResult {
  * case is one code-audit job and counts once.
  */
 function toGeneric(c: CodeTaskCandidate): GenericCandidate {
-  const thr = passesThresholds(c.score);
+  const thr = judgeCodeTask(c.score);
   return {
     modelId: c.modelId,
     qualified: c.qualified,

@@ -79,10 +79,72 @@ export function defaultOutputDir(mainRootOverride?: string): string {
   return _cachedDefaultOutputDir;
 }
 
+
+// ── Default scratch-output root (TRDD-PNU8XECB) ─────────────────────────
+// USER directive 2026-11-15: `reports/` is git-tracked and holds only FINAL,
+// complete or merged reports; `reports_dev/` is gitignored and holds
+// intermediate artifacts — per-file pieces that a run later merges, partial
+// runs, and llm-ext's own model-pool benchmark/health output (tool
+// configuration, which the reports rule routes to reports_dev even when it is
+// complete). This resolver is the single source for that second root.
+//
+// Resolution order (highest precedence first):
+//   1. `mainRootOverride` — explicit caller root, same bypass as
+//      defaultOutputDir: `<override>/reports_dev/llm-externalizer`.
+//   2. LLM_EXT_SCRATCH_DIR — relocates ONLY the scratch output.
+//   3. LLM_EXT_OUTPUT_DIR — WHY it applies here too: a caller (a test, a
+//      worker, a CI job) that sets it is isolating llm-ext's writes; routing
+//      scratch to `<project>/reports_dev` anyway would leak those writes into
+//      the real project. So an output-dir override keeps EVERYTHING in that one
+//      dir, exactly as before this split.
+//   4. `<resolveProjectMainRoot()>/reports_dev/llm-externalizer/` — cached.
+//
+// A per-call explicit `output_dir` (handled by each caller) still wins over all
+// of this, pieces included: the user named the folder.
+
+let _cachedDefaultScratchDir: string | undefined;
+
+export function defaultScratchDir(mainRootOverride?: string): string {
+  if (mainRootOverride && mainRootOverride.length > 0) {
+    return join(mainRootOverride, "reports_dev", "llm-externalizer");
+  }
+  if (_cachedDefaultScratchDir) return _cachedDefaultScratchDir;
+  const scratchEnv = process.env.LLM_EXT_SCRATCH_DIR?.trim();
+  const outputEnv = process.env.LLM_EXT_OUTPUT_DIR?.trim();
+  if (scratchEnv) {
+    _cachedDefaultScratchDir = resolve(scratchEnv);
+  } else if (outputEnv) {
+    _cachedDefaultScratchDir = resolve(outputEnv);
+  } else {
+    _cachedDefaultScratchDir = join(resolveProjectMainRoot(), "reports_dev", "llm-externalizer");
+  }
+  return _cachedDefaultScratchDir;
+}
+
+/**
+ * Directory for the per-file pieces of a multi-file run (TRDD-PNU8XECB).
+ * `merging` is true when the run will merge the pieces into one or more
+ * final reports (answer mode 1/2, or grouped output): the pieces are then
+ * intermediate and go to the scratch root, and the merged report alone goes
+ * to `reports/`. In mode 0 the per-file reports ARE the deliverable, so the
+ * caller's dir is returned unchanged (undefined = defaultOutputDir()). An
+ * explicit `outputDir` always wins. If a merge is skipped (some file failed),
+ * the listed pieces stay in the scratch root — a partial run, which the
+ * directive also assigns to reports_dev.
+ */
+export function mergePieceDir(outputDir: string | undefined, merging: boolean): string | undefined {
+  if (outputDir) return outputDir;
+  return merging ? defaultScratchDir() : undefined;
+}
+
 /** Test-only: reset the cached default so a test that sets
  *  CLAUDE_PROJECT_DIR / LLM_EXT_OUTPUT_DIR mid-run gets the recomputed value. */
 export function _resetDefaultOutputDirCache(): void {
   _cachedDefaultOutputDir = undefined;
+  // WHY both: tests that reset the output cache also change the env the
+  // scratch root derives from (TRDD-PNU8XECB); a stale scratch cache would
+  // send pieces to a previous test's directory.
+  _cachedDefaultScratchDir = undefined;
 }
 
 /** Test-only re-export of the internal helper so default-output-dir.test.ts

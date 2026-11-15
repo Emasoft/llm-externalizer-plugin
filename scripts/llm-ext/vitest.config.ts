@@ -29,6 +29,14 @@ export default defineConfig({
       'src/profile-type.test.ts',
       // PT-02 (TRDD-IQTF34TC): the migration writing profile-type into every profile; real files in a temp llm-ext-* config dir.
       'src/profile-type-migration.test.ts',
+      // TRDD-SZ7TO9FW inc 1: the unified verdict module over the six benchmark stores; real files in a temp llm-ext-* dir.
+      'src/profiles/verdicts.test.ts',
+      // TRDD-SZ7TO9FW increment 2: the pure resolution chain (the include list is explicit).
+      'src/profiles/resolve-chain.test.ts',
+      // TRDD-SZ7TO9FW increment 3 (plan W1): the production verdict reader, current hashes + automatic legacy backfill; real files in a temp llm-ext-* dir.
+      'src/profiles/production-verdicts.test.ts',
+      // TRDD-SZ7TO9FW plan W3: routeForTier, the per-tier route and deps-source seam; pure, injected fixtures.
+      'src/profiles/route-for-tier.test.ts',
       // P6c-a2b (fix-queue review S1 + 57): boot/reload through
       // evaluateSettingsValidity, the shared verdict index.ts's four call
       // sites now route through.
@@ -47,6 +55,11 @@ export default defineConfig({
       'src/classifiers/l0/test-fetch.test.ts',
       // L0-04 (TRDD-H2NRKMEY): one deadline across attempts, abortable waits.
       'src/classifiers/l0/deadline.test.ts',
+      // Classifier input-args document and the ping command (coordinator add-on, governor unit 3 fixes).
+      'src/classifiers/input-args-document.test.ts',
+      'src/classifiers/commands/ping.test.ts',
+      // TRDD-O93LFMF3: a command stop ends ping's local decider tier (mirrors the run-decision cases of command-timeout.test.ts).
+      'src/classifiers/commands/ping-stop.test.ts',
       // 'profile' command (TRDD-K3PW7Q2M) — read-only list/show against the
       // real compiled CLI + a throwaway multi-profile settings.yaml.
       'src/profile.test.ts',
@@ -74,9 +87,15 @@ export default defineConfig({
       'src/cli/active-precedence.test.ts',
       // --profile visibility in per-command --help (profile-visibility task).
       'src/cli/profile-help-visibility.test.ts',
+      // TRDD-58CFBQHN: the dry-run flag table is bound to the real estimate and preview behaviour (in-process, no dist needed).
+      'src/cli/dry-run-flags.test.ts',
+      // TRDD-OK1NN5RN: built-CLI dry runs incl. repeated array flags (the include list is explicit; this file was never run before).
+      'src/cli/estimate-positional-cli.test.ts',
       // PT-05 follow-up (TRDD-RPEKSYJL): --profile forwarding, active left alone, no active-pool gate/override for scouting-only commands; real bundled CLI entry.
       'src/cli/scouting-profile-forwarding.test.ts',
       'src/cli/grouped-help-shape.test.ts',
+      // readAllFrom (TRDD-S3QEQBYV): real-stream stdin reader.
+      'src/cli/read-all.test.ts',
       // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
       'src/test-helpers.test.ts',
       'src/grouping.test.ts',
@@ -143,6 +162,8 @@ export default defineConfig({
       // authToken branch and protocol-gated attribution headers were only ever
       // exercised through a mock, never the real routeHeaders().
       'src/route-headers.test.ts',
+      // TRDD-78LZFUVJ: makeProviderDeps over a profile other than the active one, and the boot providerDeps after a profile swap.
+      'src/provider-deps-seam.test.ts',
       // D2 split coverage (item D2/A4, 2026-09-16): the empty-response retry
       // ladder + run-level spend stop, against a real local HTTP server.
       'src/provider/completion.test.ts',
@@ -150,11 +171,25 @@ export default defineConfig({
       'src/provider/request-options.test.ts',
       'src/provider/provider-state.test.ts',
       'src/provider/provider-state-render.test.ts',
+      // TRDD-OKK9JVK6 + TRDD-KP4DWUF9: ensemble slot provider-state text; ensembleStreaming all-failed wiring (real node:http).
+      'src/ensemble-all-failed.test.ts',
+      // TRDD-7H5MGN34: a 3-member remote-ensemble profile fans one prompt out to all three models (real node:http).
+      'src/remote-ensemble-fanout.test.ts',
+      // P8 (TRDD-1OOAH3LD): local profiles with two or more models fan out to every member, each on its own route (loopback servers).
+      'src/local-ensemble-fanout.test.ts',
+      // P9 (TRDD-1OOAH3LD): mass scouting on a local llama.cpp/Locals profile, gated by its calibration record (loopback servers).
+      'src/mass_scouting/scout-local.test.ts',
+      // P7 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG): local input sizing from the calibration record (real records, loopback server).
+      'src/local-input-budget.test.ts',
+      'src/provider/supported-params-negative-cache.test.ts',
       'src/provider/retry-clock.test.ts',
       'src/provider/failure-fields.test.ts',
       'src/provider/classify-failure.test.ts',
       'src/provider/first-failure-consumers.test.ts',
       'src/provider/issue16-burst.test.ts',
+      // TRDD-3CG178O7: typed failure causes of the free rotation + the pure network-isolation classifier (real servers, a real closed port).
+      'src/free-failure-cause.test.ts',
+      'src/free-rotation-typed-causes.test.ts',
       'src/retry-clock-consumers.test.ts',
       // Single-profile fallback iterator (phase 14.1-C1, TRDD-OE27RD7I
       // addenda 2/3/4): walks ONLY the resolved profile's own model chain,
@@ -216,6 +251,9 @@ export default defineConfig({
       // proof (mocked maintainDynamicProfiles, call-count assertions).
       'src/empty-pool-wait.test.ts',
       'src/foreground-repair.test.ts',
+      // TRDD-GBC4A4CF: stoppableSleep, the one stoppable wait of every long backoff (the include list is explicit).
+      'src/command-stop-sleep.test.ts',
+      'src/stop-on-errors.test.ts',
       'src/inline-active-repair.test.ts',
       'src/outage-detection.test.ts',
       // FREE_FORBIDDEN_TOOLS vs the FREE-FORBIDDEN markers in the mass-scout
@@ -238,6 +276,22 @@ export default defineConfig({
       // `npm test` runs it in a SECOND vitest run, alone: its real llama-server load made
       // timing-sensitive files flaky when they ran alongside it (completion D1, pick-lock, regex-worker).
       'src/broker/broker.test.ts',
+      // TRDD-ZTO9K8EK governor core: pure controller tables plus real child processes through acquire.
+      'src/governor/governor.test.ts',
+      'src/broker/broker-governor.test.ts',
+      // TRDD-ZTO9K8EK governor unit 3: leases on the direct path and calibration senders; 100 real processes against a
+      // counting loopback server, so it runs in the sequential step of npm test (package.json), not beside the parallel run.
+      'src/governor/governor-direct.test.ts',
+      // TRDD-ZTO9K8EK governor unit 4: model loads and RAM; real brokers and a child that allocates memory, so it runs in the
+      // sequential step of npm test (package.json).
+      'src/governor/governor-load.test.ts',
+      // TRDD-ZTO9K8EK governor unit 5: the thread budget; real brokers and llama-servers, so it runs in the sequential step of
+      // npm test (package.json).
+      'src/governor/governor-threads.test.ts',
+      // TRDD-ZTO9K8EK governor unit 6: the burn tests of the spec's section 3 table load the machine on purpose (CPU burners,
+      // real CLIs and brokers), so they run alone in the third, sequential step of npm test (package.json).
+      'src/governor/governor-burn.test.ts',
+      'src/classifiers/receipt.test.ts',
       'src/broker/server-commands.test.ts',
       // --until-done backoff policy. The loop it drives is unbounded, so a zero
       // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight
@@ -334,6 +388,8 @@ export default defineConfig({
       // Zero-call standalone backfill (backfillAllLedgers) — same reclaim as
       // above, without a full benchmark run and its live model calls.
       'src/benchmark/backfill-ledgers.test.ts',
+      // TRDD-SZ7TO9FW inc 4: the shared non-evidence rule (no usable answer -> no qualityPass) and its backfill repair, per tool; real files in a temp llm-ext-* dir.
+      'src/benchmark/quality-evidence.test.ts',
       // Per-tool model writer (applyToolModelToSettings) — CLI/cron-only,
       // read-only-MCP-guarded (TRDD-828238b5 A7-P2).
       'src/benchmark/apply-tool-model.test.ts',
@@ -533,10 +589,15 @@ export default defineConfig({
       // Codex-removal guard — shipped tree must never invoke the codex CLI (TRDD-1e2b87cb).
       'src/no-codex-invocation.test.ts',
       'src/default-output-dir.test.ts',
+      // TRDD-PNU8XECB: scratch root (reports_dev) resolver + piece routing, and scan_folder's FINAL/INTERMEDIATE split (the include list is explicit).
+      'src/project-root-scratch.test.ts',
+      'src/scan-folder/core-report-routing.test.ts',
       // File-walking + FFD bin-packed batching engine (TRDD-828238b5 Part F).
       'src/scan-pipeline.test.ts',
       // --estimate dry-run estimator (task #187) — pure arithmetic + fail-fast negatives.
       'src/estimate.test.ts',
+      // TRDD-4TTFUIL0: --estimate applies the IRON RULE / price-ceiling gates; real ledger files in a temp config dir.
+      'src/estimate-gates.test.ts',
       // review_plan delegate-mode plan builder (TRDD-SNAEERHU).
       'src/review-plan.test.ts',
       // Layered per-path review rules (TRDD-3JQVBO7M).
@@ -550,7 +611,12 @@ export default defineConfig({
       'src/session_summary/transcript.test.ts',
       'src/session_summary/chunker.test.ts',
       'src/session_summary/model-select.test.ts',
+      'src/session_summary/local-model.test.ts',
       'src/session_summary/driver.test.ts',
+      // TRDD-3SNQAGIC follow-ups (hedge loser, speculative racers aborted) and TRDD-TYHKAKCB (non-blocking
+      // calibration enqueue): the include list is explicit, so a new test file runs only once named here.
+      'src/session_summary/driver-abort.test.ts',
+      'src/session_summary/local-model-lock.test.ts',
       // Transcript-path resolution (P5, TRDD-T4MZ8YQR) — CLAUDE_CONFIG_DIR /
       // CLAUDE_CODE_PROJECT_DIR_NAME env overrides + timestamp-based recency
       // (Claude Code 2.1.234 / 2.1.239 alignment).
@@ -560,6 +626,8 @@ export default defineConfig({
       'src/response-gate.test.ts',
       // Per-SURFACE proof the same gate is WIRED at its four acceptance sites.
       'src/response-gate.surfaces.test.ts',
+      // TRDD-PN84WC1L: real node:http 503/429 through the real scan_folder send path.
+      'src/scan-folder-http-failures.test.ts',
       // Request-deadline contract (TRDD-0H5N1V9W) — the timeout must cover the
       // BODY read, not just time-to-first-byte. Regression for a shipped bug
       // where a stalled generation hung the run forever (measured 1890s against
@@ -575,10 +643,15 @@ export default defineConfig({
       // Global `llm-ext` PATH shim (TRDD-VV0INGRT) — the SessionStart installer
       // hook and the resolver wrapper it installs to ~/.local/bin/llm-ext.
       'src/path-shim.test.ts',
+      // C4 (TRDD-O93LFMF3): the mlx-decision login-agent installer hook; real sh, temp HOME, fake PATH binaries.
+      'src/decider-agent-hook.test.ts',
       // Guards test-hermetic-config.ts: during the suite getConfigDir() must
       // never resolve to the real ~/.llm-externalizer, and must resolve
       // under /tmp (TRDD-90DM5YHO).
       'src/config-dir-hermetic.test.ts',
+      // TRDD-4HRFC42S: getConfigDir() throws under vitest when it would resolve to the real ~/.llm-externalizer.
+      'src/config-dir-test-guard.test.ts',
+      'src/backup-exclusive.test.ts',
       // TRDD w2-honest-402 — a static profile with no free models must not
       // claim a switch to free that never happened (classifyError Path 1,
       // withFreeRotation Path 2).
@@ -613,6 +686,10 @@ export default defineConfig({
       'src/classifiers/l0/model.test.ts',
       // L0-02 (TRDD-CWQOWEHO): callDecisions request building, key-in-body refusal, 1 MB cap, redirect error; real P-01 replies, real local server for the 3xx.
       'src/classifiers/l0/transport.test.ts',
+      // Local decider fallback (mlx-decision increment 1): the local sender's wire contract — NO Authorization
+      // or attribution header, the decider's own 422 text preserved, X-MLX-Decision-Truncated refused; real
+      // node:http server, real fetch.
+      'src/classifiers/l0/local-transport.test.ts',
       // PF-01 (TRDD-82LIQI5I): classifier profile schema, E84, and the D2 spend gate; pure, no I/O.
       'src/classifier-profile.test.ts',
       // L1-03 (TRDD-P7OR5OQP): ValidationPolicy presets, tolerances and noul validation over the real P-01 noul replies.
@@ -683,6 +760,12 @@ export default defineConfig({
       'src/or-jev-migration.test.ts',
       // L2-17 (TRDD-7BT0W914): classifier profile resolution: active_classifier or --profile, PT-03 type check, schema, defaults, no paid gate (D2), catalog checks on the selection path; real catalog, replay fetch.
       'src/classifiers/l2/profile.test.ts',
+      // Local decider fallback (mlx-decision, adopt-only, TRDD-O93LFMF3): the three-way /health reading, adopt, the loaded:[] wait,
+      // the discovered-server verdicts, retryable vs not, the platform and install checks; real node:http health server on a free
+      // port or an injected fetch, never the real singleton.
+      'src/classifiers/l2/local-decider.test.ts',
+      // Retry policy of the local decider tier (TRDD-O93LFMF3): fixed rescan pause, fast-fail memo, outer deadline on the wait; injected fetch and fake clock.
+      'src/classifiers/l2/local-fallback.test.ts',
       // Review round on PT-06/PF-03: migration notice, tables vs generated sections, or-jev tuning, error duplicates, banner; real /tmp files.
       'src/profile-review-round.test.ts',
       // PF-02 (TRDD-FFPDWWGN): selection-time decisions-catalog checks (guard, model exists, E19, E16) over the real P-02 catalog; replay fetch, no network.
@@ -699,11 +782,16 @@ export default defineConfig({
       'src/classifiers/run-decision.test.ts',
       // Review of 4856f009, finding 4: classify honours --command_timeout (no new request or retry, partial result, exit 124).
       'src/classifiers/command-timeout.test.ts',
+      // TRDD-XJE5DDK2: a remote failure answered by the local decider names the remote error in the stderr line and the local_decider warning.
+      'src/classifiers/local-decider-remote-error.test.ts',
       'src/classifiers/system-one-fallback.test.ts',
       // SP-14 (TRDD-OHLMZONY): findings decision spec: four questions per finding, keep/keep_low/drop policy, E71 empty window, index-scoped injection, partial failure; real P-01 noul and score replies.
       'src/classifiers/catalog/findings.test.ts',
       // SP-17 (TRDD-O5NUD6IT): test-output decision spec: grep-found failing blocks first, E74 chunked log, highest-regression merge, class/regression/severity/evidence policy, partial failure; real P-01 noul replies.
       'src/classifiers/catalog/test-output.test.ts',
+      // TRDD-S5KOOT2S Phase 2: the sentence splitter of classify requirements (pure) and the requirements decision spec: one label question per sentence, the min-confidence gate, code segments unscored, partial failure; real captured Jev reply.
+      'src/classifiers/l2/sentences.test.ts',
+      'src/classifiers/catalog/requirements.test.ts',
       // SP-10 (TRDD-N2TDAXL4): audit decision spec: 4 checks plus absence max-gated at wrong_at, E67 truncated source, index-scoped injection, partial failure; real P-01 noul reply.
       'src/classifiers/catalog/audit.test.ts',
       // SP-11 (TRDD-QFPC4Z8P): review decision spec: whole and per-file, 4 risk scores + unsafe, composite, reason codes, --claims, E68-E70, index-scoped injection, partial failure; real P-01 replies.
@@ -717,10 +805,27 @@ export default defineConfig({
       // C4-03 (TRDD-4Q1IVJOE): classify group of the launcher (in process, replayed replies) and the same through the built CLI (needs `npm run build`).
       'src/cli/classify-launch.test.ts',
       'src/cli/classify-launch-cli.test.ts',
+      // classifier review fixes d56a7b1a
+      'src/classifiers/review-fixes.test.ts',
+      'src/classifiers/commands/ping-history.test.ts',
+      // Spawns the built dist/llm-ext.js, like classify-launch-cli above (needs `npm run build`).
+      'src/cli/classify-review-cli.test.ts',
+      // TRDD-XM2OSVC0: pipes stdin into the built CLI's classify filter --estimate (truncated JSON refusal and the valid-input estimate; needs `npm run build`).
+      'src/cli/classify-stdin-cli.test.ts',
+      // TRDD-GBC4A4CF: the stop notice line names only what happened (zero jobs, cancelled, not cancelled, both).
+      'src/cli/stop-notice.test.ts',
       // SP-22 (TRDD-DTDGVXWV): regex worker thread for extract, E64 timeout, no leaked thread.
       'src/classifiers/l2/regex-worker.test.ts',
       // IN-01: file inputs (positionals, --items, --lines, ...) of filter/rank/find through collectInputs.
       'src/classifiers/input-args.test.ts',
+      // TRDD-B07E5M93: the CLI stats file gets the statusline's directory guards (real symlinks, real foreign-owned dir).
+      'src/stats-file.test.ts',
+      // TRDD-O4MSZIG5: each decision spec run end to end on one real captured Jev reply, replayed.
+      'src/classifiers/catalog/live-capture.test.ts',
+      // TRDD-FUHTNE04: hq scan quality CLI respects the budget and daily cap; outages are inconclusive.
+      'src/benchmark/hq-scan-quality-cli.test.ts',
+      // TRDD-3SNQAGIC: an aborted request cancels its broker job.
+      'src/provider/broker-abort.test.ts',
     ],
   },
 });

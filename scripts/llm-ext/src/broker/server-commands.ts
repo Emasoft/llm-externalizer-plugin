@@ -21,6 +21,7 @@
 import { pidState } from "../local-llama-server.js";
 import { BROKER_ENGINES, isBrokerProcess, isRunnerOf, readBrokerState, TOKEN_HEADER, type BrokerEngine } from "./protocol.js";
 import { readRegistry, serverLabel, stopOwnServer, type RegistryEntry, type ServerRole } from "./registry.js";
+import { snapshot } from "../governor/client.js";
 
 export interface ServerStopOptions {
   engine?: BrokerEngine;
@@ -33,18 +34,60 @@ async function ownerText(dir: string, e: RegistryEntry): Promise<string> {
   return `owner pid ${e.ownerPid} (${alive ? "alive" : "dead"}, ${kind})`;
 }
 
+/** A percent figure of the reading, or "no reading" when none was taken yet. */
+function pct(value: number | null): string {
+  return value === null ? "no reading" : `${Math.round(value)}%`;
+}
+
+/**
+ * Governor D13: the machine-wide figures, from a lockless read of the governor state (nothing is written, so an idle
+ * machine gets no file), and the T of every server registered with it, by pid. A state that cannot be read, or a
+ * malformed setting, is printed as such: status must answer whatever the governor looks like.
+ */
+function governorStatus(): { lines: string[]; threads: Map<number, number> } {
+  try {
+    const s = snapshot();
+    const age = s.readingAgeMs === null ? "no reading yet" : `reading ${(s.readingAgeMs / 1000).toFixed(1)} s old`;
+    const lines = [
+      s.enabled
+        ? `governor: on (${s.dir}): window ${s.w} of max_inferences ${s.maxInferences}, ${s.running} inference(s) running, ${s.leases.length} lease(s), ${s.waiters.length} waiting`
+        : `governor: off for this config dir (local_governor.enabled false or LLM_EXT_GOVERNOR_ENABLED=false): its sends take no lease and are not counted; machine-wide state (${s.dir}): ${s.running} inference(s) running, ${s.leases.length} lease(s), ${s.waiters.length} waiting`,
+      `governor: RAM ${pct(s.ramUsedPct)} used, limit ${s.ramLimitPct}%; CPU ${pct(s.cpuPct)} busy, limit ${s.cpuLimitPct}% (${age}); server threads ${s.threadsInUse} in use of a budget of ${s.threadBudget}`,
+      s.lastDenial === null
+        ? "governor: no denial recorded"
+        : `governor: last denial ${Math.round((Date.now() - s.lastDenial.at) / 1000)} s ago, ${s.lastDenial.kind === "load" ? "a model load" : "an inference"} of pid ${s.lastDenial.pid}: ${s.lastDenial.reason}`,
+    ];
+    // Review m6: each waiter is judged by its own limits (D13), so each is printed with them; the limit line above is the
+    // config dir this command runs in. A waiter of a unit-5 file may carry none.
+    const now = Date.now();
+    for (const w of s.waiters) {
+      const own = w.limits ? `its limits RAM ${w.limits.ramLimitPct}%, CPU ${w.limits.cpuLimitPct}%, max_inferences ${w.limits.maxInferences}` : "its limits not recorded";
+      lines.push(`governor: waiting ${Math.round((now - w.since) / 1000)} s, ${w.kind === "load" ? "a model load" : "an inference"} of pid ${w.holder.pid}: ${own}`);
+    }
+    return { lines, threads: new Map(s.servers.map((e) => [e.pid, e.threads])) };
+  } catch (err) {
+    return { lines: [`governor: cannot be read: ${(err as Error).message}`], threads: new Map() };
+  }
+}
+/** D10: the T a server was started with, as the governor books it; 0 is no -t (cpu_limit_pct 100 or the governor off). */
+function threadsText(threads: number | undefined): string {
+  if (threads === undefined) return "threads not booked with the governor";
+  return threads === 0 ? "threads 0 (no -t, not counted)" : `threads ${threads}`;
+}
 /** One line per registered server of every engine, plus the broker process. */
 export async function serverStatusText(dir: string): Promise<string> {
   const lines: string[] = [];
   const broker = readBrokerState(dir);
   if (broker && (await isBrokerProcess(broker.pid))) lines.push(`broker: pid ${broker.pid} (port ${broker.port}, version ${broker.version}, since ${broker.startedAt})`);
   else lines.push("broker: not running");
+  const governor = governorStatus();
+  lines.push(...governor.lines);
   let count = 0;
   for (const engine of BROKER_ENGINES) {
     for (const e of readRegistry(dir, engine)) {
       count++;
       lines.push(
-        `${engine} ${e.role}: model '${e.model}', port ${e.port}, pid ${e.pid} (${pidState(e.pid) === "dead" ? "not alive" : "alive"}), ctx ${e.ctx}, ${await ownerText(dir, e)}, started ${e.startedAt}`,
+        `${engine} ${e.role}: model '${e.model}', port ${e.port}, pid ${e.pid} (${pidState(e.pid) === "dead" ? "not alive" : "alive"}), ctx ${e.ctx}, ${threadsText(governor.threads.get(e.pid))}, ${await ownerText(dir, e)}, started ${e.startedAt}`,
       );
     }
   }

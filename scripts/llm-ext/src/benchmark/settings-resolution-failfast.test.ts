@@ -317,10 +317,10 @@ describe("dryRunWouldMaskRefusal false branch (review of 43e3694, S3)", () => {
 // level, direct-import, no CLI spawn needed (same pattern report-dir.test.ts
 // uses for benchmarkSubReportDir).
 describe("update-all report path (review of 43e3694, S4)", () => {
-  it("nests under <mainRoot>/reports/llm-externalizer/update-all/", async () => {
+  it("nests under <mainRoot>/reports_dev/llm-externalizer/update-all/", async () => {
     const { updateAllReportDir } = await import("./update-all.js");
     expect(updateAllReportDir("/tmp/fake-project-root")).toBe(
-      "/tmp/fake-project-root/reports/llm-externalizer/update-all",
+      "/tmp/fake-project-root/reports_dev/llm-externalizer/update-all",
     );
   });
 });

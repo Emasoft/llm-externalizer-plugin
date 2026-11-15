@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\n  \"model\": \"typesafe/jev-1.14-20261014\",\n  \"answers\": {\n    \"rank_i0\": {\n      \"type\": \"score\",\n      \"score\": 0.26,\n      \"legend\": {\n        \"0\": \"Unrelated to the query.\",\n        \"1\": \"Same general topic as the query, but no help in answering it.\",\n        \"2\": \"Partly relevant: has some information useful for the query.\",\n        \"3\": \"Relevant: substantially addresses the query.\",\n        \"4\": \"Directly and specifically answers or matches the query.\"\n      },\n      \"probabilities\": {\n        \"0\": 0.87,\n        \"1\": 0.07,\n        \"2\": 0.03,\n        \"3\": 0.01,\n        \"4\": 0.02\n      },\n      \"confidence\": 0.8\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 418,\n    \"output_tokens\": 19,\n    \"cost\": 0.000017556\n  }\n}\n"
+}

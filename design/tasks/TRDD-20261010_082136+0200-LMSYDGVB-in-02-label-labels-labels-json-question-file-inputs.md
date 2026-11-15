@@ -4,7 +4,7 @@ title: IN-02 label (--labels, --labels-json, --question, file inputs)
 column: blocked
 status: tasked
 created: 2026-10-10T08:21:36+0200
-updated: 2026-10-10T08:48:23+0200
+updated: 2026-11-14T18:51:00+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,11 +16,11 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-10T08:21:36+0200
 implementation-commits: [a77c0f96, 04e9b517]
-blocked-by: [ZB41KG62]
-unblock-when: [decision:test-doubles-ruling]
-blocker-probe: 'grep -qF OWNER-RULING-test-doubles: /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261007_050214+0200-ZB41KG62-classifiers-command-group-system-one-inference-with-the-jev-.md'
+blocked-by: [G0MS9B63]
+unblock-when: [trdd:G0MS9B63]
+blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*G0MS9B63\*'
 blocker-holds-if: exit-nonzero
-pre-block-column: dev
+pre-block-column: testing
 ---
 
 # IN-02 label (--labels, --labels-json, --question, file inputs)
@@ -51,6 +51,12 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 
 - 2026-10-10T08:21:36+0200 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T08:43:21+0200 — column → blocked by main-agent@llm-externalizer-plugin. a77c0f96 landed; waits on the owner ruling about test doubles (plan card ZB41KG62)
+- 2026-10-31T03:55:31+0100 — column → dev by main-agent@llm-externalizer-plugin. test-doubles ruling recorded on ZB41KG62 Cleared blocked-by (--clear-blocker override).
+- 2026-11-04T10:09:05+0100 — column → blocked by main-agent@llm-externalizer-plugin. waits on TRDD-KNSQAQ1S (forbidden test doubles)
+- 2026-11-04T13:31:47+0100 — column → testing by main-agent@llm-externalizer-plugin. test doubles clause met under R2 and R4; definition-of-done box waits on the clean-HEAD full suite run (headcheck) Cleared blocked-by (--clear-blocker override).
+- 2026-11-04T13:57:32+0100 — column → blocked. Waits on the owner ruling in TRDD-M2H4RJVQ; the box also waits on a full suite at a HEAD that includes ddf17705 and a committed dist rebuilt from HEAD, which the host's memory pressure delays.
+- 2026-11-05T01:43:55+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b passed npm test; no blocker left Cleared blocked-by (all blockers terminal).
+- 2026-11-14T18:51:00+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
 
 ## Notes
 
@@ -58,3 +64,15 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 2026-10-10T08:43:18+0200 a77c0f96: classify label takes --labels / --labels-json (inline or @file under the named-file rules) and file inputs; boxes proven by input-args.test.ts (labels parsing, labels-json and @file, named-file refusals, 1 and 256 labels, --default, E117 no-vote, end to end). Deviation from qs: a repeated label is refused instead of the last winning. The JSON-input overlay of spec flags landed here (planned for IN-03). Definition-of-done box waits on the owner ruling about test doubles (category c: injected readStdin and writers).
 2026-10-10T08:44:06+0200 pre-block-column set to dev: the card was worked from todo (code in a77c0f96), so a release must put it back in dev.
 2026-10-10T08:48:22+0200 04e9b517 (follow-up): --labels refuses an empty label naming --labels; labels with spaces are accepted as typed (only item ids are restricted); overlay errors that are not refusals rethrow and print as one llm-ext line (main.ts top-level handler), not as a user refusal. Gate green: build, tsc, eslint, 4808 tests passed.
+2026-11-04: definition of done not met: the card's tests use test doubles outside the 2026-10-31 ruling; the rework is TRDD-KNSQAQ1S.
+2026-11-04T13:19:41+0100 KNSQAQ1S judgment: stays blocked. input-args.test.ts is fixed (3140eaaf), but a77c0f96 also touched definitions-classify.test.ts, which still holds scripts/llm-ext/src/tools/definitions-classify.test.ts:22-25 (parserDeps: settings {} literal, throwing readFile and readStdin; reported by KNSQAQ1S as not fixed; created by 6cc2a9ad and 3c3db86f). Borderline: the verifier did not flag that line for this card and the commit did not write it; fixing it would unblock this card.
+2026-11-04T13:31:45+0100 correction to the 13:19 judgment: under R2 (ZB41KG62 line 85) definitions-classify.test.ts:22-25 belongs to BUL4EEBP (blame, 6cc2a9ad) and does not block this card; extract.test.ts:536-537 is allowed under R4; index.test.ts spies are pre-existing and on their own card. The test-doubles clause is met on this card own test files under R2 and R4 (R4 pending owner ratification). Box (definition of done) waits on the clean-HEAD full suite, eslint . --quiet and build (reports_dev/headcheck/).
+2026-11-04T13:43:27+0100 definition-of-done box also waits on a committed dist rebuilt from HEAD (stale committed dist; see TRDD-S5KOOT2S) and a full suite at a HEAD that includes ddf17705; the 23f40c1e headcheck does not cover it.
+2026-11-04T14:12:14+0100 re-pointed (blame inventory 2026-11-04, R2): owns no R4-only site; the 13:57 line Waits on the owner ruling in TRDD-M2H4RJVQ is superseded for this card.
+2026-11-04T14:14:25+0100 correction (coordinator): TRDD-6XMCY4ZE (committed dist) does not block this card; its definition-of-done box does not name a committed or built dist, and the full-suite build is done inside TRDD-YGF9YXF2. blocked-by and unblock-when carry no DIST id.
+2026-11-05T01:44+0100 restored to testing: TRDD-YGF9YXF2 complete (run 4b at c668389e, npm test exit 0); no forbidden doubles in its own test files at HEAD; the definition-of-done box waits on eslint . --quiet and tsc at HEAD.
+2026-11-05T01:55+0100 lint and typecheck measured on source identical to HEAD (scripts/ unchanged since c668389e; scratch worktree at c668389e, node_modules symlinked from the main tree, versions not rechecked against the lockfile since run 4b): tsc --noEmit -p scripts/llm-ext/tsconfig.json (src only) exit 0; npx eslint . --quiet run from scripts/llm-ext exit 0, 611 files, 0 errors, 0 warnings (reports_dev/ygf9yxf2/20261105_014302+0100-eslint-tsc-at-head.md, gitignored). This settles only the lint and typecheck part of the definition-of-done box; the box also needs the vitest include-list check, the WHY comments and the R1 reading of one commit with the TRDD id (the permissive reading, at least one commit names the id, is unratified in TRDD-M2H4RJVQ). No box ticked.
+2026-11-05T01:55+0100 correction to the 01:43-01:44 move reason and note: no forbidden doubles means no vi.mock, vi.spyOn, vi.doMock or vi.stubGlobal call in its own test files at HEAD (grep); non-vi doubles were not judged in this pass.
+2026-11-05T02:58+0100 WHY-comment pass (definition-of-done clause: WHY comments at non-obvious rules): a worker read the src diffs of the card commits and reported per-card verdicts with a spot-check (reports_dev/ygf9yxf2/20261105_021126+0100-why-review-findings.md, gitignored); the main agent re-read every gap it reported. Evidence limit: src diffs only, not tests, dist or the rest of each file. Commits 61efae4e and 948870d4 changed only comments in scripts/llm-ext/src/classifiers/run-decision.ts, so the 01:55 note's "scripts/ unchanged since c668389e" no longer holds literally. Checks at 948870d4 in a scratch worktree (node_modules symlinked from the main tree, lockfile not rechecked): tsc --noEmit -p scripts/llm-ext/tsconfig.json exit 0; eslint . from scripts/llm-ext 611 files including run-decision.ts, 0 errors, 0 warnings; run-decision.test.ts 65/65; the full suite was not rerun after c668389e (only comments changed since). No box ticked while rule R1 (TRDD-M2H4RJVQ) is unratified.
+2026-11-05T02:58+0100 Verdict for this card (a77c0f96, 04e9b517): no non-obvious rule without a WHY found.
+2026-11-05T03:06+0100 vitest include list (scripts/llm-ext/vitest.config.ts as committed at 73f863a3): every .test.ts file touched by a77c0f96 and 04e9b517 is listed: src/classifiers/input-args.test.ts (line 768), src/tools/definitions-classify.test.ts (756).

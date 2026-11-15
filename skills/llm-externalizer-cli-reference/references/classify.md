@@ -1,6 +1,10 @@
 # llm-ext reference: classify group
 
-Flags are written `--name value`; booleans take `true`/`false`. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see SKILL.md). All text below comes from `llm-ext <group> <action> --help`.
+Output: a classify command prints its text form on stdout and the receipt line (items, time, Jev tokens and cost) as the last line. Add `--json` to print the JSON envelope instead; the receipt then goes to stderr, so stdout stays one parseable JSON document. A script that parses the output must pass `--json`. `--estimate` prices the run from the catalog and sends nothing (no API key needed; it writes no `-o` report). `-o <dir>` saves the JSON envelope of every completed run, whichever output form was printed. `classify ping --estimate` is refused with `llm-ext: --estimate is not available for classify yet.` (exit 1, measured on a development build of commit 153fe531); ping does not take `--estimate`, and its help says `--no_call` sends no question.
+
+The `--estimate` row in the flag tables below comes from the help of a build that includes commit 153fe531; that row needs a release that includes it. The flag itself already works on a development build of commit 9e036052, which is in no release (measured 2026-11-04: `classify filter`, `rank` and `label` with `--estimate` exit 0 and print that nothing was sent). The installed llm-ext 14.2.0 (measured 2026-11-04) has neither: `classify filter --help` does not list `--estimate`, and `llm-ext classify filter "is this a rule" ./small.txt --estimate` exits 1 with `llm-ext: --estimate is not available for classify yet.` The same 14.2.0 message appears for `classify label ... --estimate`.
+
+Flags are written `--name value`. Boolean flags (measured for `--json` and `--estimate` on `classify filter` and `classify requirements`) are bare switches: a value after one is taken as an extra positional (file) argument. With `--input` the error is `llm-ext: --input cannot be combined with files, --items or the other file options; pass one or the other` (command `classify filter --input filter-text.json --estimate true`); without `--input` it is the usage line `llm-ext: usage: llm-ext classify requirements <file, - for stdin> [--max-bytes N]`. `--estimate` alone works. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see SKILL.md). All text below comes from `llm-ext <group> <action> --help`, except the sections that say they come from live runs and the source.
 
 ## Contents
 
@@ -18,6 +22,9 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - `llm-ext classify check`
 - `llm-ext classify findings`
 - `llm-ext classify test-output`
+- `llm-ext classify requirements` (needs a release that includes it; see its section)
+- Request JSON shapes (`filter`, `label`, `find`)
+- `llm-ext classify ping` (needs a release that includes it; see its section)
 
 ## `classify` group
 
@@ -35,6 +42,7 @@ Classify decision "verify" (catalog spec; flags, defaults and ranges are generat
 | `--auto` | number | relation confidence at or above which a grounded verdict is auto-accepted (default 0.8, range 0.5..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -60,6 +68,7 @@ Classify decision "screen" (catalog spec; flags, defaults and ranges are generat
 | `--block` | number | injection probability at or above which the text is blocked (default 0.75, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -87,6 +96,7 @@ Classify decision "filter" (catalog spec; flags, defaults and ranges are generat
 | `--band` | number | width around the threshold inside which an item is borderline (default 0.15, range 0..0.5) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
 | `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
@@ -117,7 +127,9 @@ Classify decision "label" (catalog spec; flags, defaults and ranges are generate
 |---|---|---|
 | `--auto` | number | --auto: lowest confidence that makes a label automatic (must be >= --min-confidence) (default 0.85, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
+| `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
 | `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
@@ -137,6 +149,7 @@ Classify decision "label" (catalog spec; flags, defaults and ranges are generate
 Example:
 ```bash
 llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl
+llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --context ./context.txt   # needs a release that includes --context
 ```
 
 ### `llm-ext classify rank`
@@ -152,6 +165,7 @@ Classify decision "rank" (catalog spec; flags, defaults and ranges are generated
 | `--all` | boolean | List every ranked candidate instead of the top N. |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
 | `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
 | `--head` | number | Send at most the first N bytes of every candidate, cut at a character boundary (a whole... |
@@ -187,6 +201,7 @@ Classify decision "find" (catalog spec; flags, defaults and ranges are generated
 | `--chunk` | number | --chunk: file mode, lines per request (default 150, range 1..250) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
 | `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
@@ -218,6 +233,7 @@ Classify decision "decide" (catalog spec; flags, defaults and ranges are generat
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -242,6 +258,7 @@ Classify decision "compare" (catalog spec; flags, defaults and ranges are genera
 | `--auto` | number | --auto: lowest top probability that makes a relation automatic (default 0.85, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--margin` | number | --margin: lowest gap between the top two relation probabilities for an automatic relation (default 0.5, range 0..1) |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
@@ -268,6 +285,7 @@ Classify decision "extract" (catalog spec; flags, defaults and ranges are genera
 | `--candidate_cap` | number | --candidate-cap: most regex matches kept per field; more are cut and the field cannot be... (default 20, range 2..100) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--margin` | number | --margin: lowest gap between the top two candidates for a pick to be found (default 0.5, range 0..1) |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
@@ -292,6 +310,7 @@ Classify decision "audit" (catalog spec; flags, defaults and ranges are generate
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -318,6 +337,7 @@ Classify decision "review" (catalog spec; flags, defaults and ranges are generat
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--composite_floor` | number | --composite-floor: the weighted composite must be at or above this for auto (default 0.7, range 0..1) |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -342,6 +362,7 @@ Classify decision "check" (catalog spec; flags, defaults and ranges are generate
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -367,6 +388,7 @@ Classify decision "findings" (catalog spec; flags, defaults and ranges are gener
 | `--already_handled` | number | --already-handled: p at or above which the finding is dropped as already handled (default 0.4, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
 | `--output_dir` | string | Directory for the JSON report (same text as stdout). |
@@ -392,6 +414,7 @@ Classify decision "test-output" (catalog spec; flags, defaults and ranges are ge
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--evidence` | number | --evidence: lowest p that the log shows enough to tell the cause; below it a shown failure... (default 0.5, range 0..1) |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
@@ -404,3 +427,139 @@ Example:
 ```bash
 llm-ext classify test-output --input ./request.json
 ```
+
+
+### `llm-ext classify requirements`
+
+`classify requirements` needs a release that includes it; an installed llm-ext without it exits 1 with `llm-ext: unknown action 'requirements' in group 'classify'.` (measured on llm-ext 14.2.0, 2026-11-04). The runs quoted in this section used a build that includes it.
+
+- Usage: `llm-ext classify requirements <file, - for stdin> [--max-bytes N] [--flag value ...]`, or `llm-ext classify requirements --input <file.json> [--flag value ...]` (or the JSON input on stdin)
+- Bare argument: the prompt file (or `-` for stdin); the earlier messages go in `--context`
+- Accepted profile types: classifier
+
+This section comes from live runs and the source, not from --help.
+
+Purpose: pick the explicit requirements out of one user prompt. The prompt is split into sentences in code, Jev labels every sentence with one of four classes (`requirement`: a feature, behavior, property or rule the product must have from now on, even when phrased as a command; `instruction`: an action on the current work that leaves nothing new to check afterwards, such as run, rebuild, open, commit; `opinion`; `other`: question, description of how things are now, greeting), and the sentences labelled `requirement` with confidence at or above `--min_confidence` are returned verbatim, in prompt order. Every sentence is also returned with its label, so a later step can group them (see `references/requirements-pipeline.md`).
+
+Input: the prompt as a text file (one prompt per run). The earlier messages of the conversation, which decide what "it" and "the style" refer to, go in a second file given with `--context` (`-` reads stdin); they are background for every sentence and are never scored. JSON input form: `{"prompt": "...", "context": "..."}`, `context` optional, no other key (`catalog/requirements.ts`).
+
+| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+|---|---|---|
+| `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
+| `--context` | string | File with the earlier messages of the conversation (- reads stdin), used as background for... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
+| `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
+| `--json` | boolean | Print the JSON envelope instead of the text form. |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--min_confidence` | number | --min-confidence: a sentence is a requirement only when its label is requirement and its... (default 0.6, range 0..1) |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
+| `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
+| `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
+
+`--json` and `--estimate` are bare switches: `--json true` fails with `llm-ext: usage: llm-ext classify requirements <file, - for stdin> [--max-bytes N]` (exit 1) and `--json=true` with `unknown option --json=true for classify requirements`. Flag spellings, from runs only (`classify requirements ./prompt.txt <flag> <value> --estimate`, each exit 0): `--min-confidence 0.7` and `--min_confidence 0.7`; `--max-bytes 100000` and `--max_bytes 100000`. For this decision the text form is the JSON document itself followed by the receipt lines; with `--json` the receipt goes to stderr.
+
+Output (`decision` object): `requirements`: `[{id, text, probabilities, confidence}]`, the accepted requirement sentences. `sentences`: every sentence of the prompt in order, `{id, text, kind ("text" or "code"), label, probabilities, confidence, accepted, invalid}`; `accepted` is true when the label confidence is at or above `--min_confidence`. `invalid`: `[{id, reason}]` for a sentence whose answer failed. A text sentence that is not accepted, or invalid, makes the run "need attention" (`--strict_exit` turns that into a non-zero exit). Probabilities and confidences vary a little between runs of the same input.
+
+Live example, the goal prompt (prompt file: `the colors are horrible. let's improve it a little. the loading screen background should be blue. change it and rebuild. then open the web site in chrome for me to see.`; context file: `We implemented the loading screen, but we need to improve the style. Let me see how is it now.`):
+
+```bash
+llm-ext classify requirements ./prompt.txt --context ./context.txt
+```
+
+Result (exit 0; trimmed to the relevant fields: `schema`, `snapshots`, `usage` and empty `warnings`/`degraded` omitted, per-sentence `kind`, `text` and the `probabilities` of the three losing classes omitted):
+
+```
+requirements: [ s3 "the loading screen background should be blue."  requirement 0.98, confidence 0.97 ]
+s1  opinion      probability 1     confidence 1     accepted true
+s2  instruction  probability 0.37 (requirement 0.34)  confidence 0.16  accepted false
+s3  requirement  probability 0.98  confidence 0.97  accepted true
+s4  instruction  probability 0.93  confidence 0.91  accepted true
+s5  instruction  probability 0.94  confidence 0.92  accepted true
+invalid: []   usage: input_tokens 1035, output_tokens 241, cost 0.00004347 USD
+```
+
+`s2` ("let's improve it a little.") is the borderline sentence: its label can flip between runs (see Known limitation); the confidence gate is what kept it out here.
+
+`--estimate` (checked live, 2026-11-04): works for `classify requirements`. `llm-ext classify requirements ./prompt.txt --context ./context.txt --estimate` exits 0, sends nothing and prints `classify requirements --estimate: nothing was sent`, `model: typesafe/jev-1.14`, `requests: 1`, `estimated input tokens: 1070`, `estimated input cost: 0.000045 USD (0.042 USD per million tokens)` and the line "This is an estimate, not a ceiling: it counts input tokens only, and small requests have measured up to 55% below the tokens the API reports."
+
+Limits:
+
+- Fenced code blocks (lines between three-backtick fences, `l2/sentences.ts`) are kept in `sentences` with `kind: "code"`, `label: null`, `accepted: false` and are never scored. A prompt made only of code blocks is refused: `llm-ext: invalid input: prompt: prompt has no text sentence to score (only code blocks)` (exit 1; `catalog/requirements.ts`).
+- No grouping: two consecutive sentences that form one requirement are returned as two rows, and a requirement that continues in the next sentence ("it must also ...") is not joined. Grouping is a separate step done by `llm ask`; see `references/requirements-pipeline.md`.
+- Long prompts: a prompt file over `--max_bytes` is not refused; it keeps its last lines and drops the start, and prints a warning on stderr, e.g. `over 100 bytes; kept the last 71 bytes and dropped 98 bytes from the start`. Requirements in the dropped start are lost, and the only sign is that warning on stderr. When the last line alone is over the cap it is refused: `the last line alone is over 100 bytes; raise --max-bytes` (exit 1). The cap value is 1 to 104857600 bytes (`shared-flags.ts`).
+
+Known limitation (measured 2026-11-04, TRDD-S5KOOT2S): the check used 10 vague improvement requests and 10 concrete property requests, each run alone and inside a three-sentence prompt. All 20 property runs were returned as requirements. One vague run was also returned as a requirement: "make it a bit more professional" inside "the page looks off. make it a bit more professional. rebuild it and open it for me." (confidence 0.79); sent alone, the same sentence had confidence 0.51 and was rejected. The label of a borderline sentence can change between runs (the goal example's "let's improve it a little." was argmax requirement in one run and instruction in another). In the two runs, 3 of 10 and 4 of 10 vague items had requirement as their top label and were stopped only by the gate. The `--min_confidence` gate (default 0.6) usually keeps such sentences out, not always. The check used one context ("we built the settings page yesterday.") and one opener, so the measured rate holds only for that setup. Review the returned list before writing it into a rules file.
+
+### Request JSON shapes (`--input` of `classify filter`, `label`, `find`)
+
+This section comes from live runs and the source, not from --help. All schemas are strict where marked; ids, when given, must be unique, and in json mode must match `^[A-Za-z0-9_-]{1,64}$` (`l2/ids.ts`; a missing id is its position). All paths below are under `scripts/llm-ext/src/classifiers/`. Each shape below was run live through `--input <file> --json` (exit 0) unless noted.
+
+`classify filter` takes one of two shapes (`catalog/filter.ts`, a union, strict objects):
+
+```json
+{"question": "Is this sentence a lasting requirement about how the product must look or behave?",
+ "context": "We implemented the loading screen, but we need to improve the style.",
+ "items": [{"id": "s2", "text": "let's improve it a little."}, {"id": "s3", "text": "the loading screen background should be blue."}]}
+```
+
+Text-items mode: `question` and `items` (at least 1, each `text` not blank, `id` optional and any non-empty string such as a path) required; `context` optional. Live result for 3 items (s2, s3, s4): `matched` = s3 only, p 0.67; s4 p 0.38 borderline; s2 p 0.29; `threshold` 0.5.
+
+```json
+{"context": "We implemented the loading screen, but we need to improve the style.",
+ "propositions": [{"id": "p1", "text": "The sentence 'the loading screen background should be blue.' states a lasting requirement."}]}
+```
+
+Propositions mode: `propositions` 1 to 64 entries, each `text` not blank and at most 2000 characters; `context` optional. Each proposition is judged as a statement. Live: two propositions of the form "The sentence '...' states a lasting requirement." got p 0.17 and 0.19 (nothing matched), including for the sentence that is a requirement; to sort sentences use text-items mode with a question.
+
+`classify label` (`catalog/label.ts`, not strict):
+
+```json
+{"mode": "json", "purpose": "...", "context": "...", "default": "new",
+ "items": [{"id": "pair", "text": "..."}],
+ "classes": [{"id": "duplicate", "description": "..."}, {"id": "new", "description": "..."}]}
+```
+
+`items` at least 1 (`text` required, `id` optional); `classes` 2 to 255, `id` non-empty and unique, never `__proto__`, `description` a string, null or absent; `mode` `json` (default) or `files`; `default`, when given, must be one of the class ids; `purpose` and `context` optional strings (run live with `context` and `default` "new" added, `label-ctx.json`: exit 0, same label as without them); the JSON of `classes` must be at most 8000 characters (`label.ts`). Output rows: `{id, label, confidence, probabilities, accepted, auto, review, tie, runnerUp, margin, invalid}`.
+
+`--context FILE` fills `context` (a file of earlier messages, `-` reads stdin; needs a release that includes it). Giving it together with a JSON `context` is refused with `llm-ext: --context sets context, which the JSON input already holds; give it in one place`. The context travels in every request, so the cost grows with the number of requests (`--estimate` counts it), and a context too large for the model window is refused before anything is sent.
+
+`classify find` (`catalog/find.ts`, not strict):
+
+```json
+{"query": "the loading screen background should be blue", "mode": "json",
+ "items": [{"id": "r1", "text": "..."}, {"id": "u1", "text": "..."}]}
+```
+
+`query` non-empty, `items` at least 1 (`text` required), `mode` `json` (default) or `files`. In `json` mode the items are candidates and 2 to 250 are required (`find.ts`); in `files` mode each item is a file text searched line by line. The command line cannot reach json mode: positional arguments force `files` mode (`find.ts`), so give the JSON with `--input`. Output of json mode: `{mode, status ("answered" or "absent"; partial in between), ranked: [{id, probability}], tie, exists, hits, invalid}`. `ranked` probabilities are relative among the candidates (they add up to about 1); `exists` and `status` are the absolute answer, with `--answered` (default 0.7) and `--absent` (default 0.35) as cut points (`find.ts`). Live: query "the loading screen background should be blue" against r1 "make the background color of the loading dialog of a shade of blue", r2 "the background of the load panel must not be transparent.", u1, u2 (two unrelated rules): `status` answered, `exists` 0.71, ranked r1 0.97, r2 0.02, u2 0.01, u1 0; the same query against r2, u1, u2 only: `status` absent, `exists` 0.17, while r2 still ranked first with 0.96. So `find` detects a duplicate (r1) and does not flag a related older rule (r2) as present.
+
+### `llm-ext classify ping`
+
+- Usage: `llm-ext classify ping [--no_call]`
+- Release: not in llm-ext 14.2.0 (measured 2026-11-04: `llm-ext classify ping --no_call` exits 1 with `llm-ext: unknown action 'ping' in group 'classify'.`); it needs a release that includes it.
+- Accepted profile types: classifier
+
+Checks the classifier key and the decisions service: a free key check (`GET /api/v1/key`, which reports the key spend and limit, never the key), then one tiny paid question to the profile model. The question is fixed and unambiguous: does the state "Water boils at 100 degrees Celsius at sea level." say that water boils at 100 degrees Celsius at sea level? A working model answers high, and the answer is printed with the side it is expected on:
+
+```
+key check: ok (profile or-jev, OPENROUTER_API_KEY accepted; ...)
+decision call: ok (the remote service; model typesafe/jev-1.14-20261014, answer 0.97, expected above 0.5, cost 0.00001197 USD)
+```
+
+Ping is a round-trip check: it exits non-zero when the key check fails; when the call fails and the local decider does not answer either; when the reply has no usable answer; or when the command is stopped (`--command_timeout`, exit 124). An answer below 0.5 prints a warning line on stderr and still exits 0. The question is recorded in the usage history (a local answer is recorded under the local decider's endpoint at no cost); `--max_budget` does not apply to it.
+
+Local decider fallback (in a build that includes it; in no release yet):
+
+- When: only after the remote decision call fails or times out. A failed key check and `--no_call` never use it. Ctrl-C never starts it, and neither does a `--command_timeout` stop that came before it. The fallback is on by default and can be turned off; when it is off, ping says nothing about it.
+- Where: the mlx-decision server that runs as a machine-wide singleton, looked up at the configured decider address first, then (macOS only) among the mlx-decision servers running on this machine. llm-ext never starts or replaces that server.
+- Settings: the `local_fallback` keys (`enabled`, `url`, `startTimeoutMs`, `attemptTimeoutMs`, `requestTimeoutMs`, `maxAttempts`), their defaults and ranges are in `models-and-settings.md`, section "Local decider fallback". `enabled: false` turns the fallback off. llm-ext never starts mlx-decision; a busy machine queues the request (the governor wait line every 60 s, bounded by `--command_timeout`).
+- Time: the fallback has its own 30 s cap (never longer than the configured local budget), so a decision call that fails or times out can take up to the profile timeout plus 30 s (the key check runs before it and is not counted).
+- Success: exit 0, also when the local answer arrives after the remote deadline. stderr says `llm-ext: the remote call failed: <error>; answered by the local decider`, and the result line says `the local decider, no API key used` and `cost 0 USD (local)`. A local answer below 0.5 also prints the below-0.5 warning and still exits 0. A local reply with no usable answer fails as a bad response, and the "answered by the local decider" line is not printed.
+- Failure (when the fallback is on): stderr says `llm-ext: the local decider fallback did not answer either: <reason>`. After a remote timeout, ping then fails as "deadline exceeded" (exit 5). After a remote error that came before the deadline, ping fails with that error and its own exit code; if the deadline ran out during the fallback, it fails as "deadline exceeded" (exit 5) and stderr also says `llm-ext: the remote call had failed before the deadline ran out: <error>`.
+- Stop: a `--command_timeout` stop during the local call aborts it; the command ends as stopped (exit 124) and the CLI prints the stop line. Ping's own output does not mark the stop.
+- Billing: a remote attempt that timed out on the client may still have been billed upstream; ping records no cost for it, since no reply arrived to read a cost from.
+
+| Flag | Type | Meaning |
+|---|---|---|
+| `--no_call` | boolean | Only the free key check; send no question (nothing is billed). It checks only that the key is accepted, not the credit balance or the model call: a key can pass while paid calls fail with HTTP 402 Insufficient credits; the output says so (needs a release that includes it). |

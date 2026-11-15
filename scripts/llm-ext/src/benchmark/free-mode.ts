@@ -49,6 +49,12 @@ export type PaymentErrorCertainty = "certain" | "uncertain";
 // a status, so a token count ("1402 tokens") or a request id cannot read as one.
 const ERROR_STATUS_RE = /\b(?:api error|http)\s+(\d{3})\b/;
 
+/** The HTTP status in an error text written by our own send paths (`API error 404 ...`, `HTTP 404`), or undefined. Only for a text with no typed failure fields (a failure VALUE); a thrown error carries the status as data. */
+export function errorStatusOfText(detail: string): number | undefined {
+  const status = ERROR_STATUS_RE.exec((detail || "").toLowerCase())?.[1];
+  return status === undefined ? undefined : Number(status);
+}
+
 /**
  * THE payment predicate (D1, USER 2026-09-18: "it should retry once, but if
  * the payment required or credits exhausted error is certain, it should of

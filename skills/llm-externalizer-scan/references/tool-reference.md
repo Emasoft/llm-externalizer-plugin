@@ -14,26 +14,25 @@
 
 | Tool | Use When | Default answer_mode |
 |------|----------|-------------------|
-| `chat` | General-purpose: summarize, compare, translate, generate text. Also handles custom_prompt calls. Accepts `folder_path`. | 2 (merged) |
-| `code_task` | Code-optimized analysis with code-review system prompt. Use for audits, reviews. Accepts `folder_path`. | 2 (merged) |
-| `batch_check` | **DEPRECATED** — use any tool with `answer_mode: 0, max_retries: 3`. Per-file processing with retry. | 0 (per-file) |
-| `scan_folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. | 2 (merged) |
-| `compare_files` | 3 modes: pair (2 files), batch (`file_pairs` array), git diff (`git_repo` + `from_ref` + `to_ref`). LLM summarizes differences. | N/A |
-| `check_references` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path`. | 2 (merged) |
-| `check_imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path`. | 2 (merged) |
-| `check_against_specs` | Compare source files against a specification file. Reports violations only (not missing features). Accepts `folder_path`, `input_files_paths`, or both combined. | 2 (merged) |
+| `llm ask` | General-purpose: summarize, compare, translate, generate text. Accepts `folder_path`. | 2 (merged) |
+| `llm code` | Code-optimized analysis with code-review system prompt. Use for audits, reviews. Accepts `folder_path`. | 2 (merged) |
+| `scan folder` | Auto-discover files in a directory tree and check each. Good for codebase-wide scans. | 2 (merged) |
+| `check diff` | 3 modes: pair (2 files), batch (`file_pairs` array), git diff (`git_repo` + `from_ref` + `to_ref`). LLM summarizes differences. | N/A |
+| `check refs` | Auto-resolve local imports, send source+dependencies to LLM to validate symbol references. Accepts `folder_path`. | 2 (merged) |
+| `check imports` | Two-phase: LLM extracts all import paths, server validates each exists on disk. Accepts `folder_path`. | 2 (merged) |
+| `check specs` | Compare source files against a specification file. Reports violations only (not missing features). Accepts `folder_path`, `input_files_paths`, or both combined. | 2 (merged) |
 
 ## Utility tools
 
 | Tool | Purpose |
 |------|---------|
-| `discover` | Check service health, auth token status, context window, concurrency mode, profiles |
-| `reset` | Full soft-restart. Waits for running requests, then reloads settings (picks up manual edits to `settings.yaml`) and clears caches. |
-| `get_settings` | Copy `settings.yaml` to output dir and return the path. Read-only view — edit `~/.llm-externalizer/settings.yaml` manually, then call `reset`. |
+| `settings status` | Check service health, auth token status, context window, concurrency mode, profiles |
+| `settings reset` | Full soft-restart. Waits for running requests, then reloads settings (picks up manual edits to `settings.yaml`) and clears caches. |
+| `settings show` | Copy `settings.yaml` to output dir and return the path. Read-only view — edit `~/.llm-externalizer/settings.yaml` manually, then run `settings reset`. |
 
 ### Disabled tools (by design)
 
-The CLI is read-only. `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` → apply fixes via the `llm-externalizer-scan-and-fix` plugin command instead. `set_settings`, `change_model` → edit `~/.llm-externalizer/settings.yaml` manually and call `reset`. `custom_prompt` → merged into `chat` (use `chat` with a `system` persona).
+The CLI is read-only. `fix_code`, `batch_fix`, `merge_files`, `split_file`, `revert_file` → apply fixes via the `llm-externalizer-scan-and-fix` plugin command instead. `set_settings`, `change_model` → edit `~/.llm-externalizer/settings.yaml` manually and run `settings reset`. `custom_prompt` → merged into `llm ask` (use `llm ask` with a `system` persona).
 
 ## Standard Input Fields
 
@@ -50,9 +49,7 @@ input_files_content   — Inline content (DISCOURAGED — wastes your tokens)
 
 Use `instructions_files_paths` to share reusable review rules, coding standards, or large instruction sets across multiple operations.
 
-**NOTE**: `batch_check` does NOT support `input_files_content`.
-
-**NOTE**: `check_against_specs` uses `spec_file_path` (required) plus `input_files_paths`, `folder_path`, or both combined for source files.
+**NOTE**: `check specs` uses `spec_file_path` (required) plus `input_files_paths`, `folder_path`, or both combined for source files.
 
 ## Advanced Parameters
 
@@ -61,18 +58,18 @@ Use `instructions_files_paths` to share reusable review rules, coding standards,
 | `max_tokens` | All content tools | number | Override max response tokens (default: model max ~65,535). |
 | `temperature` | Fixed | 0.1 | Not configurable. Optimized for factual/code analysis. |
 | `output_dir` | All content tools | string | Custom output directory for reports (default: `reports/llm-externalizer/`). |
-| `system` | `chat` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
-| `language` | `code_task` only | string | Programming language hint. Auto-detected from file extension. |
-| `folder_path` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | string | Absolute path to a folder to scan. Can be combined with `input_files_paths`. |
-| `recursive` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | boolean (default: true) | Recurse into subdirectories when scanning `folder_path`. |
-| `follow_symlinks` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | boolean (default: true) | Follow symbolic links. Circular symlinks auto-detected and skipped. |
-| `max_files` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | number (default: 2500) | Maximum files to discover from `folder_path`. Safety limit for large trees. |
-| `extensions` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | File extensions to include when using `folder_path`. |
-| `exclude_dirs` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | string array | Additional dirs to skip beyond built-in exclusions (hidden dirs, node_modules, .git, dist, build). |
-| `use_gitignore` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs`, `scan_folder` | boolean (default: true) | Use `.gitignore` rules via `git ls-files`. Handles submodules and nested git repos. Set `false` to include gitignored files. |
+| `system` | `llm ask` only | string | Persona override. Be specific: `"Senior TypeScript dev"`. |
+| `language` | `llm code` only | string | Programming language hint. Auto-detected from file extension. |
+| `folder_path` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs` | string | Absolute path to a folder to scan. Can be combined with `input_files_paths`. |
+| `recursive` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs` | boolean (default: true) | Recurse into subdirectories when scanning `folder_path`. |
+| `follow_symlinks` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs` | boolean (default: true) | Follow symbolic links. Circular symlinks auto-detected and skipped. |
+| `max_files` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs`, `scan folder` | number (default: 2500) | Maximum files to discover from `folder_path`. Safety limit for large trees. |
+| `extensions` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs`, `scan folder` | string array | File extensions to include when using `folder_path`. |
+| `exclude_dirs` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs`, `scan folder` | string array | Additional dirs to skip beyond built-in exclusions (hidden dirs, node_modules, .git, dist, build). |
+| `use_gitignore` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs`, `scan folder` | boolean (default: true) | Use `.gitignore` rules via `git ls-files`. Handles submodules and nested git repos. Set `false` to include gitignored files. |
 | `ensemble` | All content tools | boolean (default: true on OpenRouter) | Run all ensemble models in parallel. Set `false` for simple tasks to save tokens. |
 | `answer_mode` | Multi-file tools | 0, 1, or 2 | 0 = ONE REPORT PER FILE (parallel+retry when `max_retries>1`). 1 = ONE REPORT PER GROUP (auto-grouped by subfolder/language/basename if no `---GROUP:id---` markers, max 1 MB per group). 2 = SINGLE REPORT (merged). |
-| `max_retries` | `chat`, `code_task`, `check_references`, `check_imports`, `check_against_specs` | number (default: 1) | Max retries per file in mode 0. Set 3 for robust batch processing with exponential backoff and circuit breaker (aborts after 3 consecutive failures). |
+| `max_retries` | `llm ask`, `llm code`, `check refs`, `check imports`, `check specs` | number (default: 1) | Max retries per file in mode 0. Set 3 for robust batch processing with exponential backoff and circuit breaker (aborts after 3 consecutive failures). |
 | `redact_regex` | All content tools | string | JavaScript regex pattern to redact matching strings before sending to LLM. Applied after secret redaction. Alphanumeric matches become `[REDACTED:USER_PATTERN]`, numeric-only matches become zero-padded placeholders. |
 
 ## File Grouping
@@ -113,9 +110,9 @@ Each group produces one report file with the group ID in the filename:
 
 ### Supported tools
 
-`chat`, `code_task`, `batch_check`, `check_references`, `check_imports`, `check_against_specs`
+`llm ask`, `llm code`, `check refs`, `check imports`, `check specs`
 
-For `compare_files`, grouping uses `---GROUP:id---` markers as single-element entries in the `file_pairs` array.
+For `check diff`, grouping uses `---GROUP:id---` markers as single-element entries in the `file_pairs` array.
 
 ## Critical Constraints
 
@@ -131,4 +128,4 @@ For `compare_files`, grouping uses `---GROUP:id---` markers as single-element en
 - `scan_secrets` (boolean): Scans input files for secrets and aborts if found.
 - `redact_secrets` (boolean): Replaces secrets with `[REDACTED:LABEL]`. Prefer moving secrets to `.env` instead.
 - `redact_regex` (string): JavaScript regex pattern to redact custom strings from file content before sending to LLM. Applied after secret redaction. Invalid regex returns an error with details.
-- `use_gitignore` (boolean, default: true): Respects `.gitignore` rules via `git ls-files`. Available on all tools with `folder_path` and on `scan_folder`. Handles submodules and nested git repos.
+- `use_gitignore` (boolean, default: true): Respects `.gitignore` rules via `git ls-files`. Available on all tools with `folder_path` and on `scan folder`. Handles submodules and nested git repos.

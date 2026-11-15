@@ -35,7 +35,7 @@ import { runDiscoverNewArrivals, renderNewArrivalsText } from "../model-qualific
 // rewrite its own settings. Adoption of a recommendation goes through the CLI
 // (`llm-ext-benchmark --auto-replace --apply`), never through any MCP tool.
 import { planToolReplacements } from "../model-qualification/auto-replace";
-import { defaultOutputDir } from "../project-root";
+import { defaultScratchDir } from "../project-root";
 import { getConfigDir, loadSettings } from "../config";
 import { brokerClientVersion, defaultBrokerEntry } from "../broker/client";
 import { ensureCalibrator } from "../calibration/runner";
@@ -298,7 +298,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
       "Compiles the fieldset into a JSON Schema, fans calls out via the " +
       "scout worker, applies fix_envelope repairs, runs the required-keys " +
       "validator, persists results + FTS rows. Writes a markdown report " +
-      "under <main-project-dir>/reports/mass_scouting/ (override with " +
+      "under <main-project-dir>/reports/llm-externalizer/mass_scouting/ (override with " +
       "output_dir).\n\nRETURNS: " +
       "files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.\n\n" +
       "PROFILE: mass scouting takes its model from a `scouting`-type profile, " +
@@ -367,7 +367,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Absolute path for the markdown report directory. Defaults to " +
-            "<main-project-dir>/reports/mass_scouting/. Pass this when running " +
+            "<main-project-dir>/reports/llm-externalizer/mass_scouting/. Pass this when running " +
             "as an MCP server so the report lands in the user's project " +
             "rather than the plugin's install cache.",
         },
@@ -526,7 +526,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
     name: "mass_scout_export",
     description:
       "Dump every result row of a job to JSONL or CSV under " +
-      "<main-project-dir>/reports/mass_scouting/. Useful for follow-up " +
+      "<main-project-dir>/reports/llm-externalizer/mass_scouting/. Useful for follow-up " +
       "analysis in pandas, jq, etc.",
     inputSchema: {
       type: "object",
@@ -541,7 +541,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
           type: "string",
           description:
             "Absolute path for the export directory. Defaults to " +
-            "<main-project-dir>/reports/mass_scouting/.",
+            "<main-project-dir>/reports/llm-externalizer/mass_scouting/.",
         },
       },
       required: ["db_path", "job_id"],
@@ -919,7 +919,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/llm-externalizer/security-triage-benchmark/.",
+            "Report dir; defaults to <main-root>/reports_dev/llm-externalizer/security-triage-benchmark/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -969,7 +969,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/llm-externalizer/search-existing-benchmark/.",
+            "Report dir; defaults to <main-root>/reports_dev/llm-externalizer/search-existing-benchmark/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -1106,7 +1106,7 @@ export const MASS_SCOUT_TOOLS: McpToolDef[] = [
         output_dir: {
           type: "string",
           description:
-            "Report dir; defaults to <main-root>/reports/llm-externalizer/auto-replace/.",
+            "Report dir; defaults to <main-root>/reports_dev/llm-externalizer/auto-replace/.",
         },
         allow_paid_models_tests: {
           type: "boolean",
@@ -1602,10 +1602,12 @@ export async function dispatchMassScoutTool(
         );
         // write-roots fix (c9b, 2026-09-18): the old default was
         // `<root>/reports/auto-replace/`, OUTSIDE the USER-approved
-        // `reports/llm-externalizer/` tree; defaultOutputDir(opts.mainRoot)
+        // `reports/llm-externalizer/` tree; the project-root.ts resolver
         // also honors LLM_EXT_OUTPUT_DIR the same way every other report
         // writer does (README/docs already documented the correct path).
-        const dir = str(args.output_dir) ?? join(defaultOutputDir(opts.mainRoot), "auto-replace");
+        // TRDD-PNU8XECB: an auto-replace plan is model-pool tool configuration, so it is scratch
+        // output for the gitignored reports_dev/llm-externalizer/, not a final tracked report.
+        const dir = str(args.output_dir) ?? join(defaultScratchDir(opts.mainRoot), "auto-replace");
         mkdirSync(dir, { recursive: true });
         const reportPath = join(dir, `${compactStamp()}-auto-replace.md`);
         writeFileSync(reportPath, reportMarkdown);

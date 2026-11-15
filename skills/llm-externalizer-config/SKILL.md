@@ -17,13 +17,13 @@ Two managed local profiles are built in: `local_llama` (GGUF models through llam
 
 Changing models, profiles, API keys, URLs, or timeouts is **user-only**. This is a deliberate design choice.
 
-The `set-settings` and `change-model` CLI commands are **disabled**; the `profile add | select | edit | remove | rename` subcommands are **disabled**. Calling any of them returns a refusal pointing here.
+The `llm-ext` CLI has no command that writes settings: `settings show|profile|profiles|status` only read, and `settings reset` only reloads.
 
 The only supported workflow is:
 
 1. Open `~/.llm-externalizer/settings.yaml` in your editor.
 2. Edit the file and save.
-3. Run `llm-ext reset` to purge on-disk caches and reload the edited settings (no server to restart — every `llm-ext` call is already a fresh process).
+3. Run `llm-ext settings reset` to purge on-disk caches and reload the edited settings (no server to restart — every `llm-ext` call is already a fresh process).
 
 ## Prerequisites
 
@@ -35,12 +35,10 @@ The only supported workflow is:
 
 Copy this checklist and track your progress:
 
-1. [ ] Run `llm-ext discover` to report active profile, mode, model, auth status, service health, context window, concurrency limits
-2. [ ] Run `llm-ext get-settings` — returns a file path to an editable **copy** of `settings.yaml`
+1. [ ] Run `llm-ext settings status` to report active profile, mode, model, auth status, service health, context window, concurrency limits
+2. [ ] Run `llm-ext settings show` — returns a file path to an editable **copy** of `settings.yaml`
 3. [ ] Read the returned file with the Read tool and surface the full profile table to the user
-4. [ ] Remind the user that any change must be made by editing `~/.llm-externalizer/settings.yaml` in an editor, then calling `llm-ext reset`
-
-Do NOT attempt to call `set-settings` or `change-model` — both are disabled.
+4. [ ] Remind the user that any change must be made by editing `~/.llm-externalizer/settings.yaml` in an editor, then calling `llm-ext settings reset`
 
 ## Context
 
@@ -48,36 +46,35 @@ Use this skill when the user wants to see the current LLM Externalizer configura
 
 ## Output
 
-- `llm-ext discover` — active profile name, mode, model, auth status, context window, concurrency limits
-- `llm-ext get-settings` — file path to a read-only editable copy (you still show the user how to apply changes manually)
-- `llm-ext reset` — purges on-disk caches and reloads settings after the user has edited the file
+- `llm-ext settings status` — active profile name, mode, model, auth status, context window, concurrency limits
+- `llm-ext settings show` — file path to a read-only editable copy (you still show the user how to apply changes manually)
+- `llm-ext settings reset` — purges on-disk caches and reloads settings after the user has edited the file
 
 ## Error Handling
 
 | Error | Cause | Resolution |
 |-------|-------|------------|
-| `discover` shows invalid profile | Settings file malformed | Ask user to open `~/.llm-externalizer/settings.yaml`, fix, save, then run `llm-ext reset` |
+| `settings status` shows invalid profile | Settings file malformed | Ask user to open `~/.llm-externalizer/settings.yaml`, fix, save, then run `llm-ext settings reset` |
 | Auth token `(NOT SET)` | Env var missing | Ask user to add the env var (e.g. `OPENROUTER_API_KEY`) to their shell profile |
 | Connection refused | Local LLM server not running | Ask user to start LM Studio / Ollama / vLLM; verify URL and port in settings |
-| `set-settings` / `change-model` returned DISABLED | Expected — commands are user-only | Direct user to manual edit |
 
 ## Examples
 
 ### Inspect the current profile
 
 ```
-1. llm-ext discover → shows effective profile: free, mode: remote (or --profile <name> if passed)
-2. llm-ext get-settings → /path/to/settings_edit.yaml
+1. llm-ext settings status → shows effective profile: free, mode: remote (or --profile <name> if passed)
+2. llm-ext settings show → /path/to/settings_edit.yaml
 3. Read the file, surface the profiles table to the user
-4. Tell the user: to change, edit ~/.llm-externalizer/settings.yaml, save, then run llm-ext reset
+4. Tell the user: to change, edit ~/.llm-externalizer/settings.yaml, save, then run llm-ext settings reset
 ```
 
 ### User asks to switch profiles
 
 ```
-Do NOT call set-settings. Instead:
-  1. Show the current effective profile via llm-ext discover
-  2. List available profile names from llm-ext get-settings
+The CLI cannot change settings. Instead:
+  1. Show the current effective profile via llm-ext settings status
+  2. List available profile names with llm-ext settings profiles
   3. Tell the user: pass --profile <name> on the command for a one-off, or set
      `active: <name>` in settings.yaml for a persistent default (precedence:
      --profile > active: > the built-in `free` profile)

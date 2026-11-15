@@ -42,7 +42,7 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
     _resetDefaultOutputDirCache();
   });
 
-  it("routes the non-isolated default under <root>/reports/llm-externalizer/benchmark/, not <root>/reports/benchmark/ directly", () => {
+  it("routes the non-isolated default under <root>/reports_dev/llm-externalizer/benchmark/, not <root>/reports/benchmark/ directly", () => {
     // resolveProjectMainRoot() only honors CLAUDE_PROJECT_DIR when it
     // existsSync() on disk (project-root.ts) — a nonexistent placeholder path
     // would silently fall back to process.cwd() and pass vacuously.
@@ -54,7 +54,7 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
       _resetDefaultOutputDirCache();
 
       const path = buildReportPath();
-      expect(path.startsWith(join(fakeRoot, "reports", "llm-externalizer", "benchmark") + "/")).toBe(true);
+      expect(path.startsWith(join(fakeRoot, "reports_dev", "llm-externalizer", "benchmark") + "/")).toBe(true);
       expect(path.endsWith("-model-comparison.md")).toBe(true);
     } finally {
       rmSync(fakeRoot, { recursive: true, force: true });

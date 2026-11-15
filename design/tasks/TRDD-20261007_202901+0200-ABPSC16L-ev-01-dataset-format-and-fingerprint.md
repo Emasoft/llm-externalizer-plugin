@@ -18,7 +18,7 @@ approval-datetime: 2026-10-07T20:29:01+0200
 implementation-commits: [1bb5661d]
 blocked-by: [PCZZCDSR]
 pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261007_202836+0200-PCZZCDSR-wk-02-benchmark-workload-kit-ts.md
+blocker-probe: test -f design/tasks/TRDD-20261007_202836+0200-PCZZCDSR-wk-02-benchmark-workload-kit-ts.md
 blocker-holds-if: exit-0
 unblock-when: [trdd:PCZZCDSR]
 ---

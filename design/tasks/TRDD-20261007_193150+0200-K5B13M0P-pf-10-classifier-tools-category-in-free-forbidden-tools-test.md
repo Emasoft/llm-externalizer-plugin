@@ -18,7 +18,7 @@ approval-datetime: 2026-10-07T19:31:50+0200
 implementation-commits: [3bfa8c58]
 blocked-by: [4Q1IVJOE]
 pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261007_200013+0200-4Q1IVJOE-c4-03-launcher-and-main-wiring-and-help.md
+blocker-probe: test -f design/tasks/TRDD-20261007_200013+0200-4Q1IVJOE-c4-03-launcher-and-main-wiring-and-help.md
 blocker-holds-if: exit-0
 unblock-when: [trdd:4Q1IVJOE]
 ---

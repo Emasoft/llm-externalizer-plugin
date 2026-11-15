@@ -6,7 +6,7 @@
 
 <!--BADGES-START-->
 <p align="center">
-<a href="#"><img alt="version" src="https://img.shields.io/badge/version-14.2.0-blue"></a>
+<a href="#"><img alt="version" src="https://img.shields.io/badge/version-14.1.2-blue"></a>
 <a href="#"><img alt="build" src="https://img.shields.io/badge/build-passing-brightgreen"></a>
 <a href="#"><img alt="typescript" src="https://img.shields.io/badge/typescript-5.x-blue"></a>
 <a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
@@ -114,7 +114,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 
 - **Interactive setup wizard** (`/llm-externalizer:llm-externalizer-setup`, since v9.6.0) — detects your platform (OS, arch, RAM, GPU), finds installed runners (Ollama, LM Studio, vLLM, llama.cpp, Jan), helps download a Hugging Face model with the `hf` CLI, runs five calibrated compatibility tests on the chosen model, and emits a paste-ready `settings.yaml` profile snippet via a stdlib-only generator (`scripts/setup/build-snippet.py`). The wizard NEVER writes to your `settings.yaml` — user-only-configuration policy.
 - **Scan externalization** — 54 CLI commands for code review, duplicate hunting, import/reference validation, spec-compliance checks, bulk LLM-driven structured-output extraction (mass-scouting), full-sentence meaning-equivalence clustering (`cluster-synonyms`), size-bounded summarization (`summarize`), topic/keyword extraction (`topics`), semantic phrase deduplication (`sem-deduplicate`), concise file characterization (`describe`), injection-hardened security triage (`security-scan`), a $0 delegate mode (`review-plan`) where the host agent reviews with its own model, layered per-path review rules (`rules-check` debugs which rule fires), and diff-mode scoping on every review tool (`--diff_workspace`, `--diff_from/--diff_to`, `--diff_commit` — git-delegated, hunks carry enclosing-function context), all backed by a local or remote LLM you choose.
-- **Dry-run everything before paying** — `--estimate` predicts a run's cost (expected + hard ceiling, self-calibrating from recorded usage) and `--preview` lists exactly which files would be scanned and WHY each exclusion happened; both compose, both send nothing.
+- **Dry-run before paying** — `--estimate` predicts a run's cost (expected + hard ceiling, self-calibrating from recorded usage) and `--preview` lists exactly which files would be scanned and WHY each exclusion happened; both send no model request. Not every command that sends model requests accepts both (about a third accept both, a few only one, about a third neither); a refused flag exits with an error and spends nothing.
 - **Fix loop stays local** — fixes are applied by your Claude Code Sonnet / Opus session, NOT by the external LLM. You get the ensemble's second opinion without giving up editorial control.
 - **False-positive-aware fixers** — every fixer subagent runs a verification pass (file-read + flow-trace) before editing. Empirically ~15–30% of ensemble findings are false positives; the fixer rejects them with a typed reason.
 - **25 plugin commands** — 23 base (`setup`, `discover`, `reset`, `configure`, `change-model`, `install-statusline`, `update-all`, `benchmark`, `bench-free-pool`, `assess-model`, `check-model-health`, `discover-new-models`, `security-triage-benchmark`, `search-existing-benchmark`, `auto-replace`, `search-existing-implementations`, `cluster-synonyms`, `scan-and-fix`, `scan-and-fix-serially`, `fix-report`, `fix-found-bugs`, `high-quality-scan`, `high-quality-scan-and-fix`) + 1 mass-scout dispatcher (`mass-scout` — all 16 pipeline actions via an action word, e.g. `/llm-externalizer:llm-externalizer-mass-scout search …`; the per-action `mass-scout-*` slash commands were removed in v13.5.9, the `llm-ext mass-scout-*` CLI subcommands are unchanged) + 1 dedicated security tool (`security-scan`). Full list in [Plugin commands](#plugin-commands). Note: `/llm-externalizer:llm-externalizer-change-model` is a *user-only* redirect — it shows your current config (`discover`/`get-settings`) and guides you to edit `~/.llm-externalizer/settings.yaml` by hand, then reload via `reset`. There is no `change-model` or `set-settings` CLI command (the CLI is read-only by design). Model / profile changes always go through editing `~/.llm-externalizer/settings.yaml` (or running the setup wizard above).
@@ -125,7 +125,7 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **Auto-batching** — First-Fit-Decreasing bin-packing packs 1–5 files per LLM request (~400 KB per batch). The LLM never sees the whole codebase at once.
 - **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
 - **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's `SECRET_PATTERNS` set now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
-- **File-based output** — every report lands in `./reports/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report).
+- **File-based output** — every final report (a complete or merged result) lands in `./reports/llm-externalizer/`; intermediate output (the per-file pieces of a merged run, partial runs, llm-ext's own model-pool benchmark and health reports) lands in `./reports_dev/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report). `reports/` is git tracked and sanitized of secrets before committing; `reports_dev/` is gitignored.
 - **Cross-platform** — macOS, Linux, Windows. `llm-ext` is a bundled Node executable; the helper scripts are pure Python 3.12+.
 
 ---
@@ -432,7 +432,7 @@ credit), the command exits with the credit error and starts no profile update
 (a re-benchmark would get the same `402`). If other failures are mixed in, the
 command starts the `paid` profile's update in the background and exits at once
 with "no model of the 'paid' profile is working right now; the profile update
-is underway in the background and will be finished soon — retry later"; no
+is underway in the background and may take a while — failed benchmark attempts back off for 15 minutes to 24 hours — retry later"; no
 command ever waits for an update. Free is never engaged
 implicitly — choose it explicitly with `--profile free` or `active: free`.
 Consequence: with an exhausted balance, `--profile paid` exits with the credit
@@ -504,8 +504,8 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-benchmark` | Run the OpenRouter model-selection harness over your sample to compare candidates | Benchmark report |
 | `/llm-externalizer:llm-externalizer-bench-free-pool` | Auto-fill the *benchmark candidate set* from the given `--profile`'s `free_models` (or the bundled `FREE_POOL_SEED`) — one flag instead of N `--include`s. This is a benchmark-candidate seed, not the runtime model-selection fallback described in "Breaking changes in 14.1.0" above — a static profile still refuses at call time if it has no `free_models`; this command just needs *something* to benchmark. Resolves the pool against the live catalog: a configured non-`:free` id is admitted only when the catalog prices it at exactly `$0` (fail-fast otherwise), and zero-cost open-beta models without a `:free` suffix (e.g. `openrouter/owl-alpha`) are auto-discovered into the sweep. Composes with `--security-triage`. The same sweep runs automatically when `free_only` flips ON and the cache has no `:free` entries (TRDD-f1510055, TRDD-WJND1N2W) | Benchmark report (zero-cost) |
 | `/llm-externalizer:llm-externalizer-assess-model` | Assess one model against every LLM tool's per-tool requirements (free — no LLM call, just a public catalog fetch); shows per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass | Per-tool requirements table |
-| `/llm-externalizer:llm-externalizer-check-model-health` | Self-check the CONFIGURED model(s) of the active profile (free — no LLM call, one public catalog fetch): presence (removed/deprecated), cost drift vs a seeded baseline, and requirements regression per served tool. Advisory only — never changes settings | Health summary + `reports/llm-externalizer/model-health/` report |
-| `/llm-externalizer:llm-externalizer-discover-new-models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run (free — no LLM call, one public catalog fetch); each new id assessed against every tool's requirements. `[qualifying-only]` hides arrivals that fit no tool. Advisory only — never changes settings | Arrivals summary + `reports/llm-externalizer/model-arrivals/` report |
+| `/llm-externalizer:llm-externalizer-check-model-health` | Self-check the CONFIGURED model(s) of the active profile (free — no LLM call, one public catalog fetch): presence (removed/deprecated), cost drift vs a seeded baseline, and requirements regression per served tool. Advisory only — never changes settings | Health summary + `reports_dev/llm-externalizer/model-health/` report |
+| `/llm-externalizer:llm-externalizer-discover-new-models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run (free — no LLM call, one public catalog fetch); each new id assessed against every tool's requirements. `[qualifying-only]` hides arrivals that fit no tool. Advisory only — never changes settings | Arrivals summary + `reports_dev/llm-externalizer/model-arrivals/` report |
 | `/llm-externalizer:llm-externalizer-security-triage-benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset via the real judge pipeline; recommends the best same-or-cheaper passer (never pricier) | Recommendation + JSON/markdown report |
 | `/llm-externalizer:llm-externalizer-search-existing-benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over known duplicate locations, no LLM judge) by driving the real search-existing pipeline; recommends the best same-or-cheaper passer (never pricier) | Recommendation + JSON/markdown report |
 | `/llm-externalizer:llm-externalizer-search-existing-implementations` | PR duplicate-check — "is this feature already implemented anywhere?" | Exhaustive `NO` / `YES symbol=<name> lines=<a-b>` per file |
@@ -534,11 +534,11 @@ drops the action word).
 | `register` | Walk a folder / take a file list and store every body in the SQLite cache (honors `.gitignore`; `--git-diff <ref>` for incremental) | Counter line `registered=N already=M skipped_too_big=K …` |
 | `preclassify` | Script-only bucket tagger | Counter line per bucket |
 | `estimate` | Cost / time / cap-skipped numbers for a fieldset; honors `--budget-usd`; `--live-context` queries OpenRouter for the real provider cap | Numbers + per-bucket breakdown |
-| *(bare)* | Run the LLM scout end-to-end; emits progress lines to stderr per file | Markdown report under `reports/mass_scouting/` + counter line |
+| *(bare)* | Run the LLM scout end-to-end; emits progress lines to stderr per file | Markdown report under `reports/llm-externalizer/mass_scouting/` + counter line |
 | `search` | Per-job search (regex bypass / FTS5 / structured / combined) | Hit list (text or `--json`) |
 | `search-xjob` | Cross-job federated search | Merged hit list |
 | `get` | Print one row by `short_id` (with optional per-job result) | JSON row |
-| `export` | Dump every result row of a job to JSONL or CSV under `reports/mass_scouting/` | File path |
+| `export` | Dump every result row of a job to JSONL or CSV under `reports/llm-externalizer/mass_scouting/` | File path |
 | `jobs-list` | Enumerate every job in a DB (fieldset, model, ok/total, cost, started_at). Audit "what scouts already ran here?" before starting a new one | Markdown table (or JSON array with `--json`) |
 | `audit-sample` | Pull N random results from a finished job alongside the cached file body — human-trust check that the model understood the files | Markdown samples (or `samples[]` JSON envelope) |
 | `body-get` | Print the cached file body for a `short_id`. Lets follow-up agents reason about the file without re-reading from disk | Raw file body to stdout |
@@ -629,7 +629,7 @@ Runs the OpenRouter model-selection harness (`llm-ext-benchmark`) over your samp
 
 ### `/llm-externalizer:llm-externalizer-check-model-health`
 
-No parameters — always inspects the **active** profile from `~/.llm-externalizer/settings.yaml`. Free (no LLM call, one public catalog fetch, no API key). For the main / second / third model and every `tool_models` entry it reports presence (removed/deprecated = **CRITICAL**), cost drift vs the seeded baseline at `~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool requirements regression (**WARN**). Writes a Markdown report to `<project>/reports/llm-externalizer/model-health/`. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --check-health`.
+No parameters — always inspects the **active** profile from `~/.llm-externalizer/settings.yaml`. Free (no LLM call, one public catalog fetch, no API key). For the main / second / third model and every `tool_models` entry it reports presence (removed/deprecated = **CRITICAL**), cost drift vs the seeded baseline at `~/.llm-externalizer/model-baseline.json` (**WARN**), and per-served-tool requirements regression (**WARN**). Writes a Markdown report to `<project>/reports_dev/llm-externalizer/model-health/`. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --check-health`.
 
 ### `/llm-externalizer:llm-externalizer-discover-new-models`
 
@@ -637,7 +637,7 @@ No parameters — always inspects the **active** profile from `~/.llm-externaliz
 |---|---|---|---|---|
 | `qualifying-only` | positional flag | no | report all | When present, list only arrivals that meet ≥1 tool's requirements |
 
-Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRouter catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json`; each NEW model id is assessed against every LLM tool's per-tool requirements. Writes a Markdown report to `<project>/reports/llm-externalizer/model-arrivals/`. First run seeds the snapshot and reports zero arrivals. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --new-arrivals [--qualifying-only]`.
+Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRouter catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json`; each NEW model id is assessed against every LLM tool's per-tool requirements. Writes a Markdown report to `<project>/reports_dev/llm-externalizer/model-arrivals/`. First run seeds the snapshot and reports zero arrivals. Advisory only — never changes settings. CLI equivalent: `llm-ext-benchmark --new-arrivals [--qualifying-only]`.
 
 ### `/llm-externalizer:llm-externalizer-security-triage-benchmark`
 
@@ -652,7 +652,7 @@ Free (no LLM call, one public catalog fetch, no API key). Diffs the live OpenRou
 | `models=<id,[id...]>` | string | no | auto-discover same-or-cheaper pool | Explicit OpenRouter model id(s) to qualify for `search_existing_implementations`. Needs `$OPENROUTER_API_KEY` |
 | `qualifying_top_n=<N>` | number | no | 16 | Cap the auto-discovered candidate pool (cheapest-first) |
 | `force` | positional flag | no | use cache | Ignore the per-model-per-day cache and re-run every model |
-| `output_dir=<abs path>` | string | no | `<main-root>/reports/llm-externalizer/search-existing-benchmark/` | Report directory |
+| `output_dir=<abs path>` | string | no | `<main-root>/reports_dev/llm-externalizer/search-existing-benchmark/` | Report directory |
 
 Qualifies a model for the duplicate-detection task by driving the REAL
 search-existing pipeline against a labeled golden-fixture codebase and scoring
@@ -667,7 +667,7 @@ edits source or config. CLI equivalent: `llm-ext-benchmark --search-existing [<i
 |---|---|---|---|---|
 | `models=<id,[id...]>` | string | no | auto-discover same-or-cheaper pool | Explicit candidate model id(s) forwarded to each benchmark that runs |
 | `force` | positional flag | no | only run when degraded | Run every benchmarked tool's benchmark even when its incumbent is NOT degraded (operator audit) |
-| `output_dir=<abs path>` | string | no | `<main-root>/reports/llm-externalizer/auto-replace/` | Report directory |
+| `output_dir=<abs path>` | string | no | `<main-root>/reports_dev/llm-externalizer/auto-replace/` | Report directory |
 
 READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool
 benchmark (`security_scan`, `search_existing_implementations`), checks its
@@ -910,12 +910,12 @@ the requirements **and** passes that tool's benchmark. See
 | Tool | Purpose |
 |---|---|
 | `assess_model` | Assess ONE model against EVERY LLM tool's per-tool requirements — free: no LLM call, no token cost (just a public catalog fetch, no API key). Per-tool `OK` / `NO` + which qualifying tools also need a benchmark pass |
-| `check_model_health` | Self-check the CONFIGURED model(s) of the active profile — free: no LLM call, one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/` |
-| `discover_new_models` | Autodiscover models that newly appeared in the catalog since the last run — free: no LLM call, one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/` |
-| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner — for every benchmarked tool (`security_scan`, `search_existing_implementations`), checks the incumbent model's ledger health and, when degraded (or with `force`), runs that tool's benchmark to recommend the best same-or-cheaper replacement. On a healthy ledger no benchmark runs. Advisory ONLY — writes a report to `reports/llm-externalizer/auto-replace/` + returns its path; **never** writes settings. Adopt via the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path) |
-| `calibrate_model` | Queue ONE model of a managed local profile (`server: managed`; `llamacpp-local` or `locals-local`) for calibration and start the detached calibration runner. Returns at once; requests for an uncalibrated model wait (held) until its record exists. A model that already has a record is refused unless `--force` is given; a `memory-limited` record, or a too-big record judged against a total RAM or memory floor that has since changed, is re-queued without it. CLI: `llm-ext models calibrate --model <id> [--force]` |
+| `check_model_health` | Self-check the CONFIGURED model(s) of the active profile — free: no LLM call, one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports_dev/llm-externalizer/model-health/` |
+| `discover_new_models` | Autodiscover models that newly appeared in the catalog since the last run — free: no LLM call, one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports_dev/llm-externalizer/model-arrivals/` |
+| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner — for every benchmarked tool (`security_scan`, `search_existing_implementations`), checks the incumbent model's ledger health and, when degraded (or with `force`), runs that tool's benchmark to recommend the best same-or-cheaper replacement. On a healthy ledger no benchmark runs. Advisory ONLY — writes a report to `reports_dev/llm-externalizer/auto-replace/` + returns its path; **never** writes settings. Adopt via the CLI `llm-ext-benchmark --auto-replace --apply` (the sole writer path) |
+| `calibrate_model` | Queue ONE model of a managed local profile (`server: managed`; `llamacpp-local` or `locals-local`) for calibration and start the detached calibration runner. Returns at once; requests for an uncalibrated model wait (held) until its record exists. A model that already has a record is refused unless `--force` is given; a `memory-limited` record, or a too-big record judged against a total RAM or RAM limit (`ram_limit_pct`) that has since changed, is re-queued without it. CLI: `llm-ext models calibrate --model <id> [--force]` |
 | `calibration_status` | Show the calibration state of every model of the managed local profiles: calibrated (with the date), failed (with the step and reason), or its progress and queue state; plus whether the runner is running. CLI: `llm-ext models calibration-status` |
-| `server_status` / `server_stop` | List, or stop, the managed local servers (llama-server, Locals) recorded in the server registry (`--engine`, `--role`); a server you started yourself is never touched. CLI: `llm-ext models server-status`, `llm-ext models server-stop` |
+| `server_status` / `server_stop` | List, or stop, the managed local servers (llama-server, Locals) recorded in the server registry (`--engine`, `--role`), with the threads (`-t`) of each; a server you started yourself is never touched. `server_status` also prints the local inference governor: on or off, the window of `max_inferences`, inferences running, waiters (each shown with its own limits), RAM and CPU against their limits with the age of the reading, threads in use of the budget, and the last denial. CLI: `llm-ext models server-status`, `llm-ext models server-stop` |
 | `security_triage_benchmark` | Qualify model(s) for `security_scan` against the labeled golden dataset, scored via the real judge pipeline; recommends the best same-or-cheaper PASSER (never a pricier model). Cached per-model-per-day. Env: `$OPENROUTER_API_KEY` |
 
 ### `answer_mode` (every multi-file analysis tool)
@@ -1087,7 +1087,7 @@ the order the user listed. A dynamic profile whose whole validated list has fail
 starts its update in the background (unless one is already running, or one finished
 less than 30 minutes ago and the model catalog has not changed since) and exits
 non-zero at once with "no model of the '<profile>' profile is working right now; the
-profile update is underway in the background and will be finished soon — retry
+profile update is underway in the background and may take a while — failed benchmark attempts back off for 15 minutes to 24 hours — retry
 later." The command never waits for the update, and while the profile still has a
 working model an update runs without any message. When the failure is one an update
 cannot fix, that error is shown instead and no update starts: every model of `paid`
@@ -1347,7 +1347,47 @@ Two local profiles are built in and added to `settings.yaml` once (not active by
 - **Request broker.** One local broker serves every managed profile. It runs one local model server at a time, whatever the engine (the broker never runs a llama-server and a Locals server together), groups the queued requests by model and rotates to the next model once the current one has had its minimum slice and another model's request nears `--queue_timeout` (default 300 s; waiting is never an error). The calibration runner is a separate process: it may run its own short-lived calibration server beside the broker's main server, for the model being calibrated, and pauses while the broker has work for another model.
 - **Calibration.** A model of a managed profile is calibrated once, automatically: on its first use, or when a model id changes in a profile that has been used (a profile nobody used costs nothing). `llm-ext models calibrate --model <id> [--force]` starts or redoes it by hand. Requests for the model are held until its record is complete, which can take hours; `llm-ext models calibration-status` shows progress.
 - **`--command_timeout <s>`** (aliases `--command-timeout`, `--timeout`; `=` or a space) is accepted by every command, and any command still running when it expires exits 124. On expiry a command that sends model requests starts no new one (a request already in flight is not aborted), its jobs at the local broker are cancelled, the finished results are written and the command reports what it did not finish. Any command still running 30 s after the timeout is killed (exit 124); that is how a command that sends no model requests ends. Held requests are bounded only by it.
+- **`--stop_on_errors`** (alias `--stop-on-errors`; no value) is accepted by every command. By default a model that does not respond or is not found makes the command fall back to the next model of the profile. With the flag, the first such failure ends the command instead: no new model request starts, the finished results are written, the unfinished files are listed with the model and its cause, and the exit code is 6 (124 stays `--command_timeout`). A request waiting in the local broker for memory is not a failure and never triggers it. It covers the profile fallback chain and the free-pool rotation; an ensemble member that fails and the classify commands are unchanged.
+- **Exit code of a multi-file run.** `scan-folder`, `batch-check`, `chat`, `code-task` and `check-against-specs` exit 1 when any file failed or the run was aborted. A run that still produced some results prints its summary, report paths included, on stdout, followed by a `FAILED (n of m):` block naming each failed file and its cause (n and m count files), and one line on stderr; a run with no result at all prints on stderr only. A run stopped by `--command_timeout` exits 124 whatever failed, and one stopped by `--stop_on_errors` exits 6. A file whose provider reply ended with `finish_reason=error` after partial text counts as failed, and its partial text is not saved as a report.
 
+#### Local inference governor (machine-wide RAM and CPU limits)
+
+Every llm-ext process on this machine that runs a local model (the broker, a calibration run, a direct send to a model server on this machine: LM Studio, Ollama, llama.cpp, vLLM on a loopback address) asks one shared governor before it starts an inference or loads a model. The governor lets the work start only while RAM and CPU are under their limits, and never more than `max_inferences` inferences at once across all of them. A request that has to wait is never an error: it waits, prints why once a minute (`llm-ext: local inference waiting: RAM is 92% used, limit 80%`), and is bounded only by `--command_timeout`. Sends to a LAN or remote server never touch it.
+
+Settings, in `settings.yaml` (each key has an environment override, which wins over the file; a value out of range or an unknown key fails at once):
+
+```yaml
+local_governor:
+  enabled: true        # LLM_EXT_GOVERNOR_ENABLED (true or false)
+  ram_limit_pct: 80    # LLM_EXT_GOVERNOR_RAM_LIMIT_PCT, integer 50-99
+  cpu_limit_pct: 80    # LLM_EXT_GOVERNOR_CPU_LIMIT_PCT, integer 10-100 (100 turns the CPU limit off)
+  max_inferences: 8    # LLM_EXT_GOVERNOR_MAX_INFERENCES, integer 1-256, machine-wide
+  server_threads: 0    # LLM_EXT_GOVERNOR_SERVER_THREADS, 0 = half the thread budget, else 1 up to the budget
+```
+
+- **RAM** is anonymous + wired + compressed memory (macOS `vm_stat`; Linux `MemTotal - MemAvailable`; Windows total minus free), so file cache does not count. A model load is admitted only if its projected size fits under `ram_limit_pct`; a model that could never fit fails at once. `ram_limit_pct` also sets the free memory calibration keeps (`100 - ram_limit_pct`). It replaced `LLM_EXT_BROKER_MEMORY_FLOOR`: setting that variable is an error that names `ram_limit_pct`; the default (80, so 20 % free) replaces the old floor default of 10 % free.
+- **CPU and threads.** The thread budget is `cores x cpu_limit_pct / 100`. Each `llama-server` llm-ext starts gets `-t T -tb T` (T is half the budget unless `server_threads` is set), and the servers with a request running may never sum above the budget.
+- **Check the figures** with `llm-ext models server-status`: governor on or off, the window of `max_inferences`, inferences running, waiters (each shown with its own limits), RAM and CPU against their limits with the age of the reading, threads in use of the budget, the last denial and its reason, and the threads of each registered server. A machine that idles near the RAM limit (a busy 64 GB Mac reads 78 to 85 % at rest) blocks most loads: raise `ram_limit_pct` (at most 99), or free memory.
+- **Different config dirs** may hold different limits: each limit binds only the requests of its own config dir. A running broker reads `settings.yaml` again within 2 s of a change.
+- **`enabled: false`** opts that config dir out: its sends go straight to the server as before, take no lease and are not counted by the others.
+
+What the governor does not promise:
+
+- It limits only what llm-ext starts. Other programs, a model server you started yourself (its threads, its own loaded model, its GPU use), and an inference already running are never stopped or slowed; when other programs keep the machine over the CPU limit, llm-ext still runs one inference at a time.
+- A config dir with `enabled: false`, an llm-ext version older than the governor still running during an upgrade, and a model server started by hand on another port that llm-ext never sends to are invisible to it.
+- LM Studio and Ollama load a model on the first request that names it (just-in-time loading): such a load gets no load grant and no RAM projection, only the inference lease.
+- GPU memory on Apple Silicon is covered only through the RAM reading (unified memory). A discrete GPU (Linux, Windows) is not read at all: a model offloaded to VRAM is invisible to the RAM limit, and VRAM has no limit of its own.
+- The Linux and Windows readings are not verified on a real machine; a Linux cgroup memory limit (a container, a systemd slice) is not read, so inside one the limit is judged against the whole host.
+- With every layer on the GPU (Metal), the threads given to a `llama-server` stay mostly idle, so the thread budget limits how many servers run together more than real CPU use. The threads of a server you started yourself cannot be read and count as 0.
+- It is per user: the state is in `/tmp/llm-ext-governor-<uid>`, so two users on one machine do not see each other.
+- A first model download holds the one load grant until it ends (up to an hour), and a model that must load alone waits until no inference runs.
+- If two config dirs set different `ram_limit_pct` values, the rule that asks a model server to unload after RAM has stayed over the limit for 30 seconds may never fire for the stricter one, because its 30 second timer restarts whenever the laxer one sees RAM under its own limit.
+- The model servers that `llm-ext models calibrate` starts are counted in the figures like the others, but the governor never asks them to unload; the calibration command stops its own server when the model is done.
+- Memory growth after a model server has finished loading is not watched: a server whose memory keeps growing while it answers (its context or prompt cache) is judged only when the next request asks for a grant. A Locals server started with context size 0 gets no `--max-context`, so its memory is limited only by the model's own context size.
+- When you send a request straight to a model server you started yourself, the governor counts it as a running inference, but it does not count that server's memory and never asks it to unload.
+- A broker started by an older llm-ext version keeps running through an upgrade and takes no part in the governor; its model servers use llama.cpp's default thread count, which the governor does not count.
+- Calibration keeps `100 - ram_limit_pct` free. If the shell where you run `llm-ext models calibrate` sets a different `ram_limit_pct` than the broker uses, a model that is too big for memory may be recorded as too big in one and not in the other, until a calibration started by the broker measures that model again.
+- On filesystems with coarse modification times (HFS+, FAT, some network filesystems), a same-size edit of `settings.yaml` made within about 2 seconds of the previous one may not reach a running broker until the next edit.
 ### Environment variables
 
 | Variable | Used by |
@@ -1357,7 +1397,9 @@ Two local profiles are built in and added to `settings.yaml` once (not active by
 | `VLLM_API_KEY` | `vllm-local` preset |
 | `LLM_EXT_CONFIG_DIR` | Settings + history-log directory (default `~/.llm-externalizer`) |
 | `LLM_EXT_OUTPUT_DIR` | Default report directory (overrides the per-call `output_dir` default) |
+| `LLM_EXT_SCRATCH_DIR` | Directory for intermediate output only (per-file pieces of a merged run, model-pool benchmark/health reports); unset, intermediate output follows `LLM_EXT_OUTPUT_DIR` when that is set, else `<project>/reports_dev/llm-externalizer/` |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of auto-installing `rules/use-llm-externalizer.md` into `~/.claude/rules/` |
+| `LLM_EXT_GOVERNOR_ENABLED`, `LLM_EXT_GOVERNOR_RAM_LIMIT_PCT`, `LLM_EXT_GOVERNOR_CPU_LIMIT_PCT`, `LLM_EXT_GOVERNOR_MAX_INFERENCES`, `LLM_EXT_GOVERNOR_SERVER_THREADS` | Override the `local_governor` keys of `settings.yaml` (see "Local inference governor"); a malformed value fails at once |
 | `LLM_EXT_FREE_BELOW_USD` | No longer used — the automatic free mode on low balance is removed (14.1.0). A paid profile falls back only within its own pool; free is used only when explicitly selected with `--profile free` or `active: free`. |
 | `LLM_EXT_FREE_MODEL_ID` | No longer used — the `free: true` flag resolves to the selected profile's own first `:free` chain entry now, never a single hard-coded id (14.1.0, fix-queue 98(2)). |
 | `LLM_EXT_REASONING_EFFORT` | Reasoning effort sent to OpenRouter reasoning models: `xhigh`\|`high`\|`medium`\|`low`\|`off` (default `high`). **Reasoning tokens are billed even though the trace is discarded** — `xhigh` can be ~10× the per-call cost of no reasoning, so the default is `high`. `off` disables reasoning on every call. `mass_scout` and `cluster_synonyms` never reason regardless of this setting. |
@@ -1517,6 +1559,8 @@ llm-externalizer-plugin/
 > 3. **The `.github/workflows/notify-marketplace.yml` CI** — this workflow notifies the `emasoft-plugins` marketplace that a new release is available. On a fork it would either fail (no `MARKETPLACE_PAT` secret) or try to notify the marketplace about your fork — neither is wanted.
 >
 > The setup below disables all three on your fork so you can push PRs cleanly.
+>
+> The fourth hook, `.githooks/pre-commit`, is **not** owner-only: it scans the staged files with the Ultimate Bug Scanner and is safe for contributors to keep. Step 2a silences it along with `pre-push`; see the note there to keep it.
 
 ### Developer requirements
 
@@ -1576,6 +1620,12 @@ git config --local --get core.hooksPath
 </details>
 
 > The `pre-push` script itself is unchanged on disk (it's tracked in `.githooks/`). You're only telling *your* git not to run it.
+>
+> This also stops `.githooks/pre-commit` (the bug-scan gate) from running — every hook in the folder goes silent. That one is safe for contributors; to keep it, copy it into the default hooks directory after step 2a:
+>
+> ```bash
+> cp .githooks/pre-commit .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit
+> ```
 
 #### 2b · Disable GitHub Actions workflows on your fork
 

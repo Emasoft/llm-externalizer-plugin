@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# Pre-commit gate: Ultimate Bug Scanner (ubs) over the staged file set.
+#
+# WHY a tracked hook: this clone runs with core.hooksPath=.githooks — a
+# LOCAL git config set by the setup in PUBLISH_NOTES.md, not a committed one —
+# so the hook committed here is what runs on this repo. A copy dropped in
+# .git/hooks would be untracked and absent on a fresh clone, which is why
+# PUBLISH_NOTES.md lists that setting as a setup step. A contributor who
+# prefers the default .git/hooks location can copy this script there instead
+# (README, "Contributing" → step 2a).
+
+# WHY fail-open on a missing scanner and on a timeout: a gate that blocks every
+# commit on a machine where ubs is not installed, or that hangs for minutes on
+# one large file, gets switched off with --no-verify and then guards nothing.
+# A real finding still blocks; an absent or stalled scanner only warns.
+# Measured 2026-11-09: ubs on a 4737-line TypeScript file did not finish in
+# 5m34s (killed), so the timeout is load-bearing, not paranoia.
+
+set -uo pipefail
+
+if ! command -v ubs >/dev/null 2>&1; then
+  echo "pre-commit: ubs not installed — bug scan skipped (install per /ultimate-bug-scanner)" >&2
+  exit 0
+fi
+
+# A commit that stages no scannable language (docs, JSON, images) is not a scan
+# failure; without this ubs exits 3 and the commit would be blocked.
+export UBS_ALLOW_NO_SCAN=1
+
+timeout_s="${UBS_PRECOMMIT_TIMEOUT:-180}"
+
+echo "pre-commit: scanning staged files with ubs (timeout ${timeout_s}s)..." >&2
+
+# WHY job control and a process-group kill: `timeout ubs` kills only the ubs
+# wrapper script; the language module it spawns (ubs-js.sh, itself under its own
+# internal `timeout -k 15s 900s`) is a grandchild and survives, burning CPU for
+# up to 15 minutes after the hook already gave up. `set -m` puts the job in its
+# own process group so a negative-pid kill reaches the whole tree.
+set -m
+ubs --staged &
+scan_pid=$!
+( sleep "$timeout_s"; kill -TERM -- -"$scan_pid" 2>/dev/null ) &
+watcher_pid=$!
+wait "$scan_pid"
+status=$?
+# Kill the watcher as a GROUP, not by bare pid: the subshell forks a `sleep`
+# child, and killing only the pid leaves that sleep orphaned holding the hook
+# stdout/stderr pipe open. A caller that captures the commit output then blocks
+# until the sleep expires — a commit that finished in milliseconds appears to
+# hang for the whole timeout. `set -m` gives the watcher its own process group,
+# so the negative-pid kill reaps the sleep with it (same rule as the scan kill).
+kill -TERM -- -"$watcher_pid" 2>/dev/null
+wait "$watcher_pid" 2>/dev/null
+set +m
+
+case "$status" in
+  0) exit 0 ;;
+  # SIGTERM from the watcher: 143 is bash's exit status for a job killed by
+  # SIGTERM; 124 is what `timeout` reports, kept for the same meaning.
+  143|124)
+    echo "pre-commit: ubs exceeded ${timeout_s}s — scan skipped, commit allowed (set UBS_PRECOMMIT_TIMEOUT to change)" >&2
+    exit 0
+    ;;
+  # 2 is ubs own environment/usage failure (missing ast-grep, unverified
+  # module, timeout inside a module): the scan could not run, which is not a
+  # finding. Fail open with the reason printed, same rule as a missing binary.
+  2)
+    echo "pre-commit: ubs could not run (exit 2, see its message above) — commit allowed" >&2
+    exit 0
+    ;;
+  # 3 is ubs's "nothing was scanned" code; UBS_ALLOW_NO_SCAN makes it 0, so
+  # this only fires if a future ubs version ignores the variable.
+  3) exit 0 ;;
+  *)
+    cat >&2 <<'MSG'
+pre-commit: ubs reported findings above.
+Fix them, or mark a verified false positive with a trailing `ubs:ignore` comment on the flagged line.
+To commit anyway: git commit --no-verify
+MSG
+    exit 1
+    ;;
+esac

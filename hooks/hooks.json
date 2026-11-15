@@ -8,6 +8,11 @@
             "type": "command",
             "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-path-shim.sh\"",
             "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/hooks/install-decider-agent.sh\"",
+            "timeout": 10
           }
         ]
       }

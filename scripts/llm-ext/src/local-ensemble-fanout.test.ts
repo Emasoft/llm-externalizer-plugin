@@ -1,0 +1,196 @@
+/**
+ * local-ensemble-fanout.test.ts: P8 (TRDD-1OOAH3LD, TRDD-ZGSGGHQG). A mode-local profile that declares model,
+ * second_model and third_model runs the ensemble commands on all three, each send reaching the server of its own
+ * route; a one-model local profile keeps the single-model path; the D5 spend guard does not refuse local members.
+ * REAL node:http OpenAI-compatible servers logging every request, REAL settings file in a temp config dir under a
+ * temp HOME; no mocks, no fetch spy, nothing spawned (the profiles are unmanaged, so no broker, llama-server or Locals).
+ */
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { createServer, type Server } from "node:http";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { resetServiceHealthForTests } from "./provider/completion.js";
+
+const servers: Server[] = [];
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  for (const s of servers.splice(0)) {
+    s.closeAllConnections();
+    s.close();
+  }
+  for (const c of cleanups.splice(0)) c();
+  resetServiceHealthForTests();
+});
+
+/** A loopback chat-completions server: logs the model id of every POST into `seen`, 404 for anything else (the endpoint-flavor probe). */
+async function serve(seen: string[]): Promise<string> {
+  const server = createServer((req, res) => {
+    if (req.method !== "POST") {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end("{}");
+      return;
+    }
+    let body = "";
+    req.on("data", (c: Buffer) => (body += c.toString("utf8")));
+    req.on("end", () => {
+      const model = String((JSON.parse(body) as { model?: unknown }).model);
+      seen.push(model);
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(
+        JSON.stringify({
+          id: "x",
+          object: "chat.completion",
+          model,
+          choices: [{ index: 0, message: { role: "assistant", content: `answer from ${model}` }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+        }),
+      );
+    });
+  });
+  servers.push(server);
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const addr = server.address();
+  if (typeof addr !== "object" || addr === null) throw new Error("server address unavailable");
+  return `http://127.0.0.1:${addr.port}`;
+}
+
+/** Every file under `dir`, recursively. */
+function filesUnder(dir: string): string[] {
+  return readdirSync(dir).flatMap((n) => {
+    const p = join(dir, n);
+    return statSync(p).isDirectory() ? filesUnder(p) : [p];
+  });
+}
+
+/** Boot a fresh index.ts over a throwaway config dir holding `yaml`, then one scan_folder over a one-file folder through the real entry. */
+async function scanThroughEntry(yaml: string): Promise<{ text: string; isError: boolean; reports: string[]; idx: typeof import("./index.js") }> {
+  const cfgDir = mkdtempSync(join("/tmp", "llm-ext-local-fanout-"));
+  const homeDir = mkdtempSync(join("/tmp", "llm-ext-local-fanout-home-"));
+  const folder = mkdtempSync(join("/tmp", "llm-ext-local-fanout-files-"));
+  const out = mkdtempSync(join("/tmp", "llm-ext-local-fanout-out-"));
+  cleanups.push(() => {
+    vi.unstubAllEnvs();
+    for (const d of [cfgDir, homeDir, folder, out]) rmSync(d, { recursive: true, force: true });
+  });
+  writeFileSync(join(cfgDir, "settings.yaml"), yaml, "utf-8");
+  writeFileSync(join(folder, "a.txt"), "hello world\n", "utf-8");
+  vi.stubEnv("LLM_EXT_CONFIG_DIR", cfgDir);
+  vi.stubEnv("HOME", homeDir);
+  vi.stubEnv("LLM_EXT_INSTALL_RULE", "0");
+  vi.stubEnv("LLM_EXT_DISABLE_AUTO_RECONCILE", "1");
+  vi.stubEnv("LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION", "1");
+  vi.resetModules();
+  const idx = await import("./index.js");
+  await idx.boot();
+  const result = await idx.dispatchCallTool("scan_folder", { folder_path: folder, instructions: "find bugs", output_dir: out });
+  const reports = filesUnder(out).map((p) => readFileSync(p, "utf-8"));
+  return { text: result.content.map((c) => c.text ?? "").join("\n"), isError: result.isError === true, reports, idx };
+}
+
+/**
+ * The built-in `local` profile (mode local, unmanaged, so nothing is spawned) declaring three members: `model` plus two
+ * reserved slots. WHY not a user profile with second_model/third_model: P5 (profileTypeFieldIssues) refuses those keys on
+ * a local profile unless server: managed, and a managed profile starts the broker, which starts llama-server or Locals.
+ * The reserved-slot shape reaches the same P8 code: ensembleAllowed counts three members, and `model` (built by the
+ * non-reserved branch of getEnsembleModels) needs the P8 route to fan out at all.
+ */
+function localProfile(urlA: string, allowPaid: boolean, extra = "", second = "", third = ""): string {
+  return `active: local
+allow_paid_models: ${allowPaid}
+profiles:
+  # <-- do not touch, generated by llm-ext -->
+  local:
+    mode: local
+    api: generic-local
+    url: ${urlA}
+    model: m-one
+${extra}`.replace("@SECOND@", second).replace("@THIRD@", third);
+}
+
+const THREE = `    ensemble:
+      reserved:
+        - model: m-two@SECOND@
+        - model: m-three@THIRD@
+`;
+
+describe("local ensemble fan-out (P8, TRDD-1OOAH3LD)", () => {
+  it("a three-member local profile scan sends one request per member, each to its own route, and the report holds three member sections", async () => {
+    const a: string[] = [];
+    const b: string[] = [];
+    const c: string[] = [];
+    const [urlA, urlB, urlC] = [await serve(a), await serve(b), await serve(c)];
+    const groups = `    providers:
+      - name: second
+        api: generic-local
+        url: ${urlB}
+        models: [m-two]
+      - name: third
+        api: generic-local
+        url: ${urlC}
+        models: [m-three]
+`;
+    const r = await scanThroughEntry(localProfile(urlA, true, groups + THREE, "\n          provider: second", "\n          provider: third"));
+    expect(r.isError, r.text).toBe(false);
+    // One request per member, each on the server its route names. Without the P8 route on `model`, canFanOut fails and
+    // only m-one is sent.
+    expect(a).toEqual(["m-one"]);
+    expect(b).toEqual(["m-two"]);
+    expect(c).toEqual(["m-three"]);
+    const report = r.reports.find((t) => t.includes("## Model:")) ?? "";
+    expect(report.match(/^## Model: /gm)?.length, r.reports.join("\n=====\n")).toBe(3);
+    for (const m of ["m-one", "m-two", "m-three"]) expect(report).toContain(`## Model: ${m}`);
+  }, 60_000);
+
+  it("a one-model local profile keeps the single-model path: one request", async () => {
+    const a: string[] = [];
+    const r = await scanThroughEntry(localProfile(await serve(a), true));
+    expect(r.isError, r.text).toBe(false);
+    expect(a).toEqual(["m-one"]);
+    expect(r.idx.__getEnsembleModelsForTests()).toEqual([]);
+  }, 60_000);
+
+  it("allow_paid_models: false does not refuse local members (the D5 spend guard): all three are sent", async () => {
+    const seen: string[] = [];
+    // Router shape: one server answers every member by model id (llama router mode); every member still carries a route.
+    const r = await scanThroughEntry(localProfile(await serve(seen), false, THREE));
+    expect(r.isError, r.text).toBe(false);
+    expect([...seen].sort()).toEqual(["m-one", "m-three", "m-two"]);
+    const members = r.idx.__getEnsembleModelsForTests();
+    expect(members.map((m) => m.id)).toEqual(["m-two", "m-three", "m-one"]);
+    expect(members.every((m) => m.route?.isLocal === true)).toBe(true);
+    // Sized like a single local request (P8 review decision 1): no input-line filter, the single path's output budget.
+    expect(members.every((m) => m.maxInputLines === Number.POSITIVE_INFINITY)).toBe(true);
+    expect(new Set(members.map((m) => m.maxOutput)).size).toBe(1);
+  }, 60_000);
+});
+
+describe("ensembleAllowed (P8)", () => {
+  type Resolved = Parameters<typeof import("./index.js").ensembleAllowed>[1];
+  it("is keyed on mode, never on backend type: a remote openai_api preset (backend type local) with three models stays off", async () => {
+    const idx = await import("./index.js");
+    const remote = { mode: "remote", model: "a", secondModel: "b", thirdModel: "c" } as Resolved;
+    const local = { mode: "local", model: "a", secondModel: "b", thirdModel: "" } as Resolved;
+    const single = { mode: "local", model: "a", secondModel: "", thirdModel: "" } as Resolved;
+    expect(idx.ensembleAllowed({ type: "local" }, remote)).toBe(false);
+    expect(idx.ensembleAllowed({ type: "local" }, local)).toBe(true);
+    expect(idx.ensembleAllowed({ type: "local" }, single)).toBe(false);
+    expect(idx.ensembleAllowed({ type: "openrouter" }, null)).toBe(true);
+  });
+
+  it("counts distinct members: model == second_model is ONE member (off), two distinct ids are two (on)", async () => {
+    const idx = await import("./index.js");
+    const same = { mode: "local", model: "a", secondModel: "a", thirdModel: "", reservedSlots: [{ modelId: "a", routes: [] }] } as unknown as Resolved;
+    const two = { mode: "local", model: "a", secondModel: "b", thirdModel: "b" } as Resolved;
+    expect(idx.ensembleAllowed({ type: "local" }, same)).toBe(false);
+    expect(idx.ensembleAllowed({ type: "local" }, two)).toBe(true);
+  });
+});
+
+describe("assertLocalMembersRouted (P8 review, fail fast)", () => {
+  it("a local member with no route throws, naming it; fully routed members pass", async () => {
+    const idx = await import("./index.js");
+    const route = { name: "local", api: "generic-local", protocol: "openai_api", url: "http://127.0.0.1:1", authToken: "", keyRef: "none", primary: true, isLocal: true, isFreeProvider: false, models: [] } as unknown as NonNullable<Parameters<typeof idx.assertLocalMembersRouted>[0][number]["route"]>;
+    expect(() => idx.assertLocalMembersRouted([{ id: "m-one", route }, { id: "m-two" }])).toThrow(/m-two/);
+    expect(() => idx.assertLocalMembersRouted([{ id: "m-one", route }, { id: "m-two", route }])).not.toThrow();
+  });
+});

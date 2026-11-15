@@ -22,13 +22,14 @@
  */
 
 import { loadavg, totalmem } from "node:os";
-import { timingsFromEnv } from "../broker/scheduler.js";
+import { freeFloorPct } from "../governor/settings.js";
 import { loadSettings, scoutAccuracyThreshold } from "../config.js";
 import { localsOutgoingModel } from "../local-locals-server.js";
 import { buildPositionalSchema, calibrationScoutFixture, classifyPositional, scoreAccuracy, SCOUT_HTTP_PREFIX, SCOUT_NETWORK_PREFIX, SCOUT_TIMEOUT_PREFIX } from "../mass_scouting/scout-accuracy-fixture.js";
 import { freeMemory, kvBytes, modelKvLayers, WINDOW_HEADROOM_BYTES, weightBytes } from "./memory.js";
 import { CAP_OFF, CAP_ON, makeSender, trialTimeoutMs, type Reply, type Sender } from "./phase-a.js";
 import { factDocument } from "./phase-b-fixtures.js";
+import { releaseDirectLease, takeDirectLease } from "../governor/direct.js";
 import { dataOf, localsIds } from "./phase-b.js";
 import { scoutingFor, TASK_KINDS, type PerKind, type ScoutCandidate } from "./record.js";
 import type { Phase } from "./runner.js";
@@ -38,8 +39,10 @@ import { budgetFit, INCONCLUSIVE_PASSES, MEMORY_WAIT_CAUSE, MEMORY_WAIT_GIVEN_UP
 export const THROUGHPUT_OUTPUT_TOKENS = 256;
 /** Output cap of a scouting request: one short label per record, thinking off. */
 export const SCOUT_OUTPUT_CAP = CAP_OFF;
-/** Prompt overhead reserved in every slot (spec 4.5: 512). */
-const SLOT_OVERHEAD = 512;
+/** The thinking setting of every scouting request Phase C measures accuracy under (both engines); mass scouting on a local profile sends the same (P9). */
+export const SCOUTING_THINKING: Readonly<{ chat_template_kwargs: { enable_thinking: false } }> = { chat_template_kwargs: { enable_thinking: false } };
+/** Prompt overhead reserved in every slot (spec 4.5: 512). P7 subtracts the same overhead from the input budget (local-input-budget.ts). */
+export const SLOT_OVERHEAD = 512;
 /** Scouting runs per candidate (spec 4.5: 3 runs, different seeds). */
 const SCOUT_RUNS = 3;
 /** Repeats of a scouting run whose request timed out, before the candidate is skipped (review of fb861fab). */
@@ -154,7 +157,7 @@ export const phaseC: Phase = {
       const bugThinking = b.bug_thinking === "on" ? "on" : "off";
       const layers = modelKvLayers(ctx.item.engine, ctx.identity.files);
       const weights = weightBytes(ctx.identity.files);
-      const floorPct = timingsFromEnv(process.env).memoryFloorPct;
+      const floorPct = freeFloorPct();
 
       /**
        * A candidate's terminal result: its latest trial with outcome pass, that is measured, skipped as over total RAM
@@ -214,24 +217,34 @@ export const phaseC: Phase = {
           continue;
         }
         await ctx.restart(slotCtx, n);
-        const send: Sender = makeSender(ctx, ctx.server.engine === "locals" ? await localsIds(ctx) : []);
+        // The step holds one lease of weight n per round, so the sender takes none of its own (design D9).
+        const send: Sender = makeSender(ctx, ctx.server.engine === "locals" ? await localsIds(ctx) : [], true);
         const rates: number[] = [];
+        const roundTimeoutMs = trialTimeoutMs(prompt * n, THROUGHPUT_OUTPUT_TOKENS * n, prefillTps, decodeTps);
         for (let round = 0; round < 2; round++) {
-          const t0 = Date.now();
-          const replies = await Promise.all(
-            Array.from({ length: n }, (_, i) => {
-              const doc = factDocument(7100 + 100 * round + i, Math.floor(prompt * cpt));
-              return send.chat([{ role: "user", content: `${doc.text}\n\nDescribe the document above in about 200 words.` }], {
-                thinking: "off",
-                maxTokens: THROUGHPUT_OUTPUT_TOKENS,
-                timeoutMs: trialTimeoutMs(prompt * n, THROUGHPUT_OUTPUT_TOKENS * n, prefillTps, decodeTps),
-              });
-            }),
-          );
-          const wallMs = Date.now() - t0;
-          const bad = replies.find((r) => r.status !== 200);
-          if (bad) throw new Error(`${step}: a throughput request failed: HTTP ${bad.status} ${bad.error ?? ""}`);
-          rates.push(batchThroughput(replies, wallMs));
+          // Design D9: one lease of weight n for the n parallel requests, or a smaller window would be measured as a slower
+          // model. Per round, after the turn: held across the turn wait, it would block the broker work the turn waits for.
+          await ctx.waitForTurn();
+          const lease = await takeDirectLease(ctx.server.baseUrl, roundTimeoutMs, { weight: n, ...ctx.server.lease });
+          try {
+            const t0 = Date.now();
+            const replies = await Promise.all(
+              Array.from({ length: n }, (_, i) => {
+                const doc = factDocument(7100 + 100 * round + i, Math.floor(prompt * cpt));
+                return send.chat([{ role: "user", content: `${doc.text}\n\nDescribe the document above in about 200 words.` }], {
+                  thinking: "off",
+                  maxTokens: THROUGHPUT_OUTPUT_TOKENS,
+                  timeoutMs: roundTimeoutMs,
+                });
+              }),
+            );
+            const wallMs = Date.now() - t0;
+            const bad = replies.find((r) => r.status !== 200);
+            if (bad) throw new Error(`${step}: a throughput request failed: HTTP ${bad.status} ${bad.error ?? ""}`);
+            rates.push(batchThroughput(replies, wallMs));
+          } finally {
+            releaseDirectLease(lease);
+          }
         }
         const tps = Math.round((rates.reduce((s, x) => s + x, 0) / rates.length) * 10) / 10;
         ctx.record({ step, seed: n, outcome: "pass", data: { slots: n, slot_ctx: slotCtx, aggregate_tps: tps, load_avg: loadavg()[0] }, at: now() });
@@ -275,7 +288,7 @@ export const phaseC: Phase = {
             continue;
           }
           await ctx.restart(sCtx, n);
-          const thinkingOff = { chat_template_kwargs: { enable_thinking: false } };
+          const thinkingOff = SCOUTING_THINKING;
           const model = ctx.server.engine === "locals" ? (localsOutgoingModel(await localsIds(ctx), thinkingOff) ?? ctx.server.model) : ctx.server.model;
           const seed = 9000 + share + n;
           let correct = 0;
@@ -292,17 +305,26 @@ export const phaseC: Phase = {
             // verdict. After SCOUT_TIMEOUT_RERUNS repeats the candidate is skipped for this pass, never scored (rule A).
             for (let attempt = 0; ; attempt++) {
               await ctx.waitForTurn();
+              const runTimeoutMs = trialTimeoutMs(share * n, SCOUT_OUTPUT_CAP * n, prefillTps, decodeTps);
+              // Design D9: one lease of weight n for the run's n parallel requests, taken after the turn and before t0 so
+              // the wait is not in records_per_s; released before a rerun reloads the server.
+              const lease = await takeDirectLease(ctx.server.baseUrl, runTimeoutMs, { weight: n, ...ctx.server.lease });
               const t0 = Date.now();
-              const results = await Promise.all(
-                fixtures.map((fx) =>
-                  classifyPositional(model, ctx.server.baseUrl, ctx.server.apiKey, fx, buildPositionalSchema(fx.recordCount), {
-                    responseMode,
-                    extraBody: thinkingOff,
-                    maxTokens: SCOUT_OUTPUT_CAP,
-                    timeoutMs: trialTimeoutMs(share * n, SCOUT_OUTPUT_CAP * n, prefillTps, decodeTps),
-                  }),
-                ),
-              );
+              let results: Awaited<ReturnType<typeof classifyPositional>>[];
+              try {
+                results = await Promise.all(
+                  fixtures.map((fx) =>
+                    classifyPositional(model, ctx.server.baseUrl, ctx.server.apiKey, fx, buildPositionalSchema(fx.recordCount), {
+                      responseMode,
+                      extraBody: thinkingOff,
+                      maxTokens: SCOUT_OUTPUT_CAP,
+                      timeoutMs: runTimeoutMs,
+                    }),
+                  ),
+                );
+              } finally {
+                releaseDirectLease(lease);
+              }
               const timeouts = results.filter((r) => isScoutTimeout(r.error)).length;
               const lost = results.filter((r) => isScoutTransportFailure(r.error)).length;
               if (timeouts + lost > 0) {
@@ -370,6 +392,9 @@ export const phaseC: Phase = {
         aggregate_tps: chosen.tps,
         load_avg: Math.round(chosen.load * 100) / 100,
         scout_candidates: JSON.stringify(candidates),
+        // Governor D11: what a load of this model needs, so the broker can project a main server before granting it.
+        load_weight_bytes: weights,
+        load_kv_bytes_per_token: kvBytes(layers, 1),
         ...(unfitReason !== null ? { scouting_unfit_reason: unfitReason } : {}),
       };
       ctx.record({ step: "C/summary", seed: 0, outcome: "pass", data: summary, at: now() });

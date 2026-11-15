@@ -53,6 +53,7 @@ import {
   literalDedup,
 } from "../../text-tools/core.js";
 import type { BenchmarkWorkload } from "../workload-types.js";
+import { evidenceQualityPass, isTextToolNonEvidence, recordQualityPass } from "../quality-evidence.js";
 
 import {
   DESCRIBE_CASES,
@@ -68,6 +69,7 @@ import {
 } from "./bench-runner.js";
 import {
   aggregateTextToolScores,
+  answeredOnlyTextToolScore,
   passesTextToolThresholds,
   DEFAULT_TEXT_TOOL_THRESHOLDS,
   type TextToolScore,
@@ -75,6 +77,7 @@ import {
 } from "./score.js";
 import {
   textToolCriteria,
+  judgeTextTool,
   selectTextToolModel,
   type TextToolCandidate,
   type TextToolSelectionResult,
@@ -105,7 +108,7 @@ export interface TextToolBenchmarkOptions {
   apiKey?: string;
   /** Explicit model ids to assess. When absent, auto-discover the candidate pool. */
   models?: string[];
-  /** Report dir. Default `<main-repo-root>/reports/text-tools-benchmark/<tool>/`. */
+  /** Report dir. Default `<main-repo-root>/reports_dev/llm-externalizer/text-tools-benchmark/<tool>/`. */
   outputDir?: string;
   mainRoot?: string;
   /** Ignore the per-model-per-day cache and re-run every model. */
@@ -148,7 +151,9 @@ function caseCountFor(tool: TextToolName): number {
   return DESCRIBE_CASES.length;
 }
 
-function datasetHashFor(tool: TextToolName): string {
+/** Exported for profiles/production-verdicts.ts: the verdict reader must judge text-tools rows under
+ *  the SAME hash this benchmark writes them with (TRDD-SZ7TO9FW plan W1). */
+export function datasetHashFor(tool: TextToolName): string {
   const data: unknown =
     tool === "summarize"
       ? SUMMARIZE_CASES
@@ -533,7 +538,13 @@ async function runTextToolBenchmark(
       };
     }
 
-    cache[key].qualityPass = passesTextToolThresholds(score, thresholds).pass;
+    // Abstain (no qualityPass) when over a quarter of the cases got no answer, and
+    // judge the rest on answered cases only (TRDD-90BXJ2KO) — see quality-evidence.ts.
+    recordQualityPass(
+      cache[key],
+      evidenceQualityPass(score, isTextToolNonEvidence, (s) => passesTextToolThresholds(answeredOnlyTextToolScore(s), thresholds).pass),
+      `text-tools ledger row ${key}`,
+    );
 
     totalCost += costUsd;
     assessments.push({
@@ -547,7 +558,7 @@ async function runTextToolBenchmark(
       failureReasons,
       costUsd,
     });
-    const thr = passesTextToolThresholds(score, thresholds);
+    const thr = judgeTextTool(score, thresholds);
     progress(
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} meanScore=${score.meanScore.toFixed(3)} ` +
         `failed=${score.failedCases}/${score.totalCases}`,
@@ -589,7 +600,7 @@ async function runTextToolBenchmark(
     reason: selection.reason,
     costUsd: totalCost,
     assessments: assessments.map((a) => {
-      const thr = passesTextToolThresholds(a.score, thresholds);
+      const thr = judgeTextTool(a.score, thresholds);
       return {
         modelId: a.modelId,
         qualified: a.qualified,
@@ -688,7 +699,7 @@ function buildReportMarkdown(args: {
   lines.push("|---|---|---|---|---|---|---|---|");
   const sorted = [...args.assessments].sort((a, b) => b.score.meanScore - a.score.meanScore);
   for (const a of sorted) {
-    const thr = passesTextToolThresholds(a.score, args.thresholds);
+    const thr = judgeTextTool(a.score, args.thresholds);
     lines.push(
       `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ` +
         `${a.score.meanScore.toFixed(3)} | ${a.score.failedCases}/${a.score.totalCases} | ` +

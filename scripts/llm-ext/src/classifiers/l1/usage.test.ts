@@ -158,8 +158,9 @@ describe("L1-10 endpoint field on decisions usage lines", () => {
       });
     }
     const lines = readLines();
-    expect(lines[0]).toMatch(/ - endpoint=decisions$/);
-    expect(lines[1]).toMatch(/ - endpoint=systemone$/);
+    // C4-12: the measured input tokens follow the endpoint on the line.
+    expect(lines[0]).toMatch(/ - endpoint=decisions - tokens=\d+$/);
+    expect(lines[1]).toMatch(/ - endpoint=systemone - tokens=\d+$/);
     expect(readHistory().map((e) => e.endpoint)).toEqual(["decisions", "systemone"]);
   });
 });

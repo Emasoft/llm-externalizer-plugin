@@ -98,6 +98,8 @@ function windowsOf(i: FindingsInput): Window[] {
 
 export const spec: DecisionSpec<FindingsInput, FindingsResult> = {
   id: "findings",
+  // IN-06: the JSON carries the findings; the files they name are read whole into `sources` (input-args.ts readFileSources) unless the JSON already holds `sources`.
+  fileSources: { list: "findings", fileKey: "file", into: "sources" },
   input: findingsInput,
   thresholds: {
     real: { default: 0.5, min: 0, max: 1, help: "--real: lowest p that the finding is a real problem; below it the finding is dropped" },

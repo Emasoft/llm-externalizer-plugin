@@ -8,6 +8,7 @@ import { IdError, indexKey } from "../l2/ids.js";
 import { InputError } from "../l2/input-error.js";
 import { marginMet, PolicyError } from "../l2/policy-kit.js";
 import { dataGuard, positionalIds, renumberByPosition } from "./shared.js";
+import { clip, f2, type RenderOptions, type TextRender } from "../l2/render-text.js";
 import type { Answers, BuiltUnit, DecisionSpec, Thresholds } from "./spec.js";
 
 // E59: the whole class catalog is sent with every request, so its serialized size is bounded (budget measure inferred from the plan row: the JSON length of the classes).
@@ -66,6 +67,8 @@ export interface LabelRow {
   /** Top minus runner-up probability (jev-mcp marginOf: 0 for a lone option); null when the answer was refused. */
   margin: number | null;
   invalid: string | null;
+  /** Set only for an item that was cut into chunks: how many, and the source lines of the chunk that decided it (quicksilver "N chunks, best lines A-B"). */
+  chunk?: { chunks: number; bestLines?: [number, number] };
 }
 export interface LabelResult {
   rows: LabelRow[];
@@ -112,6 +115,43 @@ function parseLabelsJson(text: string): LabelClass[] {
   });
 }
 
+// IN-08 (qs classify): the text form. A row names its chunks when the item was judged in parts, so a verdict from one fragment is not read as the whole file.
+const chunkNote = (r: LabelRow): string => (r.chunk === undefined ? "" : ` (${r.chunk.chunks} chunks${r.chunk.bestLines ? `, best lines ${r.chunk.bestLines.join("-")}` : ""})`);
+const conf = (r: LabelRow): string => (r.confidence === null ? "n/a" : f2(r.confidence));
+
+function renderText(r: LabelResult, opts: RenderOptions): TextRender {
+  const classes = Object.keys(r.counts);
+  const only = typeof opts.only === "string" ? new Set(opts.only.split(",").map((s) => s.trim()).filter(Boolean)) : null;
+  const verbose = opts.verbose === true;
+  const answered = r.rows.filter((x) => x.label !== null);
+  // WHY not accepted = low: an unknown confidence is listed for review with the low ones, never as a sure label (qs: null >= min is false).
+  const low = answered.filter((x) => !x.accepted);
+  const lines = [classes.map((c) => `${c} ${r.counts[c]}`).join(" · ")];
+  // WHY said in the text: --only matching no class would print an empty body that reads like "nothing found".
+  for (const o of only ?? []) if (!classes.includes(o)) lines.push(`? --only names no such class: ${o}`);
+  for (const c of classes) {
+    if (only && !only.has(c)) continue;
+    // WHY stable sort, best first, unknown last: ties keep input order, as qs does.
+    const g = answered.filter((x) => x.label === c).sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
+    if (g.length === 0) continue;
+    if (verbose) {
+      lines.push(`[${c}]`);
+      for (const x of g) lines.push(`${x.accepted ? " " : "?"}${conf(x)}  ${x.id}${chunkNote(x)}`);
+    } else {
+      const ok = g.filter((x) => x.accepted);
+      if (ok.length > 0) lines.push(`[${c}] ${ok.map((x) => x.id).join(" ")}`);
+    }
+  }
+  // WHY not in --verbose: verbose already marks every low row with ? in its group.
+  const shownLow = low.filter((x) => !only || only.has(x.label!));
+  if (!verbose && shownLow.length > 0) {
+    lines.push("? low confidence — check these yourself:");
+    for (const x of shownLow) lines.push(`?${conf(x)}  ${x.label}${x.runnerUp ? ` (or ${x.runnerUp.label})` : ""}  ${clip(x.id, 100)}${chunkNote(x)}`);
+  }
+  for (const x of r.rows) if (x.invalid !== null) lines.push(`? no answer: ${x.id} (${x.invalid})`);
+  const save = opts.save;
+  return { lines, ...(typeof save === "string" ? { files: [{ path: save, content: JSON.stringify(answered.map((x) => ({ id: x.id, label: x.label, confidence: x.confidence, ...(x.chunk ? { chunks: x.chunk.chunks, ...(x.chunk.bestLines ? { best_lines: x.chunk.bestLines } : {}) } : {}) })), null, 2) }] } : {}) };
+}
 export const spec: DecisionSpec<LabelInput, LabelResult> = {
   id: "label",
   // IN-02: no leading positional (the classes come from the flags); each file is one text unit (mode files, E117) and the planner chunks long ones.
@@ -123,6 +163,12 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
   flags: [
     { flag: "--labels", property: "labels", field: "classes", help: "Classes as \"a:hint,b\": comma separated, text after the first colon is the hint (2 to 255 labels).", parse: parseLabelsFlag },
     { flag: "--labels-json", property: "labels_json", field: "classes", atFile: true, help: "Classes as a JSON object {\"label\": \"description\"}, or @file holding one (2 to 255 labels).", parse: parseLabelsJson },
+    // IN-08: output options (render: true), never inputs; see filter.ts for the same mechanism.
+    { flag: "--only", property: "only", field: "only", render: true, help: "Show only these classes (comma separated); the count line still lists all.", parse: (raw) => raw },
+    { flag: "--verbose", property: "verbose", field: "verbose", type: "boolean", render: true, help: "List every item with its confidence, grouped by class; a ? marks a low-confidence one.", parse: () => true },
+    { flag: "--save", property: "save", field: "save", render: true, help: "Write every labelled item ([{id, label, confidence}], JSON) to this file.", parse: (raw) => raw },
+    // TRDD-WYY3SPDX: --context FILE fills `context`, the same flag as `classify requirements` (earlier messages as background, sent with every request). WHY label only: `classify filter` is left for a separate card because its text-items instruction never references the shared context, so the flag would be sent and ignored there.
+    { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw },
   ],
   input: labelInputSchema,
   thresholds: {
@@ -160,7 +206,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
       renumber: renumberByPosition,
     };
   },
-  project(answers: Answers, i, t) {
+  project(answers: Answers, i, t, ctx) {
     assertBands(t);
     const ids = itemIds(i);
     const keys = ids.map((_, k) => indexKey(KEY, k));
@@ -194,6 +240,9 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
         };
         counts[c.choice] = (counts[c.choice] ?? 0) + 1;
       }
+      // WHY here and not in the row literal: the chunk meta belongs to the original question key, and a refused item has none.
+      const meta = ctx.chunks?.[keys[k]!];
+      if (meta !== undefined && meta.chunks > 1) row.chunk = { chunks: meta.chunks, ...(meta.best_lines ? { bestLines: meta.best_lines } : {}) };
       byId[id] = row;
       return row;
     });
@@ -201,4 +250,5 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
   },
   // Plan §9: review (which covers low confidence and invalid, since auto >= min-confidence) or a caller class named manual_review.
   attention: (r) => r.rows.some((row) => row.review || row.label === "manual_review"),
+  renderText,
 };

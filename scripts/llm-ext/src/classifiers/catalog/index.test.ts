@@ -34,6 +34,7 @@ const SAMPLES: Record<string, unknown[]> = {
   check: [{ preset: 'invariant-check', invariants: [{ text: 'i' }], before: 'x', after: 'y' }, { preset: 'criterion-vs-tests', criteria: [{ text: 'c' }], tests: [{ scenario: 's', assertion: 'a' }] }],
   findings: [{ task: 't', findings: [{ file: 'f.ts', line: 1, text: 'bug' }], sources: [{ file: 'f.ts', text: 'a\nb' }] }],
   'test-output': [{ log: 'ok\nFAIL x\nok', matches: [2] }],
+  requirements: [{ prompt: 'the colors are horrible. make the loading screen blue.', context: 'earlier messages' }, { prompt: 'make it blue.\n```css\n.a{}\n```' }],
 };
 const builtOf = (s: AnySpec, raw: unknown): Built => s.build(s.input.parse(raw), resolveThresholds(s.thresholds, {}));
 const questionsOf = (b: Built): Question[] => [...b.units.flatMap((u) => Object.values(u.questions)), ...Object.values(b.unsplittable)];
@@ -60,10 +61,11 @@ describe('specs without noCall: the smallest valid input still builds a question
     review: [{ diff, request: 'r' }, { mode: 'per-file', files: [{ id: 'f', text: diff }], request: 'r' }],
     check: [{ preset: 'invariant-check', invariants: [{ text: 'i' }], before: 'x', after: 'y' }, { preset: 'criterion-vs-tests', criteria: [{ text: 'c' }], tests: [{ scenario: 's', assertion: 'a' }] }],
     'test-output': [{ log: 'x' }],
+    requirements: [{ prompt: 'x' }],
   };
   const noCallFree = DECISION_SPECS.filter((s) => s.id !== 'extract' && s.id !== 'findings');
-  it('the minimal table names exactly the 12 specs that never set noCall', () => {
-    expect(noCallFree).toHaveLength(12);
+  it('the minimal table names exactly the 13 specs that never set noCall', () => {
+    expect(noCallFree).toHaveLength(13);
     expect(Object.keys(MINIMAL).sort()).toEqual(noCallFree.map((s) => s.id).sort());
   });
   for (const s of noCallFree) {
@@ -80,6 +82,8 @@ describe('specs without noCall: the smallest valid input still builds a question
     ['review', { mode: 'per-file', files: [{ id: 'f', text: 'Binary files a/x.png and b/x.png differ\n' }], request: 'r' }],
     ['review', { mode: 'per-file', files: [{ id: 'f', text: '  \n' }], request: 'r' }],
     ['test-output', { log: '  \n\n' }],
+    ['requirements', { prompt: '  \n\n' }],
+    ['requirements', { prompt: '```\nx\n```' }],
   ])('%s: the schema refuses an input that would build no question', (id, raw) => {
     expect(getSpec(id)!.input.safeParse(raw).success).toBe(false);
   });

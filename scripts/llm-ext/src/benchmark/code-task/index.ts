@@ -57,6 +57,7 @@ import {
 import { CODE_TASK_MAX_OUTPUT_TOKENS, runCodeAuditBenchmarkOnModel } from "./bench-runner.js";
 import {
   aggregateScores,
+  answeredOnlyScore,
   passesThresholds,
   DEFAULT_CODE_AUDIT_THRESHOLDS,
   type CodeAuditScore,
@@ -64,11 +65,13 @@ import {
 } from "./score.js";
 import {
   CODE_TASK_CRITERIA,
+  judgeCodeTask,
   selectCodeTaskModel,
   type CodeTaskCandidate,
   type CodeTaskSelectionResult,
 } from "./select.js";
 import { backfillLegacyQualityPass } from "../backfill-quality-pass.js";
+import { evidenceQualityPass, isFailedCasesNonEvidence, recordQualityPass } from "../quality-evidence.js";
 
 /**
  * code_task has no per-tool default model of its own — it runs on the active
@@ -83,7 +86,7 @@ export interface CodeAuditBenchmarkOptions {
   apiKey?: string;
   /** Explicit model ids to assess. When absent, auto-discover the candidate pool. */
   models?: string[];
-  /** Report dir. Default `<main-repo-root>/reports/code-task-benchmark/`. */
+  /** Report dir. Default `<main-repo-root>/reports_dev/llm-externalizer/code-task-benchmark/`. */
   outputDir?: string;
   mainRoot?: string;
   /** Ignore the per-model-per-day cache and re-run every model. */
@@ -398,7 +401,7 @@ export async function runCodeAuditBenchmark(
   // field that gives a ':free' model a verdict in the evidence fold — is never
   // backfilled, despite the note at the write site promising it would be.
   // Judging those rows from the score they already carry costs no model call.
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isFailedCasesNonEvidence, "code-task-results.json");
   if (upgraded > 0) progress(`Backfilled qualityPass on ${upgraded} legacy ledger row(s).`);
   const assessments: CodeAuditAssessment[] = [];
   let totalCost = 0;
@@ -485,7 +488,11 @@ export async function runCodeAuditBenchmark(
     // Persist the golden-dataset verdict on the ledger row (see the
     // CacheEntry.qualityPass note). Written on cache HITS too, so legacy rows
     // backfill on the next benchmark run without a --force.
-    cache[key].qualityPass = passesThresholds(score, thresholds).pass;
+    // Cases the model never answered (API error, empty reply) are unscored: the verdict
+    // is computed over the answered cases only, and a run with over a quarter of them
+    // unanswered stores NO verdict (the row reads untested; a same-day cache-hit row
+    // loses its earlier false) — see quality-evidence.ts (TRDD-90BXJ2KO).
+    recordQualityPass(cache[key], evidenceQualityPass(score, isFailedCasesNonEvidence, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass), `code-task-results.json row ${key}`);
 
     totalCost += costUsd;
     assessments.push({
@@ -499,7 +506,7 @@ export async function runCodeAuditBenchmark(
       failureReasons,
       costUsd,
     });
-    const thr = passesThresholds(score, thresholds);
+    const thr = judgeCodeTask(score, thresholds);
     progress(
       `    ${model.id}: ${thr.pass ? "PASS" : "FAIL"} ` +
         `macroF1=${score.macroF1.toFixed(3)} microR=${score.microRecall.toFixed(3)} ` +
@@ -541,7 +548,7 @@ export async function runCodeAuditBenchmark(
     reason: selection.reason,
     costUsd: totalCost,
     assessments: assessments.map((a) => {
-      const thr = passesThresholds(a.score, thresholds);
+      const thr = judgeCodeTask(a.score, thresholds);
       return {
         modelId: a.modelId,
         qualified: a.qualified,
@@ -654,7 +661,7 @@ function buildReportMarkdown(args: {
   lines.push("|---|---|---|---|---|---|---|---|---|---|---|---|---|");
   const sorted = [...args.assessments].sort((a, b) => b.score.macroF1 - a.score.macroF1);
   for (const a of sorted) {
-    const thr = passesThresholds(a.score, args.thresholds);
+    const thr = judgeCodeTask(a.score, args.thresholds);
     lines.push(
       `| \`${a.modelId}\` | ${a.qualified ? "ok" : "no"} | ${thr.pass ? "PASS" : "FAIL"} | ` +
         `${a.score.macroF1.toFixed(3)} | ${a.score.microPrecision.toFixed(3)} | ${a.score.microRecall.toFixed(3)} | ` +
@@ -752,7 +759,7 @@ export function backfillOwnLedger(): { tool: string; upgraded: number } {
   const thresholds = DEFAULT_CODE_AUDIT_THRESHOLDS;
 
   const cache = loadCache();
-  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(s, thresholds).pass);
+  const upgraded = backfillLegacyQualityPass(cache, datasetHash, (s) => passesThresholds(answeredOnlyScore(s), thresholds).pass, isFailedCasesNonEvidence, "code-task-results.json");
   if (upgraded > 0) saveCache(cache);
   return { tool: "code_task", upgraded };
 }

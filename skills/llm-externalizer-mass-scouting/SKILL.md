@@ -16,46 +16,47 @@ effort: medium
 
 Search-and-categorize for large file sets. Triage a corpus, classify a folder, build an inventory, or find which files match a topic. Reach for mass-scouting instead of hand-rolling `grep`/`find`/regex filters — the scout makes a per-file classification judgement that brittle keyword filters miss.
 
-Bulk LLM-driven structured-output analysis. Point a cheap model (default `qwen/qwen-2.5-7b-instruct`) at hundreds-to-millions of files; get back a queryable SQLite registry of extractions defined by a per-call **dynamic JSON Schema**. Use when the user wants the SAME shape of metadata from every file. For free-form prose, use the `chat` tool.
+Bulk LLM-driven structured-output analysis. Point a cheap model (default `qwen/qwen-2.5-7b-instruct`) at hundreds-to-millions of files; get back a queryable SQLite registry of extractions defined by a per-call **dynamic JSON Schema**. Use when the user wants the SAME shape of metadata from every file. For free-form prose, use `llm ask`.
 
 ## Prerequisites
 
 - `OPENROUTER_API_KEY` in env or via `userConfig.openrouter_api_key`.
 - A target folder (or `--file_paths`) and a fieldset (author one with
-  `mass-scout-build-fieldset` / `mass-scout-propose-fieldset`, or pass
+  `scout build-fieldset` / `scout propose-fieldset`, or pass
   `bundled:<name>` — sets: `code-audit`, `skill-audit`, `security-audit`,
   `pr-review`).
-- `reports/` and `reports_dev/` in `.gitignore`.
+- `reports_dev/` in `.gitignore` (intermediate and scratch output); `reports/` stays git tracked and holds final reports only, sanitized of secrets before committing. Subagents you spawn save temporary or scratch files to the `*_dev` folders and final files to the tracked ones.
 
 ## Instructions
 
-Five phases, one CLI command per phase (`llm-ext mass-scout-<phase>`),
+Five phases, one CLI command per phase (`llm-ext scout <phase>`),
 source in `scripts/llm-ext/src/mass_scouting/cli.ts`.
 
-1. **register** (`mass-scout-register`) — walks a folder (honors
+1. **register** (`scout register`) — walks a folder (honors
    `.gitignore`; `--no_gitignore` to override) or takes `--file_paths`;
    hashes + caches every body.
-2. **preclassify** (`mass-scout-preclassify`) — script-tags every row with a
+2. **preclassify** (`scout preclassify`) — script-tags every row with a
    bucket (binary / sourcecode / config / documentation / log_to_classify /
    rules_to_eval / has_frontmatter / unknown).
-3. **estimate** (`mass-scout-estimate`) — previews tokens, cost, eligible
+3. **estimate** (`scout estimate`) — previews tokens, cost, eligible
    files. `--budget_usd` is a hard gate. `--live_context` queries
    OpenRouter for the real cap.
-4. **scout** (`mass-scout`) — compiles fieldset → JSON Schema, fans LLM
+4. **scout** (`scout run`) — compiles fieldset → JSON Schema, fans LLM
    calls out, repairs + validates, persists.
-5. **search** (`mass-scout-search`, per-job) / (`mass-scout-search-xjob`,
+5. **search** (`scout search`, per-job) / (`scout search-xjob`,
    cross-job): regex bypass / FTS5 / structured JSON1 / combined.
 
-Follow-on commands: `mass-scout-jobs-list`, `mass-scout-audit-sample`,
-`mass-scout-body-get`, `mass-scout-build-fieldset`,
-`mass-scout-propose-fieldset`, `mass-scout-diff` (compare two jobs),
-`mass-scout-chain` (re-scout a filter-matched subset with a fresh fieldset).
+Follow-on commands: `scout jobs`, `scout audit-sample`,
+`scout body-get`, `scout build-fieldset`,
+`scout propose-fieldset`, `scout diff` (compare two jobs),
+`scout chain` (re-scout a filter-matched subset with a fresh fieldset).
 
 ## Output
 
-`mass-scout` writes ONE report under `<main-project-dir>/reports/mass_scouting/<TIMESTAMP>-scout-<slug>.md` and returns the path plus counts. The main project dir is `$CLAUDE_PROJECT_DIR` (used verbatim) with a cwd fallback — never derived from git. Hand path to user; never re-print. Search/get/export emit JSON/JSONL/CSV. Pass `--output_dir` explicitly to land elsewhere.
+`scout run` writes ONE report under `<main-project-dir>/reports/llm-externalizer/mass_scouting/<TIMESTAMP>-scout-<slug>.md` and returns the path plus counts. The main project dir is `$CLAUDE_PROJECT_DIR` (used verbatim) with a cwd fallback — never derived from git. Hand path to user; never re-print. Search/get/export emit JSON/JSONL/CSV. Pass `--output_dir` explicitly to land elsewhere.
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). Mass-scouting temp output follows the same split.
 
-Token efficiency: pass paths not bodies; prefer `bundled:<name>` fieldsets; restrict by `--bucket`; use `mass-scout-search` over `mass-scout-audit-sample`; pass `--json` + `--limit*` on large queries.
+Token efficiency: pass paths not bodies; prefer `bundled:<name>` fieldsets; restrict by `--bucket`; use `scout search` over `scout audit-sample`; pass `--json` + `--limit*` on large queries.
 
 ## Error Handling
 
@@ -76,14 +77,14 @@ Trigger phrases: "audit every .ts file under src/ for complexity",
 Concrete input → output:
 
 ```
-llm-ext mass-scout-estimate --db_path /tmp/x.db --fields_file bundled:code-audit \
+llm-ext scout estimate --db_path /tmp/x.db --fields_file bundled:code-audit \
   --budget_usd 0.50
   → files_eligible=50  est_cost_usd=$0.0015  budget_allowed=true
 
-llm-ext mass-scout --db_path /tmp/x.db --fields_file bundled:code-audit \
+llm-ext scout run --db_path /tmp/x.db --fields_file bundled:code-audit \
   --job_id audit-1 --source_root /path/src
   → files_ok=50  files_failed=0  cost_usd=$0.0014
-    report=<main-project-dir>/reports/mass_scouting/<TS>-scout-audit-1.md
+    report=<main-project-dir>/reports/llm-externalizer/mass_scouting/<TS>-scout-audit-1.md
 ```
 
 End-to-end: [worked-example](references/worked-example.md).

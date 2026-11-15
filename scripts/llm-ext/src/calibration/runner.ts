@@ -23,8 +23,14 @@ import { claimAndSpawn, roleLogFile, serverLabel, stopOwnServer, type RegistryEn
 import { freePort, parseManagedModel, pidState, spawnLlamaServer, waitReady, withAsyncLock } from "../local-llama-server.js";
 import { parseLocalsModel, spawnLocalsServer, waitLocalsReady } from "../local-locals-server.js";
 import { getConfigDir } from "../config.js";
+import * as gov from "../governor/client.js";
+import { isGovernorConfigError, neverFits } from "../governor/controller.js";
+import { isGovernorDirError } from "../governor/state.js";
+import { governorConfig } from "../governor/settings.js";
+import { estimateFromFiles, estimateOnDisk, loadBounds, weightFilesOnDisk } from "../governor/estimate.js";
+import { LOAD_LEASE_MS, LOCALS_CACHE_MAX_GB, LOCALS_CACHE_MIN_GB, LoadBreachError, learnedLowerBound, loadFigures, localsCacheGb, neverFitsMessage, readyBooking, watchLoad, type LoadWatch } from "../governor/load.js";
 import { loadedIdentity, staleness, type LoadedIdentity } from "./fingerprint.js";
-import { memoryWaitPrecheck } from "./memory-wait.js";
+import { memoryWaitExpired, memoryWaitPrecheck, memoryWaitTick } from "./memory-wait.js";
 import { FIXTURE_VERSION, HARNESS_VERSION, memoryVerdictStale, okRecordFrom, PRODUCTION_HARNESS_ID, readRecord, writeRecord, type CalibrationRecord, type MemoryJudged } from "./record.js";
 import { acquireModelLock, dequeueUnlocked, loadProgress, readQueue, releaseModelLock, saveProgress, withStateLock, type Progress, type QueueItem } from "./state.js";
 
@@ -102,6 +108,11 @@ export interface CalServer {
   /** The context per slot and the slot count it was started with. */
   ctx: number;
   slots: number;
+  /**
+   * D10, round 2 M4: what every calibration lease on this server carries, so the budget counts it once, by its T. One
+   * object passed into each lease (phase-a.ts, phase-c.ts): a test's fake server without it leases with neither.
+   */
+  lease: { threads: number; serverPid: number };
   /** False once the server process exited (a crash, or a stop). */
   alive: () => boolean;
   stop: (why: string) => Promise<void>;
@@ -198,8 +209,10 @@ export async function ensureCalibrator(o: { dir: string; version: string; entry:
  * Start the cal server for one model (one slot, context `ctx`) under the registry's role "cal".
  * Review M3: `onClaimed` receives the stop handle as soon as the server is spawned and registered,
  * before it is ready (a load can take minutes), so a signal in that window stops it too.
+ * Round 4 #6: `learnedMinBytes` is what an earlier breach of this model taught (its saved "load" memory wait): the
+ * lower bound is at least that, and the load is admitted only alone, like the broker's after a breach.
  */
-export async function startCalServer(dir: string, engine: BrokerEngine, model: string, ctx: number, slots: number, log: (m: string) => void, onClaimed?: (s: { stop: (why: string) => Promise<void> }) => void): Promise<CalServer> {
+export async function startCalServer(dir: string, engine: BrokerEngine, model: string, ctx: number, slots: number, log: (m: string) => void, onClaimed?: (s: { stop: (why: string) => Promise<void> }) => void, learnedMinBytes = 0): Promise<CalServer> {
   let llamaArgv: string[] = [];
   if (engine === "llama") {
     const parsed = parseManagedModel(model);
@@ -209,55 +222,136 @@ export async function startCalServer(dir: string, engine: BrokerEngine, model: s
     const parsed = parseLocalsModel(model);
     if ("error" in parsed) throw new Error(parsed.error);
   }
-  const port = await freePort();
-  const target = { port, model, ctx, slots };
-  const logFile = roleLogFile(dir, "cal", engine);
-  const apiKey = randomBytes(24).toString("hex");
-  let exited = false;
-  let cwd: string | undefined;
-  const entry = await claimAndSpawn({
-    dir,
-    engine,
-    role: "cal",
-    ownerPid: process.pid,
-    log,
-    spawn: async () => {
-      let s: { pid: number; argv: string[]; child: ChildProcess };
-      if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
-      else {
-        const l = await spawnLocalsServer(target, logFile, logFile);
-        cwd = l.cwd;
-        s = l;
-      }
-      s.child.once("exit", () => {
-        exited = true;
-      });
-      log(`spawned cal ${serverLabel(engine)} pid ${s.pid} model '${model}' ctx ${ctx} slots ${slots} port ${port}`);
-      return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model, ctx };
-    },
-  });
-  const stop = async (why: string): Promise<void> => {
-    const how = await stopOwnServer(dir, engine, entry, log);
-    log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
-    // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
-    if (cwd !== undefined) {
+  // Governor D11: a cal server is a model load like the broker's, so it waits for the machine's one load grant, and
+  // holds it from before the spawn to ready, no longer. Round 2 #4: it carries a projection too, for its own context
+  // and slots, from the weight files on disk (the fingerprint of an earlier record names them for an org/repo:quant
+  // model). Unknown on a first download: the size is not known before the download ends, so it loads alone.
+  const limits = governorConfig().limits;
+  // Governor D10: a cal server gets the same T as a main one (spec D10); a malformed server_threads throws before the
+  // load grant is asked for. Calibration records are measured under this T; -t is not in a record's identity (D10).
+  const threads = gov.spawnThreads(engine);
+  const est = estimateOnDisk(engine, model, readRecord(dir, engine, model, log)?.fingerprint.blobs ?? null);
+  const cache = engine === "locals" ? LOCALS_CACHE_MAX_GB * 1024 ** 3 : 0;
+  // Round 5 M2(a): a Locals lower bound includes the smallest prompt cache, so an alone grant implies cache room.
+  const bounds = est === null ? { bytes: 0, minBytes: 0 } : loadBounds(est, ctx * slots, cache, engine === "locals" ? LOCALS_CACHE_MIN_GB * 1024 ** 3 : 0);
+  const minBytes = Math.max(bounds.minBytes, learnedMinBytes);
+  const alone = learnedMinBytes > 0;
+  // Round 2 #1: the lower bound decides never-fits. Thrown as a plain error, so it counts as a crash of this model and
+  // ends in a failed record after MAX_CRASHES, with this message.
+  if (neverFits(minBytes, limits, totalmem())) throw new Error(neverFitsMessage(model, minBytes, limits));
+  // Round 4 #2, #3, #4: the cal server's two RAM figures for the governor's books, and the rest its Locals prompt cache
+  // must leave room for (loadFigures, shared with the broker's main server).
+  const figures = loadFigures(engine, { bytes: bounds.bytes, minBytes, weightBytes: est?.weight_bytes ?? 0, alone }, limits);
+  const lease = await gov.acquire({ kind: "load", timeoutMs: LOAD_LEASE_MS, bytes: bounds.bytes, minBytes, alone });
+  let watch: LoadWatch | null = null;
+  try {
+    let breach: number | null = null;
+    let failure: Error | null = null;
+    let stopForBreach: (() => void) | null = null;
+    watch = await watchLoad(limits, (observed, err) => {
+      breach = observed;
+      failure = err;
+      log(err !== null ? `cal server load stopped by the governor watchdog: ${err.message}` : `cal server load stopped by the governor watchdog: RAM reached its limit after ${Math.round(observed / 2 ** 20)} MiB of growth`);
+      stopForBreach?.();
+    });
+    // Round 2 #5: the same --cache-gb rule as the broker's main server. 0 would unbound the cache, so no room is a wait.
+    // Round 4 #3: the room is the reading plus every booked Locals server (an idle one is missing from the reading).
+    const rest = figures.cacheRestBytes;
+    const cacheGb = engine === "locals" ? localsCacheGb(watch.baselineBytes + gov.bookedBytesNow(), rest, limits) : undefined;
+    if (cacheGb === null) throw new LoadBreachError("no-cache-room", 0, rest + LOCALS_CACHE_MIN_GB * 1024 ** 3, `under ${LOCALS_CACHE_MIN_GB} GiB of RAM is left for the cal server's prompt cache of '${model}'`);
+    const port = await freePort();
+    const target = { port, model, ctx, slots, threads };
+    const logFile = roleLogFile(dir, "cal", engine);
+    const apiKey = randomBytes(24).toString("hex");
+    let exited = false;
+    let cwd: string | undefined;
+    const entry = await claimAndSpawn({
+      dir,
+      engine,
+      role: "cal",
+      ownerPid: process.pid,
+      log,
+      spawn: async () => {
+        let s: { pid: number; argv: string[]; child: ChildProcess };
+        if (engine === "llama") s = await spawnLlamaServer(target, llamaArgv, logFile, apiKey);
+        else {
+          const l = await spawnLocalsServer(target, logFile, logFile, cacheGb);
+          cwd = l.cwd;
+          s = l;
+        }
+        s.child.once("exit", () => {
+          exited = true;
+        });
+        log(`spawned cal ${serverLabel(engine)} pid ${s.pid} model '${model}' ctx ${ctx} slots ${slots} port ${port}`);
+        return { pid: s.pid, pgid: s.pid, port, argv: s.argv, model, ctx };
+      },
+    });
+    const stop = async (why: string): Promise<void> => {
       try {
-        rmdirSync(cwd);
-      } catch (e) {
-        log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
+        const how = await stopOwnServer(dir, engine, entry, log);
+        log(`stopped cal ${serverLabel(engine)} pid ${entry.pid} (${why}): ${how}`);
+        // The Locals server's fresh cwd (empty: Locals writes nothing there); rmdir, never a recursive delete.
+        if (cwd !== undefined) {
+          try {
+            rmdirSync(cwd);
+          } catch (e) {
+            log(`left the Locals working directory ${cwd}: ${(e as Error).message}`);
+          }
+        }
+      } finally {
+        // Round 4 #4, #5: forgotten whatever the stop's outcome, so a cal server never stays booked after its stop.
+        try {
+          gov.unregisterServer(entry.pid);
+        } catch (e) {
+          log(`could not remove cal server pid ${entry.pid} from the governor: ${(e as Error).message}`);
+        }
+      }
+    };
+    stopForBreach = () => void stop("the RAM limit was reached while it loaded").catch((e: Error) => log(`stop failed: ${e.message}`));
+    if (breach !== null) stopForBreach();
+    // Review M3: from here on the caller can stop the server, while it is still loading (a load can take minutes).
+    onClaimed?.({ stop });
+    const stopped = (): Error | null => {
+      // Round 2 #3: a load the watchdog could not see is an error (fail fast; counted as a crash). A breach is a wait,
+      // and what it teaches is a lower bound (round 4 #1), saved by calibrateOne as the model's memory wait (#6).
+      if (failure !== null) return failure;
+      return breach !== null ? new LoadBreachError("breach", breach, learnedLowerBound(minBytes, breach), `the cal server of '${model}' was stopped at the RAM limit while it loaded`) : null;
+    };
+    try {
+      // Round 4 #4: booked from the spawn, while it loads, like a main server; before the load grant goes (finally), and
+      // not caught: a server the governor cannot book is stopped below and the error counts as a crash (fail fast).
+      gov.registerServer(entry.pid, { bookedBytes: figures.bookedBytes, residentBytes: figures.residentBytes, engine, role: "cal", threads });
+      if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
+      else await waitLocalsReady(target, entry.pid, () => exited, logFile);
+    } catch (err) {
+      await stop("it did not become ready");
+      // The model waits, it did not fail: the runner leaves it queued and counts no crash (D11).
+      throw stopped() ?? err;
+    }
+    // Round 2 #8: the watch ends at ready. A breach seen before that already stopped the server, even if it answered
+    // ready first: that is the breach path, never a server handed to Phase C that is about to die.
+    const growth = watch.stop();
+    const cut = stopped();
+    if (cut !== null) {
+      await stop("the governor watchdog stopped its load");
+      throw cut;
+    }
+    if (engine === "locals") {
+      // Round 5 M1: booked at ready by what it can really hold (readyBooking), the figures read again from the weight
+      // files when there were none before the load. None at all is an error: stopped, and counted as a crash.
+      try {
+        const booking = readyBooking(figures.bookedBytes, est ?? estimateFromFiles("locals", weightFilesOnDisk("locals", model, null)), ctx * slots, cacheGb ?? 0, growth);
+        gov.registerServer(entry.pid, { bookedBytes: booking, residentBytes: booking, engine, role: "cal", threads });
+      } catch (err) {
+        await stop("it could not be booked with the governor");
+        throw err;
       }
     }
-  };
-  // Review M3: from here on the caller can stop the server, while it is still loading (a load can take minutes).
-  onClaimed?.({ stop });
-  try {
-    if (engine === "llama") await waitReady(target, entry.pid, () => exited, logFile, apiKey);
-    else await waitLocalsReady(target, entry.pid, () => exited, logFile);
-  } catch (err) {
-    await stop("it did not become ready");
-    throw err;
+    return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, ctx, slots, lease: { threads, serverPid: entry.pid }, alive: () => !exited, stop };
+  } finally {
+    watch?.stop();
+    gov.release(lease);
   }
-  return { engine, model, port, apiKey, entry, baseUrl: `http://127.0.0.1:${port}`, ctx, slots, alive: () => !exited, stop };
 }
 
 export interface RunnerOptions {
@@ -276,6 +370,11 @@ export interface RunnerOptions {
  * all implemented (or whose lock another runner holds) cannot spin.
  */
 export async function runCalibrator(o: RunnerOptions): Promise<"done" | "handover" | "another-runner" | "stopped" | "paused"> {
+  // Round 2 M5: a malformed or out-of-budget server_threads (settings.yaml or env), or any malformed governor setting,
+  // ends the run here, before the runner claims
+  // the dir or starts a model. Thrown at the first cal server instead, it took the crash path and wrote a failed record
+  // for every queued model after MAX_CRASHES: a configuration typo persisted as model failures.
+  gov.spawnThreads("llama");
   // One runner per config dir: checked and claimed under the runner lock, so racing starters leave exactly one.
   const claimed = await withAsyncLock(runnerLockPath(o.dir), async () => {
     const live = await liveCalibrator(o.dir);
@@ -347,6 +446,10 @@ function removeOwnState(dir: string): void {
 
 /** Review M2: a model whose calibration crashes (an exception, not a phase verdict) this many times gets a calibration-failed record. */
 export const MAX_CRASHES = 3;
+/** Round 4 #6: the progress memory-wait key of a model load the governor watchdog stopped (phase steps are "A/…" etc.). */
+export const LOAD_WAIT_STEP = "load";
+/** Round 5 m4: the memory-wait key of a cal load that found no room for its prompt cache: a wait, never a learned bound. */
+export const LOAD_CACHE_WAIT_STEP = "load-cache";
 
 /** Review m5: the runner gave way to the broker's work for too long; the model stays queued (not a crash). */
 class PausedError extends Error {}
@@ -453,7 +556,10 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       return "done";
     }
     await waitForTurn(o.dir, item.engine, item.model, (m) => o.log(`${name}: ${m}`));
-    server = await startCalServer(o.dir, item.engine, item.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s));
+    // Round 4 #6: a breach of an earlier load left a memory wait under LOAD_WAIT_STEP; the precheck above let this pass
+    // load (memory is back, or the wait is over), and the load carries what the breach taught.
+    let learnedMinBytes = firstRead.memoryWait?.[LOAD_WAIT_STEP]?.need ?? 0;
+    server = await startCalServer(o.dir, item.engine, item.model, harness.phaseACtx, 1, o.log, (s) => setCurrent(s), learnedMinBytes);
     const loadMs = Date.now() - startedAt;
     setCurrent(server);
     identity = await loadedIdentity(item.engine, server.baseUrl, server.apiKey, item.model, o.dir);
@@ -491,6 +597,13 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       progress.memoryWait = {};
       progress.forced_at = new Date().toISOString();
     }
+    // Round 4 #6: the load reached ready, so a wait a breach left for it is over (the phases keep their own waits).
+    // Round 5 n3: the rest of this pass (Phase C restarts) no longer carries the learned bound either.
+    if (progress.memoryWait !== undefined) {
+      delete progress.memoryWait[LOAD_WAIT_STEP];
+      delete progress.memoryWait[LOAD_CACHE_WAIT_STEP];
+    }
+    learnedMinBytes = 0;
     if (engineCheck) {
       // Phase A's earlier trials measured the old build: they are dropped and A runs again; B and C stay.
       progress.trials = progress.trials.filter((t) => !t.step.startsWith("A/"));
@@ -526,7 +639,7 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
         if (isStopping()) throw new RunnerStopping("the runner is stopping");
         await ctx.stopServer(`restart at ctx ${c}, ${slots} slot(s)`);
         const t0 = Date.now();
-        server = await startCalServer(o.dir, item.engine, item.model, c, slots, o.log, (s) => setCurrent(s));
+        server = await startCalServer(o.dir, item.engine, item.model, c, slots, o.log, (s) => setCurrent(s), learnedMinBytes);
         setCurrent(server);
         ctx.server = server;
         ctx.loadMs = Date.now() - t0;
@@ -619,9 +732,45 @@ async function calibrateOne(o: RunnerOptions, item: QueueItem, setCurrent: (s: {
       o.log(`${name}: stopped by a signal (${msg}); not counted as a crash, the model stays queued`);
       return "paused";
     }
+    // Unit 6 (D14): a governor setting made invalid while this run goes on (settings.yaml is read again when it changes,
+    // and a lowered cpu_limit_pct can put server_threads over the budget) ends the run like the check at its start: a
+    // configuration error is the user's to fix, never a crash of this model, which would write failed records.
+    // Review M1: an unusable governor directory ends the run the same way, never counted as a crash of the model and never
+    // persisted as its failure after MAX_CRASHES: the directory is the user's to fix (or enabled: false, D2).
+    if (isGovernorConfigError(err) || isGovernorDirError(err)) throw err;
     if (err instanceof PausedError) {
       o.log(`${name}: ${msg}; the model stays queued`);
       return "paused";
+    }
+    // Governor D11: a load stopped at the RAM limit is a wait for memory, never a crash of the model. Round 4 #6: what the
+    // breach taught is saved as the model's memory wait (need = the learned lower bound), so memoryWaitPrecheck loads
+    // nothing on later passes until that much is free above the floor; the next load carries it and runs alone. A wait
+    // over MEMORY_WAIT_MAX_MS of checks takes the memory-limited path, as a phase's memory wait does (rule 2).
+    if (err instanceof LoadBreachError) {
+      // Round 5 m4: no room for the prompt cache is a wait under its own key: its need gates the next pass but never
+      // becomes the learned lower bound or the alone mark, which only a breach of the model's size teaches.
+      const step = err.reason === "breach" ? LOAD_WAIT_STEP : LOAD_CACHE_WAIT_STEP;
+      const p = loadProgress(o.dir, item.engine, item.model, null, harness.id);
+      const waits = (p.memoryWait ??= {});
+      const wait = memoryWaitTick(waits[step], Math.max(err.needBytes, waits[step]?.need ?? 0), Date.now());
+      if (!memoryWaitExpired(wait)) {
+        waits[step] = wait;
+        saveProgress(o.dir, item.engine, item.model, p);
+        o.log(`${name}: ${msg}; it waits for ${Math.round(wait.need / 2 ** 20)} MiB free above the floor, and the model stays queued`);
+        return "paused";
+      }
+      p.memoryWait = {};
+      delete p.forced_at;
+      saveProgress(o.dir, item.engine, item.model, p);
+      const prior = readRecord(o.dir, item.engine, item.model, o.log);
+      // Review m1, as in the phases: a forced run (--force) of a model with an ok record only waited for memory, so that
+      // record is kept (rewritten, so a broker that marked it stale checks again). Any other run came here because the
+      // record is missing or stale, and nothing loaded can tell which: the memory-limited record is the honest verdict.
+      const kept = item.force === true && prior?.status === "ok" ? prior : null;
+      writeRecord(o.dir, kept ?? failedRecord(step, msg, "memory-limited"));
+      o.log(`${name}: ${kept ? "the existing ok record is kept" : "memory-limited"}: its load waited ${Math.round(wait.waited_ms / 60_000)} min for free memory (${msg})`);
+      dequeue();
+      return "done";
     }
     // Review M2: an exception is counted per model; at MAX_CRASHES the model gets a record with the error, so held
     // jobs fail with it instead of waiting while the runner reloads the model every minute.

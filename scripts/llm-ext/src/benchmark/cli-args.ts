@@ -76,6 +76,12 @@ export interface CliOptions {
    *  tokens following the flag). When empty, the benchmark auto-discovers the
    *  same-or-cheaper candidate pool. */
   scanFolderModels: string[];
+  /** Run the high_quality_scan QUALITY fitness benchmark (TRDD-FUHTNE04) on the
+   *  explicit model ids that follow the flag; records hq-scan-quality-results.json,
+   *  the S5 ledger profiles/verdicts.ts reads. No auto-discovery. */
+  hqScanQuality: boolean;
+  /** Explicit model id(s) for --hq-scan-quality (variadic, like --scan-folder). */
+  hqScanQualityModels: string[];
   /** Run the check_against_specs SPEC-ADHERENCE benchmark instead of the keyword task (P2d). */
   checkSpecs: boolean;
   /** Explicit model id(s) to assess in --check-specs mode (variadic — any non-flag
@@ -207,6 +213,8 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     codeTaskModels: [],
     scanFolder: false,
     scanFolderModels: [],
+    hqScanQuality: false,
+    hqScanQualityModels: [],
     checkSpecs: false,
     checkSpecsModels: [],
     summarizeBenchmark: false,
@@ -356,6 +364,16 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       opts.scanFolder = true;
       while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
         opts.scanFolderModels.push(argv[i + 1]);
+        i++;
+      }
+    } else if (a === "--hq-scan-quality") {
+      // Variadic, exactly like --scan-folder. WHY no auto-discovery default: the
+      // hq fitness ledger is judged only for the ids it records, and the caller
+      // (or --bench-free-pool) chooses which pool is in question — index.ts
+      // refuses an empty roster instead of guessing one (TRDD-FUHTNE04).
+      opts.hqScanQuality = true;
+      while (i + 1 < argv.length && !argv[i + 1].startsWith("--")) {
+        opts.hqScanQualityModels.push(argv[i + 1]);
         i++;
       }
     } else if (a === "--check-specs") {
@@ -626,7 +644,7 @@ export function printHelp(): void {
       "                    keyword task. Scores model(s) on the golden dataset via",
       "                    the real judge pipeline and recommends the best",
       "                    same-or-cheaper passer. Writes a report under",
-      "                    reports/security-triage-benchmark/.",
+      "                    reports_dev/llm-externalizer/security-triage-benchmark/.",
       "  --model ID        Assess this specific model (repeatable). Without it the",
       "                    triage benchmark auto-discovers same-or-cheaper candidates.",
       "  --force           Ignore the per-model-per-day cache and re-run.",
@@ -650,7 +668,7 @@ export function printHelp(): void {
       "                    same-or-cheaper passer. Pass explicit model id(s) after the",
       "                    flag to assess exactly those; with none, auto-discovers the",
       "                    same-or-cheaper candidate pool. Writes a report under",
-      "                    reports/search-existing-benchmark/. Composes with --force.",
+      "                    reports_dev/llm-externalizer/search-existing-benchmark/. Composes with --force.",
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY only — never edits config.",
       "",
@@ -665,7 +683,7 @@ export function printHelp(): void {
       "                    defect by FUNCTION NAME — no LLM judge. Pass explicit model",
       "                    id(s) after the flag to assess exactly those; with none,",
       "                    auto-discovers the same-or-cheaper candidate pool. Writes a",
-      "                    report under reports/code-task-benchmark/. Composes with",
+      "                    report under reports_dev/llm-externalizer/code-task-benchmark/. Composes with",
       "                    --force.",
       "  Pass gate: macro-F1 >= 0.50 AND micro-recall >= 0.50 AND <= 1 failed case.",
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
@@ -682,11 +700,22 @@ export function printHelp(): void {
       "                    precision/recall/F1 over the per-file verdicts, no LLM judge.",
       "                    Pass explicit model id(s) after the flag to assess exactly",
       "                    those; with none, auto-discovers the same-or-cheaper candidate",
-      "                    pool. Writes a report under reports/scan-folder-benchmark/.",
+      "                    pool. Writes a report under reports_dev/llm-externalizer/scan-folder-benchmark/.",
       "                    Composes with --force.",
       "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is",
       "  given, which writes the winner into P's `tool_models.scan_folder` (CLI-only).",
+      "",
+      "high_quality_scan QUALITY fitness benchmark (TRDD-FUHTNE04 — free-fitness ledger):",
+      "  --hq-scan-quality ID [ID...]",
+      "                    Run each named model over the scan_folder golden corpus with",
+      "                    the REAL scan_folder pipeline and record its pass/fail against",
+      "                    scan_folder's own bar in hq-scan-quality-results.json (the",
+      "                    ledger that gives high_quality_scan its verdicts). At least",
+      "                    one model id is required (or --bench-free-pool); there is no",
+      "                    auto-discovery. ':free' / $0 ids run free; a billable id needs",
+      "                    --allow-paid-models-tests. Never edits settings.yaml.",
+      "  Pass gate: micro-F1 >= 0.85 AND micro-recall >= 0.85 AND coverage >= 0.90.",
       "",
       "check_against_specs SPEC-ADHERENCE benchmark (separate task — per-file CLEAN/VIOLATION):",
       "  --check-specs [ID...]",
@@ -701,7 +730,7 @@ export function printHelp(): void {
       "                    severity are reported but NOT graded (that would need a judge).",
       "                    Pass explicit model id(s) after the flag to assess exactly",
       "                    those; with none, auto-discovers the same-or-cheaper candidate",
-      "                    pool. Writes a report under reports/check-specs-benchmark/.",
+      "                    pool. Writes a report under reports_dev/llm-externalizer/check-specs-benchmark/.",
       "                    Composes with --force.",
       "  Pass gate: micro-F1 >= 0.80 AND micro-recall >= 0.70 AND coverage >= 0.90.",
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
@@ -720,7 +749,7 @@ export function printHelp(): void {
       "                    validity — no LLM judge. Pass explicit model id(s) after the",
       "                    flag to assess exactly those; with none, auto-discovers the",
       "                    same-or-cheaper candidate pool. Writes a report under",
-      "                    reports/text-tools-benchmark/<tool>/. Composes with --force.",
+      "                    reports_dev/llm-externalizer/text-tools-benchmark/<tool>/. Composes with --force.",
       "  Pass gate: mean concept score >= 0.60 AND <= 1 failed case.",
       "  Never auto-selects a pricier model. ADVISORY unless --apply-profile P is given,",
       "  which writes the winner into P's `tool_models.<tool>` (CLI-only).",
@@ -734,7 +763,7 @@ export function printHelp(): void {
       "                    degraded (or with --force), run that tool's benchmark to",
       "                    surface the best same-or-cheaper replacement. On a",
       "                    healthy ledger no benchmark runs. ADVISORY by default —",
-      "                    prints + writes a report under reports/auto-replace/,",
+      "                    prints + writes a report under reports_dev/llm-externalizer/auto-replace/,",
       "                    changes NOTHING.",
       "  --apply           With --auto-replace, ACTUALLY adopt each changed",
       "                    recommendation by writing the per-tool `tool_models`",
@@ -750,7 +779,7 @@ export function printHelp(): void {
       "  --check-health    Self-check the CONFIGURED model(s) of the active profile",
       "                    for catalog presence / cost drift / requirements",
       "                    regression. Free (no LLM call). Writes a report under",
-      "                    reports/model-health/. No benchmark is run.",
+      "                    reports_dev/llm-externalizer/model-health/. No benchmark is run.",
       "  --assess-model ID Report which LLM tools model ID meets the per-tool",
       "                    REQUIREMENTS for (cost/context/output/params), and which",
       "                    of those tools ALSO need a benchmark pass before",
@@ -760,7 +789,7 @@ export function printHelp(): void {
       "  --new-arrivals    Autodiscover models that newly appeared in the catalog",
       "                    since the last run, each assessed against every tool's",
       "                    requirements. Free (no LLM call). Writes a report under",
-      "                    reports/model-arrivals/. Add --qualifying-only to list",
+      "                    reports_dev/llm-externalizer/model-arrivals/. Add --qualifying-only to list",
       "                    only arrivals that fit >=1 tool.",
       "  Pass gate: zero under-flags on critical (judge-manipulation + visible-taint)",
       "  cases AND aggregate score >= 0.5. Never auto-selects a pricier model.",

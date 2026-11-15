@@ -25,10 +25,11 @@ when that env var is unset). It is **NOT** derived from git, so reports stay in
 the main project dir even from a subfolder, a linked worktree, a monorepo whose
 subfolders each have their own git, or a git-less root. All tools share one
 resolver (`scripts/llm-ext/src/project-root.ts`).
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<main-project-dir>/reports_dev/llm-externalizer/<sub>/`; final reports go to the path above (TRDD-PNU8XECB). `reports/` is git tracked and sanitized of secrets before committing; `reports_dev/` is gitignored.
 
 This includes:
 - LLM response reports (`.md` files from `chat`, `code_task`, etc.)
-- Settings edit copy (`settings_edit.yaml` from `get_settings`)
+- Settings edit copy (`settings_edit.yaml` from `settings show`) — this one goes to `reports_dev/llm-externalizer/` instead, because it is tool configuration
 - Merged / comparison reports
 
 Every tool returns **only the file path** — never inline content. Use Read to
@@ -108,8 +109,8 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 | Tool | Purpose |
 |------|---------|
 | `assess_model` | Assess ONE OpenRouter model against EVERY LLM tool's per-tool REQUIREMENTS (cost / context / output / structured-output / reasoning). FREE — no LLM call, no token cost; just a public catalog fetch (no API key). Reports per-tool `OK`/`NO` + which qualifying tools also need a benchmark pass. CLI: `llm-ext assess-model --model <id>`. |
-| `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports/model-health/`. CLI: `llm-ext check-model-health`. |
-| `discover_new_models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run. FREE — no LLM call, no token cost; one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json` and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports/model-arrivals/`. CLI: `llm-ext discover-new-models [--qualifying_only]`. |
+| `check_model_health` | Self-check the CONFIGURED model(s) of the ACTIVE profile (main / second / third + every `tool_models` entry). FREE — no LLM call, no token cost; one public catalog fetch (no API key). Reports presence (removed/deprecated = CRITICAL), cost drift vs a seeded baseline at `~/.llm-externalizer/model-baseline.json` (WARN), and per-served-tool requirements regression (WARN). Advisory only — never writes settings. Writes a report to `reports_dev/llm-externalizer/model-health/`. CLI: `llm-ext check-model-health`. |
+| `discover_new_models` | Autodiscover models that newly appeared in the OpenRouter catalog since the last run. FREE — no LLM call, no token cost; one public catalog fetch (no API key). Diffs the live catalog against a seeded snapshot at `~/.llm-externalizer/catalog-snapshot.json` and assesses each new id against every tool's requirements. Advisory only — never writes settings. Writes a report to `reports_dev/llm-externalizer/model-arrivals/`. CLI: `llm-ext discover-new-models [--qualifying_only]`. |
 | `security_triage_benchmark` | Qualify model(s) for `security_scan` against a labeled golden dataset, scored via the REAL judge pipeline; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext security-triage-benchmark [--models <id>] [--force]`. |
 | `search_existing_benchmark` | Qualify model(s) for `search_existing_implementations` against a labeled golden-fixture codebase, scored DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — NO LLM judge) by driving the REAL search-existing pipeline in-process; recommends the best SAME-OR-CHEAPER passer (never a pricier model). Cached per-model-per-day. Env `$OPENROUTER_API_KEY`. CLI: `llm-ext search-existing-benchmark [--models <id>...] [--force]`. |
 
@@ -119,7 +120,7 @@ are grouped into LLM requests. See [answer_mode](#answer_mode) below.
 > flags). It is not the CLI surface for `assess_model` / `check_model_health` /
 > `discover_new_models` / the two per-tool benchmarks above — those are plain
 > `llm-ext <command>` subcommands.
-| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports/llm-externalizer/auto-replace/` + returns its path; NEVER writes settings (`llm-ext` cannot self-rewrite its config). Adopt by hand-editing `~/.llm-externalizer/settings.yaml` with the recommended model id, then `llm-ext reset` — configuration stays user-only. |
+| `check_tool_replacements` | READ-ONLY advisory auto-replacement planner: for every tool that HAS a per-tool benchmark (`security_scan`, `search_existing_implementations`), aggregate the durable model-health ledger for that tool's incumbent and, when degraded (or with `force`), run that tool's benchmark to recommend the best SAME-OR-CHEAPER replacement. On a healthy/empty ledger NO benchmark runs (zero false positives). Advisory ONLY — writes a report to `reports_dev/llm-externalizer/auto-replace/` + returns its path; NEVER writes settings (`llm-ext` cannot self-rewrite its config). Adopt by hand-editing `~/.llm-externalizer/settings.yaml` with the recommended model id, then `llm-ext reset` — configuration stays user-only. |
 
 ### Per-tool model selection (`tool_models`)
 

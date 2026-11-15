@@ -7,6 +7,7 @@ import { IdError, indexKey } from "../l2/ids.js";
 import { InputError } from "../l2/input-error.js";
 import { PolicyError } from "../l2/policy-kit.js";
 import { dataGuard, positionalIds, renumberByPosition } from "./shared.js";
+import { clip, f2, type TextRender } from "../l2/render-text.js";
 import type { Answers, BuiltUnit, DecisionSpec, Thresholds } from "./spec.js";
 
 const rankInputSchema = z
@@ -48,7 +49,7 @@ const LEVELS = [
 const MAX_LEVEL = LEVELS.length - 1;
 const KEY = "rank";
 
-// E34/E72: the first `bytes` bytes, backed off to a character boundary (a UTF-8 continuation byte is 10xxxxxx) so a multibyte character is never sent cut in half.
+// WHY the first `bytes` bytes, backed off to a character boundary (a UTF-8 continuation byte is 10xxxxxx): a multibyte character is never sent cut in half, and at most N bytes are sent (E34/E72; commit 79b8b5fd).
 function headOf(text: string, bytes: number): string {
   const buf = Buffer.from(text, "utf8");
   if (buf.length <= bytes) return text;
@@ -57,7 +58,8 @@ function headOf(text: string, bytes: number): string {
   return buf.subarray(0, end).toString("utf8");
 }
 
-export interface RankRow { id: string; score: number; relevance: number; confidence: number | null; headCut: boolean }
+/** `chunk` is set only for a candidate that was cut into chunks: how many, and the source lines of the chunk that decided it (qs "N chunks, best lines A-B"). */
+export interface RankRow { id: string; score: number; relevance: number; confidence: number | null; headCut: boolean; chunk?: { chunks: number; bestLines?: [number, number] } }
 export interface RankResult {
   /** The candidates to show: sorted by relevance, cut by keep-at and top (or all). */
   rows: RankRow[];
@@ -69,14 +71,23 @@ export interface RankResult {
 
 // Why rewrite by position: the planner packs units into requests and a state wire is {shared, units:[...]}, so `units[i]` must name the unit's place inside ITS request, whatever the job-wide index or chunk offset was.
 function assertTop(t: Thresholds): void {
+  // WHY a whole number: quicksilver checks --top as an integer before any work, because unchecked numeric flags silently broke its runs (qs.mjs:91-98).
   if (!Number.isInteger(t.top)) throw new PolicyError(`--top must be a whole number, got ${t.top}`);
 }
 
-// IN-03: the schema (int, min 1) would also refuse, but only as "head: ..." without the flag the user typed, so the flag names itself.
+// WHY a hand-written check: the schema (int, min 1) would also refuse, but only as "head: ..." without the flag the user typed, so the flag names itself (IN-03; commit 79b8b5fd).
 function parseHead(raw: string): number {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) throw new InputError(`--head needs a whole number of at least 1, got ${JSON.stringify(raw)}`);
   return n;
+}
+// IN-09 (qs rank): `relevance  id`, best first. A chunked candidate names its chunks so a score from one fragment is not read as the whole file.
+function renderText(r: RankResult): TextRender {
+  const lines = r.rows.map((x) => `${f2(x.relevance)}  ${clip(x.id, 200)}${x.chunk ? ` (${x.chunk.chunks} chunks${x.chunk.bestLines ? `, best lines ${x.chunk.bestLines.join("-")}` : ""})` : ""}`);
+  // WHY said: a --keep-at that drops every candidate would print nothing, which reads like a failed run.
+  if (lines.length === 0) lines.push("(no candidates)");
+  for (const x of r.invalid) lines.push(`? no answer: ${x.id} (${x.reason})`);
+  return { lines };
 }
 export const spec: DecisionSpec<RankInput, RankResult> = {
   id: "rank",
@@ -93,13 +104,16 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
   ],
   input: rankInputSchema,
   thresholds: {
+    // WHY top 10 and --all: quicksilver rank shows 10 candidates, or every candidate with --all (qs.mjs:44, 1065-1067; plan §9 row classify rank).
     top: { default: 10, min: 1, max: 100000, help: "--top: how many candidates to list (ignored with --all)" },
     // Default 0 keeps every candidate (plain rank); the claude-jev relevance form is `--head 1500 --keep-at 0.5` (D27).
     "keep-at": { default: 0, min: 0, max: 1, help: "--keep-at: drop candidates whose relevance is below this" },
   },
+  // WHY per-item: a failed request loses only the candidates it carried, every other candidate keeps its score (commit cddd9d43; plan §5 partial failure).
   split: "per-item",
+  // WHY index-scoped: candidate text is untrusted, so it sits in state and the question names it by position (units[k]); only the short query stays in instructions (D5; plan §9 row classify rank).
   injection: "index-scoped",
-  // Plan §6: score probabilities are optional; the score is still checked against them when present.
+  // WHY SCORE_POLICY, not the default: plan §6 requires probabilities for choice answers but leaves them optional for score, so a score reply without them is accepted and the score is checked against them only when present (plan §6 table, probabilities row; l1/validate.ts SCORE_POLICY).
   validation: SCORE_POLICY,
   build(i, t) {
     assertTop(t);
@@ -107,6 +121,7 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
     const units: BuiltUnit[] = i.candidates.map((c, k) => {
       const text = i.head === undefined ? c.text : headOf(c.text, i.head);
       return {
+        // WHY text in files mode: only a text unit is cut into chunks by the planner, and the chunk answers are merged back to the highest score per candidate (plan §5 unit kinds and chunk merge; D29; E63).
         kind: i.mode === "files" ? "text" : "atomic",
         // Why a bare string for text: the planner chunks a string state by lines (E63); an object state would be split by entries and refuse a long `text`.
         state: i.mode === "files" ? text : { id: ids[k], text },
@@ -119,9 +134,10 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
         },
       };
     });
+    // WHY renumber by position: the planner packs units into requests, so the questions of each unit must name its place inside its own request (plan §5 SplitJob renumber).
     return { sharedState: null, units, unsplittable: {}, renumber: renumberByPosition };
   },
-  project(answers: Answers, i, t) {
+  project(answers: Answers, i, t, ctx) {
     assertTop(t);
     const ids = candidateIds(i);
     const keys = ids.map((_, k) => indexKey(KEY, k));
@@ -139,8 +155,12 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
         return;
       }
       const s = a.answer as ScoreAnswer;
+      // WHY longer than head: a candidate no longer than --head is sent whole, so only a longer one is cut (E34, E72).
       const headCut = i.head !== undefined && Buffer.byteLength(i.candidates[k]!.text, "utf8") > i.head;
-      ranked.push({ id, score: s.score, relevance: s.score / MAX_LEVEL, confidence: s.confidence ?? null, headCut });
+      // WHY metadata only: the runner already merged a chunked candidate to its highest-scoring chunk (D29 per-file best chunk; plan §5 chunk merge: the result carries chunks and best_lines), so this only records which chunk decided and a fragment score is not read as the whole file (qs.mjs:829-840).
+      const meta = ctx.chunks?.[keys[k]!];
+      // WHY confidence ?? null: SCORE_POLICY keeps DEFAULT_POLICY confidence coerce-null (plan §6 table, confidence row; l1/validate.ts SCORE_POLICY), so a score without a usable confidence is still ranked.
+      ranked.push({ id, score: s.score, relevance: s.score / MAX_LEVEL, confidence: s.confidence ?? null, headCut, ...(meta !== undefined && meta.chunks > 1 ? { chunk: { chunks: meta.chunks, ...(meta.best_lines ? { bestLines: meta.best_lines } : {}) } } : {}) });
     });
     // Array.sort is stable, so equal scores keep the input order.
     const kept = ranked.sort((x, y) => y.score - x.score).filter((r) => r.relevance >= t["keep-at"]);
@@ -148,4 +168,5 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
   },
   // Plan §9: invalid only.
   attention: (r) => r.invalid.length > 0,
+  renderText,
 };

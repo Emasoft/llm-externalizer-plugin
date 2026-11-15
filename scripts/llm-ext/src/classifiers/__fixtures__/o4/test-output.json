@@ -1,0 +1,7 @@
+{
+ "status": 200,
+ "headers": {
+  "content-type": "application/json"
+ },
+ "body": "{\n  \"model\": \"typesafe/jev-1.14-20261014\",\n  \"answers\": {\n    \"class_i0\": {\n      \"type\": \"choice\",\n      \"choice\": \"regression\",\n      \"probabilities\": {\n        \"regression\": 0.66,\n        \"flaky\": 0.08,\n        \"environment\": 0.02,\n        \"no_failure\": 0.24\n      },\n      \"confidence\": 0.55\n    },\n    \"regression_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.1\n    },\n    \"severity_i0\": {\n      \"type\": \"score\",\n      \"score\": 1.72,\n      \"legend\": {\n        \"0\": \"Informational: no effect on the workflow, a notice only.\",\n        \"1\": \"Minor: a small or non-essential part is affected, work continues.\",\n        \"2\": \"Major: an important feature or many tests are affected.\",\n        \"3\": \"Blocking: the build or a core feature is broken, work cannot continue.\"\n      },\n      \"probabilities\": {\n        \"0\": 0.06,\n        \"1\": 0.49,\n        \"2\": 0.13,\n        \"3\": 0.32\n      },\n      \"confidence\": 0.17\n    },\n    \"evidence_i0\": {\n      \"type\": \"noul\",\n      \"noul\": 0.09\n    }\n  },\n  \"usage\": {\n    \"input_tokens\": 682,\n    \"output_tokens\": 109,\n    \"cost\": 0.000028644\n  }\n}\n"
+}

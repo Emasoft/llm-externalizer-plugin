@@ -27,19 +27,24 @@ const MODEL = process.env.LM_STUDIO_MODEL || 'thecluster/qwen3.5-27b-mlx';
 
 // Test-specific settings.yaml pointing to local LM Studio (profile-based format)
 const TEST_CONFIG_DIR = '/tmp/__llm_ext_websearch_test_config';
-mkdirSync(TEST_CONFIG_DIR, { recursive: true });
-writeFileSync(join(TEST_CONFIG_DIR, 'settings.yaml'), [
-  'active: websearch-lmstudio',
-  'profiles:',
-  '  websearch-lmstudio:',
-  '    mode: local',
-  '    api: lmstudio-local',
-  `    model: "${MODEL}"`,
-  '    url: "http://localhost:1234"',
-  '    timeout: 600',
-  '',
-].join('\n'), 'utf-8');
-
+// WHY gated: this suite needs a local LM Studio with a loaded model and web search/scrape MCP tools on
+// http://localhost:1234 and spends inference time; without LIVE_TESTS=1 it must do nothing at import and skip.
+const LIVE = process.env.LIVE_TESTS === '1';
+if (!LIVE) console.warn('[live-websearch] skipped: set LIVE_TESTS=1 (needs LM Studio on localhost:1234 with web search MCP tools) to run');
+if (LIVE) {
+  mkdirSync(TEST_CONFIG_DIR, { recursive: true });
+  writeFileSync(join(TEST_CONFIG_DIR, 'settings.yaml'), [
+    'active: websearch-lmstudio',
+    'profiles:',
+    '  websearch-lmstudio:',
+    '    mode: local',
+    '    api: lmstudio-local',
+    `    model: "${MODEL}"`,
+    '    url: "http://localhost:1234"',
+    '    timeout: 600',
+    '',
+  ].join('\n'), 'utf-8');
+}
 // Remove both module-scope temp directories once the whole suite is done.
 // Without this, repeated runs accumulate /tmp/__llm_ext_websearch_test and
 // /tmp/__llm_ext_websearch_test_config. The per-suite afterAll hooks below
@@ -102,7 +107,7 @@ function getText(result: CliResult): string {
 
 // ── Pre-flight: verify LM Studio is reachable ────────────────────────
 
-describe('pre-flight (websearch)', () => {
+describe.skipIf(!LIVE)('pre-flight (websearch)', () => {
   it('LLM backend is reachable', async () => {
     /** discover should report the backend as online */
     const result = await runWebsearchCli('discover', {}, 60_000);
@@ -116,7 +121,7 @@ describe('pre-flight (websearch)', () => {
 // Provides ONLY the source file — the model must search the web for
 // the current React API and identify deprecated patterns.
 
-describe('web search: React deprecation detection', () => {
+describe.skipIf(!LIVE)('web search: React deprecation detection', () => {
   it('detects deprecated React patterns by searching the web', async () => {
     /**
      * Given ONLY a source file with deprecated React class component patterns,
@@ -198,7 +203,7 @@ describe('web search: React deprecation detection', () => {
 // ── Web search deprecation test: Express.js middleware ────────────────
 // Tests with a different ecosystem to validate web search generality.
 
-describe('web search: Express.js deprecation detection', () => {
+describe.skipIf(!LIVE)('web search: Express.js deprecation detection', () => {
   it('detects deprecated Express.js patterns by searching the web', async () => {
     /**
      * Source file uses deprecated Express.js patterns (body-parser as separate
@@ -283,7 +288,7 @@ describe('web search: Express.js deprecation detection', () => {
 // Tests the model's ability to find the CURRENT version of a well-known
 // library and verify whether the code uses up-to-date patterns.
 
-describe('web search: Node.js API currency check', () => {
+describe.skipIf(!LIVE)('web search: Node.js API currency check', () => {
   it('identifies outdated Node.js patterns by checking current docs', async () => {
     /**
      * Source file uses Node.js patterns that were common in older versions

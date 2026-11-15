@@ -16,6 +16,7 @@ import { ANY_PROFILE_TYPE, TEXT_PROFILE_TYPES } from "../profile-accept.js";
 import { DECISION_SPECS } from "../classifiers/catalog/index.js";
 import { INPUT_FLAGS, SHARED_FLAGS } from "../classifiers/shared-flags.js";
 import type { AnySpec } from "../classifiers/catalog/spec.js";
+import { PING_DESCRIPTION, PING_FLAGS, PING_TOOL_NAME } from "../classifiers/commands/ping-flags.js";
 
 // Shared batching-reality note. Spliced into every multi-file tool
 // description because callers repeatedly assumed that avoiding answer_mode: 0
@@ -62,7 +63,7 @@ export function classifyTools(specs: readonly AnySpec[] = DECISION_SPECS) {
         ])),
         ...Object.fromEntries(SHARED_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }])),
         // IN-01: file-input flags only for specs that declare `cli`; the positional question/query has no schema property (classify is CLI-only today).
-        ...(spec.cli === undefined ? {} : Object.fromEntries(INPUT_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }]))),
+        ...(spec.cli === undefined ? {} : Object.fromEntries(INPUT_FLAGS.filter((f) => !("document" in spec.cli!) || f.option === "maxBytes").map((f) => [f.property, { type: f.type, description: f.help }]))), // IN-06: a document command takes one text, so only --max-bytes of the item flags applies
         // IN-02: the spec own flags (label --labels, --labels-json), declared on the spec (flags, not cli: check has --preset and no file mode), so the schema cannot drift from the parser.
         // IN-03: type from the flag declaration (rank --all boolean, --head number); default string.
         ...Object.fromEntries((spec.flags ?? []).map((f) => [f.property, { type: f.type ?? "string", description: f.help }])),
@@ -71,6 +72,18 @@ export function classifyTools(specs: readonly AnySpec[] = DECISION_SPECS) {
   }));
 }
 
+
+// C4-07: the `classify ping` entry, generated from the declaration in classifiers/commands/ping-flags.ts so the schema and the parser read one list.
+export function classifierPingTool() {
+  return {
+    name: PING_TOOL_NAME,
+    description: PING_DESCRIPTION,
+    inputSchema: {
+      type: "object" as const,
+      properties: Object.fromEntries(PING_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }])),
+    },
+  };
+}
 // Reusable schema for answer_mode field
 const answerModeSchema = {
   type: "number" as const,
@@ -336,8 +349,9 @@ export const ACCEPTED_PROFILE_TYPES: Readonly<Record<string, readonly ProfileTyp
   compare_files: LFP, check_references: LFP, check_imports: LFP, check_against_specs: LFP,
   // refuse free mode (config.ts, default-profiles.ts FREE_FORBIDDEN_TOOLS): paid only
   high_quality_scan: ["paid"], security_scan: ["paid"],
-  // session_summary picks only ':free' OpenRouter ids from the public catalog; a local server cannot serve them
-  session_summary: ["free", "paid"],
+  // session_summary: remote ":free" OpenRouter ids first, then the managed local model (TRDD-TYHKAKCB); a managed local
+  // profile (locals-mlx, local_llama) selected explicitly runs local-only through the broker and governor
+  session_summary: LFP,
   // mass scouting accepts only the scouting type (D34); the model-free actions below are listed in the plan row too
   mass_scout: ["scouting"], mass_scout_chain: ["scouting"], mass_scout_propose_fieldset: ["scouting"],
   mass_scout_estimate: ["scouting"], mass_scout_register: ["scouting"], mass_scout_preclassify: ["scouting"],
@@ -353,6 +367,8 @@ export const ACCEPTED_PROFILE_TYPES: Readonly<Record<string, readonly ProfileTyp
   search_existing_benchmark: ANY_PROFILE_TYPE, assess_model: ANY_PROFILE_TYPE, check_model_health: ANY_PROFILE_TYPE,
   discover_new_models: ANY_PROFILE_TYPE, check_tool_replacements: ANY_PROFILE_TYPE,
   calibrate_model: ANY_PROFILE_TYPE, calibration_status: ANY_PROFILE_TYPE, server_status: ANY_PROFILE_TYPE, server_stop: ANY_PROFILE_TYPE,
+  // C4-07: ping is not a decision spec, so it has no generated row; it needs the same classifier-only profile. Listed BEFORE the generated rows, which must stay the last spread.
+  [PING_TOOL_NAME]: ["classifier"],
   ...classifierProfileRows(),
 });
 
@@ -807,7 +823,10 @@ function buildToolsWithoutProfileTypes(limitsText: string) {
       description:
         "List the llm-ext managed local servers (llama-server and Locals) recorded in the " +
         "server registry: engine, role (main or cal), model, port, pid, whether the pid is " +
-        "alive, context size and owner; plus the broker process. Read-only; sends no model request.",
+        "alive, context size, threads (-t) and owner; plus the broker process, and the local inference " +
+        "governor: on or off, window of max_inferences, leases running, waiters, RAM and CPU against " +
+        "their limits with the age of the reading, server threads in use of the budget, and the last " +
+        "denial. Read-only; sends no model request.",
       inputSchema: { type: "object" as const, properties: {} },
     },
     {
@@ -1717,7 +1736,7 @@ function buildToolsWithoutProfileTypes(limitsText: string) {
   // every tool corresponds 1:1 to a `bin/llm-externalizer mass-scout <sub>`
   // CLI invocation.
   // C4-03: the classify entries are listed here so --help and the typo suggestion see them like any command (the general profile-type check is skipped for classify: the runner's resolveClassifierProfile enforces the classifier-only rule, and definitions-classify.test.ts pins that the row above equals it); cli/main.ts runs them through runDecisionArgv, never dispatchCallTool.
-  return [...allTools, ...MASS_SCOUT_TOOLS, ...classifyTools()];
+  return [...allTools, ...MASS_SCOUT_TOOLS, ...classifyTools(), classifierPingTool()];
 }
 
 

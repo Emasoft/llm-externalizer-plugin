@@ -66,7 +66,11 @@ describe("llm-ext classify (built CLI)", () => {
     expect(r.exitCode).toBe(0);
     expect(r.stdout).toMatch(/--threshold .*\(default 0\.5, range 0\.\.1\)/);
     expect(r.stdout).toContain("--max_budget");
-    expect(r.stdout).not.toContain("--estimate");
+    // TRDD-58CFBQHN (issue 16 item 5): the decision commands list --estimate; this pins the RENDERED row, uncut (cli/main.ts firstLine cuts a long row with "..."), which the schema test in tools/definitions-classify.test.ts cannot see. classify refuses --preview, so its help never lists it.
+    expect(r.stdout).toMatch(/--estimate\s+\[boolean\] Dry run: print the estimated input cost \(an estimate, not a ceiling\); nothing is sent to Jev\./);
+    // A second --estimate row must fail here, for example from the cli/main.ts dry-run block if a classify tool enters PROFILE_AWARE_TOOLS (src/cli/dry-run-flags.ts) with estimate: true. Since the per-flag split (TRDD-58CFBQHN step 2, e0d4fabe) that block prints only the flags DRY_RUN_SUPPORT accepts, so --preview may not appear and this count may be the only guard.
+    expect(r.stdout.match(/--estimate\s+\[boolean\]/g)).toHaveLength(1);
+    expect(r.stdout).not.toContain("--preview");
     expect(r.left).toEqual([]);
   });
   it("classify extract --help no longer says it is not usable from the command line", async () => {
@@ -88,15 +92,15 @@ describe("llm-ext classify (built CLI)", () => {
     expect(r.left).toEqual([]);
   });
   // WHY these three: leadingToken skips the global boolean flags, so a leading --quiet must not make a classify command load the engine (which creates the settings file).
-  // WHY exit 1 and the message are asserted: main.ts does not accept a leading --quiet as a global prefix today; if a later card makes it legal these tests are meant to break.
+  // WHY exit 0 and the help text (TRDD-118TUPJJ): global help advertises --quiet as global, so main.ts moves a leading --quiet behind the command; it used to be refused as "unknown command".
   it.each([
     [["--quiet", "classify", "--help"]],
     [["--quiet", "classify", "filter", "--help"]],
     [["--profile", "x", "--quiet", "classify", "--help"]],
-  ])("a leading --quiet before classify is refused without creating settings: %j", async (args) => {
+  ])("a leading --quiet before classify shows the help and creates no settings: %j", async (args) => {
     const r = await run(args);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("unknown command '--quiet'");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("llm-ext classify");
     expect(r.left).toEqual([]);
   });
   // WHY these four pin CURRENT behaviour: a non-classify help loads the engine and creates settings.yaml (open owner decision recorded on PF-04 about migration on read-only commands). Whoever changes that must update them.
@@ -109,14 +113,14 @@ describe("llm-ext classify (built CLI)", () => {
     const r = await run(args);
     expect(r.left).toContain("settings.yaml");
   });
-  // WHY exit 1 here: main.ts refuses a leading --quiet ("unknown command '--quiet'") but only after loading the engine, which still creates settings.yaml; these two pin that refused line, not a working help.
+  // WHY exit 0 and the group help (TRDD-118TUPJJ): a leading --quiet is a global flag, not a command word; the engine is still loaded for a non-classify group, so settings.yaml is still created.
   it.each([
-    [["--quiet", "scan", "--help"]],
-    [["--quiet", "session", "--help"]],
-  ])("a leading --quiet before a non-classify group is a refused line (exit 1, unknown command '--quiet') that still creates settings.yaml: %j", async (args) => {
+    [["--quiet", "scan", "--help"], "llm-ext scan <action>"],
+    [["--quiet", "session", "--help"], "llm-ext session <action>"],
+  ])("a leading --quiet before a non-classify group shows that group help and creates settings.yaml: %j", async (args, heading) => {
     const r = await run(args);
-    expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("unknown command '--quiet'");
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain(heading);
     expect(r.left).toContain("settings.yaml");
   });
   it("a typo suggests the right verb and exits 1", async () => {
@@ -137,10 +141,10 @@ describe("llm-ext classify (built CLI)", () => {
     expect(r.exitCode).toBe(3);
     expect(r.stdout).toBe("");
   });
-  it("--estimate is refused as not available for classify yet", async () => {
-    const r = await run(["classify", "filter", "--estimate", "--input", "@DIR/in.json"], { settings: SETTINGS });
+  it("--preview is refused as not available for classify yet", async () => {
+    const r = await run(["classify", "filter", "--preview", "--input", "@DIR/in.json"], { settings: SETTINGS });
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("--estimate is not available for classify yet.");
+    expect(r.stderr).toContain("--preview is not available for classify yet.");
   });
   it("a non-classify group's --help still loads the engine: the default settings file is created", async () => {
     const r = await run(["scan", "--help"]);

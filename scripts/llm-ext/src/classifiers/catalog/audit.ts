@@ -107,8 +107,8 @@ function recordQuestions(k: number, value: string): Record<string, Question> {
     return { [indexKey("absence", k)]: q(`${src} contains what ${req} asks for, so the empty ${val} is a wrongly omitted result.`, "A value was wrongly omitted", "Returning nothing is correct") };
   }
   return {
-    [indexKey("hallucinated", k)]: q(`${val} is not backed by ${src}, or the source does not contain it. Judge only from the source text, not from world knowledge.`, "The value is not in the source", "The source backs the value"),
-    [indexKey("off_target", k)]: q(`${src} does not really provide what ${req} asks for, so ${val} came from incidental text.`, "The source does not truly provide this value", "The source truly provides this value"),
+    [indexKey("hallucinated", k)]: q(`${src} nowhere states ${val}, not even in different spacing, punctuation or date format. Judge only from the source text, not from world knowledge. A value the source states in any form is never hallucinated, even when it answers the request wrongly — that failure belongs to the off_target question.`, "The value is not in the source", "The source backs the value"),
+    [indexKey("off_target", k)]: q(`${src} does not really provide what ${req} asks for, so ${val} came from incidental text, from a part of the source that answers a different question, or from an outdated or superseded value the source still states.`, "This is not the answer the source gives to this request", "The source truly provides this value"),
     [indexKey("incomplete", k)]: q(`${val} leaves out something that ${src} provides for ${req}.`, "The value misses part of what the source provides", "The value captures what the source provides"),
     [indexKey("format", k)]: q(`${val} breaks a format or constraint implied by ${req} (for example a date format, a unit or an allowed set of values).`, "The value breaks the implied format or constraint", "The value meets the implied format and constraints"),
   };
@@ -152,9 +152,10 @@ function project(answers: Answers, i: AuditInput, t: Thresholds, ctx: ProjectCtx
     const gate = maxGate(Object.values(checks), t["wrong-at"]!);
     const base = { id, status: "ok" as const, checks, p_wrong: gate.max, unanswered };
     if (!gate.gated) return { ...base, action: "ok", reason: "no check reached the gate" };
-    const gatedBy = names.filter((n) => checks[n]! >= t["wrong-at"]!);
+    // WHY only the top check, with its value (quality eval of run 20261031_191133): naming every gated check ("hallucinated, off_target, incomplete, format at or above 0.7") did not tell the user what is wrong; the highest one does. Ties keep the first in check order.
+    const top = names.reduce((best, n) => (checks[n]! > checks[best]! ? n : best));
     // WHY say so: a finding in the visible part stands (a truncated source can only demote pass to review, server.ts:1445), but the text that corrects the record may sit in the cut part.
-    return { ...base, action: "wrong", reason: `${gatedBy.join(", ")} at or above ${t["wrong-at"]}${ctx.truncated ? "; the source was truncated, so the correcting text may be in the cut part" : ""}` };
+    return { ...base, action: "wrong", reason: `${top} ${checks[top]} at or above ${t["wrong-at"]}${ctx.truncated ? "; the source was truncated, so the correcting text may be in the cut part" : ""}` };
   });
   const flagged = records.filter((r) => r.action === "wrong").length;
   const invalid = records.filter((r) => r.action === "invalid_response").length;

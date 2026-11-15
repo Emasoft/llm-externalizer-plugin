@@ -121,3 +121,45 @@ describe("fetchWithTimeout — the deadline must cover the BODY, not just the he
     expect(observed!.aborted).toBe(true);
   });
 });
+
+describe("fetchWithTimeout — a caller-supplied signal cancels the request (issue 19 / TRDD-3SNQAGIC)", () => {
+  it("an external abort ends a stalled body read AND clears the deadline timer at once", async () => {
+    // A losing session-summary racer is cancelled by its winner. The 600 s deadline timer must not
+    // outlive that cancellation: an armed timer is what kept the CLI process alive after the summary.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        return stallingResponse(init!.signal as AbortSignal);
+      }) as unknown as typeof fetch;
+      const external = new AbortController();
+
+      const res = await fetchWithTimeout("https://example.invalid/v1/chat", { signal: external.signal }, 600_000);
+      expect(vi.getTimerCount()).toBe(1); // the deadline is armed while the body is being read
+
+      external.abort();
+      await expect(res.text()).rejects.toThrow();
+      expect(vi.getTimerCount()).toBe(0); // disarmed by the abort, not left to fire 600 s later
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a signal that is already aborted never starts a request and leaves no timer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+        init!.signal!.throwIfAborted();
+        return new Response("never reached");
+      }) as unknown as typeof fetch;
+      const external = new AbortController();
+      external.abort();
+
+      await expect(
+        fetchWithTimeout("https://example.invalid/v1/chat", { signal: external.signal }, 600_000),
+      ).rejects.toThrow();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

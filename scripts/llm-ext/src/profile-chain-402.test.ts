@@ -464,7 +464,8 @@ describe("Row 102 (1) — caller-pinned modelOverride bypass, DYNAMIC `paid` pro
         // Same ProfileExhaustedError type as the 402 above -- only its cause
         // differs, and the cause is what decides: a 413 is this request's
         // problem, not the service's, so it must not abort the batch.
-        expect(result.isError, `must not abort the batch. text:\n${text}`).toBe(false);
+        // isError is true since 40e7a8e7: a failed file exits 1. The batch still goes on (2 processed, no ABORTED).
+        expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
         expect(text).toContain("2 processed, 1 failed, 0 skipped");
         expect(text).not.toMatch(/ABORTED/);
         const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
@@ -836,7 +837,8 @@ describe("D2 item 11 — scan_folder's per-file path on a DYNAMIC `paid` profile
         { "a.txt": "OVERSIZED-MARKER\n", "b.txt": "fine one\n", "c.txt": "fine two\n" },
         paidYaml(["vendor/paid-head"]),
       );
-      expect(result.isError, `must not abort the batch. text:\n${text}`).toBe(false);
+      // isError is true since 40e7a8e7: a failed file exits 1. The batch still goes on (2 processed).
+      expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
       expect(text).toContain("2 processed, 1 failed, 0 skipped");
       const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
       expect(failedLine).toContain(`${STATIC_PROFILE_EXHAUSTED_MESSAGE} (HTTP 413)`);
@@ -1112,7 +1114,8 @@ describe("9000b8d follow-up (A) — mixed causes on a chain exhaustion", () => {
           "b.txt": "fine one\n",
           "c.txt": "fine two\n",
         });
-        expect(result.isError, `must not abort the batch. text:\n${text}`).toBe(false);
+        // isError is true since 40e7a8e7: a failed file exits 1. The batch still goes on (no ABORTED, 2 processed).
+        expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
         expect(text).toContain("2 processed, 1 failed, 0 skipped");
         expect(text).not.toMatch(/ABORTED/);
         const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
@@ -1262,7 +1265,7 @@ describe("TRDD-VAORGKVF — a refused IRON RULE call is final and never feeds th
       writeFileSync(
         join(cfgDir, "scan-folder-results.json"),
         JSON.stringify({
-          "vendor/paid-b::2026-10-24T00:00:00Z::x": { date: "2026-10-24T00:00:00Z", failureReasons: [] },
+          "vendor/paid-b::2026-10-24T00:00:00Z::x": { date: "2026-10-24T00:00:00Z", failureReasons: [], qualityPass: true },
         }),
         "utf-8",
       );

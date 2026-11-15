@@ -2,11 +2,15 @@
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Profile } from "../config.js";
+import { stringify } from "yaml";
+import { readAllFrom } from "../cli/read-all.js";
+import { loadSettings, type Settings } from "../config.js";
 import { VERIFY_POLICY } from "./l1/validate.js";
 import { spec as filterSpec } from "./catalog/filter.js";
 import { spec as labelSpec } from "./catalog/label.js";
+import { spec as rankSpec } from "./catalog/rank.js";
 import type { AnySpec, ProjectCtx } from "./catalog/spec.js";
 import { replayFixture, syntheticResponse, type RecordedReply } from "./l0/test-fetch.js";
 import type { GlobalFetch } from "./l0/transport.js";
@@ -14,6 +18,13 @@ import { runDecision, runDecisionArgv, type RunDeps, type RunRequest } from "./r
 
 const KEY = "sk-or-v1-C401SECRETKEYVALUE0123456789abcdef";
 const fx = (dir: string, n: string): RecordedReply => JSON.parse(readFileSync(new URL(`./__fixtures__/${dir}/${n}.json`, import.meta.url), "utf8")) as RecordedReply;
+// WHY real streams (TRDD-S3QEQBYV, sites A10, A11 and A12): stdin is read by the production reader readAllFrom over a real PassThrough, so no stdin double is left in this file.
+// Data sites: stdinBytes builds a fresh ENDED stream inside the closure on every call, because an ended stream can be read once; nothing is asserted on it.
+// Never-called sites: unreadStdin makes one ENDED stream holding a byte per call (never shared, never at describe scope) and registers it; afterEach asserts readableDidRead === false after the test body, so a read that leaves the outcome unchanged also fails. The registry is module-level, so this relies on tests running one at a time (no it.concurrent).
+// Measured with a stderr marker in each old double (positive control: a temporary test with an empty argv printed the readStdin marker of the run helper, and a temporary --input argv printed the readFile marker of each of the three helpers): readStdin of io was called 8 times in 7 tests and never in two places (the rank --save refusal and the --nope half of the unknown-flag test); readStdin of the run helper was never called by the 6 argv rows, which are all refused first; readStdin of dry was called once in each of its 4 tests. readFile was never called by any test here; it stays the real readFileSync, as the card TRDD-S3QEQBYV settled for B1 (receipt.test.ts), so no readFile double is left either.
+const stdinBytes = (data: string | Buffer) => async (): Promise<Buffer> => { const s = new PassThrough(); s.end(data); return readAllFrom(s); };
+const unreadStreams: PassThrough[] = [];
+const unreadStdin = (): (() => Promise<Buffer>) => { const s = new PassThrough(); s.end("x"); unreadStreams.push(s); return () => readAllFrom(s); };
 
 // P-01 dec-noul answers one question under the key "is_bug"; the runner asks p_i0.. so the real reply is re-labeled to the keys of the request.
 function relabeled(questions: Record<string, unknown>, noul?: (key: string) => number, dropCost = false): Response {
@@ -53,7 +64,7 @@ function unpriced(): Served {
   return { ...s, fetch };
 }
 
-const profile = (over: Record<string, unknown> = {}): Profile => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C401_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over }) as unknown as Profile;
+const profileDoc = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C401_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over });
 
 let tmp: string;
 let prev: Record<string, string | undefined>;
@@ -66,13 +77,26 @@ beforeEach(() => {
 afterEach(() => {
   for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   rmSync(tmp, { recursive: true, force: true });
+  // WHY last and from a copy: the cleanup above must run even when this fails, and a failure must not leak streams into the next test.
+  for (const s of unreadStreams.splice(0)) expect(s.readableDidRead).toBe(false);
 });
 
+// WHY a real settings.yaml read back by loadSettings (precedent 441ce3fa, TRDD-4Q1IVJOE): a hand-built object cast to Settings skips the production loader, so the runner could pass on settings no user file produces. LLM_EXT_CONFIG_DIR is `tmp` (beforeEach), so the file is removed with it in afterEach.
+const settingsFrom = (doc: Record<string, unknown>): Settings => {
+  writeFileSync(join(tmp, "settings.yaml"), stringify(doc));
+  const settings = loadSettings();
+  if (settings === null) throw new Error("settings.yaml was not loaded");
+  return settings;
+};
 const depsOf = (fetch: GlobalFetch, over: Record<string, unknown> = {}): RunDeps => ({
-  settings: { active: "c", active_classifier: "c", profiles: { c: profile(over) } },
+  settings: settingsFrom({ active: "c", active_classifier: "c", profiles: { c: profileDoc(over) } }),
   fetch,
   catalogOptions: { path: join(tmp, "catalog.json") },
   sigint: new EventEmitter(),
+  // WHY the local decider is OFF here: these tests pin remote failure plumbing, and a fallback that answered
+  // would mask it. WHY off explicitly and not merely left out: an absent section means ENABLED by default, and
+  // a test run would then reach — or start — the real 15 GB decider on the machine running the suite.
+  localFallback: { enabled: false },
 });
 // TRDD-28BAL5ER: the runner now answers a failed Jev request with another System One model of the catalog. Tests of the per-request failure plumbing (the Nth request fails) keep their meaning only when no fallback exists, so they serve a catalog where Jev is the only System One model; the fallback itself is tested in system-one-fallback.test.ts.
 function withoutFallback(inner: GlobalFetch): GlobalFetch {
@@ -191,31 +215,92 @@ describe("runDecision (filter spec, replayed replies)", () => {
 });
 
 describe("runDecisionArgv", () => {
-  const io = (stdin: string, s: Served) => {
+  const io = (stdin: () => Promise<Buffer>, s: Served) => {
     const out: string[] = [];
     const err: string[] = [];
-    return { out, err, deps: { ...depsOf(s.fetch), readFile: (p: string) => { throw new Error(`no file ${p}`); }, readStdin: async () => Buffer.from(stdin), stdout: (t: string) => out.push(t), stderr: (l: string) => err.push(l) } };
+    return { out, err, deps: { ...depsOf(s.fetch), readFile: (p: string) => readFileSync(p, "utf8"), readStdin: stdin, stdout: (t: string) => out.push(t), stderr: (l: string) => err.push(l) } };
   };
   const input = JSON.stringify({ question: "Does it fail?", items: [{ text: "boom" }] });
 
+  // IN-07 (Q4): text is the default stdout; --json prints the envelope unchanged; neither changes the exit code.
+  const lineInput = JSON.stringify({ question: "Does it fail?", items: [{ id: "a.log:1", text: "boom 1" }, { id: "a.log:2", text: "boom 2" }] });
+  const runArgv = async (extra: string[]) => {
+    const s = serve((_n, q) => relabeled(q));
+    const { out, err, deps } = io(stdinBytes(lineInput), s);
+    const code = await runDecisionArgv(filterSpec, ["--profile", "c", ...extra], deps);
+    return { code, out, err };
+  };
+  it("IN-07: without --json stdout is the text form, not JSON; --json prints the envelope; the exit code is the same", async () => {
+    const text = await runArgv([]);
+    const json = await runArgv(["--json"]);
+    expect(text.code).toBe(json.code);
+    // C4-12: the receipt is a second stdout write after the text form; under --json it goes to stderr instead.
+    expect(text.out).toHaveLength(2);
+    expect(text.out[1]).toMatch(/^— .*\n— 2 scanned · /s);
+    expect(json.out).toHaveLength(1);
+    expect(() => JSON.parse(text.out[0]!)).toThrow();
+    // The two lines differ only in a number, so they are collapsed into one row ×2.
+    expect(text.out[0]).toMatch(/^\d\.\d\d {2}×2 {2}a\.log:1 {2}boom 1\n {8}also lines 2\n/);
+    expect(text.out[0]).toMatch(/— 2 matched, \d borderline\n$/);
+    const env = JSON.parse(json.out[0]!) as { schema: number; decision: { matched_count: number } };
+    expect(env.schema).toBe(1);
+    expect(env.decision.matched_count).toBe(2);
+    expect(text.err).toEqual([]);
+  });
+  it("IN-07: --no-collapse and --save reach the text form as render options, never the input; --save writes the rows file and says so", async () => {
+    const file = join(tmp, "rows.json");
+    const r = await runArgv(["--no-collapse", "--save", file]);
+    expect(r.err).toEqual([]);
+    expect(r.out[0]).toContain(`— full results saved to ${file}`);
+    const rows = JSON.parse(readFileSync(file, "utf8")) as { id: string; p: number }[];
+    expect(rows.map((x) => x.id).sort()).toEqual(["a.log:1", "a.log:2"]);
+  });
+  it("IN-07: --save with --json still writes the file and leaves stdout as the envelope", async () => {
+    const file = join(tmp, "rows-json.json");
+    const r = await runArgv(["--json", "--save", file]);
+    expect(JSON.parse(r.out[0]!)).toMatchObject({ schema: 1 });
+    expect(JSON.parse(readFileSync(file, "utf8"))).toHaveLength(2);
+  });
+  it("IN-07: a --save path that cannot be written keeps the paid answers on stdout, warns in the text and exits 1", async () => {
+    const r = await runArgv(["--save", join(tmp, "no-such-dir", "rows.json")]);
+    expect(r.code).toBe(1);
+    expect(r.out[0]).toMatch(/— warning: cannot save .*rows\.json/);
+    expect(r.out[0]).not.toMatch(/full results saved/);
+  });
+  it("IN-07: the -o report stays the JSON envelope whatever the stdout form", async () => {
+    const dir = join(tmp, "reports-in07");
+    const r = await runArgv(["-o", dir]);
+    const reports = readdirSync(dir);
+    expect(reports).toHaveLength(1);
+    expect(JSON.parse(readFileSync(join(dir, reports[0]!), "utf8"))).toMatchObject({ schema: 1 });
+    expect(() => JSON.parse(r.out[0]!)).toThrow();
+  });
+  it("IN-07: --save is refused as an unknown option for a spec without it", async () => {
+    const s = serve(() => { throw new Error("must not be called"); });
+    const { err, deps } = io(unreadStdin(), s);
+    expect(await runDecisionArgv(rankSpec, ["--save", "x"], deps)).toBe(1);
+    expect(err[0]).toMatch(/unknown option --save/);
+  });
+
   it("reads JSON from stdin, applies a spec-declared threshold flag, prints the envelope", async () => {
     const s = serve((_n, q) => relabeled(q));
-    const { out, err, deps } = io(input, s);
-    const code = await runDecisionArgv(filterSpec, ["--threshold", "0.8", "--band=0.01", "--profile", "c"], deps);
-    expect(err).toEqual([]);
+    const { out, err, deps } = io(stdinBytes(input), s);
+    const code = await runDecisionArgv(filterSpec, ["--threshold", "0.8", "--band=0.01", "--profile", "c", "--json"], deps);
+    // C4-12: under --json the receipt lines (start with "— ") go to stderr; nothing else may.
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     const env = JSON.parse(out[0]!) as { decision: { threshold: number; matched_count: number } };
     expect(env.decision.threshold).toBe(0.8);
     expect(env.decision.matched_count).toBe(1);
-    expect(err).toEqual([]);
+    expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
   });
 
   it("an unknown flag and a non-JSON stdin are exit 1 with one stderr line, before any request", async () => {
     const s = serve(() => { throw new Error("must not be called"); });
-    const a = io(input, s);
+    const a = io(unreadStdin(), s);
     expect(await runDecisionArgv(filterSpec, ["--nope", "1"], a.deps)).toBe(1);
     expect(a.err).toEqual(["llm-ext: unknown option --nope for classify filter"]);
-    const b = io("not json", s);
+    const b = io(stdinBytes("not json"), s);
     expect(await runDecisionArgv(filterSpec, [], b.deps)).toBe(1);
     expect(b.err[0]).toMatch(/cannot read the JSON input from stdin/);
     expect(s.decisions).toHaveLength(0);
@@ -340,7 +425,7 @@ describe("review round: argv values", () => {
   const run = async (argv: string[]) => {
     const err: string[] = [];
     const s = serve(() => { throw new Error("must not be called"); });
-    const code = await runDecisionArgv(filterSpec, argv, { ...depsOf(s.fetch), readFile: () => "{}", readStdin: async () => Buffer.from("{}"), stdout: () => undefined, stderr: (l) => err.push(l) });
+    const code = await runDecisionArgv(filterSpec, argv, { ...depsOf(s.fetch), readFile: (p: string) => readFileSync(p, "utf8"), readStdin: unreadStdin(), stdout: () => undefined, stderr: (l) => err.push(l) });
     return { code, err };
   };
   it.each([
@@ -359,7 +444,8 @@ describe("review round: argv values", () => {
 
 // Plan row E65 and review round: a build that declares `noCall` makes no API call, any other zero-question build is refused, and a run builds once.
 describe("review round: empty plan and single build", () => {
-  const withBuild = (build: AnySpec["build"], project?: AnySpec["project"], attention?: AnySpec["attention"]): AnySpec => ({ ...filterSpec, id: "fake", build, ...(project === undefined ? {} : { project }), attention: attention ?? (() => false) }) as unknown as AnySpec;
+  // IN-07: renderText is dropped because these fakes project a decision that is not a FilterResult; they test the runner, not the filter text.
+  const withBuild = (build: AnySpec["build"], project?: AnySpec["project"], attention?: AnySpec["attention"]): AnySpec => ({ ...filterSpec, id: "fake", build, ...(project === undefined ? {} : { project }), attention: attention ?? (() => false), renderText: undefined }) as unknown as AnySpec;
   const emptyBuilt = (over: Record<string, unknown> = {}) => ({ sharedState: null, units: [], unsplittable: {}, truncated: true, noCall: true as const, ...over });
   it("E65: a spec whose build declares noCall makes NO request, projects with empty answers and ctx.truncated, and exits 0", async () => {
     const s = serve((_n, q) => relabeled(q));
@@ -404,7 +490,7 @@ describe("review round: empty plan and single build", () => {
   });
   it("item 5: an empty run needs no classifier profile and no key (nothing is sent, and selecting a profile would itself fetch the catalog)", async () => {
     const urls: string[] = [];
-    const deps: RunDeps = { settings: { active: undefined, active_classifier: undefined, profiles: {} }, fetch: async (url) => { urls.push(url); throw new Error("no network"); }, catalogOptions: { path: join(tmp, "catalog.json") }, sigint: new EventEmitter() };
+    const deps: RunDeps = { settings: settingsFrom({ profiles: {} }), fetch: async (url) => { urls.push(url); throw new Error("no network"); }, catalogOptions: { path: join(tmp, "catalog.json") }, sigint: new EventEmitter() };
     delete process.env.C401_TEST_KEY;
     const out = await runDecision(withBuild(() => emptyBuilt(), () => ({ done: true })), filterReq(1), deps);
     expect(out.exitCode).toBe(0);
@@ -421,6 +507,61 @@ describe("review round: empty plan and single build", () => {
 });
 
 
+// C4-08 (TRDD-BH78CSJO): `--estimate` plans the requests and sends none. The catalog is the recorded P-02 fixture; any decisions request would reach `serve` and be listed in s.decisions.
+describe("C4-08 --estimate", () => {
+  const estimateInput = JSON.stringify({ question: "Does it fail?", items: [{ id: "a.log:1", text: "boom 1" }, { id: "a.log:2", text: "boom 2" }] });
+  const dry = async (extra: string[]) => {
+    const s = serve((_n, q) => relabeled(q));
+    const out: string[] = [];
+    const err: string[] = [];
+    const deps = { ...depsOf(s.fetch), readFile: (p: string) => readFileSync(p, "utf8"), readStdin: stdinBytes(estimateInput), stdout: (t: string) => out.push(t), stderr: (l: string) => err.push(l) };
+    const code = await runDecisionArgv(filterSpec, ["--profile", "c", "--estimate", ...extra], deps);
+    return { code, out, err, s };
+  };
+  it("sends no decisions request and prints the text form: model, requests, tokens, cost, and that it is an estimate and not a ceiling", async () => {
+    const r = await dry([]);
+    expect(r.code).toBe(0);
+    expect(r.s.decisions).toHaveLength(0);
+    expect(r.err).toEqual([]);
+    expect(r.out).toHaveLength(1);
+    expect(() => JSON.parse(r.out[0]!)).toThrow();
+    expect(r.out[0]).toMatch(/^classify filter --estimate: nothing was sent\nmodel: typesafe\/jev-1\.13\nrequests: \d+\nestimated input tokens: \d+\nestimated input cost: [\d.]+ USD \(/);
+    expect(r.out[0]).toContain("This is an estimate, not a ceiling");
+  });
+  it("--json prints the numbers as JSON, and the cost is the tokens times the catalog prompt price", async () => {
+    const r = await dry(["--json"]);
+    expect(r.code).toBe(0);
+    expect(r.s.decisions).toHaveLength(0);
+    const e = (JSON.parse(r.out[0]!) as { estimate: { requests: number; input_tokens: number; model: string; prompt_usd_per_million: number; estimated_input_cost_usd: number } }).estimate;
+    expect(e).toMatchObject({ model: "typesafe/jev-1.13" });
+    expect(e.requests).toBeGreaterThan(0);
+    expect(e.input_tokens).toBeGreaterThan(0);
+    expect(e.estimated_input_cost_usd).toBeCloseTo((e.input_tokens * e.prompt_usd_per_million) / 1_000_000, 12);
+  });
+  it("-o writes no report: a dry run has no envelope", async () => {
+    const dir = join(tmp, "reports-c408");
+    const r = await dry(["-o", dir]);
+    expect(r.code).toBe(0);
+    expect(readdirSync(dir)).toEqual([]);
+  });
+  it("--max-budget below the estimate refuses the dry run like the run (exit 1), still sending nothing", async () => {
+    const r = await dry(["--max-budget", "0.0000000001"]);
+    expect(r.code).toBe(1);
+    expect(r.err.join("\n")).toMatch(/exceeds --max-budget/);
+    expect(r.out).toEqual([]);
+    expect(r.s.decisions).toHaveLength(0);
+  });
+  it("a declared noCall input is 0 requests and 0 USD, with no profile and no catalog fetch (E65)", async () => {
+    const urls: string[] = [];
+    const fake = { ...filterSpec, id: "fake", build: () => ({ sharedState: null, units: [], unsplittable: {}, truncated: true, noCall: true as const }), renderText: undefined } as unknown as AnySpec;
+    const deps: RunDeps = { settings: settingsFrom({ profiles: {} }), fetch: async (url) => { urls.push(url); throw new Error("no network"); }, catalogOptions: { path: join(tmp, "catalog.json") }, sigint: new EventEmitter() };
+    const out = await runDecision(fake, filterReq(1, { estimate: true }), deps);
+    expect(out.exitCode).toBe(0);
+    expect(out.display).toContain("requests: 0");
+    expect(out.display).toContain("estimated input cost: 0 USD");
+    expect(urls).toEqual([]);
+  });
+});
 describe("review round 4: the catalog is loaded once per run", () => {
   const catalogFetches = (urls: string[]): number => urls.filter((u) => u.includes("output_modalities=decisions")).length;
 

@@ -7,6 +7,7 @@ import { CHUNK_CHARS_DEFAULT, chunkText } from "../l2/chunker.js";
 import { IdError, indexKey } from "../l2/ids.js";
 import { PolicyError } from "../l2/policy-kit.js";
 import { dataGuard, NONE, positionalIds, renumberByPosition } from "./shared.js";
+import { clip, f2, type TextRender } from "../l2/render-text.js";
 import type { Answers, Built, BuiltUnit, DecisionSpec, Thresholds } from "./spec.js";
 
 const findInputSchema = z
@@ -57,7 +58,7 @@ export interface FindResult {
 const quoted = (q: string): string => `The query is: ${JSON.stringify(q)}.`;
 
 // Plan §9 / E129 (qs I:1075-1120): non-blank lines keyed by 1-based number; a line longer than one chunk is cut into pieces keyed N, N.2, N.3, ... that all map back to line N.
-// Why the constant: build() cannot see the run's --chunk-chars, so pieces and chunks are bounded by the default; a smaller planner chunk-chars would make the planner refuse (never cut) an oversized chunk.
+// WHY the constant: build() cannot see the run's --chunk-chars, so pieces and chunks are bounded by the default; a smaller planner chunk-chars would make the planner refuse (never cut) an oversized chunk (plan §5 chunk-chars default 60,000; qs.mjs:1083-1086).
 function fileLines(text: string): { n: string; text: string }[] {
   const out: { n: string; text: string }[] = [];
   text.split(/\r?\n/).forEach((line, idx) => {
@@ -69,7 +70,7 @@ function fileLines(text: string): { n: string; text: string }[] {
 
 interface LineChunk { file: string; lines: { n: string; text: string }[] }
 
-// A request chunk holds at most --chunk lines and CHUNK_CHARS_DEFAULT characters, so it fits Jev's context; build and project both call this, so the keys they derive agree.
+// WHY a request chunk holds at most --chunk lines and CHUNK_CHARS_DEFAULT characters: it must fit Jev's context; build and project both call this, so the keys they derive agree (qs.mjs:1083-1095; plan §5 find row).
 function lineChunks(i: FindInput, t: Thresholds): LineChunk[] {
   const ids = itemIds(i);
   const out: LineChunk[] = [];
@@ -93,6 +94,7 @@ function lineChunks(i: FindInput, t: Thresholds): LineChunk[] {
 function assertCounts(t: Thresholds, mode: "json" | "files"): void {
   // Why json only: answered/absent are not used in files mode, which must not be refused for flags it ignores.
   if (mode === "json" && t.answered < t.absent) throw new PolicyError(`--answered (${t.answered}) must be at least --absent (${t.absent})`);
+  // WHY whole numbers: quicksilver checks --top and --chunk as integers before any work, because unchecked numeric flags silently broke its runs (qs.mjs:91-98).
   for (const name of ["top", "chunk"] as const) if (!Number.isInteger(t[name])) throw new PolicyError(`--${name} must be a whole number, got ${t[name]}`);
 }
 
@@ -105,11 +107,26 @@ function assertKeys(answers: Answers, expected: string[]): void {
   }
 }
 
+// IN-09 (qs find): files mode prints `score  file:line  text`, best first; json mode has no lines, so it prints `score  id` per ranked candidate and then the verdict.
+function renderText(r: FindResult): TextRender {
+  const lines: string[] = [];
+  if (r.mode === "files") {
+    for (const h of r.hits) lines.push(`${f2(h.score)}  ${h.id}:${h.line}  ${clip(h.text, 100)}`);
+    // WHY said: an empty body would read like a failed run, and "absent" is an answer.
+    if (r.hits.length === 0) lines.push("(no matching lines)");
+  } else {
+    for (const c of r.ranked) lines.push(`${f2(c.probability)}  ${c.id}`);
+    lines.push(`— ${r.status}${r.exists === null ? "" : `, exists ${f2(r.exists)}`}${r.tie ? ", tie between the top two" : ""}`);
+  }
+  for (const x of r.invalid) lines.push(`? no answer: ${x.key} (${x.reason})`);
+  return { lines };
+}
 export const spec: DecisionSpec<FindInput, FindResult> = {
   id: "find",
-  // IN-01: files mode searches each file line by line; --lines is refused because the lines are the unit of the search itself (qs forces it off).
+  // IN-01: files mode searches each file line by line; --lines is refused because the lines are the unit of the search itself (qs forces it off, qs.mjs:1079).
   cli: { positional: [{ name: "query", field: "query" }], itemsField: "items", fixed: { mode: "files" }, lines: false },
   input: findInputSchema,
+  // WHY these defaults: answered 0.7 and absent 0.35 are the plan json-mode cut-offs; min-score 0.05, top 5, chunk 150 (at most 250) are quicksilver's (plan §9 row classify find; qs.mjs:41-45).
   thresholds: {
     answered: { default: 0.7, min: 0, max: 1, help: "--answered: json mode, lowest exists probability that counts as answered" },
     absent: { default: 0.35, min: 0, max: 1, help: "--absent: json mode, exists probability below this is absent (between absent and answered is partial)" },
@@ -117,9 +134,11 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
     top: { default: 5, min: 1, max: 100000, help: "--top: how many ranked candidates (json) or lines (files) to list" },
     chunk: { default: 150, min: 1, max: 250, help: "--chunk: file mode, lines per request" },
   },
+  // WHY per-item: a failed request loses only the units it carried (files mode: its line chunks); json mode best and exists are unsplittable, so there a lost request gives no partial result (commit cddd9d43; plan §5 partial failure).
   split: "per-item",
   // Plan §9: the query stays in the instructions; the candidates and lines are in state.
   injection: "params-in-instructions",
+  // WHY DEFAULT_POLICY: find asks choice questions, whose probabilities the policy requires (fail closed), so files mode reads the where probabilities without a null check (plan §6 table, probabilities row).
   validation: DEFAULT_POLICY,
   // Why the explicit type: the two modes return different literal shapes (unsplittable best/exists vs {}), which only unify as Built.
   build(i, t): Built {
@@ -145,11 +164,13 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
       questions: {
         [indexKey("where", g)]: choice(
           `${quoted(i.query)} Which line in \`units[${g}].lines\` best matches the query? Answer with the line's n value, or none if no line matches. ${dataGuard("the line text")}`,
+          // WHY a none option: a chunk may hold no matching line, and where must be able to say so; qs gives where the same none criterion (qs.mjs:1102-1104; plan §9 row classify find).
           Object.fromEntries([...c.lines.map((l) => [l.n, null]), [NONE, "No line matches the query."]]),
         ),
         [indexKey("exists", g)]: noul(`${quoted(i.query)} Does any line in \`units[${g}].lines\` match the query? ${dataGuard("the line text")}`),
       },
     }));
+    // WHY renumber by position: the planner packs units into requests, so the questions of each unit must name its place inside its own request (plan §5 SplitJob renumber).
     return { sharedState: null, units, unsplittable: {}, renumber: renumberByPosition };
   },
   project(answers, i, t) {
@@ -183,16 +204,17 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
       const e = answers[indexKey("exists", g)]!;
       if (!w.ok) invalid.push({ key: indexKey("where", g), reason: w.reason });
       if (!e.ok) invalid.push({ key: indexKey("exists", g), reason: e.reason });
-      // Why both: a line scores p(where) x p(exists), so a chunk missing either answer has no score at all.
+      // WHY both: a line scores p(where) x p(exists), so a chunk missing either answer has no score at all (plan §5 find row; qs.mjs:1111).
       if (!w.ok || !e.ok) return;
       valid++;
       const exists = (e.answer as NoulAnswer).noul;
       const text = new Map(c.lines.map((l) => [l.n, l.text]));
       for (const [n, p] of Object.entries((w.answer as ChoiceAnswer).probabilities!)) {
+        // WHY skip none and keep the integer part: none is the no-match option, not a line, and a piece key N.k reports its line N (E129; qs.mjs:1109-1111).
         if (n !== NONE) found.push({ id: c.file, line: Number(n.split(".")[0]), text: text.get(n)!, score: p * exists });
       }
     });
-    // qs order: min-score, sort best first (stable), then one hit per file line (pieces of one line, and overlapping pieces, report it once), then top.
+    // WHY this order: min-score, sort best first (stable), then one hit per file line (pieces of one line, and overlapping pieces, report it once), then top; a line keeps its best piece because the sort comes before the dedupe (qs.mjs:1113-1116; plan §5 find row).
     const seen = new Set<string>();
     const hits = found
       .filter((h) => h.score >= t["min-score"])
@@ -206,4 +228,5 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
   },
   // Plan §9: exists other than answered, invalid, no lines; plus a tie in the best answer (review round 2).
   attention: (r) => r.status !== "answered" || r.invalid.length > 0 || r.tie,
+  renderText,
 };

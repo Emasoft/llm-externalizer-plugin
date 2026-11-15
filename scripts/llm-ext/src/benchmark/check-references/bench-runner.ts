@@ -31,7 +31,7 @@ export type ChatFn = (
   messages: ChatMessage[],
   options: { temperature?: number; maxTokens?: number; model?: string },
   deps: CompletionDeps,
-) => Promise<{ content: string }>;
+) => Promise<{ content: string; serviceAbort?: boolean }>;
 
 export interface CheckReferencesRunOptions {
   deps: CompletionDeps;
@@ -107,6 +107,8 @@ export async function runCheckReferencesBenchmarkOnModel(
         },
         opts.deps,
       );
+      // AGD7QUOK: the breaker verdict is returned as content; it is not the model's answer and must not be scored.
+      if (resp.serviceAbort === true) throw new Error(`circuit-breaker outage, not a model answer: ${resp.content}`);
       reported = parseVerdict(resp.content ?? "");
       if (reported === null) failures.push({ symbol: c.symbol, reason: "no anchored VERDICT line" });
     } catch (err) {

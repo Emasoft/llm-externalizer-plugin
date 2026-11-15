@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { afterAll } from "vitest";
 
 let createdDir: string | null = null;
+let createdGovernorDir: string | null = null;
 
 if (!process.env.LLM_EXT_CONFIG_DIR) {
   // Name must NOT match /llm[-_]?ext/i — that is the leak marker
@@ -37,6 +38,17 @@ if (!process.env.LLM_EXT_CONFIG_DIR) {
   process.env.LLM_EXT_CONFIG_DIR = createdDir;
 }
 
+// Without this every vitest worker, and every CLI a test spawns, would join the user's live governor and each
+// other's, waiting on real leases. Same leak-marker rule for the name as above: no /llm[-_]?ext/i.
+if (!process.env.LLM_EXT_GOVERNOR_DIR) {
+  createdGovernorDir = mkdtempSync(join("/tmp", "goviso-"));
+  process.env.LLM_EXT_GOVERNOR_DIR = createdGovernorDir;
+}
+
+// A suite running in parallel, or a 2-core runner, sits over the default limits, and every job would wait up to the
+// 30 s CPU floor. A test about the limits sets its own strict ones.
+process.env.LLM_EXT_GOVERNOR_CPU_LIMIT_PCT ??= "100";
+process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT ??= "99";
 // boot() calls installUsageRule(), which writes the REAL ~/.claude/rules/use-llm-externalizer.md; opt out
 // for every test (tests that deliberately turn installation ON set their own value).
 process.env.LLM_EXT_INSTALL_RULE ??= "0";
@@ -45,5 +57,10 @@ afterAll(() => {
     delete process.env.LLM_EXT_CONFIG_DIR;
     rmSync(createdDir, { recursive: true, force: true });
     createdDir = null;
+  }
+  if (createdGovernorDir) {
+    delete process.env.LLM_EXT_GOVERNOR_DIR;
+    rmSync(createdGovernorDir, { recursive: true, force: true });
+    createdGovernorDir = null;
   }
 });

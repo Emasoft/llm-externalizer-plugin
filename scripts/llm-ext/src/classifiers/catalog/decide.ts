@@ -24,7 +24,8 @@ const isHatch = (k: string): k is Hatch => Object.hasOwn(ESCAPE_HATCHES, k);
 
 const RELATIONS = {
   supported: "The evidence supports this requirement for this option",
-  contradicted: "The evidence contradicts this requirement for this option, not merely some other requirement",
+  // WHY "not a different burden": hosted services satisfy "no server for the team"; an account/setup cost belongs to whichever requirement states it (jev release fix plan section 1).
+  contradicted: "The evidence directly shows this requirement does not hold for this option, not merely some other requirement, and not a different burden (such as an account or cost) that a different requirement covers",
   unknown: "The evidence does not show whether this requirement holds for this option",
 } as const;
 type Relation = keyof typeof RELATIONS;
@@ -91,7 +92,7 @@ function build(i: DecideInput): Built {
         i.requirements.map((__, j) => [
           // WHY `shared.` paths: the planner sends the shared part as `state.shared` (l2/planner.ts RequestState), the same form compare and extract use.
           checkKey(k, j),
-          choice(`How does the option \`shared.candidates[${k}]\` relate to \`shared.requirements[${j}]\`, judged on the evidence in the state? Judge only this requirement, not the overall merit of the option. Missing evidence is not a contradiction. ${dataGuard("the state")}`, RELATIONS),
+          choice(`How does the option \`shared.candidates[${k}]\` relate to \`shared.requirements[${j}]\`, judged on the evidence in the state? Judge only this requirement, not the overall merit of the option and not a different requirement's burden. If the option relies on an external party to satisfy this requirement for the team, that still satisfies the requirement. Missing evidence is not a contradiction. For example, a service the vendor operates for the team satisfies a requirement that the team operate no server; the requirement is contradicted only when the evidence shows the team itself must run and operate a server. A login, a subscription or the vendor's own infrastructure is not the team operating a server. ${dataGuard("the state")}`, RELATIONS),
         ]),
       ),
     ),

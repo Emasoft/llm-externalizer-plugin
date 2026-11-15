@@ -19,12 +19,15 @@ import {
   realpathSync,
 } from "node:fs";
 import { resolve, join } from "node:path";
-import { homedir } from "node:os";
+import { homedir, hostname, networkInterfaces, userInfo } from "node:os";
+import { isIP } from "node:net";
 import { createHash } from "node:crypto";
 import { parse as yamlParse, Document as YamlDocument, isScalar, parseDocument, Scalar } from "yaml";
 import { registeredTools } from "./model-qualification/registry.js";
 import { parseLocalsModel } from "./local-locals-server.js";
 import { parseManagedModel } from "./local-llama-server.js";
+// Governor D13: the local_governor key table lives with the resolver; controller.ts imports only types, so no cycle.
+import { LOCAL_GOVERNOR_KEYS, ramLimitMin } from "./governor/controller.js";
 // PT-02: cyclic with default-profiles-state (it imports getConfigDir); safe because both sides only call the other inside functions.
 import { isMigrationStepApplied } from "./default-profiles-state.js";
 
@@ -431,6 +434,16 @@ export interface Settings {
    * on-disk load can answer the question, and "unknown" must never refuse.
    */
   unmarkedDynamicProfiles?: string[];
+  /**
+   * Governor D13 (TRDD-ZTO9K8EK): the raw `local_governor` section, uncoerced, like paid_benchmark_daily_cap_usd, so
+   * localGovernorErrors can quote what the user wrote. Read for the limits by governor/settings.ts, never from here.
+   */
+  local_governor?: unknown;
+  /**
+   * Local decider fallback (mlx-decision): the raw `local_fallback` section, uncoerced like local_governor,
+   * so localFallbackErrors can quote what the user wrote. Read for the decider by classifiers/l2/local-decider.ts.
+   */
+  local_fallback?: unknown;
 }
 
 /** Fully resolved profile with concrete values (no env var refs) */
@@ -840,6 +853,28 @@ export const API_PRESETS: Record<string, ApiPreset> = {
 // ── Paths ────────────────────────────────────────────────────────────
 // Cross-platform: homedir() + join() works on macOS, Linux, Windows WSL.
 
+/**
+ * Fail fast when a vitest run resolves the config dir to the REAL ~/.llm-externalizer.
+ *
+ * WHY (TRDD-4HRFC42S): on 2026-11-11 a vitest run that did not load test-hermetic-config.ts
+ * (a different config or cwd, or work after its afterAll deleted LLM_EXT_CONFIG_DIR) resolved
+ * the real dir and overwrote settings.yaml, losing the local_llama, locals-mlx, or-jev and
+ * paid profiles. VITEST is inherited by every CLI a test spawns, so one guard covers them all.
+ * The real home comes from the passwd entry (userInfo), NOT homedir(): tests set HOME to a
+ * fixture, which would make homedir() point at the fixture and hide the real dir. Both sides
+ * are compared by realpath so a symlinked home or dir cannot slip past.
+ */
+export function assertNotRealConfigDirUnderTest(dir: string, env: NodeJS.ProcessEnv): void {
+  if (!env.VITEST) return;
+  const canonical = (p: string): string => (existsSync(p) ? realpathSync(p) : resolve(p));
+  const realDefault = canonical(join(userInfo().homedir, ".llm-externalizer"));
+  if (canonical(dir) === realDefault) {
+    throw new Error(
+      `Config directory '${dir}' is the real ~/.llm-externalizer while running under vitest; tests must set LLM_EXT_CONFIG_DIR to a temp dir (TRDD-4HRFC42S)`,
+    );
+  }
+}
+
 /** Config directory: ~/.llm-externalizer (or LLM_EXT_CONFIG_DIR for CI) */
 export function getConfigDir(): string {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join(homedir(), ".llm-externalizer"));
@@ -856,6 +891,8 @@ export function getConfigDir(): string {
     return join(resolvedParent, p.slice(parent.length + (parent.endsWith("/") || parent.endsWith("\\") ? 0 : 1)));
   }
   const dir = resolveDeepestExisting(raw);
+  // TRDD-4HRFC42S: checked on every call, after the override is resolved, so no test or spawned CLI child can reach the real dir.
+  assertNotRealConfigDirUnderTest(dir, process.env);
   // M8: Path traversal guard — config dir must be under homedir() or /tmp.
   // Resolve home and /tmp through symlinks so the comparison uses canonical paths
   // (e.g. /tmp → /private/tmp on macOS; homedir() may also be a symlink).
@@ -983,6 +1020,70 @@ export function isLocalUrl(url: string): boolean {
   return LOCAL_URL_PATTERN.test(url);
 }
 
+
+/**
+ * The host of a URL as the WHATWG parser normalizes it (a decimal or short IPv4
+ * such as 2130706433 or 127.1 becomes a dotted quad, `0` becomes 0.0.0.0, IPv6 is
+ * compressed), without brackets or a final dot, lower case. Null when the URL
+ * does not parse. WHY a parser, not a pattern: the pattern this replaced missed
+ * every one of those spellings, and matched `//localhost` inside a path.
+ */
+function normalizedHost(url: string): string | null {
+  let host: string;
+  try {
+    host = new URL(url).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  if (host.startsWith("[") && host.endsWith("]")) host = host.slice(1, -1);
+  return host.endsWith(".") ? host.slice(0, -1) : host;
+}
+
+/** An IPv4-mapped IPv6 address, as the parser writes it (`::ffff:7f00:1`), back to its dotted quad; null for any other. */
+function mappedIpv4(ip: string): string | null {
+  const m = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(ip);
+  if (!m) return null;
+  const hi = parseInt(m[1], 16);
+  const lo = parseInt(m[2], 16);
+  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+}
+
+/** This machine's own name and interface addresses, read on every call: interfaces come and go (a VPN, a network change). */
+function ownHosts(): Set<string> {
+  const own = new Set<string>();
+  const name = normalizedHost(`http://${hostname()}`);
+  if (name) own.add(name);
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      // The zone of a link-local address (fe80::1%en0) is not part of a URL host.
+      const host = normalizedHost(a.family === "IPv6" ? `http://[${a.address.split("%")[0]}]` : `http://${a.address}`);
+      if (host) own.add(host);
+    }
+  }
+  return own;
+}
+
+/**
+ * True when a URL names THIS machine: localhost and *.localhost, 127.0.0.0/8,
+ * ::1, their IPv4-mapped forms, the unspecified 0.0.0.0 and ::, and this
+ * machine's own host name and interface addresses (a server reached at the
+ * machine's LAN address still spends this machine's RAM). NOT the same as
+ * isLocalUrl, which also matches other hosts of the LAN and .local names: the
+ * local-inference governor must gate only sends that spend this machine's RAM
+ * and CPU (governor design D9).
+ */
+export function isLoopbackUrl(url: string): boolean {
+  const host = normalizedHost(url);
+  if (host === null) return false;
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "::1" || host === "::") return true;
+  const family = isIP(host);
+  const ipv4 = family === 4 ? host : family === 6 ? mappedIpv4(host) : null;
+  if (ipv4 !== null && (ipv4.startsWith("127.") || ipv4 === "0.0.0.0")) return true;
+  const own = ownHosts();
+  return own.has(host) || (ipv4 !== null && own.has(ipv4));
+}
+
 // ── Settings load / save ────────────────────────────────────────────
 
 /**
@@ -1100,6 +1201,10 @@ export function loadSettings(): Settings | null {
         parsed.scout_price_ceiling_usd_per_million as number | undefined,
       scout_accuracy_target_bytes: parsed.scout_accuracy_target_bytes as number | undefined,
       scout_accuracy_threshold: parsed.scout_accuracy_threshold as number | undefined,
+      // Raw like the caps above: localGovernorErrors reports a malformed section in validateSettings.
+      local_governor: parsed.local_governor as unknown,
+      // Raw like the caps above: localFallbackErrors reports a malformed section in validateSettings.
+      local_fallback: parsed.local_fallback as unknown,
       // Computed from the raw text, because `yamlParse` discards comments and
       // the marker IS a comment. Only when a marked-name section is actually
       // present, so the ordinary load costs no second parse. PT-04: `scouting` carries the marker too, so it is checked here (MARKED_PROFILE_NAMES), not only the three dynamic names.
@@ -2265,6 +2370,30 @@ function formatLocalTimestamp(d: Date = new Date()): string {
   );
 }
 
+
+/** Write `content` to `<stem><ext>` without ever replacing an existing file.
+ *  WHY: backup names have one-second resolution, and a plain writeFileSync let a
+ *  second backup in the same second silently overwrite the first — the user's
+ *  original bytes were lost. The "wx" flag makes the create atomic (EEXIST instead
+ *  of a replace). A byte-identical existing file already restores this content, so
+ *  it is returned as is; a different one is kept and the next free `<stem>-N<ext>`
+ *  is used. Any other write error propagates. Returns the path that holds `content`. */
+export function writeBackupExclusive(stem: string, ext: string, content: Buffer): string {
+  for (let n = 0; n < 10_000; n++) {
+    const candidate = n === 0 ? `${stem}${ext}` : `${stem}-${n}${ext}`;
+    try {
+      // WHY mode at creation: the backup holds the user's settings (API keys); a later chmod leaves a window at the umask default.
+      writeFileSync(candidate, content, { flag: "wx", mode: 0o600 });
+      return candidate;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      // WHY Buffers, not utf-8 strings: decoding turns invalid bytes into U+FFFD, so two different files could compare equal and the original bytes would be lost.
+      if (readFileSync(candidate).equals(content)) return candidate;
+    }
+  }
+  throw new Error(`could not find a free backup name for ${stem}${ext} after 10000 attempts`);
+}
+
 /**
  * Ensure settings.yaml exists AND parses. Regenerates the two dynamic
  * profiles (free/paid, as unpopulated placeholders) when the file is MISSING
@@ -2307,10 +2436,9 @@ export function ensureSettingsExist(): Settings {
     // File exists but is corrupt/unparseable. Back it up BEFORE writing a
     // fresh one — never destroy data we could not read; the user's hand-
     // written profiles may still be recoverable by hand from the backup.
-    const backupPath = `${settingsPath}.corrupt-${formatLocalTimestamp()}`;
-    const raw = readFileSync(settingsPath, "utf-8");
-    writeFileSync(backupPath, raw, "utf-8");
-    try { chmodSync(backupPath, 0o600); } catch { /* Windows may not support chmod */ }
+    // WHY exclusive: a second corrupt file within the same second must not replace this backup.
+    const raw = readFileSync(settingsPath); // Buffer: utf-8 decoding would corrupt non-UTF-8 bytes in the backup
+    const backupPath = writeBackupExclusive(`${settingsPath}.corrupt-${formatLocalTimestamp()}`, "", raw);
     process.stderr.write(
       `[llm-externalizer] WARNING: ${settingsPath} could not be parsed as YAML. ` +
         `Your original file has been preserved at ${backupPath} — inspect it by ` +
@@ -3406,6 +3534,155 @@ export function validateProfile(
 }
 
 /**
+ * Every error in a raw `local_governor` section: not a mapping, an unknown key, `enabled` not a boolean, a limit not an
+ * integer in its range. Absent (undefined or null) is no error: the defaults apply. Fail fast: a typo is reported,
+ * never read as the default.
+ */
+export function localGovernorErrors(raw: unknown): string[] {
+  const known = `enabled, ${Object.keys(LOCAL_GOVERNOR_KEYS).join(", ")}`;
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== "object" || Array.isArray(raw)) return [`local_governor must be a mapping of ${known}, got ${JSON.stringify(raw)}`];
+  const errors: string[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key === "enabled") {
+      if (typeof value !== "boolean") errors.push(`local_governor.enabled must be true or false, got ${JSON.stringify(value)}`);
+      continue;
+    }
+    const spec = (LOCAL_GOVERNOR_KEYS as Record<string, { min: number; max: number }>)[key];
+    if (!spec) {
+      errors.push(`local_governor.${key} is not a known key (known: ${known})`);
+      continue;
+    }
+    // ramLimitMin: the test-only env that lowers the minimum of ram_limit_pct must reach the settings check too, or a
+    // settings.yaml limit under 50 that the resolver accepts would be refused here as malformed (review M5).
+    const min = key === "ram_limit_pct" ? ramLimitMin() : spec.min;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > spec.max) {
+      const range = spec.max === Number.MAX_SAFE_INTEGER ? `of at least ${min}` : `from ${min} to ${spec.max}`;
+      errors.push(`local_governor.${key} must be an integer ${range}, got ${JSON.stringify(value)}`);
+    }
+  }
+  return errors;
+}
+
+function appendLocalGovernorErrors(result: ValidationResult, settings: Settings): ValidationResult {
+  const errors = localGovernorErrors(settings.local_governor);
+  return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
+}
+
+/** The known keys of `local_fallback` and the kind/range of each. Names in the error text come from this
+ * table, so a key that is read but not listed here is impossible to add silently. */
+type LocalFallbackKeySpec =
+  | { kind: "boolean" }
+  | { kind: "string" }
+  | { kind: "int"; min: number; max: number };
+const LOCAL_FALLBACK_KEYS: Record<string, LocalFallbackKeySpec> = {
+  enabled: { kind: "boolean" },
+  url: { kind: "string" },
+  startTimeoutMs: { kind: "int", min: 1000, max: 900000 },
+  attemptTimeoutMs: { kind: "int", min: 1000, max: 600000 },
+  requestTimeoutMs: { kind: "int", min: 1000, max: 600000 },
+  maxAttempts: { kind: "int", min: 1, max: 100 },
+};
+/** Keys of the removed decider start path (llm-ext now only adopts the running singleton, local-decider.ts). WHY listed: they never shipped in a tag, so there is no migration, but a settings.yaml that still carries one must say it was removed, not that it is a typo. */
+const LOCAL_FALLBACK_REMOVED_KEYS: ReadonlySet<string> = new Set(["contextTokens", "minFreeMemoryGb", "maxCpuLoad"]);
+/** Loopback only, and only the two hosts this section promises. WHY a parser and not a prefix pattern:
+ * `http://127.0.0.1:57455@evil.example.com` MATCHES /^http:\/\/(127\.0\.0\.1|localhost):/ while its real host is
+ * evil.example.com (everything before `@` is userinfo, RFC 3986), and the local sender
+ * (classifiers/l0/local-transport.ts) attaches no Authorization header — a prefix test would post the state to a
+ * remote host unauthenticated. WHY here and not at send time: that same missing header is the whole risk.
+ * The parser also ACCEPTS spellings the pattern refused, all genuinely loopback: HTTP://, LOCALHOST, and the
+ * numeric/short IPv4 forms 2130706433 and 127.1, which WHATWG normalizes to 127.0.0.1. Those widenings are
+ * intended and pinned by tests, not a side effect. The port must be real: a url without one names no server to
+ * adopt, and port 0 binds an ephemeral port nothing can then reach. WHATWG drops the scheme's default port, so
+ * `http://127.0.0.1:80` parses to port "" and is refused as portless — measured. Not serving on 80 is an
+ * ASSUMPTION about the decider, not a decision anyone recorded (the refusal message names the loopback rule, not
+ * the port), so a reader who genuinely needs :80 should not read this as settled. */
+function isLoopbackDeciderUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  // WHY the bare origin only (TRDD-O93LFMF3, 7f6ac13b review): the sender builds `<url without trailing slashes>/v1/systemone`
+  // (classifiers/l0/local-transport.ts), so a path doubles the segment (`.../v1/systemone/v1/systemone`), a query swallows
+  // the appended path, and a fragment is silently dropped. Reject them here instead of sending to a wrong endpoint.
+  const bareOrigin = (parsed.pathname === "" || parsed.pathname === "/") && parsed.search === "" && parsed.hash === "";
+  return (
+    parsed.protocol === "http:" &&
+    (parsed.hostname === "127.0.0.1" || parsed.hostname === "localhost") &&
+    parsed.port !== "" &&
+    parsed.port !== "0" &&
+    bareOrigin
+  );
+}
+
+/**
+ * Every error in a raw `local_fallback` section: not a mapping, an unknown key, `enabled` not a boolean, a
+ * `url` outside loopback, a numeric key outside its range. Absent (undefined or
+ * null) is no error: the defaults apply. Fail fast — a typo is reported, never read as the default.
+ * Lives here, beside localGovernorErrors and not in classifiers/, because config.ts must not import from
+ * classifiers/ (see the DecisionsEndpoint note above); classifiers/l2/local-decider.ts re-exports it.
+ */
+export function localFallbackErrors(raw: unknown): string[] {
+  const known = Object.keys(LOCAL_FALLBACK_KEYS).join(", ");
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return [`local_fallback must be a mapping of ${known}, got ${JSON.stringify(raw)}`];
+  }
+  const errors: string[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const spec = LOCAL_FALLBACK_KEYS[key];
+    if (spec === undefined) {
+      errors.push(
+        LOCAL_FALLBACK_REMOVED_KEYS.has(key)
+          ? `local_fallback.${key} was removed: llm-ext no longer starts the mlx-decision decider, so this setting has no effect — delete it from settings.yaml (known: ${known})`
+          : `local_fallback.${key} is not a known key (known: ${known})`,
+      );
+      continue;
+    }
+    if (spec.kind === "boolean") {
+      if (typeof value !== "boolean") errors.push(`local_fallback.${key} must be true or false, got ${JSON.stringify(value)}`);
+    } else if (spec.kind === "string") {
+      if (key === "url") {
+        if (typeof value !== "string" || value === "") {
+          errors.push(`local_fallback.url must be a non-empty string, got ${JSON.stringify(value)}`);
+        } else if (!isLoopbackDeciderUrl(value)) {
+          errors.push(
+            `local_fallback.url must be http://127.0.0.1:<port> or http://localhost:<port> with no path, query or fragment (llm-ext appends /v1/systemone itself) — refused: not a loopback decider url, got ${JSON.stringify(value)}`,
+          );
+        }
+      } else if (typeof value !== "string" || value === "") {
+        errors.push(`local_fallback.${key} must be a non-empty string, got ${JSON.stringify(value)}`);
+      }
+    } else if (typeof value !== "number" || !Number.isInteger(value) || value < spec.min || value > spec.max) {
+      errors.push(`local_fallback.${key} must be an integer from ${spec.min} to ${spec.max}, got ${JSON.stringify(value)}`);
+    }
+  }
+  // Cross-field: an attempt budget above the overall deadline would kill every attempt mid-flight, since the
+  // attempt timer fires after the request timer already ended the run. Values that fail their own type/range
+  // check above are reported there, so only two numbers reach this comparison.
+  // WHY merged and not raw: a key using its default is absent from raw, so the check would not fire
+  // for the most likely misconfiguration (set one knob, not the other). Merge first, then check.
+  // The two defaults are literal because config.ts must not import classifiers/l2/local-fallback.ts (cycle);
+  // LOCAL_FALLBACK_DEFAULTS there is the same pair, so the two copies must stay in step.
+  const mergedTimeouts = { requestTimeoutMs: 400000, attemptTimeoutMs: 200000, ...(raw as { requestTimeoutMs?: number; attemptTimeoutMs?: number }) };
+  // WHY there is NO startTimeoutMs <= requestTimeoutMs check: defaults merge first, so a user who sets only
+  // requestTimeoutMs below the default startTimeoutMs (300000) would fail settings load on a key they never wrote.
+  // The outer deadline already cuts the wait for a loading decider (local-fallback.ts), so a larger startTimeoutMs is
+  // harmless: the effective wait is min(startTimeoutMs, the remaining request budget).
+  if (typeof mergedTimeouts.requestTimeoutMs === "number" && typeof mergedTimeouts.attemptTimeoutMs === "number" && mergedTimeouts.requestTimeoutMs < mergedTimeouts.attemptTimeoutMs) {
+    errors.push(`local_fallback.requestTimeoutMs (${mergedTimeouts.requestTimeoutMs}) must be >= attemptTimeoutMs (${mergedTimeouts.attemptTimeoutMs}): a per-attempt budget larger than the overall deadline kills every attempt mid-flight`);
+  }
+  return errors;
+}
+
+function appendLocalFallbackErrors(result: ValidationResult, settings: Settings): ValidationResult {
+  const errors = localFallbackErrors(settings.local_fallback);
+  return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
+}
+
+/**
  * Fold the Settings-level `paid_benchmark_daily_cap_usd` check into a
  * profile's ValidationResult. A tiny wrapper (not inlined into
  * validateSettings) so the two early-return branches in validateSettings
@@ -3471,7 +3748,7 @@ export function settingsLevelErrors(settings: Settings): string[] {
   // PT-01: E81g / E81d / E113 are settings-level too (any profile, not just the effective one).
   errors.push(...profileTypesSettingsErrors(settings));
   errors.push(...activeClassifierErrors(settings));
-  return appendCapErrors({ valid: errors.length === 0, errors }, settings).errors;
+  return appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings).errors;
 }
 
 /**
@@ -3524,8 +3801,13 @@ export function validateSettings(settings: Settings): ValidationResult {
   // own explicit-type errors already come from validateProfile, hence `skip`.
   const typeErrors = [...profileTypesSettingsErrors(settings, name), ...activeClassifierErrors(settings)];
   const result = validateProfile(name, profile);
-  return appendCapErrors(
-    typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] },
+  // Governor D13: a malformed local_governor fails the load like a malformed cap, whichever profile is effective.
+  // Local decider fallback: a malformed local_fallback does too, for the same reason (a typo is never the default).
+  return appendLocalFallbackErrors(
+    appendLocalGovernorErrors(
+      appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+      settings,
+    ),
     settings,
   );
 }

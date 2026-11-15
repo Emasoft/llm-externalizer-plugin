@@ -1,10 +1,10 @@
 ---
 trdd-id: UQ8TYKC9
 title: SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
-column: blocked
+column: testing
 status: tasked
 created: 2026-10-07T19:49:33+0200
-updated: 2026-10-10T05:03:14+0200
+updated: 2026-11-15T17:29:03+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,11 +16,11 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:49:33+0200
 implementation-commits: [189a6b44, f651b119, da2da099, cddd9d43]
-pre-block-column: dev
-blocked-by: [O4MSZIG5]
-unblock-when: [trdd:O4MSZIG5]
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md
-blocker-holds-if: exit-0
+pre-block-column: 
+blocked-by: []
+unblock-when: []
+blocker-probe: test -f design/archived/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md
+blocker-holds-if: exit-nonzero
 ---
 
 # SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
@@ -33,6 +33,7 @@ The rank (jev-mcp rerank + qs rank + claude-jev relevance, D29) decision as one 
 - 2026-10-10T03:11:47+0200 — column → todo by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T03:11:48+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T05:03:14+0200 — column → blocked by main-agent@llm-externalizer-plugin. only the live reply capture (O4MSZIG5) and the definition of done remain
+- 2026-10-31T12:12:04+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 
@@ -77,7 +78,7 @@ L2-06, L2-19
 - [x] E63: rank: candidates over 100k chars → planner splits; file chunks merged by best chunk
 - [x] E72: `rank --head`: candidate shorter than the head size → whole file sent
 - [x] golden snapshot of `build` output
-- [ ] `project` on this card's captured live reply
+- [x] `project` on this card's captured live reply
 - [x] injection placement as planned (candidates moved to state (D5)), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered
@@ -92,3 +93,5 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 
 2026-10-10 board check: stays in dev. Doable now: the partial-run cases (one failed, fatal first, budget stop, abort) through the real runPlan and the partial-failure testkit were not run for this spec in wave 8 (the testkit exists since wave 9). Still waits on the capture card TRDD-O4MSZIG5 for the live reply box.
 2026-10-10: cddd9d43 added the partial-run cases through the real planner and fan-out (testkit option failAt and limits.maxQuestionsPerRequest): one failed request, fatal first, --max-budget stop, abort. Abort contract: a request in flight at Ctrl-C that rejects is recorded 'aborted', requests not started are skipped and reported as aborted, a reply that arrives is kept. The card has no partial-run box, so none was ticked (the obligation was in its RESULT note). cddd9d43 was verified only as a pair with 6cc2a9ad and carries no rebuilt dist. Report: docs_dev/20261010-partial-run-cases-report.md. rank: a lost request invalidates only the candidate(s) it carried, with the fan-out reason; attention raised (rank.test.ts). BLOCKED on the capture card TRDD-O4MSZIG5 (pre-block-column dev). Remaining: box 'project on this card's captured live reply' (no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only) and the definition-of-done box. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
+2026-11-04: definition of done not met: WHY comments thin (rank.ts has one WHY comment, line 86; the per-file best-chunk merge and SCORE_POLICY sites carry none). The other clauses were verified met that day.
+2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.

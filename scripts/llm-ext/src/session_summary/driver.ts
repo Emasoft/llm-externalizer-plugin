@@ -388,6 +388,9 @@ export type CallModelFn = (
   prompt: string,
   modelId: string,
   maxOutputTokens: number,
+  /** Aborted when the caller no longer wants this request (the race lost): the
+   *  implementation must cancel the request at once and settle with an error. */
+  signal?: AbortSignal,
 ) => Promise<string>;
 
 export interface SummarizeSessionOptions {
@@ -399,6 +402,8 @@ export interface SummarizeSessionOptions {
   modelMaxContext: number;
   /** The selected model's completion ceiling (P3's EligibleModel.maxCompletionTokens). */
   modelMaxCompletionTokens: number;
+  /** True when `modelId` is the managed local model (EligibleModel.local, TRDD-TYHKAKCB): a local-only chain. */
+  modelLocal?: true;
   /** Ordered fallback candidates (biggest-context-first, same shape as P3's
    *  `selectModels()` output minus the primary `modelId` entry) tried, in
    *  order, when the active model becomes unavailable mid-run — delisted
@@ -837,6 +842,19 @@ class ContextOverflowError extends Error {
   }
 }
 
+/**
+ * A request cancelled by OUR OWN abort signal (a losing racer whose chunk the winner already
+ * committed — issue 19 / TRDD-3SNQAGIC). It is not a model failure: nothing may classify it,
+ * demote a model, set a cooldown or run-unusable verdict, or retry it. Only the race that
+ * aborted the request ever sees it, and that race discards it.
+ */
+class ChunkAbortedError extends Error {
+  constructor(label: string, cause?: unknown) {
+    super(`session-summary: ${label} was cancelled (its chunk is already committed by another racer)`, { cause });
+    this.name = "ChunkAbortedError";
+  }
+}
+
 /** The raw, no-side-effect result of one model call for one chunk — shared
  *  by `callChunkModel`, the ordinary (single-model) `attemptChunk` path, and
  *  the hedging race (`attemptChunkMaybeHedged`) so both a primary attempt
@@ -957,11 +975,14 @@ async function callWithRetry(
   echoCheckSource: string,
   retryTransient: boolean = false,
   sleepFn: (ms: number) => Promise<void> = sleep,
+  signal?: AbortSignal,
 ): Promise<string> {
   let lastErr: unknown = null;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // A request cancelled before it starts (or between attempts) is never sent: see the catch below.
+    if (signal?.aborted) throw new ChunkAbortedError(label);
     try {
-      const result = await callModel(prompt, modelId, maxOutputTokens);
+      const result = await callModel(prompt, modelId, maxOutputTokens, signal);
       // Runtime evidence, not metadata guessing: model-select.ts admits any
       // model with text on both sides of its modality, including ones
       // whose text output may not actually be usable (e.g. a music model
@@ -1008,6 +1029,12 @@ async function callWithRetry(
       }
       return result;
     } catch (err) {
+      // WHY this is the FIRST check in the catch (issue 19 / TRDD-3SNQAGIC): an abort here is OUR
+      // cancellation of a losing racer, never the model failing. Without this exit the abort error
+      // fell through to the "genuine failure" branch below and the cancelled request was re-sent up
+      // to maxRetries times, each retry another full-deadline request — and it could be misread as
+      // a transient/availability verdict against a healthy model. It is no verdict at all.
+      if (signal?.aborted) throw new ChunkAbortedError(label, err);
       if (err instanceof ModelUnavailableError) throw err; // no-text/echo: never retried, propagate for fallback immediately
       lastErr = err;
       // The retry clock already spent its whole window (TRDD-YG72CYY7) inside
@@ -1245,6 +1272,17 @@ function renderChunkPrompt(chunk: TranscriptChunk, totalChunks: number): string 
   return `${header}\n\n${TRANSCRIPT_DATA_MARKER}\n\n${chunkBodyText(chunk)}`;
 }
 
+/**
+ * Bytes a map prompt carries besides the transcript text: the header for the largest part numbers and both
+ * continuation notes, plus the data marker. TRDD-TYHKAKCB: local-model.ts subtracts it from the calibrated byte budget
+ * of a local model, whose budget covers the WHOLE request (local-input-budget.ts), so a chunk plus this prompt fits.
+ * WHY computed from renderChunkPrompt's own parts and not a constant: the header text is owner-specified and may change.
+ */
+export function mapPromptOverheadBytes(): number {
+  const header = chunkPromptHeader(99_999, 99_999, " (continues from the previous part; continues into the next part)");
+  return Buffer.byteLength(`${header}\n\n${TRANSCRIPT_DATA_MARKER}\n\n`, "utf8");
+}
+
 /** Deterministically join the per-chunk map summaries into the final
  *  session summary — see the module header for why this is NOT a second
  *  model call. Straight concatenation in chunk order, with a plain
@@ -1305,7 +1343,8 @@ export async function summarizeSession(
   // throw, and an automated retry loop that never converges — field report
   // ai-maestro-janitor, 2026-08-25).
   const models: EligibleModel[] = [
-    { id: options.modelId, contextLength: options.modelMaxContext, maxCompletionTokens: options.modelMaxCompletionTokens },
+    // TRDD-TYHKAKCB: the primary carries the local marker too when the chain is local-only (the remote selection failed).
+    { id: options.modelId, contextLength: options.modelMaxContext, maxCompletionTokens: options.modelMaxCompletionTokens, ...(options.modelLocal === true ? { local: true as const } : {}) },
     ...(options.fallbackModels ?? []),
   ];
 
@@ -1316,7 +1355,19 @@ export async function summarizeSession(
   // work, so a misconfigured modelId fails in milliseconds, not after
   // chunking a multi-hundred-MB transcript.
   // `true, true` = free_only forced AND billable; this path is OpenRouter-only.
-  for (const m of models) assertFreeOnlyModel(true, true, m.id);
+  // TRDD-TYHKAKCB: the managed local model (local: true, appended LAST by local-model.ts) is exempt. WHY it keeps the
+  // $0 guarantee: it runs on this machine through the broker, so it bills nothing; the gate exists to keep a paid
+  // REMOTE id out, and every remote candidate still passes it. WHY local entries must come last: fan-out, racing and
+  // the slot-replacement order below index `models` by position and assume the remote candidates form its prefix.
+  let sawLocal = false;
+  for (const m of models) {
+    if (m.local === true) {
+      sawLocal = true;
+      continue;
+    }
+    if (sawLocal) throw new Error(`session-summary: remote model '${m.id}' follows a local one; the local model must be the last candidate`);
+    assertFreeOnlyModel(true, true, m.id);
+  }
 
   let activeModelIdx = 0;
   const activeModel = (): EligibleModel => models[activeModelIdx];
@@ -1357,7 +1408,12 @@ export async function summarizeSession(
   const fanoutCandidate =
     concurrencyRequested === "auto" ||
     (typeof concurrencyRequested === "number" && concurrencyRequested > 1);
-  const fanoutK = Math.min(models.length, MAX_FANOUT_MODELS);
+  // TRDD-TYHKAKCB: local entries never join fan-out (or the single-chunk race, which uses this same set). WHY: the
+  // budget below is the MIN window across these models, so a small local window would shrink every remote chunk, and
+  // the race would send a chunk sized for remote windows to it. They are the last candidates, so the remote ones are
+  // exactly the first remoteCount entries and slot replacement (nextReplacementIdx) can still reach the local one.
+  const remoteCount = models.filter((m) => m.local !== true).length;
+  const fanoutK = Math.min(remoteCount, MAX_FANOUT_MODELS);
   const fanoutModelsInit: EligibleModel[] = models.slice(0, fanoutK);
   const fanoutMinWindowBudget =
     fanoutK > 1 ? Math.min(...fanoutModelsInit.map(windowBudgetForModel)) : 0;
@@ -1536,13 +1592,21 @@ export async function summarizeSession(
           `Checkpoint saved at ${options.checkpointPath}.`,
       );
     }
+    const hadLocal = models.some((m) => m.local === true);
     return new Error(
       `session-summary: every candidate free model is unavailable — tried ${triedIds.join(", ")}. ` +
         // Stable codes preserve every terminal slot without replaying earlier provider bodies.
         `Reasons: ${failures.map((failure) => `${failure.modelId} (${failure.reason})`).join(", ")}. ` +
-        `session-summary selects only eligible free OpenRouter models; it does not fall back to the configured backend. ` +
+        // TRDD-TYHKAKCB: the sentence is reworded only on a run whose chain held the managed local model, where "only
+        // free OpenRouter models" would be false (and under a selected local profile the local broker IS that profile);
+        // a run with no local model keeps it byte-identical (callers and driver.test.ts:872 match it with toContain).
+        (hadLocal
+          ? `session-summary tries eligible free OpenRouter models first and the managed local model last. `
+          : `session-summary selects only eligible free OpenRouter models; it does not fall back to the configured backend. `) +
         `Last failure on '${lastErr.modelId}' (${lastErr.reason}): ${lastErr.detail}.${when} ` +
-        `Checkpoint saved at ${options.checkpointPath} — re-run once a model recovers.`,
+        `Checkpoint saved at ${options.checkpointPath} — re-run once a model recovers.` +
+        // Appended at the END so no earlier span is split.
+        (hadLocal ? ` The local model was '${models[models.length - 1].id}' (served by its local broker).` : ""),
     );
   }
 
@@ -1624,6 +1688,7 @@ export async function summarizeSession(
     label: string,
     retryTransient: boolean,
     sleepFn: (ms: number) => Promise<void>,
+    signal?: AbortSignal,
   ): Promise<ChunkCallResult> {
     // A sibling worker (same-slot PER_MODEL_CONCURRENCY, or another fan-out
     // slot) may already hold a gone/daily-quota verdict for this exact model
@@ -1663,6 +1728,7 @@ export async function summarizeSession(
         chunkBodyText(chunks[i]),
         retryTransient,
         sleepFn,
+        signal,
       );
       return { kind: "ok", summary };
     } catch (err) {
@@ -1744,10 +1810,12 @@ export async function summarizeSession(
     // callChunkModel rethrows anything that is not a fallback/overflow, and an
     // unattached rejection from a loser would surface as an unhandled rejection
     // long after the winner already returned.
+    // One AbortController per racer, so the winner can cancel every OTHER racer (see the commit below).
+    const racerControllers = racers.map(() => new AbortController());
     const attempts = racers.map((model, k) =>
-      callChunkModel(0, model, `chunk 0 (race ${k + 1}/${racers.length}: ${model.id})`, true, sleep).then(
-        (result) => ({ ok: true as const, model, result }),
-        (err: unknown) => ({ ok: false as const, model, err }),
+      callChunkModel(0, model, `chunk 0 (race ${k + 1}/${racers.length}: ${model.id})`, true, sleep, racerControllers[k].signal).then(
+        (result) => ({ ok: true as const, model, k, result }),
+        (err: unknown) => ({ ok: false as const, model, k, err }),
       ),
     );
 
@@ -1760,6 +1828,16 @@ export async function summarizeSession(
           if (settled.ok && settled.result.kind === "ok") {
             decided = true;
             finishFromCallResult(0, settled.result);
+            // WHY abort the losers HERE (issue 19 / TRDD-3SNQAGIC): the chunk is committed, so every
+            // other racer's answer is worthless. Left running, each loser held its HTTP request, its
+            // body-read deadline timer and its retry backoff open until its own 600 s deadline, and
+            // the CLI (which has no exit on the success path) stayed alive that long after the
+            // summary was already on stdout — a caller waiting for exit got nothing. The commit
+            // above comes first so a loser's cancellation can never be mistaken for a failure of
+            // the chunk; the aborted losers are discarded by `decided` and by ChunkAbortedError.
+            racerControllers.forEach((c, j) => {
+              if (j !== settled.k) c.abort();
+            });
             onChunkEvent?.({
               chunkIndex: 0,
               totalChunks: 1,
@@ -1973,8 +2051,39 @@ export async function summarizeSession(
       }
       return n.promise;
     }
+    /** The abort controllers of every still-running call on a chunk (its owner's and any speculative racer's), so
+     *  the chunk's fate cancels them all — TRDD-3SNQAGIC follow-up. A slot can hold ANY model, the local one included
+     *  after a replacement (`applyFanoutTransition` takes `models[nextReplacementIdx++]`), so no call here may run on
+     *  untracked once its answer is worthless. */
+    const chunkCallControllers = new Map<number, Set<AbortController>>();
+    /** `callChunkModel` for chunk `i` with an abort signal registered under `i`; the registration is removed once the
+     *  call settles, before the returned promise settles. */
+    function trackedChunkCall(i: number, model: EligibleModel, label: string): Promise<ChunkCallResult> {
+      const ctl = new AbortController();
+      let set = chunkCallControllers.get(i);
+      if (!set) {
+        set = new Set();
+        chunkCallControllers.set(i, set);
+      }
+      const own = set;
+      own.add(ctl);
+      return callChunkModel(i, model, label, true, sleep, ctl.signal).finally(() => {
+        own.delete(ctl);
+      });
+    }
     function fireChunkSettled(i: number): void {
       chunkSettledNotifiers.get(i)?.resolve();
+      // WHY abort here (TRDD-3SNQAGIC follow-up): this fires on a commit or a supersession, after which every other
+      // call on `i` is a loser. Before, the losers ran on to their own deadline as floating calls, holding a slot's
+      // rate-bucket share and keeping the process alive after the summary was done. The resolve above runs FIRST, so a
+      // waiting owner sees "decided elsewhere" before its call rejects; the rejection is a ChunkAbortedError, which
+      // the owner and the speculative path both discard: no verdict, never a failure. The winner's own call has already
+      // settled and deregistered, so it is never in the set.
+      const set = chunkCallControllers.get(i);
+      if (set) {
+        chunkCallControllers.delete(i);
+        for (const ctl of set) ctl.abort();
+      }
     }
     /** Slots that already spent a speculative attempt on a given chunk —
      *  bounds racing to at most one attempt per (chunk, slot), so a
@@ -2194,13 +2303,8 @@ export async function summarizeSession(
       tried.add(launchSlot);
       specTried.set(i, tried);
       slotFloatCount[launchSlot]++;
-      const attempt = callChunkModel(
-        i,
-        fanoutSlots[launchSlot].model,
-        `chunk ${i} (speculative, slot ${launchSlot})`,
-        true,
-        sleep,
-      )
+      // TRDD-3SNQAGIC follow-up: tracked, so the owner's commit aborts this racer (its rejection is discarded below).
+      const attempt = trackedChunkCall(i, fanoutSlots[launchSlot].model, `chunk ${i} (speculative, slot ${launchSlot})`)
         .then(
           (result) => {
             if (result.kind === "ok") {
@@ -2250,13 +2354,8 @@ export async function summarizeSession(
             // re-split superseded it) — otherwise a racer's win would change
             // nothing about wall clock, since the map phase would still sit
             // behind this slow request via Promise.allSettled(workers).
-            const call = callChunkModel(
-              i,
-              fanoutSlots[slotIdx].model,
-              `chunk ${i} (slot ${slotIdx})`,
-              true,
-              sleep,
-            );
+            // TRDD-3SNQAGIC follow-up: tracked, so a speculative racer's commit (or a re-split) aborts this call.
+            const call = trackedChunkCall(i, fanoutSlots[slotIdx].model, `chunk ${i} (slot ${slotIdx})`);
             const raced = await Promise.race([
               call.then(
                 (result) => ({ settled: true as const, result }),
@@ -2264,7 +2363,9 @@ export async function summarizeSession(
               ),
               chunkSettledPromise(i).then(() => ({ settled: false as const })),
             ]);
-            if (!raced.settled) {
+            // An abort is only ever fired by `fireChunkSettled`, i.e. the chunk was decided elsewhere: treat the
+            // ChunkAbortedError exactly like the notifier winning the race — no verdict, never thrown as a failure.
+            if (!raced.settled || ("err" in raced && raced.err instanceof ChunkAbortedError)) {
               // Decided elsewhere. The still-outstanding request keeps its
               // rate-bucket share as a floating call (admission-counted,
               // termination-ignored) until it settles; this worker moves on.
@@ -2408,7 +2509,9 @@ export async function summarizeSession(
      *  hedging would have. */
     function raceForFirstOk(
       primary: Promise<ChunkCallResult>,
+      primaryCtl: AbortController,
       hedge: Promise<ChunkCallResult>,
+      hedgeCtl: AbortController,
     ): Promise<ChunkCallResult> {
       return new Promise<ChunkCallResult>((res, rej) => {
         let settled = false;
@@ -2418,13 +2521,20 @@ export async function summarizeSession(
         let hedgeDone = false;
         let hedgeOutcome: ChunkCallResult | undefined;
 
+        // WHY abort the loser the moment one side wins (TRDD-3SNQAGIC follow-up, same reason as raceSingleChunk):
+        // the loser's answer is worthless once the winner's text resolves this race, yet left running it held its
+        // HTTP request, deadline timer and retry backoff open (up to the 600 s chunk deadline), keeping the CLI alive
+        // after the summary was done. The aborted side settles with ChunkAbortedError AFTER `settled` is true, so
+        // `finish` ignores it: it is no verdict, never a failure of the chunk or of its model.
         const finish = () => {
           if (settled) return;
           if (primaryDone && primaryOutcome?.kind === "ok") {
             settled = true;
+            hedgeCtl.abort();
             res(primaryOutcome);
           } else if (hedgeDone && hedgeOutcome?.kind === "ok") {
             settled = true;
+            primaryCtl.abort();
             res(hedgeOutcome);
           } else if (primaryDone && hedgeDone) {
             settled = true;
@@ -2455,12 +2565,17 @@ export async function summarizeSession(
      *  loser's text, whichever side it is, is discarded without ever
      *  touching the checkpoint). */
     async function attemptChunkMaybeHedged(i: number): Promise<ChunkAttemptOutcome> {
-      const primary = callChunkModel(i, activeModel(), `chunk ${i}`, true, sleep);
+      // TRDD-3SNQAGIC follow-up: the primary carries its own signal so a winning hedge can cancel it. Unused when no
+      // hedge launches: nothing else ever aborts it.
+      const primaryCtl = new AbortController();
+      const primary = callChunkModel(i, activeModel(), `chunk ${i}`, true, sleep, primaryCtl.signal);
 
       // Never hedge a chunk that already had (or is ineligible for) one —
       // no fallback candidate beyond the active model, hedging disabled, or
       // this chunk already spent its one hedge (HARD CONSTRAINT: one max).
-      if (!hedgeEnabled || hedgedOnce.has(i) || activeModelIdx + 1 >= models.length) {
+      // TRDD-TYHKAKCB: never hedge onto the local model: this chunk was sized for the active (remote) window, and the
+      // local one is reached only through a fallback switch, which re-chunks to its window first.
+      if (!hedgeEnabled || hedgedOnce.has(i) || activeModelIdx + 1 >= models.length || models[activeModelIdx + 1].local === true) {
         return finishFromCallResult(i, await primary);
       }
 
@@ -2493,11 +2608,13 @@ export async function summarizeSession(
       hedgedOnce.add(i); // spend this chunk's one hedge, win or lose
       const hedgeModel = models[activeModelIdx + 1];
       hedgeInFlight++;
-      const hedge = callChunkModel(i, hedgeModel, `chunk ${i} (hedge)`, true, sleep).finally(() => {
+      // TRDD-3SNQAGIC follow-up: the hedge carries its own signal so the race can cancel it when the primary wins.
+      const hedgeCtl = new AbortController();
+      const hedge = callChunkModel(i, hedgeModel, `chunk ${i} (hedge)`, true, sleep, hedgeCtl.signal).finally(() => {
         hedgeInFlight--;
       });
 
-      return finishFromCallResult(i, await raceForFirstOk(primary, hedge));
+      return finishFromCallResult(i, await raceForFirstOk(primary, primaryCtl, hedge, hedgeCtl));
     }
 
     async function worker(workerIdx: number): Promise<void> {

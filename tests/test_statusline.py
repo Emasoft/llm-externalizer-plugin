@@ -909,10 +909,25 @@ def test_statusline_tier4_seven_day_only_has_calendar_line(tmp_path: Path) -> No
     assert any(line.startswith("📅") for line in out.split("\n")), f"no 📅 line in: {out!r}"
 
 
+# A 60-char model name makes the unsplit line wider than 80 columns on every machine. statusline.py splits
+# only when the visible width exceeds `cols`, and a CI runner has no CLI version or long path, so the bare
+# envelope fits in 80 columns and correctly stays one line there.
+_WIDE_ENV = {**_ENV_BASE, "model": {"display_name": "opus-" + "m" * 60}}
+
+
+def _assert_wider_than_80(rate_limits: dict, tmp_path: Path) -> None:
+    """Guard the premise: the same envelope, unsplit, is wider than the tier-3 `cols` the test uses."""
+    unsplit = _run_statusline({**_WIDE_ENV, "rate_limits": rate_limits}, tmp_path, cols=999)
+    assert "\n" not in unsplit, f"cols=999 must stay one line: {unsplit!r}"
+    width = _load_statusline_module()._visible_width(unsplit)
+    assert width > 80, f"premise failed: the line is only {width} wide, it fits in 80 columns and is never split"
+
+
 def test_statusline_tier3_spend_only_keeps_own_line(tmp_path: Path) -> None:
     """At tier-3 width with only spend_limit, the last line starts with the card emoji."""
-    envelope = {**_ENV_BASE, "rate_limits": {"spend_limit": {"used_usd": 12.5, "limit_usd": 100.0, "period": "monthly"}}}
-    out = _run_statusline(envelope, tmp_path, cols=80)
+    rate_limits = {"spend_limit": {"used_usd": 12.5, "limit_usd": 100.0, "period": "monthly"}}
+    _assert_wider_than_80(rate_limits, tmp_path)
+    out = _run_statusline({**_WIDE_ENV, "rate_limits": rate_limits}, tmp_path, cols=80)
     lines = out.split("\n")
     assert len(lines) == 3 and lines[-1].startswith("💳"), f"spend row lost its own line: {out!r}"
 
@@ -925,7 +940,9 @@ def test_statusline_omits_7d_when_only_five_hour(tmp_path: Path) -> None:
 
 def test_statusline_tier3_seven_day_only_gets_own_line(tmp_path: Path) -> None:
     """At tier-3 width with only seven_day, the last line starts with the calendar emoji."""
-    out = _run_statusline({**_ENV_BASE, "rate_limits": {"seven_day": {"used_percentage": 5.0}}}, tmp_path, cols=80)
+    rate_limits = {"seven_day": {"used_percentage": 5.0}}
+    _assert_wider_than_80(rate_limits, tmp_path)
+    out = _run_statusline({**_WIDE_ENV, "rate_limits": rate_limits}, tmp_path, cols=80)
     lines = out.split("\n")
     assert len(lines) == 3, f"expected 3 lines at 80 cols: {out!r}"
     assert lines[-1].startswith("📅"), f"last line should start with 📅: {out!r}"

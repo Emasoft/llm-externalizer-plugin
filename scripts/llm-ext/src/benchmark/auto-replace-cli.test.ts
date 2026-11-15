@@ -115,7 +115,9 @@ describe("benchmark CLI — --auto-replace / --apply (TRDD-828238b5 A7-P3)", () 
     // row99c SF6: routed through defaultOutputDir() (project-root.ts), which
     // nests under <project>/reports/llm-externalizer/ — the ONLY USER-approved
     // report root — instead of the old <project>/reports/auto-replace/.
-    const reportDir = join(root, "reports", "llm-externalizer", "auto-replace");
+    // TRDD-PNU8XECB: auto-replace output is model-pool tool configuration, so it now
+    // lands in the gitignored <project>/reports_dev/llm-externalizer/ scratch root.
+    const reportDir = join(root, "reports_dev", "llm-externalizer", "auto-replace");
     const reports = readdirSync(reportDir).filter((f) => f.endsWith("-auto-replace.md"));
     expect(reports.length).toBe(1);
     const md = readFileSync(join(reportDir, reports[0]!), "utf-8");

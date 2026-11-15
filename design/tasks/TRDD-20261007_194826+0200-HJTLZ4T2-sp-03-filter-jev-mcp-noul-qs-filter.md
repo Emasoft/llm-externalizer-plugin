@@ -4,7 +4,7 @@ title: SP-03 filter (jev-mcp noul + qs filter)
 column: blocked
 status: tasked
 created: 2026-10-07T19:48:26+0200
-updated: 2026-10-10T08:27:27+0200
+updated: 2026-11-04T10:15:37+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,10 +16,10 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:48:26+0200
 implementation-commits: [189a6b44, f651b119, da2da099]
-blocked-by: [O4MSZIG5, XHHH0N1E, LWDKZO2A]
-unblock-when: [trdd:O4MSZIG5, trdd:XHHH0N1E, trdd:LWDKZO2A]
+blocked-by: [XHHH0N1E, LWDKZO2A]
+unblock-when: [trdd:XHHH0N1E, trdd:LWDKZO2A]
 pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_082128+0200-XHHH0N1E-in-01-shared-input-modes-through-collectinputs-filter-rank-f.md -o -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_082309+0200-LWDKZO2A-in-07-text-output-json-and-the-filter-flags-no-collapse-save.md
+blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082128+0200-XHHH0N1E-in-01-shared-input-modes-through-collectinputs-filter-rank-f.md -o -f design/tasks/TRDD-20261010_082309+0200-LWDKZO2A-in-07-text-output-json-and-the-filter-flags-no-collapse-save.md
 blocker-holds-if: exit-0
 ---
 
@@ -78,7 +78,7 @@ L2-10 policy kit, L2-19, L2-06 input rules
 - [x] E57: filter: thresholds breaking `p + auto ≤ 1` → thresholds refused
 - [x] E128: `filter`: p between threshold and threshold + band → listed in both matched and borderline, as qs does; receipt counts p ≥ threshold
 - [x] golden snapshot of `build` output
-- [ ] `project` on this card's captured live reply
+- [x] `project` on this card's captured live reply
 - [x] injection placement as planned (question/proposition in instructions), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered

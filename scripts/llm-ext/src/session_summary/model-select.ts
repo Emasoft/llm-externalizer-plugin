@@ -69,6 +69,10 @@ export interface EligibleModel {
   id: string;
   contextLength: number;
   maxCompletionTokens: number;
+  /** True only for the managed local model session_summary/local-model.ts appends LAST (TRDD-TYHKAKCB). WHY an
+   *  explicit marker and never the id shape: the driver exempts it from the ":free" cost gate and keeps it out of
+   *  fan-out, racing and hedging, and a marker set by one module cannot be forged by a catalog id. */
+  local?: true;
 }
 
 export interface SelectModelsOptions {

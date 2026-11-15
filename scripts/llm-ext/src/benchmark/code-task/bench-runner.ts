@@ -32,9 +32,10 @@
  * FAIL-SAFE POSTURE (same as the other two runners): a model/API failure never
  * aborts the sweep. A case whose pipeline returns isError is recorded as a
  * failure and scored with an EMPTY accused set (its defects become false
- * negatives), so a degraded model simply scores poorly instead of throwing. The
- * scorer's `maxFailedCases` ceiling then stops a badly-degraded run from passing
- * on the strength of the cases that did survive.
+ * negatives) in the raw aggregate, so the report shows the degraded run. The
+ * stored quality verdict (quality-evidence.ts, TRDD-90BXJ2KO) is computed over
+ * the answered cases only, and a run with over a quarter of its cases failed
+ * abstains instead of storing a fail.
  */
 
 import { realFetch } from "../../security_scan/openrouter.js";

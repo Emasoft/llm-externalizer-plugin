@@ -122,7 +122,7 @@ Auth fields accept either:
 - **`$ENV_VAR_NAME`** — resolved from process environment at runtime
 - **`"direct-value"`** — used as-is
 
-Default env vars are set by the API preset. If `discover` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the shell/process environment `llm-ext` runs in — check the plugin keychain or your exported env vars.
+Default env vars are set by the API preset. If `settings status` shows the token is resolved, auth is working. If it shows `(NOT SET)`, the env var is missing from the shell/process environment `llm-ext` runs in — check the plugin keychain or your exported env vars.
 
 ## Manual Edit Workflow
 
@@ -155,15 +155,15 @@ profiles:
 
 **Step 3** — Save the file.
 
-**Step 4** — Reload. Either restart Claude Code, or run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` to reload without restarting.
+**Step 4** — Reload. Either restart Claude Code, or run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" settings reset` to reload without restarting.
 
-**Step 5** — Verify with `discover`.
+**Step 5** — Verify with `settings status`.
 
 **CRITICAL**: The file on disk IS the source of truth. Every profile you want to keep must appear in the file — a missing profile is a deleted profile after reload.
 
 ## Validation Rules
 
-Validation runs at load time — on any `llm-ext` command, and again after `reset`. If validation fails, the error is written to stderr and the affected profile becomes unusable. Rules:
+Validation runs at load time — on any `llm-ext` command, and again after `settings reset`. If validation fails, the error is written to stderr and the affected profile becomes unusable. Rules:
 
 - `mode` must be `local`, `remote`, or `remote-ensemble`
 - `api` must be a valid preset name
@@ -185,7 +185,7 @@ Validation runs at load time — on any `llm-ext` command, and again after `rese
   profile-level `api`); use `generic-local` with an explicit `url` instead
 - `generic-local` requires an explicit `url`, as a binding and as `api`
 
-To recover: edit the file to fix the issue, save, and run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` (or restart Claude Code).
+To recover: edit the file to fix the issue, save, and run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" settings reset` (or restart Claude Code).
 
 ## Ensemble Mode
 
@@ -203,7 +203,7 @@ On OpenRouter with `remote-ensemble` mode, read-only content tools run on three 
 | `LM_API_TOKEN` | LM Studio / generic-local auth token |
 | `VLLM_API_KEY` | vLLM auth token |
 | `LLM_EXT_CONFIG_DIR` | Override settings directory (default: `~/.llm-externalizer`); also relocates the benchmark markdown reports under `<cfg>/reports/benchmark/`, alongside the JSON sidecar, lock, ledger, state and backups that already live there |
-| `LLM_EXT_OUTPUT_DIR` | Override output directory (default: `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim — never git) |
+| `LLM_EXT_OUTPUT_DIR` | Override output directory (default: `<main-project-dir>/reports/llm-externalizer/`, anchored on `$CLAUDE_PROJECT_DIR` verbatim — never git); intermediate output follows it too unless `LLM_EXT_SCRATCH_DIR` is set (default `<main-project-dir>/reports_dev/llm-externalizer/`, TRDD-PNU8XECB) |
 | `LLM_EXT_INSTALL_RULE` | Set to `0` to opt out of the auto-install of the `use-llm-externalizer` rule into `~/.claude/rules/` |
 | `LLM_EXT_CATALOG_TTL_MS` | How long the OpenRouter catalog snapshot is trusted before the `free`/`paid` maintainer re-checks it (default `600000` = 10 min) |
 | `LLM_EXT_DISABLE_AUTO_RECONCILE` | Set to `1` to turn off ALL dynamic maintenance of the `free`/`paid` profiles (no availability/price re-checks, no background benchmarking) |
@@ -296,9 +296,9 @@ refuses every command until you delete the top-level key by hand.
 
 | Symptom | Cause | Fix |
 |---------|-------|-----|
-| `discover` shows `(NOT SET)` for auth token | Env var missing from the process environment `llm-ext` runs in | Export the env var in your shell (or set it in the plugin keychain), then re-run |
+| `settings status` shows `(NOT SET)` for auth token | Env var missing from the process environment `llm-ext` runs in | Export the env var in your shell (or set it in the plugin keychain), then re-run |
 | Connection refused to local server | LM Studio / Ollama not running | Start the local server, verify URL and port |
 | Validation error on reload | Invalid profile config | Check validation rules above; ensure mode/api preset match |
 | Ensemble returns only one model's results | File exceeds size limit for one model | Normal behavior — grok limit is 20K lines, qwen 40K lines, gemini 50K lines |
-| Tools return "not configured" | `--profile <name>` names a profile missing from settings.yaml, or settings.yaml itself is missing | Open `~/.llm-externalizer/settings.yaml`, confirm the profile exists under `profiles:` (or drop `--profile` to use the built-in `free` profile), save, run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" reset` |
+| Tools return "not configured" | `--profile <name>` names a profile missing from settings.yaml, or settings.yaml itself is missing | Open `~/.llm-externalizer/settings.yaml`, confirm the profile exists under `profiles:` (or drop `--profile` to use the built-in `free` profile), save, run `"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" settings reset` |
 | No command exists to write `settings.yaml` | Expected — model & profile config is user-only | Edit `~/.llm-externalizer/settings.yaml` manually instead |

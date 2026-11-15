@@ -170,6 +170,10 @@ describe("synthetic: after the window the file fails with the rate-limit cause",
     );
     expect(err).toBeInstanceOf(AllFreeModelsExhaustedError);
     expect(requestCount()).toBe(1);
+    // S8CS3RRF: the error still names the rate limit and carries the earliest retry time.
+    const exhausted = err as AllFreeModelsExhaustedError;
+    expect(exhausted.message).toMatch(/429/);
+    expect(exhausted.earliestResetMs).toBeGreaterThan(Date.now() + 60_000);
   }, 60_000);
 });
 

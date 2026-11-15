@@ -83,7 +83,8 @@ describe("built-in local profiles: added once (P5)", () => {
     expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}local_llama`)).toBe(true);
     const p = profiles();
     expect(p.local_llama).toEqual({ "profile-type": "local", mode: "local", api: "llamacpp-local", url: "http://127.0.0.1:8181", server: "managed", model: "org/repo:Q4_K_M" });
-    if (!ON_APPLE_SILICON) expect(readFileSync(getSettingsPath(), "utf-8")).toBe(own);
+    // Other migration steps may add sections elsewhere in the file, so compare the user's own block, not the whole file.
+    expect(readFileSync(getSettingsPath(), "utf-8")).toContain(own.slice(own.indexOf("  # my llama")));
   });
 
   it("a deleted profile stays deleted: the step never adds it again", () => {

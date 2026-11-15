@@ -9,27 +9,27 @@
 ## Symptom flowchart
 
 ```
-Something went wrong with mass-scout. Where?
+Something went wrong with scout run. Where?
 
-├── mass-scout-register said registered=0
+├── scout register said registered=0
 │   ├── --folder_path empty / wrong? → verify with `ls`
 │   ├── all files filtered by .gitignore? → re-run with --no_gitignore
 │   └── all files > register cap? → check --extensions; raise --max_context_pct_register
 │
-├── mass-scout-preclassify shows everything as 'unknown'
+├── scout preclassify shows everything as 'unknown'
 │   └── files have no recognised extension and no shebang
 │       → that's expected; scout still processes them with
 │         --bucket sourcecode (or no bucket filter at all)
 │
-├── mass-scout-estimate shows budget_allowed=false
+├── scout estimate shows budget_allowed=false
 │   ├── too many files → narrow --bucket or filter the source tree
 │   ├── files too big → lower --max_context_pct_scout
 │   └── budget too low → raise --budget_usd
 │
-├── mass-scout returns files_failed > 0
+├── scout run returns files_failed > 0
 │   ├── HTTP 400 context length exceeded? → --live_context to find
 │   │   the real cap, then lower --max_context_pct_scout to fit
-│   ├── all retries exhausted? → run mass-scout-audit-sample on the
+│   ├── all retries exhausted? → run scout audit-sample on the
 │   │   failing short_ids to see what the LLM returned; check
 │   │   `mass_scout_skipped` table for the recorded error
 │   └── circuit_tripped=true → too many consecutive failures.
@@ -37,16 +37,16 @@ Something went wrong with mass-scout. Where?
 │       or simplify the fieldset (drop array_object fields first).
 │
 ├── scout result_json doesn't match what I expected
-│   ├── mass-scout-audit-sample to see the raw responses
+│   ├── scout audit-sample to see the raw responses
 │   ├── verify the field descriptions are unambiguous
 │   ├── the LLM picks weird enum values? → tighten enum to fewer values
-│   └── re-run with mass-scout-chain on a small subset + a refined
-│       fieldset, compare with mass-scout-diff
+│   └── re-run with scout chain on a small subset + a refined
+│       fieldset, compare with scout diff
 │
-└── mass-scout-search returns nothing
+└── scout search returns nothing
     ├── --query is FTS5 syntax, not regex (use OR/AND/NEAR)
     ├── --filter uses '$.path:OP:value' (e.g. '$.is_async:=:true')
-    └── try `mass-scout-get` to confirm the row exists, then refine the filter
+    └── try `scout get` to confirm the row exists, then refine the filter
 ```
 
 ## Failure modes
@@ -67,7 +67,7 @@ Something went wrong with mass-scout. Where?
 
 ## Resume
 
-Re-running `mass-scout` with the same `--job_id` skips files that already
+Re-running `scout run` with the same `--job_id` skips files that already
 have a result row. Combined with the scout cap + skipped-file logging, you
 can iteratively fix oversize files (split them, reduce them) and re-run
 until every eligible file is scouted.

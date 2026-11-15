@@ -7,7 +7,8 @@
  * no ProviderDeps and imports NOTHING from index.ts.
  */
 
-import { CommandStoppedError, commandStopReason } from "../command-stop.js";
+import { CommandStoppedError, commandStopReason, isStopOnErrors, STOP_ON_ERRORS_EXIT, stopCommand, stoppableSleep } from "../command-stop.js";
+import { errorStatusOfText, paymentErrorCertainty } from "../benchmark/free-mode.js";
 
 export const CONNECT_TIMEOUT_MS = 5000;
 
@@ -54,16 +55,25 @@ export async function fetchWithTimeout(
 ): Promise<Response> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // A caller-supplied signal (issue 19 / TRDD-3SNQAGIC: a losing session-summary racer is cancelled
+  // by its winner) is COMPOSED with the timeout controller, never replaced by it: spreading
+  // `...options` and then setting `signal` would silently drop the caller's abort. When it fires
+  // the timer is disarmed at once — the body-read error path is not guaranteed to reach the
+  // tap's flush/cancel, and an armed 600 s timer is exactly what held the process open.
+  const external = options.signal ?? undefined;
   let disarmed = false;
   const disarm = () => {
     if (disarmed) return;
     disarmed = true;
     clearTimeout(timer);
+    external?.removeEventListener("abort", disarm);
   };
+  external?.addEventListener("abort", disarm, { once: true });
+  const signal = external ? AbortSignal.any([controller.signal, external]) : controller.signal;
 
   let res: Response;
   try {
-    res = await fetch(url, { ...options, signal: controller.signal });
+    res = await fetch(url, { ...options, signal });
   } catch (err) {
     // Never leak the timer when the request fails outright.
     disarm();
@@ -269,6 +279,9 @@ export function failureText(err: unknown): string {
   return source instanceof Error ? source.message : String(source);
 }
 
+/** Runs one attempt (`fetchOnce`) under whatever it guards, reporting the time it waited before the attempt through `waited`. */
+export type AttemptGate = (fetchOnce: () => Promise<Response>, waited: (ms: number) => void) => Promise<Response>;
+
 export async function fetchWithRetry429(
   url: string,
   fetchOpts: RequestInit,
@@ -287,6 +300,11 @@ export async function fetchWithRetry429(
   // Retry clock (TRDD-YG72CYY7 inc 1): gates the START of the next attempt or
   // wait only; a request already in flight is never aborted by it.
   clock?: RetryClock,
+  // Run around each single attempt, never around the retries: the local inference governor's lease (governor/direct.ts,
+  // design D9). WHY per attempt: a lease held across a backoff holds a slot while the server computes nothing, and
+  // outlives the one request its expiry was sized for. `waited` moves this call's start forward, so the wait does not
+  // use up `timeout`.
+  gate?: AttemptGate,
 ): Promise<Response> {
   let lastRes: Response | undefined;
   // Capture the error body text before draining it (the body stream is
@@ -313,6 +331,8 @@ export async function fetchWithRetry429(
   for (let attempt = 0; attempt <= RETRY_MAX_ATTEMPTS; attempt++) {
     // Follow-up review M3: a stopped command starts no new request (no first attempt, no retry), remote included.
     throwIfStopped();
+    // The caller cancelled this call (see the catch below): start no new attempt.
+    if (fetchOpts.signal?.aborted) throw fetchOpts.signal.reason;
     const elapsed = Date.now() - startTime;
     const remaining = timeout - elapsed;
 
@@ -333,7 +353,12 @@ export async function fetchWithRetry429(
 
     try {
       if (clock) clock.attempts = (clock.attempts ?? 0) + 1;
-      lastRes = await fetchWithTimeout(url, fetchOpts, Math.max(remaining, 1000));
+      const fetchOnce = (): Promise<Response> => fetchWithTimeout(url, fetchOpts, Math.max(remaining, 1000));
+      lastRes = gate
+        ? await gate(fetchOnce, (ms) => {
+            startTime += ms;
+          })
+        : await fetchOnce();
       newestNetworkError = undefined;
       if (clock) {
         // Status and provider describe the NEWEST attempt only; the provider is
@@ -342,6 +367,10 @@ export async function fetchWithRetry429(
         clock.lastProvider = undefined;
       }
     } catch (err) {
+      // A caller-cancelled request (fetchOpts.signal, issue 19 / TRDD-3SNQAGIC) is not a network failure:
+      // without this exit the AbortError was classified, tallied, logged as "[http-retry] Network error"
+      // and RETRIED, restarting the very request the caller had just cancelled.
+      if (fetchOpts.signal?.aborted) throw err;
       // A network failure is the NEWEST outcome: forget the status of the
       // previous attempt, or the final error's trail would claim "last status
       // 429" for a call that actually ended in ECONNRESET (and a message-based
@@ -388,7 +417,7 @@ export async function fetchWithRetry429(
         `[http-retry] Network error (attempt ${attempt + 1}/${RETRY_MAX_ATTEMPTS + 1}), ` +
         `retrying in ${(backoff / 1000).toFixed(1)}s: ${err instanceof Error ? err.message : String(err)}\n`,
       );
-      await new Promise((r) => setTimeout(r, backoff));
+      await stoppableSleep(backoff, fetchOpts.signal ?? undefined); // WHY: a stop ends the wait at once; the next attempt start throws it
       if (givesBack) {
         freeSteps++;
         attempt--; // the loop increment gives this attempt back
@@ -483,7 +512,7 @@ export async function fetchWithRetry429(
       );
     }
 
-    await new Promise((r) => setTimeout(r, backoff));
+    await stoppableSleep(backoff, fetchOpts.signal ?? undefined); // WHY: a stop ends the wait at once; the next attempt start throws it
   }
 
   // All retries exhausted — return a re-wrapped Response so the caller's
@@ -593,6 +622,38 @@ export function throwIfStopped(): void {
   if (why !== null) throw stoppedError(why);
 }
 
+/**
+ * Whether a model failure is one --stop_on_errors acts on: the model is not found (404, 410), gives no response (any
+ * network code, a local timeout included), fails server-side (5xx), or is out of credit (402). A per-file input error (413),
+ * a rate limit (429), a deliberate refusal (the IRON RULE) and a breaker verdict carry no such status and do not stop the
+ * command. Read from the typed failure fields when the failure is an Error; only a failure VALUE (a text, as the free
+ * rotation receives it) is read by its status text. `endpointDead` is the caller's own typed verdict (a broker job error).
+ */
+function isStopWorthyFailure(failure: unknown, endpointDead: boolean): boolean {
+  if (endpointDead) return true;
+  const text = typeof failure === "string" ? failure : failureText(failure);
+  const typed = typeof failure === "string" ? undefined : failureOf(failure);
+  if (typed?.networkCode !== undefined) return true;
+  const status = typed?.status ?? errorStatusOfText(text);
+  if (status !== undefined) return status === 404 || status === 410 || status === 402 || status >= 500;
+  return paymentErrorCertainty(text) === "certain";
+}
+
+/**
+ * --stop_on_errors (TRDD-SWNIIFTF): called where a model failure would start a fallback (the profile-chain walk, the
+ * free-pool rotation, an ensemble slot). With the flag set and a failure of the kind above it stops the command with the
+ * model and the cause, and throws that stop, so the caller does not try the next model. Otherwise it does nothing. WHY a stop
+ * and not a plain error: the command keeps the finished per-file results and its summary, exactly like --command_timeout,
+ * through the one stop state.
+ */
+export function stopIfStopOnErrors(model: string, failure: unknown, endpointDead = false): void {
+  if (!isStopOnErrors() || !isStopWorthyFailure(failure, endpointDead)) return;
+  const text = typeof failure === "string" ? failure : failureText(failure);
+  const why = `--stop_on_errors: model '${model}' failed: ${text.split("\n")[0].slice(0, 300)}`;
+  stopCommand(why, STOP_ON_ERRORS_EXIT, "--stop_on_errors");
+  throw stoppedError(commandStopReason() ?? why);
+}
+
 /** The fields attached to `err`, or to a RetryDeadlineError's cause. */
 export function failureOf(err: unknown): FailureFields | undefined {
   const source = err instanceof RetryDeadlineError ? err.cause : err;
@@ -677,6 +738,30 @@ export function networkCodeOf(err: unknown, url: string): string | undefined {
   }
   return walkNetworkCode(err, 0, isOpenRouterHost(hostOf(url)));
 }
+
+
+/** Network error codes that mean "the provider could not be reached or did not answer in time" (networkCodeOf above). */
+export const OUTAGE_NETWORK_CODES: ReadonlySet<string> = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "ETIMEDOUT-LOCAL",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+]);
+
+/**
+ * The codes that mean "this machine has no usable network path to the provider" (TRDD-3CG178O7). Derived from
+ * OUTAGE_NETWORK_CODES so the two cannot drift. WHY ETIMEDOUT-LOCAL is excluded: it is the request own timeout abort, so a
+ * slow model on a big prompt produces it with a perfectly healthy network; it still counts as an outage observation
+ * (a 5xx-style signal needing 2 models and a failing probe) but never as isolation on its own.
+ */
+export const NETWORK_ISOLATION_CODES: ReadonlySet<string> = new Set(
+  [...OUTAGE_NETWORK_CODES].filter((code) => code !== "ETIMEDOUT-LOCAL"),
+);
 
 export function hostOf(url: string): string {
   return URL.canParse(url) ? new URL(url).hostname : "";

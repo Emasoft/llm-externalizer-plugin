@@ -4,7 +4,7 @@ title: C4-09 -o and --strict-exit wiring
 column: backburner
 status: tasked
 created: 2026-10-07T20:00:34+0200
-updated: 2026-10-07T20:00:36+0200
+updated: 2026-10-31T17:19:30+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -50,9 +50,9 @@ To be listed at card start.
 
 ## Acceptance
 
-- [ ] `-o` saves the same JSON as stdout as a `.json` report
-- [ ] `--strict-exit` exits non-zero when the spec's attention predicate holds
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] `-o` saves the same JSON as stdout as a `.json` report - evidence: run-decision.ts:165,192,452; run-decision.test.ts:457 (-o equals stdout)
+- [x] `--strict-exit` exits non-zero when the spec's attention predicate holds - evidence: run-decision.test.ts:457 (exit follows --strict-exit); classify-launch.test.ts:186
+- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules - OPEN: full npm test is run at the 14.3.0 release gate; not ticked now
 
 ## Out of scope
 

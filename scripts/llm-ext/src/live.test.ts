@@ -8,7 +8,7 @@
  * Skip with: npx vitest run --exclude src/live.test.ts
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, beforeAll } from 'vitest';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
 import { resolveTestConfig, runCli } from './test-helpers';
@@ -29,7 +29,13 @@ const LIVE =
 
 // requireLiveBackend opts into the user's configured backend (the cost-safety
 // default is a local, unreachable one). timeout: 300s for reasoning models.
-const testConfig = resolveTestConfig({ testName: 'live', timeout: 300, requireLiveBackend: true });
+if (!LIVE) console.warn('[live] skipped: set LIVE_TESTS=1 and OPENROUTER_API_KEY to run the paid live tests');
+// WHY lazy: resolving a live-backend config at module level fails validation under the hermetic test config, so a
+// suite without the opt-in would die at collection instead of skipping.
+let testConfig: ReturnType<typeof resolveTestConfig>;
+beforeAll(() => {
+  if (LIVE) testConfig = resolveTestConfig({ testName: 'live', timeout: 300, requireLiveBackend: true });
+});
 
 /**
  * Parse `[llm-externalizer] progress N/M (X%) — message` lines the CLI

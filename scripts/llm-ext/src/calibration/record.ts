@@ -14,7 +14,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, wr
 import { totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import type { BrokerEngine } from "../broker/protocol.js";
-import { timingsFromEnv } from "../broker/scheduler.js";
+import { freeFloorPct } from "../governor/settings.js";
 
 /**
  * Bumped when the calibration method changes, and whenever PRODUCTION_HARNESS
@@ -37,7 +37,11 @@ import { timingsFromEnv } from "../broker/scheduler.js";
 // verdicts (coordinator decisions 2026-10-29, rules 1 and 2): the status "memory-limited" and the optional
 // `memory_judged` of a calibration-failed record, both additive under RECORD_SCHEMA 2. No further bump: version 5 was
 // never released before them, so no version-5 record of the older shape exists outside a development tree.
-export const HARNESS_VERSION = 5;
+// 6 (governor unit 4, round 4 #8): Phase C records `load_estimate` (the weight bytes and the KV bytes per token a load
+// is projected from), now required on an ok record, and every memory verdict was judged on the old RAM reading (free
+// pages; the governor reads used = anonymous + wired + compressed pages, D4). A version-5 record has neither, so every
+// version-5 record and progress (14.2.0) is redone once.
+export const HARNESS_VERSION = 6;
 /**
  * The `harness` id of a record made with the production harness (D4, main-agent
  * decision 2026-10-29). A custom LLM_EXT_CALIBRATION_HARNESS writes
@@ -149,6 +153,14 @@ export interface CalibrationRecord {
    */
   scouting_unfit_reason?: string;
   speed?: { prefill_tps: number; decode_tps: number; aggregate_tps: number; load_avg: number };
+  /**
+   * What a load of this model needs (local-inference-governor-design.md D11): the weight files and the KV cache per
+   * token of context, f16, a sliding-window layer counted as full attention (a linear upper bound, the safe side). The
+   * broker projects a main server from it before the load is granted. Required on an ok record (round 4 #8, harness
+   * version 6), absent on a failed one; an ok record without it fails the schema, so it is read as missing and the
+   * model is calibrated again.
+   */
+  load_estimate?: { weight_bytes: number; kv_bytes_per_token: number };
 }
 
 /** `<slug>`: the model id made filename-safe, plus 8 hex digits of its sha256, so two ids that sanitize alike never share a record. */
@@ -237,6 +249,8 @@ export function recordSchemaErrors(raw: unknown): string[] {
   need(sr === undefined || (isStr(sr) && sr !== "" && Array.isArray(sc) && sc.length === 0), "scouting_unfit_reason");
   const sp = raw.speed;
   need(isObj(sp) && ["prefill_tps", "decode_tps", "aggregate_tps", "load_avg"].every((k) => isNonNeg(sp[k])), "speed");
+  const le = raw.load_estimate;
+  need(isObj(le) && isNonNeg(le.weight_bytes) && isNonNeg(le.kv_bytes_per_token), "load_estimate {weight_bytes, kv_bytes_per_token}");
   return e;
 }
 
@@ -285,6 +299,10 @@ export function okRecordFrom(base: RecordBase, trials: ReadonlyArray<{ step: str
   const b = of("B/summary");
   const c = of("C/summary");
   const n = (v: unknown): number => Number(v);
+  const req = (v: unknown, what: string): number => {
+    if (v === undefined) throw new Error(`cannot write the calibration record: no ${what}`);
+    return n(v);
+  };
   const off = b.thinking_off_mode;
   const reasons = typeof b.unfit_reasons === "string" ? (JSON.parse(b.unfit_reasons) as Partial<Record<TaskKind, string>>) : {};
   return {
@@ -306,6 +324,9 @@ export function okRecordFrom(base: RecordBase, trials: ReadonlyArray<{ step: str
     scouting_candidates: JSON.parse(String(c.scout_candidates)) as ScoutCandidate[],
     ...(typeof c.scouting_unfit_reason === "string" ? { scouting_unfit_reason: c.scouting_unfit_reason } : {}),
     speed: { prefill_tps: Math.min(n(a.prefill_tps_2k), n(a.prefill_tps_8k)), decode_tps: n(a.decode_tps), aggregate_tps: n(c.aggregate_tps), load_avg: n(c.load_avg) },
+    // Round 4 #8: required. A C/summary without both figures is a bug in the runner (harness version 6 redoes older
+    // progress), so the record is refused here, never written without them.
+    load_estimate: { weight_bytes: req(c.load_weight_bytes, "C/summary load_weight_bytes"), kv_bytes_per_token: req(c.load_kv_bytes_per_token, "C/summary load_kv_bytes_per_token") },
   };
 }
 
@@ -378,22 +399,28 @@ export const MEMORY_LIMITED_RETRY_MS = 3_600_000;
  * which a different floor re-checks. The trained context it stores changes only with the weights; a weights change is
  * caught by the runner's fingerprint once the model is queued, never at read time (nothing is loaded here).
  *
- * Review m3: the floor is read from the environment of the reading process (LLM_EXT_BROKER_MEMORY_FLOOR, default 10)
- * on purpose: the environment is the only place the floor is configured (broker/scheduler.ts TIMING_ENV; there is no
- * settings field), and the broker gates memory with that same value. Every process of one config dir agrees when they
- * share it: a runner the broker starts inherits the broker's environment (runner.ts ensureCalibrator). A shell with
- * another value (models calibrate, calibration-status) can judge differently; the disagreement converges once a
- * broker-started runner measures the model again under the broker's floor (spec 4.3, rule 1).
+ * Unit 6 (governor D13): the floor is the free memory the governor RAM limit leaves, 100 - ram_limit_pct (governor/
+ * settings.ts freeFloorPct; env LLM_EXT_GOVERNOR_RAM_LIMIT_PCT over settings.yaml local_governor.ram_limit_pct over 80),
+ * the one limit the broker and the governor judge RAM by (one limit, not one reading: off darwin calibration measures
+ * free memory with os.freemem, MemFree on Linux, while the governor reads MemTotal - MemAvailable; freeMemory in
+ * calibration/memory.ts). It replaced the broker's own floor variable, whose default 10 was the floor the old limit default 90
+ * left; the limit default is now 80 (20 % free), so a record judged under 10 % reads as stale and is judged again. A shell
+ * with another env value (models calibrate, calibration-status) can judge differently; the disagreement converges once a
+ * broker-started runner measures the model again under the broker's limit (spec 4.3, rule 1).
  */
-export function memoryVerdictStale(r: Pick<CalibrationRecord, "status" | "memory_judged">, floorPct = timingsFromEnv(process.env).memoryFloorPct, totalRam = totalmem()): string | null {
+export function memoryVerdictStale(r: Pick<CalibrationRecord, "status" | "memory_judged">, floorPct = freeFloorPct(), totalRam = totalmem()): string | null {
   const j = r.memory_judged;
   if (r.status !== "calibration-failed" || j === undefined) return null;
   if (j.total_ram_bytes !== totalRam) return `the total RAM changed from ${j.total_ram_bytes} to ${totalRam} bytes`;
-  if (j.floor_pct !== floorPct) return `the memory floor changed from ${j.floor_pct} % to ${floorPct} %`;
+  if (j.floor_pct !== floorPct) return `the RAM limit changed from ram_limit_pct ${100 - j.floor_pct} % to ${100 - floorPct} %`;
   return null;
 }
 
-/** The record's verdict for the broker: ok, failed (with the message the job fails with), or missing (the job is held). */
+/**
+ * The record's verdict for the broker: ok, failed (with the message the job fails with), or missing (the job is held).
+ * An ok record always carries load_estimate (round 4 #8: required by the schema), so a load is never admitted on an
+ * unknown size, and nothing falls back to the weight files on disk here.
+ */
 export function readRecordStatus(dir: string, engine: BrokerEngine, model: string, log?: (msg: string) => void, nowMs = Date.now()): RecordStatus {
   const r = readRecord(dir, engine, model, log);
   if (r === null) return { state: "missing" };

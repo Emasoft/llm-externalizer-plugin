@@ -15,7 +15,7 @@
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { createServer, type Server } from "node:http";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import {
   chatCompletionWithRetry,
   chatCompletionJSON,
@@ -35,13 +35,19 @@ import {
 } from "../free-rotation.js";
 import { getModelEventsPath } from "../model-events.js";
 import { IRON_RULE_REFUSAL_PREFIX } from "../benchmark/validated.js";
-import { calibratedOutputTokens, withUsageContext } from "../usage-history.js";
+import { calibratedOutputTokens, getHistoryPath, withUsageContext } from "../usage-history.js";
 import { RetryDeadlineError } from "./http.js";
 import { OutputLimitError, OUTPUT_LIMIT_PREFIX, resetNoToolContextWarningForTests, type ResolvedRequestOptions } from "./request-options.js";
 
 let server: Server | undefined;
 
 afterEach(() => {
+  // TRDD-WTKO255N: vitest abandons the body of a test that hits its timeout,
+  // so a restore in that test's own finally does not run while the body stays
+  // stuck, and a leaked fake setTimeout can hang the later tests in this file
+  // until the test timeout (run 3, 2026-11-04). No test pins this line: this
+  // comment is its only guard.
+  vi.useRealTimers();
   server?.close();
   server = undefined;
   // runUnusable AND the circuit breaker are process-wide module state —
@@ -1135,4 +1141,50 @@ describe("request_options — wire body and length handling (TRDD-1OOAH3LD)", ()
     ).rejects.toBeInstanceOf(OutputLimitError);
     expect(calibratedOutputTokens("chat", "local-m")?.n ?? 0).toBe(before + 1);
   });
+});
+
+describe("a call cancelled through options.signal is no failure (issue 19 / TRDD-3SNQAGIC)", () => {
+  it("ends at once: no retry, no breaker failure, no run-unusable verdict, no FAIL history line", async () => {
+    // A losing session-summary racer is cancelled by its winner. Everything the retry ladder does with a
+    // failure would punish a healthy model (breaker food, run-unusable) or restart the cancelled request.
+    let posts = 0;
+    server = createServer((req, res) => {
+      if (req.method === "GET") {
+        res.writeHead(404, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "not found" }));
+        return;
+      }
+      posts++; // the model never answers: only the caller's abort can end this request
+    });
+    await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
+    const addr = server.address();
+    if (typeof addr !== "object" || addr === null) throw new Error("server address unavailable");
+    const model = "thinkingmachines/inkling:free";
+    const backend: BackendConfig = {
+      type: "openrouter",
+      billable: false,
+      isLocal: false,
+      baseUrl: `http://127.0.0.1:${addr.port}`,
+      apiKey: "key",
+      model,
+      __version: 1,
+    };
+    const deps = baseDeps(backend, null);
+    const readHistory = (): string => (existsSync(getHistoryPath()) ? readFileSync(getHistoryPath(), "utf-8") : "");
+    const historyBefore = readHistory();
+    const failuresBefore = serviceFailureCountForTests();
+    const controller = new AbortController();
+    const call = withUsageContext({ tool: "session_summary", params: "x=1", project: "/p" }, () =>
+      chatCompletionWithRetry(MESSAGES, { model, signal: controller.signal }, deps),
+    );
+    await vi.waitFor(() => expect(posts).toBe(1), { timeout: 15_000 });
+    controller.abort();
+    await expect(call).rejects.toThrow();
+    await new Promise((r) => setTimeout(r, 300)); // a retry, if any, would have posted again by now
+
+    expect(posts).toBe(1);
+    expect(serviceFailureCountForTests()).toBe(failuresBefore);
+    expect(isRunUnusable(model)).toBe(false);
+    expect(readHistory().slice(historyBefore.length)).not.toContain("FAIL");
+  }, 30_000);
 });

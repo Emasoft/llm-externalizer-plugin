@@ -67,6 +67,15 @@ describe("compare_files runner — orchestration", () => {
     expect(r.caseScores).toHaveLength(cases.length);
   });
 
+  it("AGD7QUOK: a serviceAbort verdict is recorded as an outage failure, never scored as the model's summary", async () => {
+    const r = await runCompareFilesBenchmarkOnModel("m", {
+      deps,
+      chatFn: async () => ({ content: `SERVER ISSUE DETECTED ${cases[0].changedSymbols[0]}`, serviceAbort: true }),
+    });
+    expect(r.failures).toHaveLength(cases.length);
+    expect(r.failures[0].reason).toContain("circuit-breaker outage");
+    expect(r.hallucinations).toHaveLength(0);
+  });
   it("treats an EMPTY completion as a failure, not as a silent zero", async () => {
     const r = await runCompareFilesBenchmarkOnModel("m", {
       deps,

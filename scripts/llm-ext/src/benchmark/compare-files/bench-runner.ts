@@ -39,7 +39,7 @@ export type ChatFn = (
   messages: ChatMessage[],
   options: { temperature?: number; maxTokens?: number; model?: string },
   deps: CompletionDeps,
-) => Promise<{ content: string }>;
+) => Promise<{ content: string; serviceAbort?: boolean }>;
 
 export interface CompareFilesRunOptions {
   deps: CompletionDeps;
@@ -105,6 +105,8 @@ export async function runCompareFilesBenchmarkOnModel(
         },
         opts.deps,
       );
+      // AGD7QUOK: the breaker verdict is returned as content; it is not the model's answer and must not be scored or hallucination-checked.
+      if (resp.serviceAbort === true) throw new Error(`circuit-breaker outage, not a model answer: ${resp.content}`);
       summary = typeof resp.content === "string" && resp.content.length > 0 ? resp.content : null;
       if (summary === null) failures.push({ id: c.id, reason: "empty completion" });
     } catch (err) {

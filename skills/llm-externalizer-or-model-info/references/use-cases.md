@@ -1,4 +1,4 @@
-# or_model_info — Use Cases
+# models info — Use Cases
 
 ## Table of Contents
 - [1. Verify supported parameters](#1-verify-supported-parameters-before-integrating-a-model)
@@ -11,7 +11,7 @@
 ## 1. Verify supported parameters before integrating a model
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model anthropic/claude-sonnet-4.5
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model anthropic/claude-sonnet-4.5
 ```
 
 Check the `supported_parameters` list for the fields you need. The `:free` tier of a
@@ -23,7 +23,7 @@ support all of them.
 ## 2. Compare pricing across providers hosting the same model
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model meta-llama/llama-3.3-70b-instruct
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model meta-llama/llama-3.3-70b-instruct
 ```
 
 The output has one section per endpoint (provider), each with its own `pricing`,
@@ -33,7 +33,7 @@ and latency requirements.
 ## 3. Debug slow or failing calls
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "<the-model-you're-calling>"
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model "<the-model-you're-calling>"
 ```
 
 Look at `uptime_last_30m`. Below 95% means the provider is struggling — the
@@ -43,7 +43,7 @@ Check the `latency_last_30m` p99 to set realistic per-request timeouts.
 ## 4. Check quantization for quality trade-offs
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model meta-llama/llama-3.3-70b-instruct
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model meta-llama/llama-3.3-70b-instruct
 ```
 
 Quantization levels (`fp16`, `int8`, `int4`, `unknown`) indicate the precision each
@@ -53,7 +53,7 @@ output. Compare across endpoints if you care about fidelity.
 ## 5. Confirm context length and max tokens
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model google/gemini-2.5-flash
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model google/gemini-2.5-flash
 ```
 
 Each endpoint reports `context_length`, `max_completion_tokens`, and `max_prompt_tokens`.
@@ -63,7 +63,7 @@ Use these to estimate whether a large input/output will fit and to set the right
 ## 6. Check reasoning support
 
 ```bash
-"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" or-model-info --model "<any-model-id>"
+"$CLAUDE_PLUGIN_ROOT/bin/llm-ext" models info --model "<any-model-id>"
 ```
 
 Look for `reasoning` in `supported_parameters`. If present, the model accepts the

@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-10-30T08:20:45+0100
+updated: 2026-11-14T16:20:02+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -132,3 +132,7 @@ Sent by the coordinator to the calibration worker on 2026-10-29 at 17:50 +0100; 
 - A forced calibration that ends memory-limited keeps a current ok record.
 - The broker exits only after its config dir has been missing for 10 s continuously.
 - The memory floor has one source, the environment (LLM_EXT_BROKER_MEMORY_FLOOR).
+
+## Notes
+
+2026-11-14T16:20+0100 TRDD-SWNIIFTF (--stop_on_errors) closed its box (c), a request queued for memory still completes, on the governor queue (164fa021), not on the broker memory queue its npt named (this card and ZGSGGHQG). When the broker memory wait lands, re-check that a broker job held for memory never trips --stop_on_errors (the user ruling of 2026-10-28: not having enough memory is not a failure, it only queues the request).

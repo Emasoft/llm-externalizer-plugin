@@ -11,7 +11,7 @@
  * This module imports neither phase: Phase C imports Phase B, so a helper shared by both lives here.
  */
 
-import { timingsFromEnv } from "../broker/scheduler.js";
+import { freeFloorPct } from "../governor/settings.js";
 import type { BrokerEngine } from "../broker/protocol.js";
 import { freeMemory, WINDOW_STEP } from "./memory.js";
 import type { PhaseContext } from "./runner.js";
@@ -100,7 +100,7 @@ export async function memoryWaitPrecheck(dir: string, engine: BrokerEngine, mode
   const p = loadProgress(dir, engine, model, null, harnessId);
   const entries = Object.entries(p.memoryWait ?? {});
   if (entries.length === 0) return null;
-  const { free, floor } = await freeMemory(timingsFromEnv(process.env).memoryFloorPct);
+  const { free, floor } = await freeMemory(freeFloorPct());
   if (entries.some(([, w]) => w.need <= free - floor)) return null;
   const nowMs = Date.now();
   const ticked = entries.map(([step, w]) => [step, memoryWaitTick(w, w.need, nowMs)] as const);

@@ -48,7 +48,7 @@ import {
 } from "./cost-estimate";
 import { openRegistry, type Registry } from "./registry";
 import { preclassifyAll } from "./preclassify";
-import { runScoutJob, type FetchImpl } from "./scout";
+import { inputCapBytes, parseReplyJson, runScoutJob, scoutSystemPrompt, type FetchImpl } from "./scout";
 import {
   massScoutSearch,
   massScoutSearchXjob,
@@ -96,6 +96,7 @@ import {
   scoutAccuracyTargetBytes,
   scoutAccuracyThreshold,
 } from "../config";
+import { leasedFetch, localScoutOpts, resolveLocalScouting } from "./scout-local";
 
 // ── Public types ───────────────────────────────────────────────────────
 
@@ -526,15 +527,9 @@ function parseFilterToken(token: string): SearchFilter | { error: string } {
 
 // ── Real-fetch adapter ─────────────────────────────────────────────────
 
-const rawFetch: FetchImpl = async (url, init) => {
-  const res = await fetch(url, init);
-  return {
-    ok: res.ok,
-    status: res.status,
-    json: () => res.json() as Promise<unknown>,
-    text: () => res.text(),
-  };
-};
+// Governor design D9: the leased adapter (a loopback target takes a lease to the end of the body; a remote one never
+// touches the governor) moved to scout-local.ts, which the local scouting path (P9) sends through as well.
+const rawFetch: FetchImpl = leasedFetch;
 
 /**
  * The production adapter, with free-model rotation baked in — mass_scout is the
@@ -949,38 +944,53 @@ async function runEstimate(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  const resolved = resolveCliModel(flags);
-  if ("error" in resolved) return err(resolved.error);
-  const model = resolved.model;
-  const unpopulated = "unpopulated" in resolved;
-  const pricing = resolvePricing(model, flags);
-  if ("error" in pricing) return err(pricing.error);
+  // P9: a local llama.cpp or Locals active profile prices 0 (a local route never bills) and takes its sizes from the
+  // calibration record; it needs no pricing flags and no OpenRouter key.
+  const local = resolveLocalScouting(flags, loadSettings());
+  if (local !== null && "error" in local) return err(local.error);
+  let model: string;
+  let unpopulated = false;
+  let pricing: ModelPricing;
+  if (local !== null) {
+    model = local.model;
+    pricing = { ...local.pricing };
+  } else {
+    const resolved = resolveCliModel(flags);
+    if ("error" in resolved) return err(resolved.error);
+    model = resolved.model;
+    unpopulated = "unpopulated" in resolved;
+    const priced = resolvePricing(model, flags);
+    if ("error" in priced) return err(priced.error);
+    pricing = priced;
 
-  // Live context-window override — opt-in. Only fires when --live-context
-  // is set AND we have an API key; otherwise we trust pricing.context_window.
-  if (flags["live-context"] === "true") {
-    const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      return err(
-        "--live-context requires OPENROUTER_API_KEY (export it or pass via opts.apiKey).",
+    // Live context-window override — opt-in. Only fires when --live-context
+    // is set AND we have an API key; otherwise we trust pricing.context_window.
+    if (flags["live-context"] === "true") {
+      const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+      if (!apiKey) {
+        return err(
+          "--live-context requires OPENROUTER_API_KEY (export it or pass via opts.apiKey).",
+        );
+      }
+      const live = await fetchProviderContext(
+        model,
+        apiKey,
+        adaptFetchForContext(opts.fetchImpl ?? realFetch),
       );
+      if (live === null) {
+        return err(
+          `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`,
+        );
+      }
+      pricing.context_window = live;
     }
-    const live = await fetchProviderContext(
-      model,
-      apiKey,
-      adaptFetchForContext(opts.fetchImpl ?? realFetch),
-    );
-    if (live === null) {
-      return err(
-        `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`,
-      );
-    }
-    pricing.context_window = live;
   }
 
   const compiled = compileFieldset(fs);
-  const promptBytes = Buffer.byteLength(compiled.systemPrompt, "utf-8");
-  const schemaBytes = Buffer.byteLength(JSON.stringify(compiled.jsonSchema), "utf-8");
+  // P9 local: without json_schema the schema rides in the system prompt (scoutSystemPrompt), so it is counted once, there.
+  const structured = local !== null ? local.structuredOutput : true;
+  const promptBytes = Buffer.byteLength(scoutSystemPrompt(compiled, structured), "utf-8");
+  const schemaBytes = structured ? Buffer.byteLength(JSON.stringify(compiled.jsonSchema), "utf-8") : 0;
   const expectedOutputBytes = Number(flags["expected-output-bytes"] ?? 200);
 
   const reg = openRegistry({ path: dbPath });
@@ -990,7 +1000,12 @@ async function runEstimate(
     schema_overhead_bytes: schemaBytes,
     expected_output_bytes: expectedOutputBytes,
     bucket: flags["bucket"],
-    worker_count: flags["workers"] ? Number(flags["workers"]) : undefined,
+    worker_count:
+      local !== null
+        ? local.workers
+        : flags["workers"]
+          ? Number(flags["workers"])
+          : undefined,
     per_call_seconds: flags["per-call-seconds"] ? Number(flags["per-call-seconds"]) : undefined,
     max_context_pct_scout: flags["max-context-pct-scout"]
       ? Number(flags["max-context-pct-scout"])
@@ -998,6 +1013,18 @@ async function runEstimate(
     max_context_pct_register: flags["max-context-pct-register"]
       ? Number(flags["max-context-pct-register"])
       : undefined,
+    // P9 local: the calibrated input share is the cap, the same one runScoutJob applies.
+    ...(local !== null
+      ? {
+          scout_cap_for: (row: { basename: string }) =>
+            inputCapBytes(
+              compiled,
+              { tokens: local.candidate.share_tokens, charsPerToken: local.charsPerToken },
+              structured,
+              row.basename,
+            ),
+        }
+      : {}),
   });
   reg.close();
 
@@ -1009,6 +1036,9 @@ async function runEstimate(
     `model=${model}  context_window=${pricing.context_window}`,
     ...(unpopulated
       ? [`no scouting profile yet; priced with ${DEFAULT_MODEL}, the real run uses the model \`benchmark scout-accuracy\` selects`]
+      : []),
+    ...(local !== null
+      ? [`local profile=${local.profile} engine=${local.engine} share_tokens=${local.candidate.share_tokens} slots=${local.candidate.slots} max_tokens=${local.maxTokens} structured_output=${local.structuredOutput}`]
       : []),
     `files_eligible=${est.files_eligible}`,
     `files_skipped_too_big=${est.files_skipped_too_big}`,
@@ -1053,49 +1083,70 @@ async function runScout(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — scout is
-  // one of the three LLM-driving handlers this gate owns.
-  const gate = await resolveScoutModel(flags, opts);
-  if ("error" in gate) return err(gate.error);
-  const model = gate.model;
-  const untestedStamp = gate.untested
-    ? "model_status=UNTESTED MODEL (--allow-untested-model)"
-    : undefined;
-  // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
-  // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
-  // itself. Captured ONCE here, right beside the model resolution it's
-  // paired with, and threaded through below.
-  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
-  const freeOnly = scoutingFreeOnly();
-  const pricing = resolvePricing(model, flags);
-  if ("error" in pricing) return err(pricing.error);
-
-  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return err(
-      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
-    );
-  }
-  const fetchImpl = opts.fetchImpl ?? realFetch;
+  // P9: on a local llama.cpp or Locals active profile the calibration record is the quality gate and sizes the run;
+  // the requests go to the profile's own server (or its broker), never to OpenRouter and never with its key.
+  const local = resolveLocalScouting(flags, loadSettings());
+  if (local !== null && "error" in local) return err(local.error);
   // Mark the rotation send-log before any request, so the report can tell which
   // free models actually answered if the adapter rotated during this job.
   const rotationMark = rotationJournalMark();
+  let model: string;
+  let untestedStamp: string | undefined;
+  let freeOnly: boolean;
+  let pricing: ModelPricing;
+  let apiKey: string;
+  let fetchImpl: FetchImpl;
+  if (local !== null) {
+    model = local.model;
+    // A local profile is never forced into free mode (shouldForceFreeMode), and its route never bills.
+    freeOnly = false;
+    pricing = { ...local.pricing };
+    apiKey = "";
+    fetchImpl = opts.fetchImpl ?? local.fetchImpl;
+  } else {
+    // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — scout is
+    // one of the three LLM-driving handlers this gate owns.
+    const gate = await resolveScoutModel(flags, opts);
+    if ("error" in gate) return err(gate.error);
+    model = gate.model;
+    untestedStamp = gate.untested
+      ? "model_status=UNTESTED MODEL (--allow-untested-model)"
+      : undefined;
+    // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
+    // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
+    // itself. Captured ONCE here, right beside the model resolution it's
+    // paired with, and threaded through below.
+    // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+    freeOnly = scoutingFreeOnly();
+    const priced = resolvePricing(model, flags);
+    if ("error" in priced) return err(priced.error);
+    pricing = priced;
 
-  // Live context-window override — opt-in; same semantics as estimate.
-  // Wired here too so a one-shot `scout` (without a preceding `estimate`)
-  // also gets the real provider cap when the caller asks for it.
-  if (flags["live-context"] === "true") {
-    const live = await fetchProviderContext(
-      model,
-      apiKey,
-      adaptFetchForContext(fetchImpl),
-    );
-    if (live === null) {
+    const key = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+    if (!key) {
       return err(
-        `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`,
+        "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
       );
     }
-    pricing.context_window = live;
+    apiKey = key;
+    fetchImpl = opts.fetchImpl ?? realFetch;
+
+    // Live context-window override — opt-in; same semantics as estimate.
+    // Wired here too so a one-shot `scout` (without a preceding `estimate`)
+    // also gets the real provider cap when the caller asks for it.
+    if (flags["live-context"] === "true") {
+      const live = await fetchProviderContext(
+        model,
+        apiKey,
+        adaptFetchForContext(fetchImpl),
+      );
+      if (live === null) {
+        return err(
+          `--live-context: could not fetch context_length for model ${JSON.stringify(model)} from OpenRouter.`,
+        );
+      }
+      pricing.context_window = live;
+    }
   }
 
   const reg = openRegistry({ path: dbPath });
@@ -1110,7 +1161,13 @@ async function runScout(
         model,
         apiKey,
         freeOnly,
-        workers: flags["workers"] ? Number(flags["workers"]) : undefined,
+        ...(local !== null ? localScoutOpts(local) : {}),
+        workers:
+          local !== null
+            ? local.workers
+            : flags["workers"]
+              ? Number(flags["workers"])
+              : undefined,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : undefined,
         bucket: flags["bucket"],
         smokeTest: flags["no-smoke-test"] !== "true",
@@ -1386,40 +1443,56 @@ async function runProposeFieldset(
   const { flags } = parseFlags(args);
   const goal = requireFlag(flags, "goal");
   if (typeof goal === "object") return err(goal.error);
-  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return err(
-      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
-    );
+  // P9: on a local llama.cpp or Locals active profile the calibration record gates the model and the request goes to
+  // the profile's own server (or its broker), never to OpenRouter and never with its key.
+  const local = resolveLocalScouting(flags, loadSettings());
+  if (local !== null && "error" in local) return err(local.error);
+  const structured = local !== null ? local.structuredOutput : true;
+  let model: string;
+  let apiUrl: string;
+  let apiKey = "";
+  let fetchImpl: FetchImpl;
+  if (local !== null) {
+    model = local.model;
+    apiUrl = local.apiUrl;
+    fetchImpl = opts.fetchImpl ?? local.fetchImpl;
+  } else {
+    const key = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+    if (!key) {
+      return err(
+        "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
+      );
+    }
+    apiKey = key;
+    fetchImpl = opts.fetchImpl ?? realFetch;
+    // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) —
+    // propose-fieldset is one of the three LLM-driving handlers this gate owns.
+    const gate = await resolveScoutModel(flags, opts);
+    if ("error" in gate) return err(gate.error);
+    model = gate.model;
+    if (gate.untested) {
+      // stdout is the fieldset JSON — the stamp goes to stderr (A4).
+      process.stderr.write("model_status=UNTESTED MODEL (--allow-untested-model)\n");
+    }
+    // Row 101 fix-queue: captured ONCE right beside the model resolution it's
+    // paired with, instead of reading getActiveFreeOnly() fresh at the assert
+    // call below — same explicit-value treatment as runScoutJob/judgeGroups
+    // (4d160a8), applied here since this call has no separate Options struct.
+    // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+    const freeOnly = scoutingFreeOnly();
+    // Airtight free_only cost-safety (TRDD-97ef8b63). propose-fieldset makes its own
+    // OpenRouter call; under free_only a non-':free' model throws BEFORE the request.
+    // Route-aware billable (item 1/A1): do NOT hardcode `true` — this call always
+    // hits OpenRouter itself, but `model` may still be routed to a non-billable
+    // provider (e.g. b.ai) under a `providers:` profile, same derivation
+    // resolveConnection uses (config.ts's getActiveBillableForModel).
+    const billable = getActiveBillableForModel(model);
+    assertFreeOnlyModel(freeOnly, billable, model);
+    // IRON RULE (TRDD-8b6b3646): a PAID propose-fieldset model must be validated
+    // (mass_scout is rank 0 — any pass validates), else refuse. Exempt for ':free'.
+    assertModelValidated(model, "mass_scout", billable);
+    apiUrl = "https://openrouter.ai/api/v1/chat/completions";
   }
-  const fetchImpl = opts.fetchImpl ?? realFetch;
-  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) —
-  // propose-fieldset is one of the three LLM-driving handlers this gate owns.
-  const gate = await resolveScoutModel(flags, opts);
-  if ("error" in gate) return err(gate.error);
-  const model = gate.model;
-  if (gate.untested) {
-    // stdout is the fieldset JSON — the stamp goes to stderr (A4).
-    process.stderr.write("model_status=UNTESTED MODEL (--allow-untested-model)\n");
-  }
-  // Row 101 fix-queue: captured ONCE right beside the model resolution it's
-  // paired with, instead of reading getActiveFreeOnly() fresh at the assert
-  // call below — same explicit-value treatment as runScoutJob/judgeGroups
-  // (4d160a8), applied here since this call has no separate Options struct.
-  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
-  const freeOnly = scoutingFreeOnly();
-  // Airtight free_only cost-safety (TRDD-97ef8b63). propose-fieldset makes its own
-  // OpenRouter call; under free_only a non-':free' model throws BEFORE the request.
-  // Route-aware billable (item 1/A1): do NOT hardcode `true` — this call always
-  // hits OpenRouter itself, but `model` may still be routed to a non-billable
-  // provider (e.g. b.ai) under a `providers:` profile, same derivation
-  // resolveConnection uses (config.ts's getActiveBillableForModel).
-  const billable = getActiveBillableForModel(model);
-  assertFreeOnlyModel(freeOnly, billable, model);
-  // IRON RULE (TRDD-8b6b3646): a PAID propose-fieldset model must be validated
-  // (mass_scout is rank 0 — any pass validates), else refuse. Exempt for ':free'.
-  assertModelValidated(model, "mass_scout", billable);
-  const apiUrl = "https://openrouter.ai/api/v1/chat/completions";
 
   // Read sample files (if any) so the LLM can see actual content.
   const samples: { path: string; body: string }[] = [];
@@ -1495,18 +1568,30 @@ async function runProposeFieldset(
   try {
     res = await fetchImpl(apiUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers: local !== null
+        ? local.headers
+        : {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${apiKey}`,
+          },
       body: JSON.stringify({
         model,
         messages: [
-          { role: "system", content: sysPrompt },
+          // P9 local without json_schema: the schema goes in the system prompt, as scoutSystemPrompt does for scout.
+          {
+            role: "system",
+            content: structured
+              ? sysPrompt
+              : `${sysPrompt} It must match this JSON Schema: ${JSON.stringify(responseSchema.schema)}`,
+          },
           { role: "user", content: userPrompt },
         ],
-        response_format: { type: "json_schema", json_schema: responseSchema },
+        ...(structured
+          ? { response_format: { type: "json_schema", json_schema: responseSchema } }
+          : {}),
         temperature: 0.2,
+        // P9 local: the reply cap and thinking setting Phase C measured scouting under; remote sends neither, as before.
+        ...(local !== null ? { max_tokens: local.maxTokens, ...local.extraBody } : {}),
       }),
     });
   } catch (e) {
@@ -1525,7 +1610,7 @@ async function runProposeFieldset(
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(content);
+    parsed = parseReplyJson(content, structured);
   } catch (e) {
     return err(`propose-fieldset: JSON.parse failed: ${(e as Error).message}`);
   }
@@ -1752,30 +1837,50 @@ async function runChain(
   const fs = loadFieldsetFromArg(fieldsFile);
   if ("error" in fs) return err(fs.error);
 
-  // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — chain is
-  // one of the three LLM-driving handlers this gate owns.
-  const gate = await resolveScoutModel(flags, opts);
-  if ("error" in gate) return err(gate.error);
-  const model = gate.model;
-  const untestedStamp = gate.untested
-    ? "model_status=UNTESTED MODEL (--allow-untested-model)"
-    : undefined;
-  // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
-  // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
-  // itself. Captured ONCE here, right beside the model resolution it's
-  // paired with, and threaded through below.
-  // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
-  const freeOnly = scoutingFreeOnly();
-  const pricing = resolvePricing(model, flags);
-  if ("error" in pricing) return err(pricing.error);
+  // P9: on a local llama.cpp or Locals active profile the calibration record is the quality gate and sizes the run.
+  const local = resolveLocalScouting(flags, loadSettings());
+  if (local !== null && "error" in local) return err(local.error);
+  let model: string;
+  let untestedStamp: string | undefined;
+  let freeOnly: boolean;
+  let pricing: ModelPricing;
+  let apiKey: string;
+  let fetchImpl: FetchImpl;
+  if (local !== null) {
+    model = local.model;
+    // A local profile is never forced into free mode (shouldForceFreeMode), and its route never bills.
+    freeOnly = false;
+    pricing = { ...local.pricing };
+    apiKey = "";
+    fetchImpl = opts.fetchImpl ?? local.fetchImpl;
+  } else {
+    // TRDD-FKAR9VPK D5: the scouting-profile require gate (A3 tree) — chain is
+    // one of the three LLM-driving handlers this gate owns.
+    const gate = await resolveScoutModel(flags, opts);
+    if ("error" in gate) return err(gate.error);
+    model = gate.model;
+    untestedStamp = gate.untested
+      ? "model_status=UNTESTED MODEL (--allow-untested-model)"
+      : undefined;
+    // Row 101 fix-queue: runScoutJob's cost-safety gate now takes freeOnly as
+    // an explicit REQUIRED parameter instead of reading getActiveFreeOnly()
+    // itself. Captured ONCE here, right beside the model resolution it's
+    // paired with, and threaded through below.
+    // PT-05 (D34): scouting runs on a scouting profile, so free-only follows that type, not the active profile.
+    freeOnly = scoutingFreeOnly();
+    const priced = resolvePricing(model, flags);
+    if ("error" in priced) return err(priced.error);
+    pricing = priced;
 
-  const apiKey = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    return err(
-      "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
-    );
+    const key = opts.apiKey ?? process.env.OPENROUTER_API_KEY;
+    if (!key) {
+      return err(
+        "OPENROUTER_API_KEY missing. Export it in your shell, set the plugin's userConfig.openrouter_api_key, or add it to ~/.llm-externalizer/settings.yaml.",
+      );
+    }
+    apiKey = key;
+    fetchImpl = opts.fetchImpl ?? realFetch;
   }
-  const fetchImpl = opts.fetchImpl ?? realFetch;
 
   const reg = openRegistry({ path: dbPath });
   // 1. Find source rows matching the filter.
@@ -1814,7 +1919,12 @@ async function runChain(
   // matches the value runScoutJob actually fans out with — otherwise the
   // registry's job-history metadata diverges from reality (e.g. the run
   // really used 8 workers but the row says 1).
-  const workers = flags["workers"] ? Number(flags["workers"]) : 4;
+  const workers =
+    local !== null
+      ? local.workers
+      : flags["workers"]
+        ? Number(flags["workers"])
+        : 4;
   if (!reg2.getJob(newJob)) {
     reg2.createJob({
       job_id: newJob,
@@ -1863,6 +1973,7 @@ async function runChain(
         model,
         apiKey,
         freeOnly,
+        ...(local !== null ? localScoutOpts(local) : {}),
         workers,
         maxRetries: flags["max-retries"] ? Number(flags["max-retries"]) : 1,
         bucket: SENTINEL,

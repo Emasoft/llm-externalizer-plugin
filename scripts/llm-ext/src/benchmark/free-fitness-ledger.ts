@@ -137,7 +137,15 @@ export function recordFitnessVerdict(
   detail?: string,
 ): void {
   const cache = loadFitnessCache(tool);
-  cache[`${modelId}::${today()}::${hash}`] = { date: today(), score, detail };
+  const key = `${modelId}::${today()}::${hash}`;
+  // WHY an inconclusive verdict never replaces a conclusive one (TRDD-FUHTNE04):
+  // the key is per model per DAY, so a same-day rerun that only hit a provider
+  // outage (rate limit, network) would otherwise overwrite a real PASS or FAIL
+  // measured earlier that day with "no evidence". A conclusive row replaces
+  // anything; an inconclusive row only fills an empty or inconclusive slot.
+  const prev = cache[key];
+  if (score.inconclusive && prev !== undefined && prev.score.inconclusive !== true) return;
+  cache[key] = { date: today(), score, detail };
   saveFitnessCache(tool, cache);
 }
 

@@ -35,24 +35,25 @@ Codebase scan via the `llm-ext` CLI, active profile (default: `remote-ensemble`,
 ## Instructions
 
 1. Parse `$ARGUMENTS` for **target** (default `.`), **focus**, `free` flag.
-2. `llm-ext discover`. Abort `[FAILED] — offline` if offline.
-3. Pick the command: duplicate-check → `search-existing-implementations`; folder audit → `scan-folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `code-task` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `code-task`; **reviewing recent changes only** → add a diff mode to `scan-folder`/`code-task` (`--diff_workspace true`, or `--diff_from <ref> --diff_to <ref>`, or `--diff_commit <sha>`) — scope shrinks to the changed files, resolution delegated to git. Per-path rubrics come from `.llm-ext/rules.yaml` automatically (`rules-check <file>` shows which rule fires). Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`. Background commands are capped at 30 min (max 2 h) in unattended sessions (`-p`, CI); interactive sessions are uncapped. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
-4. **Paid profile? Estimate first.** If `discover` shows free mode OFF, run the exact
+2. `llm-ext settings status`. Abort `[FAILED] — offline` if offline.
+3. Pick the command: duplicate-check → `scan impl`; folder audit → `scan folder` (`--use_gitignore`, `--answer_mode 0`); ≤5 files → `llm code` (`--answer_mode 0`, `--max_retries 3`); glob → expand, then `llm code`; **reviewing recent changes only** → add a diff mode to `scan folder`/`llm code` (`--diff_workspace true`, or `--diff_from <ref> --diff_to <ref>`, or `--diff_commit <sha>`) — scope shrinks to the changed files, resolution delegated to git. Per-path rubrics come from `.llm-ext/rules.yaml` automatically (`check rules <file>` shows which rule fires). Folder/large scans can run long — use an extended Bash timeout or `run_in_background: true`. Background commands are capped at 30 min (max 2 h) in unattended sessions (`-p`, CI); interactive sessions are uncapped. On Linux, `CLAUDE_CODE_TOOL_MEMORY_LIMIT` (Claude Code ≥2.1.233) can cap a scan's memory so a runaway run can't stall the session.
+4. **Paid profile? Estimate first.** If `settings status` shows free mode OFF, run the exact
    command with `--estimate` prepended to its flags — a ~3s dry-run (zero LLM sends) that
    prints `expected` and `ceiling` USD. Proceed only when the ceiling is acceptable; report
    the estimate in the reply. Free mode: skip, everything is $0.
 5. Run the command. `--free` only if asked (warn about prompt logging).
 6. Default rubric: bugs/crashes/security exploits/data corruption/local broken refs only. NOT missing error handling, null checks, validation, logging, style. Respect source style. Cite function names + lines.
-7. Collect report paths. Do NOT read/summarize.
+7. Collect report paths. Do NOT read/summarize. Exit 1 with a `FAILED (n of m):` block still prints the finished paths: collect them and name the failed files in the reply.
 8. Return paths using Output format.
 
-Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check-against-specs` or `search-existing-implementations`).
+Limitations: `.md` files EXCLUDED by default (pass `--instructions` for semantic search; structural validation → CPV). LLM sees only 1–5 files/request — no cross-file refs (use `check specs` or `scan impl`).
 
 ## Output
 
 Reports default to `<main-project-dir>/reports/llm-externalizer/` (the main project dir Claude Code is in); pass `--output_dir` only for a custom location. Filenames embed the source filename or group id.
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). Subagents you spawn save temporary or scratch files to the `*_dev` folders and final files to the tracked ones.
 
-**answer_mode**: `0`=per-file (`scan-folder` default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
+**answer_mode**: `0`=per-file (`scan folder` default), `1`=per-group (subfolder/extension/basename, 1 MB cap), `2`=merged. Controls disk output only, not LLM visibility.
 
 Reply format (exact, no preamble):
 ```
@@ -68,7 +69,7 @@ On failure: `[FAILED] scan-<label> — <one-line reason>`
 |-------|-----|
 | Service offline | Check network/API status; abort |
 | Auth 401 | Set `userConfig.openrouter_api_key` or `$OPENROUTER_API_KEY` |
-| Credit 402 | Falls back to the next model of the selected profile; exhausted profile → blocking dynamic update, then exit non-zero if it still fails. No switch to free |
+| Credit 402 | Falls back to the next model of the selected profile only. Exhausted profile: every model 402 → exits non-zero with the credit error and starts no update; other failures mixed in on a dynamic profile → starts the update in the background and exits at once with the retry-later message. Never waits for an update, never switches to free |
 | Empty response | Server auto-retries up to 15× (2s backoff) |
 | No files found | Verify target path and `--use_gitignore` |
 

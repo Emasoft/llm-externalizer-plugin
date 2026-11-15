@@ -935,3 +935,26 @@ describe("round C1 review M-B: a stale sleeper does not proceed into a re-trippe
   });
 
 });
+
+
+// RFDHRB1O: the test reset hook zeroes the sleeper count; a sleeper pending across it must not drive the count negative on wake.
+describe("RFDHRB1O: resetServiceHealthForTests with a pending sleeper", () => {
+  it("the sleeper count stays at 0 after the reset and after the sleeper wakes", async () => {
+    vi.useFakeTimers();
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      resetServiceHealthForTests();
+      tripServiceHealthForTests();
+      const a = checkServiceHealthForTests();
+      expect(serviceHealthSleepersForTests()).toBe(1);
+      resetServiceHealthForTests();
+      expect(serviceHealthSleepersForTests()).toBe(0);
+      await vi.advanceTimersByTimeAsync(61_000);
+      await a;
+      expect(serviceHealthSleepersForTests()).toBe(0);
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});

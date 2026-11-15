@@ -9,7 +9,7 @@
  * full: an overestimate, which is the safe side.
  *
  * W is the largest context with weights + KV(W) + 1 GB under the free memory
- * minus the broker's memory floor, at most the harness's window cap.
+ * minus the floor the governor RAM limit leaves (100 - ram_limit_pct), at most the harness's window cap.
  */
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from "node:fs";
@@ -249,18 +249,13 @@ export function weightBytes(files: readonly string[]): number {
 }
 
 /**
- * Free memory now, and the broker's floor, in bytes. darwin: memory_pressure's
- * free percentage (it counts inactive and purgeable memory, as the broker's
- * own gate does); elsewhere os.freemem(). The floor is LLM_EXT_BROKER_MEMORY_FLOOR
- * percent of RAM (default 10), the same value the broker gates Locals with.
+ * Free memory now, and the floor, in bytes. darwin: total RAM minus the governor's "used" (anonymous + wired
+ * + compressed pages, governor/ram.ts, D4), through memoryFreePercent, which throws when vm_stat gives no reading;
+ * elsewhere os.freemem(). The floor is `floorPct` percent of RAM: 100 - ram_limit_pct (governor/settings.ts
+ * freeFloorPct), the free memory the governor RAM limit leaves (D13).
  */
 export async function freeMemory(floorPct: number): Promise<{ free: number; floor: number }> {
   const total = totalmem();
-  let free = freemem();
-  if (platform() === "darwin") {
-    const pct = await memoryFreePercent();
-    if (pct === null) throw new Error("memory_pressure gave no reading: the calibration window cannot be measured");
-    free = Math.round((pct / 100) * total);
-  }
+  const free = platform() === "darwin" ? Math.round(((await memoryFreePercent()) / 100) * total) : freemem();
   return { free, floor: Math.round((floorPct / 100) * total) };
 }

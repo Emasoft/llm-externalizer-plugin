@@ -86,6 +86,15 @@ describe("check_references runner — orchestration", () => {
     expect(r.verdicts).toHaveLength(cases.length);
   });
 
+  it("AGD7QUOK: a serviceAbort verdict is recorded as an outage failure, never parsed as the model's verdict", async () => {
+    const r = await runCheckReferencesBenchmarkOnModel("m", {
+      deps,
+      chatFn: async () => ({ content: "SERVER ISSUE DETECTED. VERDICT: BROKEN", serviceAbort: true }),
+    });
+    expect(r.failures).toHaveLength(cases.length);
+    expect(r.failures[0].reason).toContain("circuit-breaker outage");
+    expect(r.verdicts.every((v) => v.reported === null)).toBe(true);
+  });
   it("uses the documented cap and temperature 0", async () => {
     let opts: { maxTokens?: number; temperature?: number } | undefined;
     await runCheckReferencesBenchmarkOnModel("m", {

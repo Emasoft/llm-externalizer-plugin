@@ -5,7 +5,7 @@ import { safeReadText } from '../../safe-body.js';
 import { type Deadline } from './deadline.js';
 import { ClassifierError, badResponseError, classifyHttpError, networkError, timeoutError } from './errors.js';
 import type { DecisionsEndpoint } from '../../config.js';
-import { CommandStoppedError, commandStopReason } from '../../command-stop.js';
+import { CommandStoppedError, commandStopReason, stoppableSleep } from '../../command-stop.js';
 
 export type GlobalFetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -186,7 +186,8 @@ export async function callDecisions(call: DecisionsCall, opts: CallOptions): Pro
     }
     // WHY Deadline.sleep: an abort or the deadline must end the wait at once (E10).
     try {
-      await opts.deadline.sleep(wait);
+      // WHY the race: Deadline.sleep ends on abort or deadline only; a command stop must also end the wait (loop top then throws it).
+      await Promise.race([opts.deadline.sleep(wait), stoppableSleep(wait)]);
     } catch (e) {
       if (opts.deadline.reason === 'timeout') throw timeoutError();
       throw e;

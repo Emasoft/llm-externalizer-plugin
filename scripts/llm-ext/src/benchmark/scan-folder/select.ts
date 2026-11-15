@@ -21,7 +21,20 @@
 import { TOOL_MODEL_REGISTRY } from "../../model-qualification/registry.js";
 import type { ModelCriteria } from "../discover.js";
 import { selectSameOrCheaper, type GenericCandidate } from "../select-common.js";
-import { passesThresholds, type ScanFolderScore } from "./score.js";
+import { passesThresholds, type ScanFolderScore, type ScanFolderThresholds } from "./score.js";
+import { answeredOnlyScore } from "../search-existing/score.js";
+import { isUnansweredFilesNonEvidence, NON_EVIDENCE_REASON } from "../quality-evidence.js";
+
+/**
+ * The benchmark verdict for display and selection: the SAME judgement the ledger
+ * qualityPass uses (answered files only; a run with over a quarter of its files
+ * unanswered is not evidence and cannot qualify) so selection and the stored
+ * verdict cannot disagree (TRDD-90BXJ2KO).
+ */
+export function judgeScanFolder(score: ScanFolderScore, thresholds?: ScanFolderThresholds): { pass: boolean; failures: string[] } {
+  if (isUnansweredFilesNonEvidence(score)) return { pass: false, failures: [NON_EVIDENCE_REASON] };
+  return passesThresholds(answeredOnlyScore(score), thresholds);
+}
 
 /**
  * Per-tool requirements for scan_folder. Single source of truth is the registry
@@ -79,7 +92,7 @@ export interface ScanFolderSelectionResult {
  * search_existing's gate ranks on micro-F1 for the same reason (same output shape).
  */
 function toGeneric(c: ScanFolderCandidate): GenericCandidate {
-  const thr = passesThresholds(c.score);
+  const thr = judgeScanFolder(c.score);
   return {
     modelId: c.modelId,
     qualified: c.qualified,

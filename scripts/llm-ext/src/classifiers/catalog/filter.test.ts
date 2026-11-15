@@ -236,3 +236,57 @@ describe("SP-03 filter: --lines collapsing (collapseRepeats)", () => {
     expect(collapseRepeats([row("a.log:1", 0.9, "one"), row("a.log:2", 0.9, "two")])).toHaveLength(2);
   });
 });
+
+// IN-07 (TRDD-LWDKZO2A): the text form, from a REAL projection (spec.project) through the real spec.renderText.
+describe("IN-07 filter: text form", () => {
+  const render = (res: FilterResult, opts: Record<string, unknown> = {}) => spec.renderText!(res, opts);
+  const lineItems = items(["a", "b", "c", "d", "e"]);
+  const projected = run(ans(0.95, 0.6, 0.5, 0.4, 0.05), lineItems);
+
+  it("lists the sure rows, then the borderline ones under a header, then the count line (p >= threshold counted)", () => {
+    expect(render(projected).lines).toEqual([
+      "0.95  f.log:1  a",
+      "? borderline (0.35–0.65) — check these yourself:",
+      "0.60  f.log:2  b",
+      "0.50  f.log:3  c",
+      "0.40  f.log:4  d",
+      "— 3 matched, 3 borderline",
+    ]);
+  });
+  it("E128: p in [threshold, threshold + band) shows in the borderline list and the matched count includes it", () => {
+    const mid = run(ans(0.6), items(["m"]));
+    expect(render(mid).lines).toEqual(["? borderline (0.35–0.65) — check these yourself:", "0.60  f.log:1  m", "— 1 matched, 1 borderline"]);
+  });
+  it("prints (no matches) when nothing is sure or borderline", () => {
+    expect(render(run(ans(0.05), items(["x"]))).lines).toEqual(["(no matches)", "— 0 matched, 0 borderline"]);
+  });
+  it("names the items with no answer and why", () => {
+    const res = { ...run(ans(0.9), items(["a"])), invalid: [{ id: "f.log:9", reason: "aborted" }] };
+    expect(render(res).lines).toContain("? no answer: f.log:9 (aborted)");
+  });
+  it("collapses --lines rows that differ only in numbers into xN with the other line numbers; --no-collapse prints each row", () => {
+    const rows = ["worker 12 failed", "worker 13 failed", "worker 14 failed", "disk full"];
+    const res = run(ans(0.9, 0.9, 0.9, 0.9), items(rows));
+    expect(render(res).lines.slice(0, 3)).toEqual(["0.90  ×3  f.log:1  worker 12 failed", "        also lines 2-3", "0.90  f.log:4  disk full"]);
+    expect(render(res, { noCollapse: true }).lines.slice(0, 4)).toEqual(["0.90  f.log:1  worker 12 failed", "0.90  f.log:2  worker 13 failed", "0.90  f.log:3  worker 14 failed", "0.90  f.log:4  disk full"]);
+  });
+  it("whole-file rows print the path only and are never collapsed (their ids carry no line number)", () => {
+    const res = run(ans(0.9, 0.9), { question: "q", items: [{ id: "/p/a.txt", text: "same 1" }, { id: "/p/b.txt", text: "same 2" }] });
+    expect(render(res).lines.slice(0, 2)).toEqual(["0.90  /p/a.txt", "0.90  /p/b.txt"]);
+  });
+  it("proposition rows print their text under the synthesized id", () => {
+    const res = run(ans(0.9), { propositions: [{ text: "the sky is blue" }] });
+    expect(render(res).lines[0]).toBe("0.90  proposition_0  the sky is blue");
+  });
+  it("--save: one file with every answered row as [{id, p}], best first, even a row the text hides", () => {
+    const out = render(projected, { save: "/tmp/llm-ext-in07-not-written.json" });
+    expect(out.files).toHaveLength(1);
+    expect(out.files![0]!.path).toBe("/tmp/llm-ext-in07-not-written.json");
+    expect(JSON.parse(out.files![0]!.content)).toEqual(projected.rows.map((x) => ({ id: x.id, p: x.p })));
+    expect(JSON.parse(out.files![0]!.content)).toHaveLength(5);
+    expect(render(projected).files).toBeUndefined();
+  });
+  it("declares --no-collapse and --save as render flags, so they never reach the strict input schema", () => {
+    expect(spec.flags!.map((f) => [f.flag, f.field, f.render, f.type ?? "string"])).toEqual([["--no-collapse", "noCollapse", true, "boolean"], ["--save", "save", true, "string"]]);
+  });
+});

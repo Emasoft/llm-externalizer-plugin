@@ -198,6 +198,8 @@ LOW_KEYWORDS = {
 
 # ── Fallback prompt (general-purpose dispatch) ───────────────────────────────
 
+# Rule 7 (TRDD-PNU8XECB, USER directive 2026-11-15): the fallback fixer must keep scratch
+# in the gitignored *_dev folders and final files in the tracked ones, like every subagent.
 FALLBACK_PROMPT_TEMPLATE = """You are fixing exactly ONE bug from the markdown file at {path}.
 
 Rules:
@@ -207,7 +209,8 @@ Rules:
 4. Regression check: re-read your diff and trace the modified code paths. If you introduced a new bug, fix it in the same iteration. If you discover a pre-existing bug that wasn't listed, append it as a new '### N. <title>' entry under the appropriate '## <severity> severity' section — do NOT fix it this iteration.
 5. Update the target bug's entry: append ' — FIXED' to its '### ' heading, and rewrite its body to describe (a) what the bug was and (b) what the fix was. Keep it concise — match the style of existing FIXED entries.
 6. Do NOT commit. Do NOT touch any other unfixed bug. Do NOT run the app.
-7. Return EXACTLY ONE LINE to the orchestrator: 'Fixed: <bug title>' on success, or '[FAILED] <one-line reason>' if you couldn't make progress.
+7. Scratch vs final files: temporary or scratch files (partial notes, lint output, intermediate pieces) go to the gitignored *_dev folders (reports_dev/, scripts_dev/, ...); final files go to the git-tracked folders without the suffix (reports/, scripts/, ...). Never write scratch into a tracked folder.
+8. Return EXACTLY ONE LINE to the orchestrator: 'Fixed: <bug title>' on success, or '[FAILED] <one-line reason>' if you couldn't make progress.
 """
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

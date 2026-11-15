@@ -41,7 +41,8 @@ import {
   effectiveProfileName,
 } from "./config.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "./benchmark/free-mode.js";
-import { failureText } from "./provider/http.js";
+import { failureText, stopIfStopOnErrors } from "./provider/http.js";
+import { CommandStoppedError } from "./command-stop.js";
 import { benchmarkFailedModels } from "./benchmark/security-triage/index.js";
 import {
   assessModelPersistence,
@@ -52,6 +53,7 @@ import {
 } from "./model-events.js";
 
 import { RetryDeadlineError, retryWindowClosed, type RetryClock } from "./provider/http.js";
+import { freeFailureCause, typedRawFailure, type FreeFailureCause } from "./free-failure-cause.js";
 
 // ── Which free models are APPROVED (the pool rotation may draw on) ──────
 
@@ -1246,6 +1248,8 @@ export class AllFreeModelsExhaustedError extends Error {
     readonly tried: readonly string[],
     readonly earliestResetMs: number | null,
     readonly lastDetail: string,
+    /** One typed cause per model tried, in attempt order (TRDD-3CG178O7). The message is unchanged. */
+    readonly causes: readonly FreeFailureCause[],
   ) {
     const when =
       earliestResetMs && earliestResetMs > Date.now()
@@ -1361,6 +1365,8 @@ export async function callWithFreeRotation<T>(
   // Newest failure seen (thrown error or failure value): the cause when the
   // shared clock closes under a model that failed with its own plain error.
   let lastThrown: unknown;
+  // The typed cause of every model that failed and was rotated past, carried on AllFreeModelsExhaustedError (TRDD-3CG178O7).
+  const causes: FreeFailureCause[] = [];
 
   for (;;) {
     // The clock is the dispatch's whole retry budget: once closed, no candidate
@@ -1410,6 +1416,7 @@ export async function callWithFreeRotation<T>(
             now(),
           ),
           lastDetail,
+          causes,
         );
       }
     }
@@ -1417,6 +1424,7 @@ export async function callWithFreeRotation<T>(
     tried.push(cur.id);
     hooks.onAttempt?.(cur.id);
     let detail: string;
+    let source: unknown;
     let refusalUntil: number | undefined;
     try {
       const result = await callOne(cur.id, cur.maxOutput);
@@ -1428,7 +1436,10 @@ export async function callWithFreeRotation<T>(
       // A failure the caller reported as a value, but NOT an availability one —
       // hand it straight back so the caller can surface the real error.
       if (!classifyUnavailable(failure)) return result;
+      // --stop_on_errors (TRDD-SWNIIFTF): this is the point where the rotation would try the next model.
+      stopIfStopOnErrors(cur.id, failure);
       detail = failure;
+      source = failure;
       // First line, capped: a failure VALUE can be a whole partial answer plus
       // its upstream-error tail, and it would flow unbounded into a deadline
       // error's cause text.
@@ -1444,6 +1455,8 @@ export async function callWithFreeRotation<T>(
       // an availability error, so it falls through to the classification below
       // (cooldown for that model, next model tried).
       if (err instanceof RetryDeadlineError && err.dispatchClosed) throw err;
+      // The stop raised by --stop_on_errors above (or a --command_timeout stop) is final: its text may name a 503 and must not be classified as an unavailable model and rotated past.
+      if (err instanceof CommandStoppedError) throw err;
       lastThrown = err;
       // failureText: a RetryDeadlineError's own message is neutral; its cause
       // carries the availability text classifyUnavailable must read to rotate.
@@ -1454,8 +1467,14 @@ export async function callWithFreeRotation<T>(
       // uncertain one gets. It is not an availability verdict, so
       // recordUnavailable below writes no cooldown of its own for it (a model
       // already proven dead this run keeps that verdict, as for any error).
-      if (!classifyUnavailable(msg) && paymentErrorCertainty(msg) === null) throw err;
+      // WHY the exit point is unchanged (TRDD-3CG178O7): a failure that is neither an availability verdict nor a certain payment error
+      // still leaves the rotation HERE, after the first model, so a network failure never reaches the pool-exhausted throw. Only the
+      // thrown error becomes typed (a network failure carries its cause list and names the code); no retry, no fallback, no new setting.
+      if (!classifyUnavailable(msg) && paymentErrorCertainty(msg) === null) throw typedRawFailure(cur.id, err, msg);
+      // --stop_on_errors (TRDD-SWNIIFTF): this is the point where the rotation would try the next model.
+      stopIfStopOnErrors(cur.id, err);
       detail = msg;
+      source = err;
       // refusalUntil: set ONLY in the catch (a refusal thrown by the call);
       // a failure VALUE carries no retryAt, so it stays undefined on that path.
       if (err instanceof RetryDeadlineError && err.retryAt !== undefined && !err.dispatchClosed) {
@@ -1464,6 +1483,8 @@ export async function callWithFreeRotation<T>(
     }
 
     lastDetail = detail;
+    // One typed cause per failed model (TRDD-3CG178O7), pushed at the one rotate point: the pool-exhausted throw below carries them.
+    causes.push(freeFailureCause(cur.id, source, detail));
     // Round C0b item 3 (B7): a refusal (dispatchClosed false) with a
     // provider-supplied retryAt cools the model at least until retryAt — the
     // generic 30 s ladder would have the rotation re-trying it at once on the

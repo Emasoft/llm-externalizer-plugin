@@ -30,7 +30,7 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - Bare argument: none (everything goes through flags)
 - Accepted profile types: scouting
 
-mass-scouting Phase 4: actually call the LLM on every eligible file. Compiles the fieldset into a JSON Schema, fans calls out via the scout worker, applies fix_envelope repairs, runs the required-keys validator, persists results + FTS rows. Writes a markdown report under <main-project-dir>/reports/mass_scouting/ (override with output_dir).
+mass-scouting Phase 4: actually call the LLM on every eligible file. Compiles the fieldset into a JSON Schema, fans calls out via the scout worker, applies fix_envelope repairs, runs the required-keys validator, persists results + FTS rows. Writes a markdown report under <main-project-dir>/reports/llm-externalizer/mass_scouting/ (override with output_dir).
 
 RETURNS: files_total/ok/failed/skipped_too_big, retries, cost_usd, report path.
 
@@ -224,14 +224,14 @@ llm-ext scout get --db_path /tmp/scout.db --short_id 1 --job_id scout-audit
 - Bare argument: none (everything goes through flags)
 - Accepted profile types: any
 
-Dump every result row of a job to JSONL or CSV under <main-project-dir>/reports/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.
+Dump every result row of a job to JSONL or CSV under <main-project-dir>/reports/llm-externalizer/mass_scouting/. Useful for follow-up analysis in pandas, jq, etc.
 
 | Flag | Type | Meaning (as printed by --help; long text is truncated there) |
 |---|---|---|
 | `--db_path` | string | (required) Absolute path to the SQLite registry. Created if missing. All sub-commands of a single... |
 | `--format` | string | 'jsonl' (default) or 'csv'. |
 | `--job_id` | string | (required) Stable job identifier (e.g. 'scout-2026-05-06-audit'). Re-running scout with the same id... |
-| `--output_dir` | string | Absolute path for the export directory. Defaults to <main-project-dir>/reports/mass_scouting/. |
+| `--output_dir` | string | Absolute path for the export directory. Defaults to <main-project-dir>/reports/llm-externalizer/mass_scouting/. |
 
 Example:
 ```bash

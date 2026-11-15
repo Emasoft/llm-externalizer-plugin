@@ -1,10 +1,10 @@
 ---
 trdd-id: 0JLI6PGT
 title: SP-13 check presets invariant-check, criterion-vs-tests (D15)
-column: blocked
+column: human_review
 status: tasked
 created: 2026-10-07T19:50:37+0200
-updated: 2026-10-10T04:43:19+0200
+updated: 2026-11-04T10:11:34+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,10 +16,10 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:50:37+0200
 implementation-commits: [643d7887]
-blocked-by: [O4MSZIG5]
+blocked-by: []
 unblock-when: [trdd:O4MSZIG5]
-pre-block-column: dev
-blocker-probe: test -f /Volumes/EmaUITEK4TBSSD/Code/llm-externalizer/llm-externalizer-plugin/design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md
+pre-block-column: 
+blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md
 blocker-holds-if: exit-0
 ---
 
@@ -32,6 +32,8 @@ The check presets invariant-check, criterion-vs-tests (D15) decision as one cata
 - 2026-10-07T19:50:37+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T04:27:51+0200 — column → dev by main-agent@llm-externalizer-plugin. wave 9 code committed; acceptance boxes ticked by evidence, remaining boxes owed
 - 2026-10-10T04:42:55+0200 — column → blocked by main-agent@llm-externalizer-plugin. remaining work waits on: O4MSZIG5
+- 2026-10-31T12:12:21+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
+- 2026-11-04T10:11:34+0100 — column → human_review by main-agent@llm-externalizer-plugin. only the commit-link clause is open; owner decision
 
 ## Plan refs
 
@@ -71,7 +73,7 @@ none
 
 - [x] each preset's labels and attention
 - [x] golden snapshot of `build` output
-- [ ] `project` on this card's captured live reply
+- [x] `project` on this card's captured live reply
 - [x] injection placement as planned (index-scoped), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered
@@ -85,3 +87,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 
 2026-10-10: check spec with two presets registered, tested in catalog/check.test.ts, committed in 643d7887; boxes 1, 2 and 4 to 6 ticked. box 'project on this card's captured live reply' unticked: no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only (needs a capture card, none exists); definition-of-done box (text: tests in the vitest include list, typecheck, lint and npx eslint . --quiet clean, full npm test green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules) stays unticked: met are the include-list entry and the clean typecheck, lint and full suite at 643d7887 (4620 tests) and 67649b69 (4635 tests); unmet is 'one commit with the TRDD id in its subject' (the subjects carry TRDD-ZB41KG62); commit traceability: implementation-commits on this card; the commit message does not name the card id. Report: docs_dev/20261010-SP-10-11-13-report.md
 2026-10-10 BLOCKED (pre-block-column dev): the remaining work is the live reply capture, owned by TRDD-O4MSZIG5 (unblock-when trdd:O4MSZIG5). The definition-of-done clause 'one commit with the TRDD id in its subject' is an open owner decision on TRDD-ZB41KG62, not work on this card. validate's probe requirement is met by 'test -f <blocker card file>', which also reads cleared if the blocker card is renamed, superseded or cancelled; unblock-when is the real condition.
+2026-11-04: every clause of the definition of done is met (own tests in the HEAD include list, no double outside the GlobalFetch seam and ruling categories a, b, c in its own tests, WHY comments present, gate green that day on a tree holding other sessions' uncommitted files) except the commit link: no commit subject or body names this card id; the code is in 643d7887 under its plan label. Owner decision: accept the plan label as the link, or keep the box open.

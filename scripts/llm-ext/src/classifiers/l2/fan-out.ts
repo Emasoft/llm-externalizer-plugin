@@ -11,7 +11,7 @@ import type { BudgetTracker } from "./cost-cap.js";
 import type { EnvelopeReply } from "./envelope.js";
 import { chunkOf, type Plan, type PlannedRequest } from "./planner.js";
 import { warning, type Warning } from "./warnings.js";
-import { CommandStoppedError, commandStopReason } from "../../command-stop.js";
+import { CommandStoppedError, commandStopFlag, commandStopReason } from "../../command-stop.js";
 
 /** What `exec` returns for one request: the billed reply as the envelope wants it, plus its raw answers. `exec` records the usage (before answer checks, plan §7) and reads the body with parseDecisionsReply. */
 export type ExecReply = EnvelopeReply & { answers: Record<string, unknown> };
@@ -257,7 +257,7 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
       if (fatal !== null) fail({ requestIndex, kind: "fatal", message: `the run stopped after a ${fatal.class} failure on request ${fatal.requestIndex}` });
       else fail({ requestIndex, kind: "aborted", message: "the run was aborted" });
     } else if ("commandStop" in o.value) {
-      fail({ requestIndex, kind: "stopped", message: commandStopReason() ?? "--command_timeout stopped the run" });
+      fail({ requestIndex, kind: "stopped", message: commandStopReason() ?? `${commandStopFlag()} stopped the run` });
     } else if ("budgetStop" in o.value) {
       fail({ requestIndex, kind: "budget", message: "--max-budget was passed before this request was sent" });
     } else {
@@ -289,7 +289,8 @@ export async function runPlan<U extends BuiltUnit>(plan: Plan<U>, opts: RunPlanO
   const stopped = notSent > 0 ? "budget" : notSentStop > 0 ? "timeout" : null;
   // WHY the numbers: requests already in flight can overshoot the cap, so the reader sees what was spent and what was never sent.
   if (opts.budget && notSent > 0) warnings.push(warning("budget-stop", `--max-budget stopped the run: ${notSent} of ${plan.requests.length} requests not sent, ${opts.budget.spent()} USD spent`, notSent));
-  if (notSentStop > 0) warnings.push(warning("command-timeout-stop", `--command_timeout stopped the run: ${notSentStop} of ${plan.requests.length} requests not sent; the answers already received are kept`, notSentStop));
+  // The flag named is the one that stopped the run: a --stop_on_errors stop (exit 6) must not read as a timeout. The code and the envelope value "timeout" stay: they are the schema consumers read.
+  if (notSentStop > 0) warnings.push(warning("command-timeout-stop", `${commandStopFlag()} stopped the run: ${notSentStop} of ${plan.requests.length} requests not sent; the answers already received are kept`, notSentStop));
   const status = fatal !== null || (failures.length > 0 && opts.split === "whole-result") ? "failed" : failures.length > 0 ? "partial" : "complete";
   // WHY the replies stay when failed: every billed reply is counted in usage and cost, whatever happens to the answers.
   const dropped = status === "failed" && opts.split === "whole-result";

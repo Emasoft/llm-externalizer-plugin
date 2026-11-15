@@ -12,7 +12,7 @@
  *   4. Add explicit `--include MODEL_ID` baselines (bypass the filter)
  *   5. For each model, call OpenRouter with the fixtures + strict JSON schema
  *   6. Score each result against ground truth
- *   7. Emit a markdown report under reports/benchmark/<ts>-results.md
+ *   7. Emit a markdown report under reports_dev/llm-externalizer/benchmark/<ts>-results.md
  */
 
 import { mkdirSync, writeFileSync, existsSync } from "node:fs";
@@ -61,7 +61,7 @@ import {
 import { paymentErrorCertainty } from "./free-mode.js";
 import { registeredTools } from "../model-qualification/registry.js";
 import { readCandidates, clearCandidates } from "../dynamic-candidates.js";
-import { bookDailySpend } from "./daily-spend.js";
+import { bookDailySpend, dailyRemainingUsd } from "./daily-spend.js";
 import { runUpdateAll, estimateWorkloadCostUsd, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
 import {
   ASSUMED_MAX_OUTPUT_TOKENS,
@@ -75,7 +75,14 @@ import { runSecurityTriageBenchmark } from "./security-triage/index.js";
 import { runScoutAccuracyBenchmark } from "./scout-accuracy.js";
 import { runSearchExistingBenchmark } from "./search-existing/index.js";
 import { runCodeAuditBenchmark } from "./code-task/index.js";
-import { runScanFolderBenchmark } from "./scan-folder/index.js";
+import { runScanFolderBenchmark, describeWorkload as describeScanFolderWorkload } from "./scan-folder/index.js";
+import { datasetFingerprint } from "./scan-folder/dataset.js";
+import {
+  HQ_EMPTY_ROSTER_ERROR,
+  runHqScanQualityRoster,
+  runHqScanQualityBenchmark,
+  resolveHqScanQualityRoster,
+} from "./hq-scan-quality.js";
 import { runCheckSpecsBenchmark } from "./check-specs/index.js";
 import {
   runDescribeBenchmark,
@@ -101,7 +108,7 @@ import {
   runDiscoverNewArrivals,
   renderNewArrivalsText,
 } from "../model-qualification/new-arrivals.js";
-import { defaultOutputDir } from "../project-root.js";
+import { defaultScratchDir } from "../project-root.js";
 import {
   getConfigDir,
   getSettingsPath,
@@ -234,6 +241,12 @@ function validateCombinations(opts: CliOptions): void {
     throw new Error(
       "--apply-profile requires --pick-top-n (or --code-task / --scan-folder / --check-specs / --summarize-benchmark / --topics-benchmark / --sem-dedup-benchmark / --describe-benchmark, which write their single winner into tool_models.<tool>)",
     );
+  }
+  if (opts.hqScanQuality && opts.hqScanQualityModels.length === 0 && !opts.benchFreePool) {
+    // WHY a usage error: --hq-scan-quality has no auto-discovery (the fitness
+    // ledger is judged per named id), so an empty roster would run nothing — a
+    // silent no-op this function exists to refuse (TRDD-FUHTNE04).
+    throw new Error(HQ_EMPTY_ROSTER_ERROR);
   }
   if (opts.fromCache && opts.pickTopN === null) {
     throw new Error("--from-cache requires --pick-top-n (no point loading the cache otherwise).");
@@ -832,6 +845,11 @@ async function main(): Promise<CliResult> {
       for (const id of pool) {
         if (!opts.scanFolderModels.includes(id)) opts.scanFolderModels.push(id);
       }
+    } else if (opts.hqScanQuality) {
+      // Append (preserve any explicit ids the user passed after --hq-scan-quality).
+      for (const id of pool) {
+        if (!opts.hqScanQualityModels.includes(id)) opts.hqScanQualityModels.push(id);
+      }
     } else if (opts.checkSpecs) {
       // Append (preserve any explicit ids the user passed after --check-specs).
       for (const id of pool) {
@@ -908,6 +926,7 @@ async function main(): Promise<CliResult> {
     [opts.searchExisting, "search-existing", opts.searchExistingModels],
     [opts.codeTask, "code-task", opts.codeTaskModels],
     [opts.scanFolder, "scan-folder", opts.scanFolderModels],
+    [opts.hqScanQuality, "hq-scan-quality", opts.hqScanQualityModels],
     [opts.checkSpecs, "check-specs", opts.checkSpecsModels],
     [opts.summarizeBenchmark, "text-summarize", opts.summarizeBenchmarkModels],
     [opts.topicsBenchmark, "text-topics", opts.topicsBenchmarkModels],
@@ -976,6 +995,14 @@ async function main(): Promise<CliResult> {
   // DERIVED from the corpus bytes, with no LLM judge.
   if (opts.scanFolder) {
     return runScanFolderPhase(opts);
+  }
+
+  // --hq-scan-quality routes to the high_quality_scan QUALITY fitness benchmark
+  // (TRDD-FUHTNE04): before this flag runHqScanQualityBenchmark had no caller, so
+  // hq-scan-quality-results.json was never written and every model read untested
+  // for high_quality_scan (profiles/verdicts.ts S5).
+  if (opts.hqScanQuality) {
+    return runHqScanQualityPhase(opts);
   }
 
   // --check-specs routes to the check_against_specs SPEC-ADHERENCE benchmark — a wholly
@@ -1411,9 +1438,9 @@ async function runUpdateAllPhase(opts: CliOptions): Promise<CliResult> {
       force: opts.force,
       // review of 43e3694 (S5): NO mainRoot override here — update-all's
       // report used to ALWAYS resolve one (resolveMainRoot()), which made
-      // writeReport's defaultOutputDir(opts.mainRoot) treat it as an
+      // writeReport's defaultScratchDir(opts.mainRoot) treat it as an
       // explicit override and skip the LLM_EXT_OUTPUT_DIR env check every
-      // real run takes, while --auto-replace's own defaultOutputDir() call
+      // real run takes, while --auto-replace's own defaultScratchDir() call
       // (no argument) always honoured it — two commands disagreeing on the
       // same env var. mainRoot is now optional in UpdateAllOptions and left
       // unset here, so the real CLI honours LLM_EXT_OUTPUT_DIR exactly like
@@ -2144,7 +2171,7 @@ async function runPopulatePaidDefaultProfile(
 /**
  * --security-triage phase: assess model(s) on the security_scan triage golden
  * dataset and recommend the best same-or-cheaper passer. Writes its own JSON +
- * markdown report under reports/security-triage-benchmark/.
+ * markdown report under reports_dev/llm-externalizer/security-triage-benchmark/.
  */
 async function runSecurityTriagePhase(opts: CliOptions): Promise<CliResult> {
   console.error("[triage] security_scan triage model benchmark");
@@ -2213,7 +2240,7 @@ async function runScoutAccuracyPhase(opts: CliOptions): Promise<CliResult> {
  * golden fixture dataset and recommend the best same-or-cheaper passer. Scored
  * DETERMINISTICALLY (precision/recall/F1 over the known duplicate locations — no
  * LLM judge). Writes its own JSON + markdown report under
- * reports/search-existing-benchmark/. ADVISORY only — never edits config.
+ * reports_dev/llm-externalizer/search-existing-benchmark/. ADVISORY only — never edits config.
  */
 async function runSearchExistingPhase(opts: CliOptions): Promise<CliResult> {
   console.error("[search-existing] search_existing_implementations model benchmark");
@@ -2242,7 +2269,7 @@ async function runSearchExistingPhase(opts: CliOptions): Promise<CliResult> {
  * really shipped and was really fixed) plus never-fixed clean files, and scoring
  * is DETERMINISTIC: precision/recall/F1 on localizing the defect by FUNCTION
  * NAME, with NO LLM judge anywhere. Writes JSON + markdown under
- * reports/code-task-benchmark/.
+ * reports_dev/llm-externalizer/code-task-benchmark/.
  *
  * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
  * P's `tool_models.code_task` via applyToolModelToSettings — the same atomic,
@@ -2316,7 +2343,7 @@ async function runCodeTaskPhase(opts: CliOptions): Promise<CliResult> {
  * time rather than hand-listed — so the expected answer cannot drift from the
  * corpus. Scoring is DETERMINISTIC: precision/recall/F1 over the per-file
  * MATCH/NO_MATCH verdicts, with NO LLM judge anywhere. Writes JSON + markdown
- * under reports/scan-folder-benchmark/.
+ * under reports_dev/llm-externalizer/scan-folder-benchmark/.
  *
  * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
  * P's `tool_models.scan_folder` via applyToolModelToSettings — the same atomic,
@@ -2383,6 +2410,76 @@ async function runScanFolderPhase(opts: CliOptions): Promise<CliResult> {
 }
 
 /**
+ * --hq-scan-quality phase (TRDD-FUHTNE04): run each named model through
+ * runHqScanQualityBenchmark, which drives the REAL scan_folder pipeline over the
+ * scan_folder golden corpus and records one row per model in
+ * hq-scan-quality-results.json (key `modelId::date::hqScanQualityHash(datasetFingerprint())`,
+ * row `{date, score:{pass, inconclusive}}`) — exactly the shape profiles/verdicts.ts S5 reads.
+ *
+ * Cost guards, all before a model is sent:
+ *   1. resolveHqScanQualityRoster: every id catalog-priced, then
+ *      assertPaidBenchmarkAllowed (billable ids need --allow-paid-models-tests).
+ *   2. hqSpendRefusal per model: the worst-case sweep estimate must fit what is
+ *      left of --budget-usd AND of today's paid_benchmark_daily_cap_usd, else the
+ *      phase STOPS (exit 2) and names every model it did not run.
+ * Actual spend is booked into the daily-spend ledger after each model, so the
+ * next model's daily check (and every later process) sees it. Never writes
+ * settings.yaml.
+ */
+async function runHqScanQualityPhase(opts: CliOptions): Promise<CliResult> {
+  console.error("[hq-scan-quality] high_quality_scan quality fitness benchmark");
+  // The catalog is the public, no-auth, $0 endpoint: it prices each id for the
+  // paid guard before the API key is even needed.
+  const catalog = await fetchProgrammingModels();
+  const roster = resolveHqScanQualityRoster(opts.hqScanQualityModels, catalog);
+  const apiKey = resolveApiKey();
+  // One corpus hash per run, the same fingerprint production-verdicts.ts reads.
+  const datasetHash = datasetFingerprint();
+  const workload = describeScanFolderWorkload();
+  // Settings (the cap value) are loaded once; the daily-spend LEDGER itself is
+  // re-read on every dailyRemainingUsd call, so each model sees earlier bookings.
+  const settings = loadSettings();
+  const outcome = await runHqScanQualityRoster(roster, {
+    budgetUsd: opts.budgetUsd,
+    estimateUsd: (e) =>
+      estimateWorkloadCostUsd(workload, {
+        inputDollarsPerMillion: e.inputDollarsPerMillion,
+        outputDollarsPerMillion: e.outputDollarsPerMillion,
+      }),
+    dailyRemainingUsd: () => dailyRemainingUsd(settings),
+    bookSpend: (usd) => bookDailySpend(usd),
+    run: async (e) => {
+      const r = await runHqScanQualityBenchmark(e.id, {
+        apiKey,
+        pricing: e.pricing,
+        datasetHash,
+        onProgress: (m) => console.error(`[hq-scan-quality] ${e.id}: ${m}`),
+      });
+      // INCONCLUSIVE is printed apart from FAIL: it is a provider problem, not a
+      // quality verdict, and the ledger records it as neither (hq-scan-quality.ts).
+      process.stdout.write(`hq_scan_quality ${e.id} ${r.pass ? "pass" : r.inconclusive ? "inconclusive" : "fail"}\n`);
+      return r;
+    },
+  });
+  const ran = outcome.results.map((r) => `${r.id} ${r.label.toUpperCase()}`);
+  const passed = outcome.results.filter((r) => r.label === "pass").length;
+  console.error(`[hq-scan-quality] spend: $${outcome.spendUsd.toFixed(6)}`);
+  if (outcome.stopped) {
+    return {
+      ok: false,
+      code: 2,
+      summary:
+        `hq-scan-quality stopped before ${outcome.stopped.beforeId}: ${outcome.stopped.reason} — not sent. ` +
+        `Ran: ${ran.length > 0 ? ran.join(", ") : "none"}; not run: ${outcome.stopped.notRun.join(", ")}; spend $${outcome.spendUsd.toFixed(6)}.`,
+    };
+  }
+  return {
+    ok: true,
+    summary: `hq-scan-quality benchmark done — ${passed}/${roster.length} passed (${ran.join(", ")}), spend $${outcome.spendUsd.toFixed(6)}; verdicts recorded in hq-scan-quality-results.json`,
+  };
+}
+
+/**
  * --check-specs phase: assess model(s) on the check_against_specs SPEC-ADHERENCE corpus
  * and recommend the best same-or-cheaper passer. The spec is this repo's own shipped
  * `scripts/llm-ext/TESTING.md` and the corpus is thirteen VERBATIM git snapshots of real files
@@ -2393,7 +2490,7 @@ async function runScanFolderPhase(opts: CliOptions): Promise<CliResult> {
  * precision/recall/F1 over the per-file CLEAN/VIOLATION verdicts, with NO LLM judge
  * anywhere. Violation CONTENT (the cited rule, the severity) is reported but deliberately
  * NOT graded — grading it needs a judge. Writes JSON + markdown under
- * reports/check-specs-benchmark/.
+ * reports_dev/llm-externalizer/check-specs-benchmark/.
  *
  * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into P's
  * `tool_models.check_against_specs` via applyToolModelToSettings — the same atomic,
@@ -2485,7 +2582,7 @@ const TEXT_TOOL_RUNNERS: Record<
  * corpus (dataset.ts) and recommend the best same-or-cheaper passer. Scoring is
  * DETERMINISTIC: concept recall / character-budget compliance / JSON validity
  * against a hand-authored answer key (score.ts), with NO LLM judge anywhere.
- * Writes JSON + markdown under reports/text-tools-benchmark/<tool>/.
+ * Writes JSON + markdown under reports_dev/llm-externalizer/text-tools-benchmark/<tool>/.
  *
  * ADVISORY by default. With `--apply-profile P` it ALSO persists the winner into
  * P's `tool_models.<tool>` via applyToolModelToSettings — the same atomic,
@@ -2560,7 +2657,7 @@ async function runTextToolPhase(
  * On a healthy/empty ledger NO benchmark runs and every recommendation is "keep
  * the incumbent".
  *
- * Writes the advisory markdown report under reports/auto-replace/. This is the
+ * Writes the advisory markdown report under reports_dev/llm-externalizer/auto-replace/. This is the
  * ONLY surface that may WRITE the recommendation back: with --apply, each
  * changed=true finding is adopted by writing the per-tool `tool_models` entry to
  * ~/.llm-externalizer/settings.yaml via applyToolModelToSettings (the CLI/cron-
@@ -2601,9 +2698,11 @@ async function runAutoReplacePhase(opts: CliOptions, freeOnly: boolean): Promise
   // row99c SF6: was join(resolveProjectMainRoot(), "reports", "auto-replace", ...)
   // — a second, un-approved report root outside <project>/reports/llm-externalizer/
   // (USER write-roots rule, 2026-09-18; see project-root.ts's own doc comment).
-  // defaultOutputDir() is the single source of truth for that root; route
+  // project-root.ts is the single source of truth for that root; route
   // through it instead of hand-rolling resolveProjectMainRoot()+"reports" again.
-  const reportPath = join(defaultOutputDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
+  // TRDD-PNU8XECB: an auto-replace plan is model-pool tool configuration (often run by cron), so it
+  // goes to the gitignored scratch root (reports_dev/llm-externalizer/), not the tracked reports/.
+  const reportPath = join(defaultScratchDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
   mkdirSync(dirname(reportPath), { recursive: true });
   writeFileSync(reportPath, fullReport, "utf-8");
 
@@ -2844,7 +2943,7 @@ async function runAssessModelPhase(modelId: string): Promise<CliResult> {
  * --check-health: self-check the CONFIGURED model(s) of the active profile for
  * catalog presence, cost drift, and requirements regression (TRDD-828238b5 A2).
  * Free — no LLM call; one public catalog fetch + a JSON diff vs the seeded
- * baseline. Writes a report under reports/model-health/ and prints a summary.
+ * baseline. Writes a report under reports_dev/llm-externalizer/model-health/ and prints a summary.
  * Exit 1 when any configured model is critical (deprecated/removed).
  */
 async function runCheckHealthPhase(): Promise<CliResult> {
@@ -2873,7 +2972,7 @@ async function runCheckHealthPhase(): Promise<CliResult> {
  * --new-arrivals: autodiscover models that newly appeared in the OpenRouter
  * catalog since the last run (TRDD-828238b5 A4). Free — no LLM call; one public
  * catalog fetch diffed against the seeded snapshot, each new id assessed against
- * every per-tool requirements gate. Writes a report under reports/model-arrivals/
+ * every per-tool requirements gate. Writes a report under reports_dev/llm-externalizer/model-arrivals/
  * and prints a summary. Report-only — always exit 0 (informational).
  */
 async function runNewArrivalsPhase(opts: CliOptions): Promise<CliResult> {
@@ -2968,12 +3067,14 @@ export function buildReportPath(): string {
   // Write-roots rule (2026-09-18): the non-isolated (production) branch used
   // to join resolveMainRoot() + "reports"/"benchmark" directly, landing at
   // <project-root>/reports/benchmark/ — OUTSIDE every USER-approved write
-  // root. Route it through defaultOutputDir() instead (the single approved
+  // root. Route it through project-root.ts instead (the single approved
   // exception root, <project-root>/reports/llm-externalizer/) and nest
   // "benchmark" under that.
   const reportDir = process.env.LLM_EXT_CONFIG_DIR
     ? join(getConfigDir(), "reports", "benchmark")
-    : join(defaultOutputDir(), "benchmark");
+    // TRDD-PNU8XECB: a model-pool comparison is tool configuration and usually runs detached, so it
+    // is scratch output (reports_dev/llm-externalizer/benchmark/), not a final tracked report.
+    : join(defaultScratchDir(), "benchmark");
   const now = new Date();
   const pad = (n: number): string => String(n).padStart(2, "0");
   const offsetMin = -now.getTimezoneOffset();

@@ -42,6 +42,7 @@ export function recordDecisionsUsage(opts: {
   // WHY ok true: the callback runs only for a 200 reply with valid usage, so the request was served and billed; the later answer check does not change what was charged.
   // WHY no withUsageContext here: the dispatch chokepoint installs the invocation context once, so every request of one run shares one op-id; a context per call would split the run.
   // WHY the endpoint on the line: stats and readers tell decisions calls from chat completions by this field (L1-10).
-  recordRequest({ ok: true, durationMs: opts.durationMs, costUsd: cost.costUsd, endpoint: opts.endpoint });
+  // WHY the input tokens on the line (C4-12): the reply measured them, and the lifetime Jev totals sum them from the history.
+  recordRequest({ ok: true, durationMs: opts.durationMs, costUsd: cost.costUsd, endpoint: opts.endpoint, inputTokens: opts.usage.input_tokens });
   return cost;
 }

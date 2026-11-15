@@ -21,12 +21,12 @@ import {
 let cfg: string;
 let prevCfgDir: string | undefined;
 
-/** Write a `modelId::date::hash`-keyed deterministic ledger (failureReasons=[]
- *  means PASS). */
-function writeDeterministic(file: string, entries: Record<string, { failureReasons: string[] }>) {
+/** Write a `modelId::date::hash`-keyed deterministic ledger. TRDD-SZ7TO9FW inc 2: the pass rule is the row's
+ *  qualityPass (the stored threshold verdict), so each fixture states it; failureReasons is carried but not judged. */
+function writeDeterministic(file: string, entries: Record<string, { failureReasons: string[]; qualityPass?: boolean }>) {
   const out: Record<string, unknown> = {};
   for (const [modelId, v] of Object.entries(entries)) {
-    out[`${modelId}::2026-07-16::hashA`] = { date: "2026-07-16", failureReasons: v.failureReasons };
+    out[`${modelId}::2026-07-16::hashA`] = { date: "2026-07-16", failureReasons: v.failureReasons, ...(v.qualityPass === undefined ? {} : { qualityPass: v.qualityPass }) };
   }
   writeFileSync(join(cfg, file), JSON.stringify(out), "utf-8");
 }
@@ -64,7 +64,7 @@ describe("validated — difficulty hierarchy", () => {
 
   it("a HARDER pass covers an EASIER tool, but not vice-versa", () => {
     // deepseek passed code_task (hardest); qwen passed only security_scan (easiest tool w/ bench).
-    writeDeterministic("code-task-results.json", { "d/deepseek": { failureReasons: [] } });
+    writeDeterministic("code-task-results.json", { "d/deepseek": { failureReasons: [], qualityPass: true } });
     writeTriage({ "q/qwen": { pass: true, inconclusive: false } });
 
     // deepseek (code_task pass) is validated for code_task AND every easier tool.
@@ -88,14 +88,19 @@ describe("validated — difficulty hierarchy", () => {
 });
 
 describe("validated — pass/fail extraction", () => {
-  it("a non-empty failureReasons is NOT a pass (empty/errored/429 runs excluded)", () => {
+  it("qualityPass decides the pass, not failureReasons; a row without a boolean qualityPass proves nothing", () => {
     writeDeterministic("code-task-results.json", {
-      "good/model": { failureReasons: [] },
-      "bad/model": { failureReasons: ["case1: wrong"] },
+      "good/model": { failureReasons: [], qualityPass: true },
+      "bad/model": { failureReasons: ["case1: wrong"], qualityPass: false },
+      // TRDD-SZ7TO9FW inc 2: the live shape the old empty-failureReasons rule served as a pass.
+      "quiet-fail/model": { failureReasons: [], qualityPass: false },
+      "legacy/model": { failureReasons: [] },
     });
     const set = validatedModelsForTool("code_task");
     expect(set.has("good/model")).toBe(true);
     expect(set.has("bad/model")).toBe(false);
+    expect(set.has("quiet-fail/model")).toBe(false);
+    expect(set.has("legacy/model")).toBe(false);
   });
 
   it("an inconclusive triage run is NOT a pass", () => {
@@ -130,7 +135,7 @@ describe("assertModelValidated — the send-time chokepoint", () => {
   });
 
   it("allows a validated paid model", () => {
-    writeDeterministic("code-task-results.json", { "ok/model": { failureReasons: [] } });
+    writeDeterministic("code-task-results.json", { "ok/model": { failureReasons: [], qualityPass: true } });
     expect(() => assertModelValidated("ok/model", "code_task", true)).not.toThrow();
   });
 

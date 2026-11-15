@@ -24,7 +24,27 @@ import {
   selectSameOrCheaper,
   type GenericCandidate,
 } from "../select-common.js";
-import { passesThresholds, type SearchExistingScore } from "./score.js";
+import {
+  answeredOnlyScore,
+  passesThresholds,
+  type SearchExistingScore,
+  type SearchExistingThresholds,
+} from "./score.js";
+import { isUnansweredFilesNonEvidence, NON_EVIDENCE_REASON } from "../quality-evidence.js";
+
+/**
+ * The benchmark verdict for display and selection: the SAME judgement the ledger
+ * qualityPass uses (answered files only; a run with over a quarter of its files
+ * unanswered is not evidence and cannot qualify) so selection and the stored
+ * verdict cannot disagree (TRDD-90BXJ2KO).
+ */
+export function judgeSearchExisting(
+  score: SearchExistingScore,
+  thresholds?: SearchExistingThresholds,
+): { pass: boolean; failures: string[] } {
+  if (isUnansweredFilesNonEvidence(score)) return { pass: false, failures: [NON_EVIDENCE_REASON] };
+  return passesThresholds(answeredOnlyScore(score), thresholds);
+}
 
 /**
  * Per-tool requirements for search_existing_implementations. Single source of
@@ -76,7 +96,7 @@ export interface SearchExistingSelectionResult {
  * passesThresholds (the same gate the benchmark uses to decide pass).
  */
 function toGeneric(c: SearchExistingCandidate): GenericCandidate {
-  const thr = passesThresholds(c.score);
+  const thr = judgeSearchExisting(c.score);
   return {
     modelId: c.modelId,
     qualified: c.qualified,

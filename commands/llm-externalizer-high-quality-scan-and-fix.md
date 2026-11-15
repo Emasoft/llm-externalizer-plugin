@@ -146,6 +146,7 @@ On any error: `[FAILED] llm-externalizer-high-quality-scan-and-fix — <one-line
 ## Constraints
 
 - `answer_mode` is hardcoded `0`; `output_dir` is hardcoded `$MAIN_ROOT/reports/llm-externalizer`. Do NOT accept overrides.
+- Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 - Fixers are ALWAYS Opus — never Sonnet. Do NOT route by file size.
 - You MUST NOT `Read` any scan report, fixer summary, or the final joined report; only file paths flow through the orchestrator.
 - Fixer dispatch MUST be parallel (batches of ≤15). Sequential dispatch defeats the design.

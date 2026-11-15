@@ -5,7 +5,7 @@ title: classifiers command group - system-one inference with the Jev model via O
 column: todo
 
 created: 2026-10-07T05:02:14+0200
-updated: 2026-10-10T08:44:43+0200
+updated: 2026-11-15T17:27:54+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,7 +16,7 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T05:02:14+0200
-npt: [WBZJRSQB]
+npt: []
 ---
 
 # classifiers command group - system-one inference with the Jev model via OpenRouter
@@ -28,6 +28,7 @@ Feature queued by the USER on 2026-10-07 for after the 14.1.0 release; research 
 ## Approval log
 
 - 2026-10-07T05:02:14+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-15T17:27:50+0100 USER decision (verbatim choice 'Publish now (Recommended)'): the next release (14.3.0) ships before the classifier plan is complete; this overrides the 2026-10-09 ruling for that release only. Recorded on TRDD-EB1XGLMJ.
 
 ## USER directive verbatim
 
@@ -48,7 +49,7 @@ From TRDD-KV2WCFCS review: every classifier tool that calls the decisions endpoi
 
 - Plan approved by the USER 2026-10-07: design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md (plan v3, sections 1-17; all D-rows took their default; every paid step in D12 still waits for an explicit USER go-ahead).
 - Scope now: classify commands (filter, label, rank, find, ask, verify, screen, decide (+--hook), compare, extract, audit, review (+--claims), findings, test-output, check presets, ping), browse run/doctor, five profile types (local, free, paid, scouting, classifier; PT cards), README redesign (RD epic, RD-01..RD-20).
-- NEXT ACTION: finish the 14.1.0 release (WBZJRSQB) first; then mint the plan's cards group by group (plan section 17); no classifier code before 14.1.0 ships.
+- NEXT ACTION: 14.1.x shipped. Continue the child cards from wave 10; run trddgrep next.
 - SUPERSEDED: the earlier 'every classifier tool must be in free-forbidden-tools.test.ts' constraint — replaced by PF-10 (CLASSIFIER_TOOLS category governed by allow_paid).
 2026-10-07: plan re-approved with §18 (card minting in backburner in parallel with 14.1.0) and the D2 spending ruling.
 2026-10-07: plan §12's Card column wins over the §16 worked examples (the L0-03 example still lists E10, owned by L0-04). Every card group is checked with scripts_dev/check-plan-cards.py before commit. Commit eadb797's message counted the warnings wrong: there are 17 shortened titles plus 2 cards (P-04, L0-03) citing E rows in Plan refs they do not own.
@@ -80,6 +81,12 @@ Startable before P-01: RD-01, RD-02, RD-03, RD-04, RD-05, RD-06, RD-07, RD-08, R
 2026-10-10T08:34:35+0200 b159d89b (IN-01, TRDD-XHHH0N1E): classify filter/rank/find take files, directories, globs, -, --items, --lines, --ext, --limit, --max-bytes, --follow-symlinks; suite 266 files / 4796 tests. IN-01 joins the cards blocked on the owner ruling about test doubles (it is now the most urgent open decision: every finished runner and command card lands blocked on it). Commit 9abc0514's message also claims the probes were anchored to a line start; superseded (now a quoted fixed-string grep with exit-nonzero).
 2026-10-10T08:43:18+0200 a77c0f96 (IN-02, TRDD-LMSYDGVB): classify label takes --labels / --labels-json and file inputs; suite 266 files / 4806 tests; IN-02 joins the cards blocked on the test-double ruling. Plan inconsistency for the owner: label's 2-255 labels rule cannot reach 255 under E59's 8000-character catalog budget (each class serializes to at least ~32 characters).
 2026-10-10T08:44:43+0200 Process note for every coordinator session: the Bash tool runs zsh, which does not word-split an unquoted variable; never pass a list of paths to git in one variable (name them literally, use an array, or run a bash script), and chain every commit guard with && (set -e did not stop a failed commit command here). Card writes: quote any trddgrep set value containing colon-space; run the full validate before committing cards.
+OWNER-RULING-test-doubles: PERMISSIVE. Decided 2026-10-31 by the coordinator under the USER grant 'decide by yourself autonomously', recorded in the 14.2.0 handoff as D1.
+Scope of the 2026-10-31 ruling: PERMISSIVE covers only the three categories of the 08:16:44 line (fakes of what cannot be produced for real, hand-built decision specs, injected sinks and signal sources). Every other test double stays forbidden; the user's standing rule that tests are real still holds.
+2026-11-04 DoD drain of the 18 dev cards (six read-only verifiers, each told to find the unmet clause). Coordinator rules, under the user's 2026-11-04 instruction 'decide by yourself. just base your decision on verified facts.': R1 the commit clause is met when a commit subject, or the body of the bundle commit, names the card id and implementation-commits lists that commit, because history is never rewritten; R2 the test-doubles clause is judged on the card's own test files, and doubles in shared files count against the card that owns them; R3 other sessions' uncommitted edits that are only the governor-burn include line in vitest.config.ts and dist/ build output do not block a card whose tests run neither. Closed: 0G2IVEVU, SILI0HS8, N2TDAXL4, QFPC4Z8P, N1FQ8A8K, FPD1G0VB. Human review (no commit names the id): 0JLI6PGT, O5NUD6IT. Open in dev, WHY comments thin: UQ8TYKC9 (rank.ts), NGXUX45F (find.ts). Blocked on TRDD-KNSQAQ1S (forbidden test doubles): LMSYDGVB, DCI7C2Y7, AQ82IO1T, XHHH0N1E, 4Q1IVJOE, BUL4EEBP, XZZ2NSWY, OHLMZONY.
+2026-11-04 correction to the drain line above: the user's 2026-11-04 message answered three bug-scan questions (subprocess timeouts, JSON.parse, the governor test skip) and does not by itself cover R1 to R3. They rest on the standing user rule to decide on verified facts without stalling, on drain-by-default, and on the 2026-10-31 precedent where the coordinator ruled on this same definition of done. R1 accepts a body mention where the clause's words say subject: it serves the clause's purpose (git log --grep finds the id; implementation-commits links back) but departs from its wording, so it stands pending owner ratification. The six cards closed under it are archived and immutable; if the owner rejects R1, each needs a follow-up commit naming its id. Blocked cards now carry unblock-when [trdd:KNSQAQ1S] and a probe on that card, replacing the stale test-doubles-ruling probe.
+2026-11-04T13:31:22+0100 R4 (coordinator reading, pending owner ratification like R1, under the standing rule to decide on verified facts): a seam that throws to fail the test if it is ever invoked asserts non-use and is not a double, because a real dependency would make the assertion vacuous (read 2026-11-04: classify-launch.test.ts:164 and definitions-classify.test.ts:25 readStdin, extract.test.ts:536-537 spawn). A seam that returns substitute data is a double, allowed only under (a), (b) or (c). A data-returning readStdin (run-decision.test.ts:206, 413, 502; input-args.test.ts:90) is read as (a), assumed and not measured: a test worker is taken to have no controllable stdin; the same content can be produced end to end by spawning the built CLI with piped stdin, so this is the weakest part. Where a real function gives the same guarantee it must be used: a settings {} literal (definitions-classify.test.ts:22; a real settings.yaml through loadSettings is possible) and a throwing readFile (:24; real readFileSync throws ENOENT) are forbidden. If the owner rejects the data-returning part, input-args and run-decision reopen and LMSYDGVB, AQ82IO1T, XHHH0N1E, DCI7C2Y7, BUL4EEBP and XZZ2NSWY return to blocked.
+- 2026-11-05: two owner rulings bind the whole classify group, see the section "Owner rulings 2026-11-05" below: no hook or caller-specific adapter; llm-ext provides only commands and skills, and how a command is used, and by which program, is not its concern. Open owner question: whether they retire TRDD-ZBMRKOI3 and TRDD-TIJ6EYK3.
 
 ## USER directives verbatim (2026-10-07, continued)
 
@@ -109,3 +116,7 @@ Startable before P-01: RD-01, RD-02, RD-03, RD-04, RD-05, RD-06, RD-07, RD-08, R
 
 The KV2WCFCS constraint (every classifier tool in free-forbidden-tools.test.ts) is superseded: classifier tools form a CLASSIFIER_TOOLS category derived from the catalog registry, exempt from the free-only rule because allow_paid governs them; an assertion checks every decisions-sending tool is in that list (plan PF-10).
 2026-10-07 (USER ruling): classifiers are paid by design: no allow_paid field, no paid switch, no default spend cap; the only cap is the opt-in --max-budget=<usd> (plan D2). This supersedes the 'governed by allow_paid' wording above and in the STATE block.
+
+## Owner rulings 2026-11-05
+
+2026-11-05 owner rulings that bind the whole classify group, verbatim: "how such command will be used and by what program is not a concern of llm-externalizer. the same is true for all jev commands." and "i did not asked for any hook. you must only create llm-ext commands and skills." Their context is recorded on TRDD-EME7S0D3. Open owner question: whether they retire TRDD-ZBMRKOI3 (C4-05 classify decide --hook) and TRDD-TIJ6EYK3 (DOC-07 hook-gate.md); nothing acted on.
