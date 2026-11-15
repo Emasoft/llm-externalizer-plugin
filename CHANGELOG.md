@@ -8,7 +8,7 @@ Curated notes for 14.3.0; the generated entry is the section above.
 
 **Local inference fallback**
 
-- Classifier requests are answered by a local model when the remote model fails. One machine-wide local decision server serves them: llm-ext adopts the server that is already running and never starts a second one, and the server can be installed as a login agent. The result records that the local model answered, and a warning names the remote error that caused the fallback.
+- Classifier requests are answered by a local model when the remote model fails. One machine-wide local decision server serves them: llm-ext adopts the server that is already running and never starts a second one; the plugin does not install that server, so it must already be running. The result records that the local model answered, and a warning names the remote error that caused the fallback.
 - A governor caps the RAM and CPU that local requests may use, 80 % of each by default. Every local request takes a lease from it and waits, then resumes, under memory or CPU pressure instead of failing; a saturated governor makes later lease waits fail fast for 60 seconds.
 - The fallback address must be a bare loopback origin; a URL whose real host is remote is refused.
 - Session summaries fall back to a calibrated managed local model after the remote free models. A request that loses a race, or is aborted, cancels its job at the local broker.
