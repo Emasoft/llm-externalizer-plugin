@@ -275589,7 +275589,7 @@ async function ensureLocalDecider(cfg, deps) {
   if (installed) {
     return { ok: false, retryable: true, reason: "no mlx-decision server is running yet (the singleton may be restarting); llm-ext never starts one" };
   }
-  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one \u2014 install mlx-decision and its login agent" };
+  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one \u2014 install mlx-decision and start its server yourself (this plugin does not install or start it)" };
 }
 async function waitForLoaded(cfg, deps, url2) {
   const deadline = deps.now() + cfg.startTimeoutMs;
@@ -275758,7 +275758,7 @@ var init_local_fallback = __esm({
     DECIDER_SINGLETON_PORT = 8123;
     LOCAL_FALLBACK_DEFAULTS = {
       enabled: true,
-      /** WHY the login agent port: it is only the FIRST place looked at; discovery by process and listening sockets finds the singleton on any other port anyway. */
+      /** WHY the singleton port: it is only the FIRST place looked at; discovery by process and listening sockets finds the singleton on any other port anyway. */
       url: `http://127.0.0.1:${DECIDER_SINGLETON_PORT}`,
       /** How long to wait for an ADOPTED singleton to finish loading its model: five minutes, since MLX loads the weights before /health reports them, and that is minutes, not seconds. */
       startTimeoutMs: 3e5,
