@@ -292922,7 +292922,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.4.1";
+var VERSION = "14.5.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

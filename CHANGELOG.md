@@ -1,6 +1,38 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.5.0] - 2026-11-16
+
+### Added
+
+- Feat(classify): local-only classifier profile local-decision on mlx-decision; no remote-only classify run; plans fit the local decider (TRDD-1L9VMEY7)
+
+
+### Changed
+
+- Ci: temporary 120 min job ceiling to measure the Linux broker and governor stages (TRDD-36L97JC9)
+
+
+### Documentation
+
+- Docs(trdd): record the local-decision implementation and its open base64 gap (TRDD-1L9VMEY7)
+
+- Docs: add TRDD-1L9VMEY7, local-only classifier profile local-decision and no remote-only classifier profile (TRDD-1L9VMEY7)
+
+- Docs(trdd): Linux CI evidence for v14.4.1 and why a diagnostic PR cannot run (TRDD-36L97JC9)
+
+- Docs(trdd): add the strip-code read to ZGSGGHQG and pin the origin of the 14.4.1 test totals (TRDD-FC2TX9VU)
+
+- Docs(trdd): record implementation commits, the post-publish read of the thinking strip, and the 14.4.1 release checks (TRDD-FC2TX9VU)
+
+- Docs(trdd): FC2TX9VU state after the 14.4.1 publish (TRDD-FC2TX9VU)
+
+
+### Refactored
+
+- Refactor(broker): retire the drain path for pre-one-broker brokers and its test (TRDD-ZGSGGHQG)
+
+
 ## [14.4.1] - 2026-11-16
 
 ### Added
