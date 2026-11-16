@@ -142,6 +142,13 @@ export interface PhaseContext {
   restart: (ctx: number, slots: number) => Promise<void>;
   /** The last lines of the cal server log (for a crash report). */
   logTail: () => string;
+  /**
+   * The free-memory reading of a phase memory check, called with the floor percentage. Production leaves it unset and the
+   * phase reads the real machine through freeMemory (memory.ts). WHY it exists (TRDD-36L97JC9): a test of the memory wait
+   * needs a reading it can place relative to total RAM; sized from the host's real reading, its fixture is unsatisfiable
+   * on an idle host (free about 90 % of RAM), as on the Linux CI runner.
+   */
+  freeMemory?: (floorPct: number) => Promise<{ free: number; floor: number }>;
   log: (msg: string) => void;
 }
 

@@ -102,6 +102,27 @@ jobs:
       - name: Lint Python scripts
         run: uv run --no-project --with ruff ruff check scripts/
 
+      # TRDD-36L97JC9: tests/test_publish_failed_push.py and tests/test_publish_runs_git_in_repo_root.py run the REAL
+      # git-cliff (scripts/publish.py step 4), and the ubuntu runner does not ship it: both died with FileNotFoundError.
+      # Pinned release + SHA-256 of the asset (the release publishes it as the asset digest; verified by downloading
+      # v2.14.2 and hashing it), the same pattern as the llama-server step in ci.yml; a mismatch fails the step. 2.14.2
+      # is the version the tests pass on locally.
+      - name: Install git-cliff
+        env:
+          CLIFF_TAG: v2.14.2
+          CLIFF_SHA256: 24f397c733add5390fdceee3a2088588ab0d5f944ce00d34cb7029b888cf2db4
+        run: |
+          set -euo pipefail
+          asset="git-cliff-${CLIFF_TAG#v}-x86_64-unknown-linux-gnu.tar.gz"
+          dest="${RUNNER_TEMP}/git-cliff"
+          mkdir -p "$dest"
+          curl -fsSL --retry 3 -o "${dest}/${asset}" \
+            "https://github.com/orhun/git-cliff/releases/download/${CLIFF_TAG}/${asset}"
+          echo "${CLIFF_SHA256}  ${dest}/${asset}" | sha256sum -c -
+          tar -xzf "${dest}/${asset}" -C "$dest"
+          echo "${dest}/git-cliff-${CLIFF_TAG#v}" >> "$GITHUB_PATH"
+          "${dest}/git-cliff-${CLIFF_TAG#v}/git-cliff" --version
+
       # TRDD-CCS6ENHU: tests/*.py previously ran ONLY in release.yml, gated
       # behind an actual release — a regression here reached CI green and
       # shipped before anyone saw a failure. Mirrors release.yml's own

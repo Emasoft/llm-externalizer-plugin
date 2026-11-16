@@ -400,15 +400,24 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
     }
   };
 
+  /** Injected free memory: 55 % of total RAM, so above the 50 % floor by a margin and the window (5 % to 50 % of RAM) is the same on every host. */
+  const injectedFree = (): number => Math.round(0.55 * totalmem());
+  const injectedReading = async (floorPct: number): Promise<{ free: number; floor: number }> => ({ free: injectedFree(), floor: Math.round((floorPct / 100) * totalmem()) });
+
   /**
+   * TRDD-36L97JC9: the free-memory reading is INJECTED (ctx.freeMemory), not read from the host. The window where a
+   * candidate waits is (free - floor, total - floor]; with the least candidate at one slot and the largest at two or
+   * more, it holds the whole ladder only when memory in use is large, so a fixture sized from the real reading is
+   * unsatisfiable on an idle host (the Linux CI runner: free 14183 MiB of about 16 GiB). Total RAM stays the real one.
+   * The rest of this file keeps the real reading.
    * Unit 6: the floor is 100 - ram_limit_pct, so at most 50 % (ram_limit_pct 50) and at least 1 % (99). The synthetic KV
-   * per token (`blocks`) is sized from this machine's reading so that the least candidate misses the free memory above a
+   * per token (`blocks`) is sized from the injected reading so that the least candidate misses the free memory above a
    * 50 % floor while the largest fits the free memory above a 1 % floor (and total RAM above 50 %): a wait, then memory
-   * back, whatever is in use (coordinator decision 5), as long as free memory spans that gap.
+   * back, whatever is in use on the host.
    */
   const halfFloorBlocks = async (tokens: { least: number; most: number }): Promise<number> => {
     const total = totalmem();
-    const { free } = await freeMemory(1);
+    const free = injectedFree();
     const { head, perToken } = probeKv();
     const lo = free - 0.5 * total - head;
     const hi = Math.min(free - 0.01 * total, 0.5 * total) - head;
@@ -423,6 +432,7 @@ describe("phaseC.run: memory waits pause, never fail; a scouting timeout reruns 
     const scout4 = 4 * scoutSlotCtx(2048);
     const blocks = await halfFloorBlocks({ least: Math.min(main1, scout4), most: Math.max(2 * main1, scout4) });
     const { ctx, trials } = context(url, { mainSlots: [1, 2], scoutShares: [2048], scoutSlots: [4] }, {}, blocks);
+    ctx.freeMemory = injectedReading;
     process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT = "50";
     const first = await phaseC.run(ctx);
     expect(first).toMatchObject({ passed: false, paused: true, step: "C/main/1" });

@@ -191,7 +191,8 @@ export const phaseC: Phase = {
        */
       const fits = async (step: string, slots: number, slotCtx: number): Promise<Record<string, string | number> | null> => {
         await ctx.stopServer(`measuring free memory for ${step}`);
-        const { free, floor } = await freeMemory(floorPct);
+        // WHY the reading is overridable: see PhaseContext.freeMemory (TRDD-36L97JC9); production never sets it.
+        const { free, floor } = await (ctx.freeMemory ?? freeMemory)(floorPct);
         const need = weights + kvBytes(layers, slots * slotCtx) + WINDOW_HEADROOM_BYTES;
         const mib = (x: number): number => Math.round(x / 2 ** 20);
         const fit = budgetFit(need, totalmem() - floor, free - floor);

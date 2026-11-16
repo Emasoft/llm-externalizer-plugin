@@ -162,6 +162,10 @@ export function parseLsofListeners(stdout: string): Map<number, string[]> {
  * timeout or signal, any other exit code, and exit 1 WITH stderr all throw, carrying the exit/signal and stderr.
  * The none-rule trusts lsof's exit-1 semantics; a harmless lsof warning on exit 1 therefore becomes a retryable
  * "cannot list" (accepted trade-off: retryable, never a wrong adoption or a second server).
+ *
+ * WHY the default `lsofPath` is the macOS one (TRDD-36L97JC9): the only caller, discoverDeciders, runs only on darwin
+ * (local-decider.ts refuses every other platform before it scans), and macOS ships lsof at /usr/sbin/lsof. Linux has it
+ * at /usr/bin/lsof, or not at all, and no Linux caller exists, so no lookup is written for it.
  */
 export function listenersOf(pids: number[], lsofPath = "/usr/sbin/lsof"): Promise<Map<number, string[]>> {
   if (pids.length === 0) return Promise.resolve(new Map());

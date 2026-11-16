@@ -728,7 +728,11 @@ describe("listenersOf", () => {
     return file;
   }
 
-  it("reports the loopback urls of real sockets bound on 127.0.0.1, 0.0.0.0 and ::", async () => {
+  // WHY these three use `it.runIf(darwin)` (TRDD-36L97JC9): they run listenersOf with its default lsof path, /usr/sbin/lsof, the macOS
+  // location, and the decider they serve is macOS-only (local-decider.ts refuses any other platform before the scan). On
+  // Linux that path does not exist (ENOENT). The other tests in this block pass their own lsof path or a /bin/sh script
+  // and run on every platform.
+  it.runIf(process.platform === "darwin")("reports the loopback urls of real sockets bound on 127.0.0.1, 0.0.0.0 and ::", async () => {
     // WHY `::` is here: it pins the MAPPING (a tIPv6 *:P socket becomes a loopback url), not reachability. A Python
     // server bound to :: is IPv6-only and will not answer on 127.0.0.1; it ends as "did not answer /health".
     // On a host with IPv6 disabled, listen(0, "::") throws EAFNOSUPPORT.
@@ -737,7 +741,7 @@ describe("listenersOf", () => {
     for (const port of ports) expect(got).toContain(`http://127.0.0.1:${port}`);
   });
 
-  it("a repeated pid still answers", async () => {
+  it.runIf(process.platform === "darwin")("a repeated pid still answers", async () => {
     const port = await listenOn("127.0.0.1");
     const got = (await listenersOf([process.pid, process.pid])).get(process.pid) ?? [];
     expect(got).toContain(`http://127.0.0.1:${port}`);
@@ -747,7 +751,7 @@ describe("listenersOf", () => {
     expect((await listenersOf([], "/nonexistent/lsof")).size).toBe(0);
   });
 
-  it("a pid that does not exist is an empty map (lsof exit 1, no output)", async () => {
+  it.runIf(process.platform === "darwin")("a pid that does not exist is an empty map (lsof exit 1, no output)", async () => {
     expect((await listenersOf([999999])).size).toBe(0);
   });
 
