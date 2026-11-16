@@ -7577,14 +7577,14 @@ function buildBenchmarkRoster(candidatePool, criteria2, includeIds, baselineLook
 function rankByQualityIndex(models) {
   const codexVals = models.map((m) => m.codexIndex).filter((v) => v !== void 0);
   const eloVals = models.map((m) => m.designArenaElo).filter((v) => v !== void 0);
-  const normalise = (v, pool) => {
+  const normalise2 = (v, pool) => {
     if (v === void 0 || pool.length === 0) return void 0;
     const lo = Math.min(...pool);
     const hi = Math.max(...pool);
     return hi === lo ? 1 : (v - lo) / (hi - lo);
   };
   const qualityScore = (m) => {
-    const axes = [normalise(m.codexIndex, codexVals), normalise(m.designArenaElo, eloVals)].filter(
+    const axes = [normalise2(m.codexIndex, codexVals), normalise2(m.designArenaElo, eloVals)].filter(
       (v) => v !== void 0
     );
     return axes.length === 0 ? void 0 : axes.reduce((a, b) => a + b, 0) / axes.length;
@@ -8601,9 +8601,9 @@ function hostIsAppleSiliconUnderRosetta() {
   }
   return rosettaArm64Probe;
 }
-function localsPlatformSupported(platform2, arch) {
-  const injected = platform2 !== void 0 || arch !== void 0;
-  const p = platform2 ?? process.platform;
+function localsPlatformSupported(platform3, arch) {
+  const injected = platform3 !== void 0 || arch !== void 0;
+  const p = platform3 ?? process.platform;
   const a = arch ?? process.arch;
   if (p !== "darwin") return false;
   if (a === "arm64") return true;
@@ -18942,7 +18942,7 @@ ${lanes.join("\n")}
           const isMacOs = process.platform === "darwin";
           const isLinuxOrMacOs = process.platform === "linux" || isMacOs;
           const statSyncOptions = { throwIfNoEntry: false };
-          const platform2 = _os.platform();
+          const platform3 = _os.platform();
           const useCaseSensitiveFileNames2 = isFileSystemCaseSensitive();
           const fsRealpath = !!_fs.realpathSync.native ? process.platform === "win32" ? fsRealPathHandlingLongPath : _fs.realpathSync.native : _fs.realpathSync;
           const executingFilePath = __filename.endsWith("sys.js") ? _path.join(_path.dirname(__dirname), "__fake__.js") : __filename;
@@ -19023,7 +19023,7 @@ ${lanes.join("\n")}
               return process.memoryUsage().heapUsed;
             },
             getFileSize(path) {
-              const stat = statSync18(path);
+              const stat = statSync20(path);
               if (stat == null ? void 0 : stat.isFile()) {
                 return stat.size;
               }
@@ -19067,7 +19067,7 @@ ${lanes.join("\n")}
             }
           };
           return nodeSystem;
-          function statSync18(path) {
+          function statSync20(path) {
             try {
               return _fs.statSync(path, statSyncOptions);
             } catch {
@@ -19126,7 +19126,7 @@ ${lanes.join("\n")}
               activeSession.post("Profiler.stop", (err, { profile }) => {
                 var _a;
                 if (!err) {
-                  if ((_a = statSync18(profilePath)) == null ? void 0 : _a.isDirectory()) {
+                  if ((_a = statSync20(profilePath)) == null ? void 0 : _a.isDirectory()) {
                     profilePath = _path.join(profilePath, `${(/* @__PURE__ */ new Date()).toISOString().replace(/:/g, "-")}+P${process.pid}.cpuprofile`);
                   }
                   try {
@@ -19147,7 +19147,7 @@ ${lanes.join("\n")}
             }
           }
           function isFileSystemCaseSensitive() {
-            if (platform2 === "win32" || platform2 === "win64") {
+            if (platform3 === "win32" || platform3 === "win64") {
               return false;
             }
             return !fileExists(swapCase(__filename));
@@ -19246,7 +19246,7 @@ ${lanes.join("\n")}
                 let stat;
                 if (typeof dirent === "string" || dirent.isSymbolicLink()) {
                   const name = combinePaths(path, entry);
-                  stat = statSync18(name);
+                  stat = statSync20(name);
                   if (!stat) {
                     continue;
                   }
@@ -19270,7 +19270,7 @@ ${lanes.join("\n")}
             return matchFiles(path, extensions, excludes, includes, useCaseSensitiveFileNames2, process.cwd(), depth, getAccessibleFileSystemEntries, realpath);
           }
           function fileSystemEntryExists(path, entryKind) {
-            const stat = statSync18(path);
+            const stat = statSync20(path);
             if (!stat) {
               return false;
             }
@@ -19312,7 +19312,7 @@ ${lanes.join("\n")}
           }
           function getModifiedTime3(path) {
             var _a;
-            return (_a = statSync18(path)) == null ? void 0 : _a.mtime;
+            return (_a = statSync20(path)) == null ? void 0 : _a.mtime;
           }
           function setModifiedTime(path, time) {
             try {
@@ -231350,11 +231350,11 @@ var init_daily_spend = __esm({
 });
 
 // src/benchmark/free-fitness-ledger.ts
-import { createHash as createHash12 } from "node:crypto";
-import { existsSync as existsSync27, mkdirSync as mkdirSync22, readFileSync as readFileSync38, renameSync as renameSync19, writeFileSync as writeFileSync22 } from "node:fs";
-import { join as join40 } from "node:path";
+import { createHash as createHash13 } from "node:crypto";
+import { existsSync as existsSync28, mkdirSync as mkdirSync24, readFileSync as readFileSync42, renameSync as renameSync21, writeFileSync as writeFileSync23 } from "node:fs";
+import { join as join43 } from "node:path";
 function fitnessHash(payload) {
-  return createHash12("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 12);
+  return createHash13("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 12);
 }
 function massScoutThroughputHash(params) {
   return fitnessHash({ v: THROUGHPUT_VERSION, ...params });
@@ -231363,13 +231363,13 @@ function hqScanQualityHash(datasetHash) {
   return fitnessHash({ v: HQ_QUALITY_VERSION, dataset: datasetHash });
 }
 function fitnessLedgerPath(tool) {
-  return join40(getConfigDir(), tool === "mass_scout" ? MASS_SCOUT_FITNESS_LEDGER : HQ_SCAN_FITNESS_LEDGER);
+  return join43(getConfigDir(), tool === "mass_scout" ? MASS_SCOUT_FITNESS_LEDGER : HQ_SCAN_FITNESS_LEDGER);
 }
 function loadFitnessCache(tool) {
   const p = fitnessLedgerPath(tool);
-  if (!existsSync27(p)) return {};
+  if (!existsSync28(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync38(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync42(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
     }
@@ -231378,11 +231378,11 @@ function loadFitnessCache(tool) {
   return {};
 }
 function saveFitnessCache(tool, cache2) {
-  mkdirSync22(getConfigDir(), { recursive: true });
+  mkdirSync24(getConfigDir(), { recursive: true });
   const p = fitnessLedgerPath(tool);
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync22(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync19(tmp, p);
+  writeFileSync23(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync21(tmp, p);
 }
 function today8() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -231483,10 +231483,10 @@ var init_tool_context_floors = __esm({
 });
 
 // src/default-profiles.ts
-import { createHash as createHash13 } from "node:crypto";
+import { createHash as createHash14 } from "node:crypto";
 function poolFingerprint(pool) {
   const canonical = pool.map((m) => `${m.id}\0${m.inputDollarsPerMillion}\0${m.outputDollarsPerMillion}`).sort().join("");
-  return createHash13("sha256").update(canonical).digest("hex").slice(0, 16);
+  return createHash14("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 function defaultProfileModelIds(profile) {
   if (profile.free_only) {
@@ -231502,7 +231502,7 @@ function modelSpecFingerprint(m, includePrice) {
     [...m.supportedParameters ?? []].slice().sort().join(",")
   ];
   if (includePrice) parts.push(String(m.inputDollarsPerMillion), String(m.outputDollarsPerMillion));
-  return createHash13("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
+  return createHash14("sha256").update(parts.join("|")).digest("hex").slice(0, 16);
 }
 function isFreeForbiddenTool(tool) {
   if (FITNESS_GATED_TOOLS.has(tool)) {
@@ -231657,8 +231657,8 @@ var init_default_profiles = __esm({
 });
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync25, readFileSync as readFileSync41, renameSync as renameSync22, writeFileSync as writeFileSync25 } from "node:fs";
-import { join as join43 } from "node:path";
+import { mkdirSync as mkdirSync27, readFileSync as readFileSync45, renameSync as renameSync24, writeFileSync as writeFileSync26 } from "node:fs";
+import { join as join46 } from "node:path";
 function toCatalogPriceSnapshot(cat) {
   return cat.map((m) => ({
     id: m.id,
@@ -231681,7 +231681,7 @@ var init_model_reconcile = __esm({
 
 // src/local_discovery/scan.ts
 import { execFileSync as execFileSync4 } from "node:child_process";
-import { cpus as cpus2, totalmem as totalmem3 } from "node:os";
+import { cpus as cpus2, totalmem as totalmem7 } from "node:os";
 function parseOpenAiModels(body) {
   if (!body || typeof body !== "object") return [];
   const data = body.data;
@@ -231753,7 +231753,7 @@ var init_scan = __esm({
 });
 
 // src/local-profile.ts
-import { createHash as createHash14 } from "node:crypto";
+import { createHash as createHash15 } from "node:crypto";
 function buildLocalProfileSection(services) {
   const withModels = services.filter((s) => s.reachable && s.models.length > 0);
   if (withModels.length === 0) {
@@ -231816,7 +231816,7 @@ function localEndpointFingerprint(services) {
     }
   }
   const canonical = pairs.sort().join("");
-  return createHash14("sha256").update(canonical).digest("hex").slice(0, 16);
+  return createHash15("sha256").update(canonical).digest("hex").slice(0, 16);
 }
 var init_local_profile = __esm({
   "src/local-profile.ts"() {
@@ -231827,8 +231827,8 @@ var init_local_profile = __esm({
 });
 
 // src/catalog-cache.ts
-import { existsSync as existsSync28, mkdirSync as mkdirSync26, readFileSync as readFileSync42, renameSync as renameSync23, unlinkSync as unlinkSync3, writeFileSync as writeFileSync26, chmodSync as chmodSync4 } from "node:fs";
-import { join as join44 } from "node:path";
+import { existsSync as existsSync29, mkdirSync as mkdirSync28, readFileSync as readFileSync46, renameSync as renameSync25, unlinkSync as unlinkSync4, writeFileSync as writeFileSync27, chmodSync as chmodSync4 } from "node:fs";
+import { join as join47 } from "node:path";
 function parseCatalogTtlMs(raw) {
   if (raw === void 0 || raw.trim() === "") return DEFAULT_CATALOG_TTL_MS;
   const n = Number(raw);
@@ -231836,12 +231836,12 @@ function parseCatalogTtlMs(raw) {
   return n;
 }
 function catalogCachePath() {
-  return join44(getConfigDir(), "catalog-cache.json");
+  return join47(getConfigDir(), "catalog-cache.json");
 }
 function readCacheFile(path) {
   try {
-    if (!existsSync28(path)) return null;
-    const parsed = JSON.parse(readFileSync42(path, "utf-8"));
+    if (!existsSync29(path)) return null;
+    const parsed = JSON.parse(readFileSync46(path, "utf-8"));
     if (typeof parsed.fetchedAtMs !== "number" || !Array.isArray(parsed.models)) return null;
     return {
       fetchedAtMs: parsed.fetchedAtMs,
@@ -231855,16 +231855,16 @@ function readCacheFile(path) {
 function writeCacheFile(path, data) {
   const tmp = `${path}.tmp.${process.pid}`;
   try {
-    mkdirSync26(getConfigDir(), { recursive: true });
-    writeFileSync26(tmp, JSON.stringify(data, null, 2), "utf-8");
+    mkdirSync28(getConfigDir(), { recursive: true });
+    writeFileSync27(tmp, JSON.stringify(data, null, 2), "utf-8");
     try {
       chmodSync4(tmp, 384);
     } catch {
     }
-    renameSync23(tmp, path);
+    renameSync25(tmp, path);
   } catch {
     try {
-      if (existsSync28(tmp)) unlinkSync3(tmp);
+      if (existsSync29(tmp)) unlinkSync4(tmp);
     } catch {
     }
   }
@@ -231913,13 +231913,13 @@ var init_catalog_cache = __esm({
 });
 
 // src/default-profiles-runner.ts
-import { readFileSync as readFileSync43, rmSync as rmSync6, writeFileSync as writeFileSync27 } from "node:fs";
-import { join as join45 } from "node:path";
+import { readFileSync as readFileSync47, rmSync as rmSync6, writeFileSync as writeFileSync28 } from "node:fs";
+import { join as join48 } from "node:path";
 function backgroundUpdateLockPathFor(profile) {
-  return join45(getConfigDir(), `background-update-${profile}.lock`);
+  return join48(getConfigDir(), `background-update-${profile}.lock`);
 }
 function defaultProfileLogPath(profile) {
-  return join45(getConfigDir(), `default-profile-${profile}.log`);
+  return join48(getConfigDir(), `default-profile-${profile}.log`);
 }
 function populateDefaultProfile(opts) {
   const {
@@ -232006,7 +232006,7 @@ function describeOutcome(outcome) {
   }
 }
 function backgroundUpdateRequestPathFor(profile) {
-  return join45(getConfigDir(), `background-update-${profile}.requested`);
+  return join48(getConfigDir(), `background-update-${profile}.requested`);
 }
 function lastUpdateFinishedMs(profile) {
   const record = getDynamicProfileRecord(profile);
@@ -232015,7 +232015,7 @@ function lastUpdateFinishedMs(profile) {
 function profileUpdateRequestPending(profile) {
   let raw;
   try {
-    raw = readFileSync43(backgroundUpdateRequestPathFor(profile), "utf-8");
+    raw = readFileSync47(backgroundUpdateRequestPathFor(profile), "utf-8");
   } catch {
     return false;
   }
@@ -232054,7 +232054,7 @@ var init_default_profiles_runner = __esm({
 });
 
 // src/dynamic-maintainer.ts
-import { readFileSync as readFileSync44, statSync as statSync17 } from "node:fs";
+import { readFileSync as readFileSync48, statSync as statSync19 } from "node:fs";
 function toDynamicCatalogEntry(m) {
   return {
     id: m.id,
@@ -232077,7 +232077,7 @@ function applyPatch(base, patch) {
   return next;
 }
 function isMarkedDynamicSection(settingsPath, name) {
-  const text = readFileSync44(settingsPath, "utf-8");
+  const text = readFileSync48(settingsPath, "utf-8");
   return profileSectionMarkerState((0, import_yaml4.parseDocument)(text), name) === "marked";
 }
 function regenerateInvalidMarkedSection(args) {
@@ -232257,7 +232257,7 @@ async function maintainOneDynamicProfile(args) {
     if (benchLockIsHeld(backgroundUpdateLockPathFor(name), nowMs)) return wroteSettings;
     let logMtimeMs = null;
     try {
-      logMtimeMs = statSync17(defaultProfileLogPath(name)).mtimeMs;
+      logMtimeMs = statSync19(defaultProfileLogPath(name)).mtimeMs;
     } catch {
     }
     if (logMtimeMs !== null && logMtimeMs - nowMs <= 6e4 && nowMs - logMtimeMs < SPAWN_ATTEMPT_FLOOR_MS) {
@@ -232427,19 +232427,19 @@ __export(profile_detector_exports, {
   claimDetectThrottle: () => claimDetectThrottle,
   detectProfileChanges: () => detectProfileChanges
 });
-import { existsSync as existsSync29, readFileSync as readFileSync45, renameSync as renameSync24, writeFileSync as writeFileSync28 } from "node:fs";
-import { join as join46 } from "node:path";
+import { existsSync as existsSync30, readFileSync as readFileSync49, renameSync as renameSync26, writeFileSync as writeFileSync29 } from "node:fs";
+import { join as join49 } from "node:path";
 function detectThrottleStatePath() {
-  return join46(getConfigDir(), "profile-detect-throttle.json");
+  return join49(getConfigDir(), "profile-detect-throttle.json");
 }
 function detectThrottleLockPath() {
-  return join46(getConfigDir(), "profile-detect-throttle.lock");
+  return join49(getConfigDir(), "profile-detect-throttle.lock");
 }
 function readDetectThrottleState() {
   const path = detectThrottleStatePath();
-  if (!existsSync29(path)) return { version: 1, claimedAtMs: {} };
+  if (!existsSync30(path)) return { version: 1, claimedAtMs: {} };
   try {
-    const parsed = JSON.parse(readFileSync45(path, "utf-8"));
+    const parsed = JSON.parse(readFileSync49(path, "utf-8"));
     if (typeof parsed !== "object" || parsed === null) return { version: 1, claimedAtMs: {} };
     const state = parsed;
     if (typeof state.claimedAtMs !== "object" || state.claimedAtMs === null) {
@@ -232453,8 +232453,8 @@ function readDetectThrottleState() {
 function writeDetectThrottleState(state) {
   const path = detectThrottleStatePath();
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync28(tmp, JSON.stringify(state), "utf-8");
-  renameSync24(tmp, path);
+  writeFileSync29(tmp, JSON.stringify(state), "utf-8");
+  renameSync26(tmp, path);
 }
 function claimDetectThrottle(name, nowMs = Date.now()) {
   return withMkdirLock(detectThrottleLockPath(), () => {
@@ -232622,8 +232622,8 @@ var init_profile_detector = __esm({
 // src/benchmark/index.ts
 init_usage_history();
 init_bench_lock();
-import { mkdirSync as mkdirSync27, writeFileSync as writeFileSync29, existsSync as existsSync30 } from "node:fs";
-import { dirname as dirname14, join as join47 } from "node:path";
+import { mkdirSync as mkdirSync29, writeFileSync as writeFileSync30, existsSync as existsSync31 } from "node:fs";
+import { dirname as dirname16, join as join50 } from "node:path";
 import { fileURLToPath as fileURLToPath11, pathToFileURL } from "node:url";
 
 // src/benchmark/ground-truth.ts
@@ -233210,27 +233210,20 @@ init_security_triage();
 init_search_existing();
 init_code_task();
 init_scan_folder();
-import { mkdirSync as mkdirSync19, writeFileSync as writeFileSync19 } from "node:fs";
-import { dirname as dirname13, join as join37 } from "node:path";
+import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20 } from "node:fs";
+import { dirname as dirname15, join as join40 } from "node:path";
 
 // src/benchmark/check-imports/bench-runner.ts
 init_scan_pipeline();
 import { readdirSync as readdirSync11 } from "node:fs";
-import { join as join30 } from "node:path";
+import { join as join33 } from "node:path";
 
 // src/provider/completion.ts
 import { appendFileSync as appendFileSync3 } from "node:fs";
 
-// src/safe-body.ts
-var MAX_RESPONSE_BYTES = Number(
-  process.env.LLM_EXT_MAX_RESPONSE_BYTES ?? 32 * 1024 * 1024
-);
-
-// src/provider/completion.ts
-init_model_events();
-init_usage_history();
-init_rate_limiter();
-init_http();
+// src/local-input-budget.ts
+init_command_stop();
+import { readFileSync as readFileSync33 } from "node:fs";
 
 // src/governor/direct.ts
 init_command_stop();
@@ -233261,6 +233254,678 @@ import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
 import { join as join27 } from "node:path";
 var PS_ENV = { ...process.env, LC_ALL: "C", TZ: "UTC" };
 
+// src/calibration/phase-a.ts
+init_local_locals_server();
+var WORDS = "river stone market window garden letter engine winter silver harbor quiet morning station paper copper meadow lantern cable forest signal ladder orchard pocket canvas thunder bridge marble candle feather valley".split(
+  " "
+);
+
+// src/calibration/phase-c.ts
+import { loadavg, totalmem as totalmem6 } from "node:os";
+init_config();
+init_local_locals_server();
+
+// src/mass_scouting/scout-accuracy-fixture.ts
+var SCOUT_ACCURACY_FIXTURE_VERSION = 1;
+var MIN_FIXTURE_RECORDS = 40;
+var CHAT_COMPLETIONS_SUFFIX = "/v1/chat/completions";
+var SCOUT_CATEGORIES = [
+  "debugging",
+  "testing",
+  "deployment",
+  "docs",
+  "security",
+  "performance",
+  "refactoring",
+  "tooling",
+  "data",
+  "ui"
+];
+var VOCAB = {
+  debugging: {
+    words: [
+      "breakpoint",
+      "stacktrace",
+      "watchpoint",
+      "coredump",
+      "debugger",
+      "traceback",
+      "repro",
+      "heisenbug",
+      "bisect",
+      "logging",
+      "assert",
+      "symbol",
+      "backtrace",
+      "step-over",
+      "inspection",
+      "heap",
+      "race",
+      "deadlock",
+      "exception",
+      "failing",
+      "flaky",
+      "root-cause",
+      "stack",
+      "probe",
+      "diagnose",
+      "panic",
+      "segfault",
+      "watchdog"
+    ],
+    tags: ["#debugging", "#breakpoint", "#repro", "#traceback"]
+  },
+  testing: {
+    words: [
+      "unittest",
+      "fixture",
+      "mock",
+      "stub",
+      "coverage",
+      "assertion",
+      "regression",
+      "integration",
+      "e2e",
+      "pytest",
+      "vitest",
+      "tdd",
+      "suite",
+      "hypothesis",
+      "property-based",
+      "golden",
+      "snapshot",
+      "matrix",
+      "flaky-test",
+      "smoke",
+      "canary",
+      "fuzz",
+      "oracle",
+      "testbed",
+      "harness",
+      "xunit",
+      "spec",
+      "double"
+    ],
+    tags: ["#testing", "#coverage", "#tdd", "#vitest"]
+  },
+  deployment: {
+    words: [
+      "deploy",
+      "release",
+      "rollback",
+      "canary",
+      "blue-green",
+      "pipeline",
+      "docker",
+      "kubernetes",
+      "helm",
+      "terraform",
+      "provision",
+      "cluster",
+      "staging",
+      "production",
+      "artifact",
+      "registry",
+      "image",
+      "tag",
+      "rollout",
+      "orchestration",
+      "service-mesh",
+      "ingress",
+      "replica",
+      "autoscale",
+      "uptime",
+      "outage",
+      "failover",
+      "drift"
+    ],
+    tags: ["#deployment", "#kubernetes", "#release", "#rollout"]
+  },
+  docs: {
+    words: [
+      "readme",
+      "changelog",
+      "tutorial",
+      "guide",
+      "reference",
+      "manual",
+      "api-docs",
+      "docstring",
+      "style-guide",
+      "onboarding",
+      "faq",
+      "glossary",
+      "diagram",
+      "specification",
+      "admonition",
+      "mkdocs",
+      "markdown",
+      "footnote",
+      "sidebar",
+      "landing-page",
+      "howto",
+      "cheatsheet",
+      "appendix",
+      "index",
+      "crossref",
+      "typo",
+      "wording",
+      "example"
+    ],
+    tags: ["#docs", "#readme", "#guide", "#markdown"]
+  },
+  security: {
+    words: [
+      "cve",
+      "injection",
+      "sanitizer",
+      "escaping",
+      "authn",
+      "authz",
+      "token",
+      "secret",
+      "vault",
+      "harden",
+      "threat-model",
+      "audit",
+      "pentest",
+      "malware",
+      "sandbox",
+      "allowlist",
+      "denylist",
+      "nonce",
+      "signature",
+      "certificate",
+      "tls",
+      "rotate",
+      "least-privilege",
+      "exfiltration",
+      "spoofing",
+      "tampering",
+      "repudiation",
+      "disclosure"
+    ],
+    tags: ["#security", "#cve", "#audit", "#harden"]
+  },
+  performance: {
+    words: [
+      "latency",
+      "throughput",
+      "profiler",
+      "bottleneck",
+      "cache-hit",
+      "memoize",
+      "benchmark",
+      "flamegraph",
+      "hotpath",
+      "alloc",
+      "garbage-collection",
+      "batching",
+      "vectorize",
+      "index-scan",
+      "n+1",
+      "lazy-load",
+      "prefetch",
+      "compression",
+      "pooling",
+      "budget",
+      "percentile",
+      "tail-latency",
+      "jank",
+      "regression-perf",
+      "simd",
+      "inlining",
+      "branchless",
+      "amortized"
+    ],
+    tags: ["#performance", "#latency", "#profiler", "#benchmark"]
+  },
+  refactoring: {
+    words: [
+      "extract-method",
+      "inline",
+      "rename",
+      "move-class",
+      "dead-code",
+      "god-object",
+      "coupling",
+      "cohesion",
+      "strategy",
+      "adapter",
+      "decorator",
+      "simplify",
+      "deduplicate",
+      "split",
+      "merge",
+      "parameterize",
+      "encapsulate",
+      "bridge",
+      "facade",
+      "anti-pattern",
+      "cyclomatic",
+      "introduce-param",
+      "guard-clause",
+      "collapsing",
+      "sprawling",
+      "primitive-obsession",
+      "feature-envy",
+      "shotgun"
+    ],
+    tags: ["#refactoring", "#cleanup", "#dedup", "#simplify"]
+  },
+  tooling: {
+    words: [
+      "linter",
+      "formatter",
+      "cli",
+      "flag",
+      "subcommand",
+      "builder",
+      "bundler",
+      "transpiler",
+      "watcher",
+      "repl",
+      "scaffold",
+      "generator",
+      "template",
+      "plugin-system",
+      "hook",
+      "extension",
+      "toolchain",
+      "sdk",
+      "codemod",
+      "migration-script",
+      "changelog-tool",
+      "script",
+      "automation",
+      "makefile",
+      "taskfile",
+      "runner",
+      "wrapper",
+      "shim"
+    ],
+    tags: ["#tooling", "#cli", "#linter", "#automation"]
+  },
+  data: {
+    words: [
+      "schema",
+      "migration",
+      "index",
+      "query-planner",
+      "normal-form",
+      "denormalize",
+      "etl",
+      "pipeline-data",
+      "warehouse",
+      "columnar",
+      "parquet",
+      "jsonl",
+      "csv",
+      "sqlite",
+      "postgres",
+      "serde",
+      "serialization",
+      "primary-key",
+      "foreign-key",
+      "transaction",
+      "isolation",
+      "upsert",
+      "vacuum",
+      "partition",
+      "shard",
+      "ttl",
+      "materialized-view",
+      "cursor"
+    ],
+    tags: ["#data", "#schema", "#sql", "#etl"]
+  },
+  ui: {
+    words: [
+      "component",
+      "props",
+      "state",
+      "hook-ui",
+      "render",
+      "layout",
+      "accessibility",
+      "aria",
+      "focus-trap",
+      "stylesheet",
+      "tailwind",
+      "responsive",
+      "viewport",
+      "dark-mode",
+      "theming",
+      "widget",
+      "modal",
+      "tooltip",
+      "dropdown",
+      "form",
+      "validation-ui",
+      "i18n",
+      "skeleton",
+      "virtualized",
+      "scroll",
+      "animation",
+      "transition",
+      "design-system"
+    ],
+    tags: ["#ui", "#component", "#a11y", "#css"]
+  }
+};
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = a + 1831565813 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function generateRecord(category, idx, rnd, tagsOverride) {
+  const v = VOCAB[category];
+  const descWords = [];
+  const wordCount = 5 + idx % 3;
+  for (let i = 0; i < wordCount; i++) {
+    descWords.push(v.words[Math.floor(rnd() * v.words.length)]);
+  }
+  const tags = tagsOverride ?? v.tags.slice(0, 2 + idx % 2).join(" ");
+  const name = `skill-${String(idx).padStart(6, "0")}`;
+  const bodyWords = [];
+  for (let i = 0; i < 4 + idx % 2; i++) {
+    bodyWords.push(v.words[Math.floor(rnd() * v.words.length)]);
+  }
+  return [
+    "---",
+    `name: ${name}`,
+    `description: ${descWords.join(" ")} -- ${tags}`,
+    `version: 1.${idx % 10}.${idx % 3}`,
+    "---",
+    "",
+    `# ${name}`,
+    "",
+    `${bodyWords.join(" ")}.`,
+    "",
+    ""
+  ].join("\n");
+}
+function generateFixtureRecords(seed, count) {
+  const rnd = mulberry32(seed);
+  const chunks = [];
+  const expected = [];
+  for (let i = 0; i < count; i++) {
+    const cat = SCOUT_CATEGORIES[i % SCOUT_CATEGORIES.length];
+    chunks.push(generateRecord(cat, i, rnd));
+    expected.push(cat);
+  }
+  const body = chunks.join("");
+  return { body, expected, recordCount: expected.length };
+}
+var MIN_FIXTURE_BYTES = Buffer.byteLength(
+  generateFixtureRecords(1, MIN_FIXTURE_RECORDS).body,
+  "utf-8"
+);
+function generateFixture(seed, targetBytes) {
+  const rnd = mulberry32(seed);
+  const chunks = [];
+  const expected = [];
+  let total = 0;
+  let i = 0;
+  while (i < MIN_FIXTURE_RECORDS || total < targetBytes) {
+    const cat = SCOUT_CATEGORIES[i % SCOUT_CATEGORIES.length];
+    const rec = generateRecord(cat, i, rnd);
+    if (total + rec.length > targetBytes && i >= MIN_FIXTURE_RECORDS) break;
+    chunks.push(rec);
+    expected.push(cat);
+    total += rec.length;
+    i++;
+  }
+  const body = chunks.join("");
+  return { body, expected, recordCount: expected.length };
+}
+function buildPositionalSchema(expectedCount) {
+  return {
+    name: "skill_frontmatter_extraction",
+    strict: true,
+    schema: {
+      type: "object",
+      additionalProperties: false,
+      required: ["categories"],
+      properties: {
+        categories: {
+          type: "array",
+          minItems: expectedCount,
+          maxItems: expectedCount,
+          items: {
+            type: "string",
+            enum: [...SCOUT_CATEGORIES]
+          },
+          description: `Exactly ${expectedCount} category labels \u2014 one per skill-file record, in input order (categories[i] is the category of the record whose name is "skill-${"i".padStart(6, "0")}" for index i).`
+        }
+      }
+    }
+  };
+}
+function parsePositionalText(content) {
+  let text = content.replace(/<think>[\s\S]*?<\/think>/g, "");
+  const open = text.lastIndexOf("</think>");
+  if (open >= 0) text = text.slice(open + "</think>".length);
+  text = text.replace(/```(?:json)?/gi, "").trim();
+  const tryParse = (s) => {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return void 0;
+    }
+  };
+  let value = tryParse(text);
+  if (value === void 0) {
+    const a = text.indexOf("{");
+    const b = text.lastIndexOf("}");
+    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
+  }
+  if (value === void 0) {
+    const a = text.indexOf("[");
+    const b = text.lastIndexOf("]");
+    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
+  }
+  if (value === void 0) return { error: `no JSON object or array in the reply text: ${JSON.stringify(text.slice(0, 120))}` };
+  const list = Array.isArray(value) ? value : typeof value === "object" && value !== null ? value.categories : void 0;
+  if (!Array.isArray(list)) return { error: "the reply text has no categories array" };
+  if (!list.every((v) => typeof v === "string")) return { error: "the categories array holds a non-string entry" };
+  return { categories: list.map((v) => v.trim().toLowerCase()) };
+}
+var SCOUT_TIMEOUT_PREFIX = "timeout after ";
+var SCOUT_NETWORK_PREFIX = "network: ";
+var SCOUT_HTTP_PREFIX = "HTTP ";
+async function classifyPositional(modelId, baseUrl, apiKey, fixture, schema, opts = {}) {
+  const doFetch = opts.fetchImpl ?? ((u, init) => fetch(u, init));
+  const mode = opts.responseMode ?? "json_schema";
+  const systemPrompt = [
+    "You are a skill-file frontmatter classifier.",
+    `Each record of the input is one skill-file block, whose frontmatter carries "name: skill-NNNNNN" where NNNNNN is its index (starting at 0).`,
+    `Allowed categories: ${SCOUT_CATEGORIES.join(", ")}.`,
+    `For EVERY record, return ONE category. Output a JSON object {"categories": [...]} where categories[i] is the category of the record named "skill-" + i padded to 6 digits.`,
+    `The "categories" array MUST have exactly ${fixture.recordCount} entries \u2014 one per record.`,
+    ...mode === "text" ? [`Reply with only that JSON object, no other text. It must match this JSON Schema: ${JSON.stringify(schema.schema ?? schema)}`] : []
+  ].join(" ");
+  const userPrompt = `Classify the following ${fixture.recordCount} skill-file records:
+
+${fixture.body}`;
+  const startMs = Date.now();
+  const PER_CALL_MS = opts.timeoutMs ?? 9e4;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PER_CALL_MS);
+  let res;
+  try {
+    res = await doFetch(`${baseUrl}${CHAT_COMPLETIONS_SUFFIX}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: modelId,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt }
+        ],
+        // The text path (P6) sends no response_format: the schema is in the system prompt instead.
+        ...mode === "json_schema" ? { response_format: { type: "json_schema", json_schema: schema } } : {},
+        ...opts.maxTokens !== void 0 ? { max_tokens: opts.maxTokens } : {},
+        temperature: 0.1,
+        ...opts.extraBody
+      }),
+      signal: controller.signal
+    });
+  } catch (e) {
+    clearTimeout(timeoutId);
+    const err = e;
+    const code = typeof err.cause?.code === "string" ? ` (${err.cause.code})` : "";
+    return {
+      predicted: [],
+      promptTokens: 0,
+      completionTokens: 0,
+      durationMs: Date.now() - startMs,
+      error: err.name === "AbortError" ? `${SCOUT_TIMEOUT_PREFIX}${PER_CALL_MS}ms` : `${SCOUT_NETWORK_PREFIX}${err.message}${code}`
+    };
+  }
+  clearTimeout(timeoutId);
+  const durationMs = Date.now() - startMs;
+  if (!res.ok) {
+    const text = await res.text().catch(() => "") ?? "";
+    return {
+      predicted: [],
+      promptTokens: 0,
+      completionTokens: 0,
+      durationMs,
+      error: `${SCOUT_HTTP_PREFIX}${res.status}: ${text.slice(0, 200)}`
+    };
+  }
+  let payload;
+  try {
+    payload = await res.json();
+  } catch (e) {
+    return {
+      predicted: [],
+      promptTokens: 0,
+      completionTokens: 0,
+      durationMs,
+      error: `non-JSON response: ${e.message}`
+    };
+  }
+  const content = payload.choices?.[0]?.message?.content;
+  const inTok = payload.usage?.prompt_tokens ?? 0;
+  const outTok = payload.usage?.completion_tokens ?? 0;
+  if (typeof content !== "string") {
+    return {
+      predicted: [],
+      promptTokens: inTok,
+      completionTokens: outTok,
+      durationMs,
+      error: "no message.content in response"
+    };
+  }
+  let parsed;
+  if (mode === "text") {
+    const t = parsePositionalText(content);
+    if ("error" in t) {
+      return { predicted: [], promptTokens: inTok, completionTokens: outTok, durationMs, error: t.error };
+    }
+    parsed = { categories: t.categories };
+  } else {
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      return {
+        predicted: [],
+        promptTokens: inTok,
+        completionTokens: outTok,
+        durationMs,
+        error: `JSON.parse: ${e.message}`
+      };
+    }
+  }
+  if (!Array.isArray(parsed.categories)) {
+    return {
+      predicted: [],
+      promptTokens: inTok,
+      completionTokens: outTok,
+      durationMs,
+      error: "response.categories not an array"
+    };
+  }
+  const predicted = parsed.categories.filter(
+    (v) => typeof v === "string"
+  );
+  return {
+    predicted,
+    promptTokens: inTok,
+    completionTokens: outTok,
+    durationMs,
+    error: null
+  };
+}
+function scoreAccuracy(expected, actual) {
+  const total = expected.length;
+  const minLen = Math.min(actual.length, total);
+  let correct = 0;
+  for (let i = 0; i < minLen; i++) {
+    if (actual[i] === expected[i]) correct++;
+  }
+  return { correct, total, accuracy: total === 0 ? 0 : correct / total };
+}
+
+// src/calibration/memory.ts
+init_local_locals_server();
+import { closeSync as closeSync4, existsSync as existsSync25, openSync as openSync4, readFileSync as readFileSync29, readSync as readSync3, statSync as statSync17 } from "node:fs";
+import { freemem as freemem2, platform as platform2, totalmem as totalmem3 } from "node:os";
+import { dirname as dirname10, join as join28 } from "node:path";
+var WINDOW_HEADROOM_BYTES = 1024 ** 3;
+
+// src/calibration/phase-b-fixtures.ts
+var SYLLABLES = "har low bren dle cor vin mar ston el wick ash ford tam rin bel mont dor sey fen wald kes tor lun bry gal mere pol den rus kin".split(" ");
+var NUMBER_WORDS = "zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen eighteen nineteen twenty".split(" ");
+
+// src/calibration/phase-b.ts
+import { totalmem as totalmem5 } from "node:os";
+init_local_locals_server();
+init_local_llama_server();
+
+// src/calibration/state.ts
+init_local_llama_server();
+import { mkdirSync as mkdirSync18, readFileSync as readFileSync32, renameSync as renameSync17, rmdirSync as rmdirSync5, statSync as statSync18, unlinkSync as unlinkSync3, writeFileSync as writeFileSync17 } from "node:fs";
+import { join as join31 } from "node:path";
+
+// src/broker/protocol.ts
+init_local_llama_server();
+import { readFileSync as readFileSync30, renameSync as renameSync15, rmSync as rmSync4, writeFileSync as writeFileSync16 } from "node:fs";
+import { join as join29 } from "node:path";
+
+// src/calibration/record.ts
+import { createHash as createHash9 } from "node:crypto";
+import { closeSync as closeSync5, fsyncSync, mkdirSync as mkdirSync17, openSync as openSync5, readFileSync as readFileSync31, renameSync as renameSync16, writeSync as writeSync2 } from "node:fs";
+import { totalmem as totalmem4 } from "node:os";
+import { dirname as dirname11, join as join30 } from "node:path";
+
+// src/calibration/memory-wait.ts
+var MEMORY_WAIT_MAX_MS = 30 * 6e4;
+var MEMORY_WAIT_GAP_MS = 5 * 6e4;
+var INCONCLUSIVE_PASSES = 3;
+var MEMORY_WAIT_CAUSE = `still short of free memory after ${MEMORY_WAIT_MAX_MS / 6e4} min`;
+var MEMORY_WAIT_GIVEN_UP = `waited for free memory on ${INCONCLUSIVE_PASSES} passes`;
+
+// src/safe-body.ts
+var MAX_RESPONSE_BYTES = Number(
+  process.env.LLM_EXT_MAX_RESPONSE_BYTES ?? 32 * 1024 * 1024
+);
+
+// src/provider/completion.ts
+init_model_events();
+init_usage_history();
+init_rate_limiter();
+init_http();
+
 // src/provider/lmstudio.ts
 init_http();
 init_usage_history();
@@ -233281,16 +233946,9 @@ init_bench_spawn();
 init_http();
 init_command_stop();
 init_local_llama_server();
-import { createHash as createHash9, randomUUID as randomUUID3 } from "node:crypto";
-import { mkdirSync as mkdirSync17 } from "node:fs";
+import { createHash as createHash10, randomUUID as randomUUID3 } from "node:crypto";
+import { mkdirSync as mkdirSync19 } from "node:fs";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
-
-// src/broker/protocol.ts
-init_local_llama_server();
-import { readFileSync as readFileSync29, renameSync as renameSync15, rmSync as rmSync4, writeFileSync as writeFileSync16 } from "node:fs";
-import { join as join28 } from "node:path";
-
-// src/broker/client.ts
 var COMMAND_ID = `${process.pid}-${randomUUID3().slice(0, 8)}`;
 
 // src/provider/completion.ts
@@ -233348,11 +234006,11 @@ function buildCheckImportsExtractMessages(input) {
 }
 
 // src/benchmark/check-imports/dataset.ts
-import { readFileSync as readFileSync30, readdirSync as readdirSync10 } from "node:fs";
-import { dirname as dirname10, join as join29, resolve as resolve13 } from "node:path";
+import { readFileSync as readFileSync34, readdirSync as readdirSync10 } from "node:fs";
+import { dirname as dirname12, join as join32, resolve as resolve13 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
 var FIXTURE_DIR = resolve13(
-  dirname10(fileURLToPath8(import.meta.url)),
+  dirname12(fileURLToPath8(import.meta.url)),
   "../../../benchmark-fixtures/check-imports/src"
 );
 var IMPORT_FORMS = Object.freeze([
@@ -233382,7 +234040,7 @@ function describeWorkload6() {
   for (const file of files) {
     const messages = buildCheckImportsExtractMessages({
       lang: "typescript",
-      fileBlock: readFileAsCodeBlock(join30(FIXTURE_DIR, file)),
+      fileBlock: readFileAsCodeBlock(join33(FIXTURE_DIR, file)),
       fileFormatExample: ""
     });
     for (const m of messages) promptCharsPerModel += (m.content ?? "").length;
@@ -233398,8 +234056,8 @@ function describeWorkload6() {
 }
 
 // src/benchmark/compare-files/bench-runner.ts
-import { readFileSync as readFileSync32, readdirSync as readdirSync13 } from "node:fs";
-import { join as join32 } from "node:path";
+import { readFileSync as readFileSync36, readdirSync as readdirSync13 } from "node:fs";
+import { join as join35 } from "node:path";
 
 // src/compare-files/prompt.ts
 function compareFilesSystemPrompt(extras) {
@@ -233407,11 +234065,11 @@ function compareFilesSystemPrompt(extras) {
 }
 
 // src/benchmark/compare-files/dataset.ts
-import { readFileSync as readFileSync31, readdirSync as readdirSync12 } from "node:fs";
-import { dirname as dirname11, join as join31, resolve as resolve14 } from "node:path";
+import { readFileSync as readFileSync35, readdirSync as readdirSync12 } from "node:fs";
+import { dirname as dirname13, join as join34, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 var FIXTURE_DIR2 = resolve14(
-  dirname11(fileURLToPath9(import.meta.url)),
+  dirname13(fileURLToPath9(import.meta.url)),
   "../../../benchmark-fixtures/compare-files/diffs"
 );
 var EXPECTED_SYMBOL_COUNTS = Object.freeze({
@@ -233431,7 +234089,7 @@ function describeWorkload7() {
   const files = readdirSync13(FIXTURE_DIR2).filter((f) => f.endsWith(".diff")).sort();
   let promptCharsPerModel = 0;
   for (const f of files) {
-    const diff = readFileSync32(join32(FIXTURE_DIR2, f), "utf-8");
+    const diff = readFileSync36(join35(FIXTURE_DIR2, f), "utf-8");
     promptCharsPerModel += compareFilesSystemPrompt("").length + `Compare the changes in commit ${f}.
 
 Diff:
@@ -233449,15 +234107,15 @@ ${diff}
 }
 
 // src/benchmark/check-references/bench-runner.ts
-import { readFileSync as readFileSync34, readdirSync as readdirSync15 } from "node:fs";
-import { join as join34 } from "node:path";
+import { readFileSync as readFileSync38, readdirSync as readdirSync15 } from "node:fs";
+import { join as join37 } from "node:path";
 
 // src/benchmark/check-references/dataset.ts
-import { readFileSync as readFileSync33, readdirSync as readdirSync14 } from "node:fs";
-import { dirname as dirname12, join as join33, resolve as resolve15 } from "node:path";
+import { readFileSync as readFileSync37, readdirSync as readdirSync14 } from "node:fs";
+import { dirname as dirname14, join as join36, resolve as resolve15 } from "node:path";
 import { fileURLToPath as fileURLToPath10 } from "node:url";
 var FIXTURE_DIR3 = resolve15(
-  dirname12(fileURLToPath10(import.meta.url)),
+  dirname14(fileURLToPath10(import.meta.url)),
   "../../../benchmark-fixtures/check-references"
 );
 var EXPECTED_BROKEN = Object.freeze({
@@ -233476,7 +234134,7 @@ function describeWorkload8() {
   const dirs = readdirSync15(FIXTURE_DIR3, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name);
   let promptCharsPerModel = 0;
   for (const d of dirs) {
-    promptCharsPerModel += readFileSync34(join34(FIXTURE_DIR3, d, "consumer.ts"), "utf-8").length + readFileSync34(join34(FIXTURE_DIR3, d, "dependency.ts"), "utf-8").length + 400;
+    promptCharsPerModel += readFileSync38(join37(FIXTURE_DIR3, d, "consumer.ts"), "utf-8").length + readFileSync38(join37(FIXTURE_DIR3, d, "dependency.ts"), "utf-8").length + 400;
   }
   return {
     tool: "check_references",
@@ -233496,12 +234154,12 @@ init_discover();
 init_config();
 init_cost_estimate();
 init_types();
-import { createHash as createHash10 } from "node:crypto";
-import { existsSync as existsSync25, mkdirSync as mkdirSync18, readFileSync as readFileSync36, renameSync as renameSync16, writeFileSync as writeFileSync18 } from "node:fs";
-import { join as join36 } from "node:path";
+import { createHash as createHash11 } from "node:crypto";
+import { existsSync as existsSync26, mkdirSync as mkdirSync20, readFileSync as readFileSync40, renameSync as renameSync18, writeFileSync as writeFileSync19 } from "node:fs";
+import { join as join39 } from "node:path";
 
 // src/text-tools/core.ts
-import { readFileSync as readFileSync35 } from "fs";
+import { readFileSync as readFileSync39 } from "fs";
 import { basename as basename5 } from "path";
 
 // src/response-gate.ts
@@ -233540,7 +234198,7 @@ function readInput(args) {
   }
   if (file) {
     try {
-      const text = readFileSync35(file, "utf-8");
+      const text = readFileSync39(file, "utf-8");
       if (!text.trim()) return { error: `Input file is empty: ${file}` };
       return { text, sourcePath: file };
     } catch (err) {
@@ -234215,9 +234873,9 @@ var DESCRIBE_CASES = [
 
 // src/benchmark/text-tools/bench-runner.ts
 init_openrouter();
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync17 } from "node:fs";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync18 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
-import { join as join35 } from "node:path";
+import { join as join38 } from "node:path";
 
 // src/benchmark/text-tools/score.ts
 var norm = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
@@ -234517,10 +235175,10 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
           modelId,
           ctx,
           async (deps) => {
-            const dir = mkdtempSync2(join35(tmpdir3(), "llm-ext-describe-bench-"));
+            const dir = mkdtempSync2(join38(tmpdir3(), "llm-ext-describe-bench-"));
             try {
-              const filePath = join35(dir, c.fileName);
-              writeFileSync17(filePath, c.content, "utf-8");
+              const filePath = join38(dir, c.fileName);
+              writeFileSync18(filePath, c.content, "utf-8");
               return await runDescribe({ input_file: filePath, max_chars: c.maxChars }, deps);
             } finally {
               rmSync5(dir, { recursive: true, force: true });
@@ -234613,30 +235271,30 @@ function caseCountFor(tool) {
 }
 function datasetHashFor(tool) {
   const data = tool === "summarize" ? SUMMARIZE_CASES : tool === "topics" ? TOPICS_CASES : tool === "sem_deduplicate" ? SEM_DEDUP_CASES : DESCRIBE_CASES;
-  return createHash10("sha1").update(JSON.stringify(data)).digest("hex").slice(0, 12);
+  return createHash11("sha1").update(JSON.stringify(data)).digest("hex").slice(0, 12);
 }
 function cachePath6() {
-  return join36(getConfigDir(), "text-tools-results.json");
+  return join39(getConfigDir(), "text-tools-results.json");
 }
 function cacheKey6(tool, modelId, date, datasetHash) {
   return `${tool}::${modelId}::${date}::${datasetHash}`;
 }
 function loadCache6() {
   const p = cachePath6();
-  if (!existsSync25(p)) return {};
+  if (!existsSync26(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync36(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync40(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
   } catch {
   }
   return {};
 }
 function saveCache6(cache2) {
-  mkdirSync18(getConfigDir(), { recursive: true });
+  mkdirSync20(getConfigDir(), { recursive: true });
   const p = cachePath6();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync18(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync16(tmp, p);
+  writeFileSync19(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync18(tmp, p);
 }
 function resolveApiKey6(override) {
   const k = override || process.env.OPENROUTER_API_KEY || process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
@@ -234914,11 +235572,11 @@ async function runTextToolBenchmark(tool, opts) {
     incumbentInputDollarsPerMillion: incumbentIn,
     incumbentOutputDollarsPerMillion: incumbentOut
   });
-  const reportDir = opts.outputDir ?? join36(benchmarkSubReportDir("text-tools-benchmark", opts.mainRoot), tool);
-  mkdirSync18(reportDir, { recursive: true });
+  const reportDir = opts.outputDir ?? join39(benchmarkSubReportDir("text-tools-benchmark", opts.mainRoot), tool);
+  mkdirSync20(reportDir, { recursive: true });
   const stamp2 = reportStamp6();
-  const jsonReportPath = join36(reportDir, `${stamp2}-${tool}-benchmark.json`);
-  const reportPath = join36(reportDir, `${stamp2}-${tool}-benchmark.md`);
+  const jsonReportPath = join39(reportDir, `${stamp2}-${tool}-benchmark.json`);
+  const reportPath = join39(reportDir, `${stamp2}-${tool}-benchmark.md`);
   const jsonPayload = {
     timestamp: (/* @__PURE__ */ new Date()).toISOString(),
     tool,
@@ -234955,8 +235613,8 @@ async function runTextToolBenchmark(tool, opts) {
     rejected: selection.rejected
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync18(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
-  renameSync16(jtmp, jsonReportPath);
+  writeFileSync19(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  renameSync18(jtmp, jsonReportPath);
   const md = buildReportMarkdown6({
     tool,
     caseCount,
@@ -234970,8 +235628,8 @@ async function runTextToolBenchmark(tool, opts) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync18(mtmp, md, "utf-8");
-  renameSync16(mtmp, reportPath);
+  writeFileSync19(mtmp, md, "utf-8");
+  renameSync18(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
     recommendedModelId: selection.recommendedModelId,
@@ -235602,12 +236260,12 @@ ${r.ensemble.picks.map((p, i) => `${i + 1}. \`${p}\``).join("\n")}` : "")
   return L.join("\n") + "\n";
 }
 function updateAllReportDir(mainRoot) {
-  return join37(defaultScratchDir(mainRoot), "update-all");
+  return join40(defaultScratchDir(mainRoot), "update-all");
 }
 function writeReport(r, opts) {
-  const path = join37(updateAllReportDir(opts.mainRoot), `${stamp()}-update-all.md`);
-  mkdirSync19(dirname13(path), { recursive: true });
-  writeFileSync19(path, renderUpdateAllReport(r, opts), "utf-8");
+  const path = join40(updateAllReportDir(opts.mainRoot), `${stamp()}-update-all.md`);
+  mkdirSync21(dirname15(path), { recursive: true });
+  writeFileSync20(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;
 }
 
@@ -235623,642 +236281,29 @@ init_daily_spend();
 init_report_dir();
 init_config();
 init_budget();
-import { mkdirSync as mkdirSync21, renameSync as renameSync18, writeFileSync as writeFileSync21 } from "node:fs";
-import { join as join39 } from "node:path";
-
-// src/mass_scouting/scout-accuracy-fixture.ts
-var SCOUT_ACCURACY_FIXTURE_VERSION = 1;
-var MIN_FIXTURE_RECORDS = 40;
-var CHAT_COMPLETIONS_SUFFIX = "/v1/chat/completions";
-var SCOUT_CATEGORIES = [
-  "debugging",
-  "testing",
-  "deployment",
-  "docs",
-  "security",
-  "performance",
-  "refactoring",
-  "tooling",
-  "data",
-  "ui"
-];
-var VOCAB = {
-  debugging: {
-    words: [
-      "breakpoint",
-      "stacktrace",
-      "watchpoint",
-      "coredump",
-      "debugger",
-      "traceback",
-      "repro",
-      "heisenbug",
-      "bisect",
-      "logging",
-      "assert",
-      "symbol",
-      "backtrace",
-      "step-over",
-      "inspection",
-      "heap",
-      "race",
-      "deadlock",
-      "exception",
-      "failing",
-      "flaky",
-      "root-cause",
-      "stack",
-      "probe",
-      "diagnose",
-      "panic",
-      "segfault",
-      "watchdog"
-    ],
-    tags: ["#debugging", "#breakpoint", "#repro", "#traceback"]
-  },
-  testing: {
-    words: [
-      "unittest",
-      "fixture",
-      "mock",
-      "stub",
-      "coverage",
-      "assertion",
-      "regression",
-      "integration",
-      "e2e",
-      "pytest",
-      "vitest",
-      "tdd",
-      "suite",
-      "hypothesis",
-      "property-based",
-      "golden",
-      "snapshot",
-      "matrix",
-      "flaky-test",
-      "smoke",
-      "canary",
-      "fuzz",
-      "oracle",
-      "testbed",
-      "harness",
-      "xunit",
-      "spec",
-      "double"
-    ],
-    tags: ["#testing", "#coverage", "#tdd", "#vitest"]
-  },
-  deployment: {
-    words: [
-      "deploy",
-      "release",
-      "rollback",
-      "canary",
-      "blue-green",
-      "pipeline",
-      "docker",
-      "kubernetes",
-      "helm",
-      "terraform",
-      "provision",
-      "cluster",
-      "staging",
-      "production",
-      "artifact",
-      "registry",
-      "image",
-      "tag",
-      "rollout",
-      "orchestration",
-      "service-mesh",
-      "ingress",
-      "replica",
-      "autoscale",
-      "uptime",
-      "outage",
-      "failover",
-      "drift"
-    ],
-    tags: ["#deployment", "#kubernetes", "#release", "#rollout"]
-  },
-  docs: {
-    words: [
-      "readme",
-      "changelog",
-      "tutorial",
-      "guide",
-      "reference",
-      "manual",
-      "api-docs",
-      "docstring",
-      "style-guide",
-      "onboarding",
-      "faq",
-      "glossary",
-      "diagram",
-      "specification",
-      "admonition",
-      "mkdocs",
-      "markdown",
-      "footnote",
-      "sidebar",
-      "landing-page",
-      "howto",
-      "cheatsheet",
-      "appendix",
-      "index",
-      "crossref",
-      "typo",
-      "wording",
-      "example"
-    ],
-    tags: ["#docs", "#readme", "#guide", "#markdown"]
-  },
-  security: {
-    words: [
-      "cve",
-      "injection",
-      "sanitizer",
-      "escaping",
-      "authn",
-      "authz",
-      "token",
-      "secret",
-      "vault",
-      "harden",
-      "threat-model",
-      "audit",
-      "pentest",
-      "malware",
-      "sandbox",
-      "allowlist",
-      "denylist",
-      "nonce",
-      "signature",
-      "certificate",
-      "tls",
-      "rotate",
-      "least-privilege",
-      "exfiltration",
-      "spoofing",
-      "tampering",
-      "repudiation",
-      "disclosure"
-    ],
-    tags: ["#security", "#cve", "#audit", "#harden"]
-  },
-  performance: {
-    words: [
-      "latency",
-      "throughput",
-      "profiler",
-      "bottleneck",
-      "cache-hit",
-      "memoize",
-      "benchmark",
-      "flamegraph",
-      "hotpath",
-      "alloc",
-      "garbage-collection",
-      "batching",
-      "vectorize",
-      "index-scan",
-      "n+1",
-      "lazy-load",
-      "prefetch",
-      "compression",
-      "pooling",
-      "budget",
-      "percentile",
-      "tail-latency",
-      "jank",
-      "regression-perf",
-      "simd",
-      "inlining",
-      "branchless",
-      "amortized"
-    ],
-    tags: ["#performance", "#latency", "#profiler", "#benchmark"]
-  },
-  refactoring: {
-    words: [
-      "extract-method",
-      "inline",
-      "rename",
-      "move-class",
-      "dead-code",
-      "god-object",
-      "coupling",
-      "cohesion",
-      "strategy",
-      "adapter",
-      "decorator",
-      "simplify",
-      "deduplicate",
-      "split",
-      "merge",
-      "parameterize",
-      "encapsulate",
-      "bridge",
-      "facade",
-      "anti-pattern",
-      "cyclomatic",
-      "introduce-param",
-      "guard-clause",
-      "collapsing",
-      "sprawling",
-      "primitive-obsession",
-      "feature-envy",
-      "shotgun"
-    ],
-    tags: ["#refactoring", "#cleanup", "#dedup", "#simplify"]
-  },
-  tooling: {
-    words: [
-      "linter",
-      "formatter",
-      "cli",
-      "flag",
-      "subcommand",
-      "builder",
-      "bundler",
-      "transpiler",
-      "watcher",
-      "repl",
-      "scaffold",
-      "generator",
-      "template",
-      "plugin-system",
-      "hook",
-      "extension",
-      "toolchain",
-      "sdk",
-      "codemod",
-      "migration-script",
-      "changelog-tool",
-      "script",
-      "automation",
-      "makefile",
-      "taskfile",
-      "runner",
-      "wrapper",
-      "shim"
-    ],
-    tags: ["#tooling", "#cli", "#linter", "#automation"]
-  },
-  data: {
-    words: [
-      "schema",
-      "migration",
-      "index",
-      "query-planner",
-      "normal-form",
-      "denormalize",
-      "etl",
-      "pipeline-data",
-      "warehouse",
-      "columnar",
-      "parquet",
-      "jsonl",
-      "csv",
-      "sqlite",
-      "postgres",
-      "serde",
-      "serialization",
-      "primary-key",
-      "foreign-key",
-      "transaction",
-      "isolation",
-      "upsert",
-      "vacuum",
-      "partition",
-      "shard",
-      "ttl",
-      "materialized-view",
-      "cursor"
-    ],
-    tags: ["#data", "#schema", "#sql", "#etl"]
-  },
-  ui: {
-    words: [
-      "component",
-      "props",
-      "state",
-      "hook-ui",
-      "render",
-      "layout",
-      "accessibility",
-      "aria",
-      "focus-trap",
-      "stylesheet",
-      "tailwind",
-      "responsive",
-      "viewport",
-      "dark-mode",
-      "theming",
-      "widget",
-      "modal",
-      "tooltip",
-      "dropdown",
-      "form",
-      "validation-ui",
-      "i18n",
-      "skeleton",
-      "virtualized",
-      "scroll",
-      "animation",
-      "transition",
-      "design-system"
-    ],
-    tags: ["#ui", "#component", "#a11y", "#css"]
-  }
-};
-function mulberry32(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = a + 1831565813 | 0;
-    let t = Math.imul(a ^ a >>> 15, 1 | a);
-    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-    return ((t ^ t >>> 14) >>> 0) / 4294967296;
-  };
-}
-function generateRecord(category, idx, rnd, tagsOverride) {
-  const v = VOCAB[category];
-  const descWords = [];
-  const wordCount = 5 + idx % 3;
-  for (let i = 0; i < wordCount; i++) {
-    descWords.push(v.words[Math.floor(rnd() * v.words.length)]);
-  }
-  const tags = tagsOverride ?? v.tags.slice(0, 2 + idx % 2).join(" ");
-  const name = `skill-${String(idx).padStart(6, "0")}`;
-  const bodyWords = [];
-  for (let i = 0; i < 4 + idx % 2; i++) {
-    bodyWords.push(v.words[Math.floor(rnd() * v.words.length)]);
-  }
-  return [
-    "---",
-    `name: ${name}`,
-    `description: ${descWords.join(" ")} -- ${tags}`,
-    `version: 1.${idx % 10}.${idx % 3}`,
-    "---",
-    "",
-    `# ${name}`,
-    "",
-    `${bodyWords.join(" ")}.`,
-    "",
-    ""
-  ].join("\n");
-}
-function generateFixtureRecords(seed, count) {
-  const rnd = mulberry32(seed);
-  const chunks = [];
-  const expected = [];
-  for (let i = 0; i < count; i++) {
-    const cat = SCOUT_CATEGORIES[i % SCOUT_CATEGORIES.length];
-    chunks.push(generateRecord(cat, i, rnd));
-    expected.push(cat);
-  }
-  const body = chunks.join("");
-  return { body, expected, recordCount: expected.length };
-}
-var MIN_FIXTURE_BYTES = Buffer.byteLength(
-  generateFixtureRecords(1, MIN_FIXTURE_RECORDS).body,
-  "utf-8"
-);
-function generateFixture(seed, targetBytes) {
-  const rnd = mulberry32(seed);
-  const chunks = [];
-  const expected = [];
-  let total = 0;
-  let i = 0;
-  while (i < MIN_FIXTURE_RECORDS || total < targetBytes) {
-    const cat = SCOUT_CATEGORIES[i % SCOUT_CATEGORIES.length];
-    const rec = generateRecord(cat, i, rnd);
-    if (total + rec.length > targetBytes && i >= MIN_FIXTURE_RECORDS) break;
-    chunks.push(rec);
-    expected.push(cat);
-    total += rec.length;
-    i++;
-  }
-  const body = chunks.join("");
-  return { body, expected, recordCount: expected.length };
-}
-function buildPositionalSchema(expectedCount) {
-  return {
-    name: "skill_frontmatter_extraction",
-    strict: true,
-    schema: {
-      type: "object",
-      additionalProperties: false,
-      required: ["categories"],
-      properties: {
-        categories: {
-          type: "array",
-          minItems: expectedCount,
-          maxItems: expectedCount,
-          items: {
-            type: "string",
-            enum: [...SCOUT_CATEGORIES]
-          },
-          description: `Exactly ${expectedCount} category labels \u2014 one per skill-file record, in input order (categories[i] is the category of the record whose name is "skill-${"i".padStart(6, "0")}" for index i).`
-        }
-      }
-    }
-  };
-}
-function parsePositionalText(content) {
-  let text = content.replace(/<think>[\s\S]*?<\/think>/g, "");
-  const open = text.lastIndexOf("</think>");
-  if (open >= 0) text = text.slice(open + "</think>".length);
-  text = text.replace(/```(?:json)?/gi, "").trim();
-  const tryParse = (s) => {
-    try {
-      return JSON.parse(s);
-    } catch {
-      return void 0;
-    }
-  };
-  let value = tryParse(text);
-  if (value === void 0) {
-    const a = text.indexOf("{");
-    const b = text.lastIndexOf("}");
-    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
-  }
-  if (value === void 0) {
-    const a = text.indexOf("[");
-    const b = text.lastIndexOf("]");
-    if (a >= 0 && b > a) value = tryParse(text.slice(a, b + 1));
-  }
-  if (value === void 0) return { error: `no JSON object or array in the reply text: ${JSON.stringify(text.slice(0, 120))}` };
-  const list = Array.isArray(value) ? value : typeof value === "object" && value !== null ? value.categories : void 0;
-  if (!Array.isArray(list)) return { error: "the reply text has no categories array" };
-  if (!list.every((v) => typeof v === "string")) return { error: "the categories array holds a non-string entry" };
-  return { categories: list.map((v) => v.trim().toLowerCase()) };
-}
-var SCOUT_TIMEOUT_PREFIX = "timeout after ";
-var SCOUT_NETWORK_PREFIX = "network: ";
-var SCOUT_HTTP_PREFIX = "HTTP ";
-async function classifyPositional(modelId, baseUrl, apiKey, fixture, schema, opts = {}) {
-  const doFetch = opts.fetchImpl ?? ((u, init) => fetch(u, init));
-  const mode = opts.responseMode ?? "json_schema";
-  const systemPrompt = [
-    "You are a skill-file frontmatter classifier.",
-    `Each record of the input is one skill-file block, whose frontmatter carries "name: skill-NNNNNN" where NNNNNN is its index (starting at 0).`,
-    `Allowed categories: ${SCOUT_CATEGORIES.join(", ")}.`,
-    `For EVERY record, return ONE category. Output a JSON object {"categories": [...]} where categories[i] is the category of the record named "skill-" + i padded to 6 digits.`,
-    `The "categories" array MUST have exactly ${fixture.recordCount} entries \u2014 one per record.`,
-    ...mode === "text" ? [`Reply with only that JSON object, no other text. It must match this JSON Schema: ${JSON.stringify(schema.schema ?? schema)}`] : []
-  ].join(" ");
-  const userPrompt = `Classify the following ${fixture.recordCount} skill-file records:
-
-${fixture.body}`;
-  const startMs = Date.now();
-  const PER_CALL_MS = opts.timeoutMs ?? 9e4;
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), PER_CALL_MS);
-  let res;
-  try {
-    res = await doFetch(`${baseUrl}${CHAT_COMPLETIONS_SUFFIX}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: modelId,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt }
-        ],
-        // The text path (P6) sends no response_format: the schema is in the system prompt instead.
-        ...mode === "json_schema" ? { response_format: { type: "json_schema", json_schema: schema } } : {},
-        ...opts.maxTokens !== void 0 ? { max_tokens: opts.maxTokens } : {},
-        temperature: 0.1,
-        ...opts.extraBody
-      }),
-      signal: controller.signal
-    });
-  } catch (e) {
-    clearTimeout(timeoutId);
-    const err = e;
-    const code = typeof err.cause?.code === "string" ? ` (${err.cause.code})` : "";
-    return {
-      predicted: [],
-      promptTokens: 0,
-      completionTokens: 0,
-      durationMs: Date.now() - startMs,
-      error: err.name === "AbortError" ? `${SCOUT_TIMEOUT_PREFIX}${PER_CALL_MS}ms` : `${SCOUT_NETWORK_PREFIX}${err.message}${code}`
-    };
-  }
-  clearTimeout(timeoutId);
-  const durationMs = Date.now() - startMs;
-  if (!res.ok) {
-    const text = await res.text().catch(() => "") ?? "";
-    return {
-      predicted: [],
-      promptTokens: 0,
-      completionTokens: 0,
-      durationMs,
-      error: `${SCOUT_HTTP_PREFIX}${res.status}: ${text.slice(0, 200)}`
-    };
-  }
-  let payload;
-  try {
-    payload = await res.json();
-  } catch (e) {
-    return {
-      predicted: [],
-      promptTokens: 0,
-      completionTokens: 0,
-      durationMs,
-      error: `non-JSON response: ${e.message}`
-    };
-  }
-  const content = payload.choices?.[0]?.message?.content;
-  const inTok = payload.usage?.prompt_tokens ?? 0;
-  const outTok = payload.usage?.completion_tokens ?? 0;
-  if (typeof content !== "string") {
-    return {
-      predicted: [],
-      promptTokens: inTok,
-      completionTokens: outTok,
-      durationMs,
-      error: "no message.content in response"
-    };
-  }
-  let parsed;
-  if (mode === "text") {
-    const t = parsePositionalText(content);
-    if ("error" in t) {
-      return { predicted: [], promptTokens: inTok, completionTokens: outTok, durationMs, error: t.error };
-    }
-    parsed = { categories: t.categories };
-  } else {
-    try {
-      parsed = JSON.parse(content);
-    } catch (e) {
-      return {
-        predicted: [],
-        promptTokens: inTok,
-        completionTokens: outTok,
-        durationMs,
-        error: `JSON.parse: ${e.message}`
-      };
-    }
-  }
-  if (!Array.isArray(parsed.categories)) {
-    return {
-      predicted: [],
-      promptTokens: inTok,
-      completionTokens: outTok,
-      durationMs,
-      error: "response.categories not an array"
-    };
-  }
-  const predicted = parsed.categories.filter(
-    (v) => typeof v === "string"
-  );
-  return {
-    predicted,
-    promptTokens: inTok,
-    completionTokens: outTok,
-    durationMs,
-    error: null
-  };
-}
-function scoreAccuracy(expected, actual) {
-  const total = expected.length;
-  const minLen = Math.min(actual.length, total);
-  let correct = 0;
-  for (let i = 0; i < minLen; i++) {
-    if (actual[i] === expected[i]) correct++;
-  }
-  return { correct, total, accuracy: total === 0 ? 0 : correct / total };
-}
-
-// src/benchmark/scout-accuracy.ts
+import { mkdirSync as mkdirSync23, renameSync as renameSync20, writeFileSync as writeFileSync22 } from "node:fs";
+import { join as join42 } from "node:path";
 init_cost_estimate();
 
 // src/mass_scouting/scout-accuracy-ledger.ts
 init_config();
-import { createHash as createHash11 } from "node:crypto";
-import { existsSync as existsSync26, mkdirSync as mkdirSync20, readFileSync as readFileSync37, renameSync as renameSync17, writeFileSync as writeFileSync20 } from "node:fs";
-import { join as join38 } from "node:path";
+import { createHash as createHash12 } from "node:crypto";
+import { existsSync as existsSync27, mkdirSync as mkdirSync22, readFileSync as readFileSync41, renameSync as renameSync19, writeFileSync as writeFileSync21 } from "node:fs";
+import { join as join41 } from "node:path";
 function scoutAccuracyLedgerPath() {
-  return join38(getConfigDir(), "scout-accuracy-results.json");
+  return join41(getConfigDir(), "scout-accuracy-results.json");
 }
 function scoutAccuracyHash(threshold, targetBytes) {
-  return createHash11("sha256").update(`${SCOUT_ACCURACY_FIXTURE_VERSION}:${threshold}:${targetBytes}`).digest("hex").slice(0, 12);
+  return createHash12("sha256").update(`${SCOUT_ACCURACY_FIXTURE_VERSION}:${threshold}:${targetBytes}`).digest("hex").slice(0, 12);
 }
 function ledgerKey(modelId, date, hash) {
   return `${modelId}::${date}::${hash}`;
 }
 function loadCache7() {
   const p = scoutAccuracyLedgerPath();
-  if (!existsSync26(p)) return {};
+  if (!existsSync27(p)) return {};
   try {
-    const parsed = JSON.parse(readFileSync37(p, "utf-8"));
+    const parsed = JSON.parse(readFileSync41(p, "utf-8"));
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
     }
@@ -236267,16 +236312,16 @@ function loadCache7() {
   return {};
 }
 function loadOrInit() {
-  mkdirSync20(getConfigDir(), { recursive: true });
+  mkdirSync22(getConfigDir(), { recursive: true });
   return loadCache7();
 }
 function saveCache7(cache2) {
   const dir = getConfigDir();
-  mkdirSync20(dir, { recursive: true });
+  mkdirSync22(dir, { recursive: true });
   const p = scoutAccuracyLedgerPath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync20(tmp, JSON.stringify(cache2, null, 2), "utf-8");
-  renameSync17(tmp, p);
+  writeFileSync21(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  renameSync19(tmp, p);
 }
 function today7() {
   return (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
@@ -236486,7 +236531,7 @@ async function runScoutAccuracyBenchmark(opts = {}) {
     (a, b) => a.inputDollarsPerMillion + a.outputDollarsPerMillion - (b.inputDollarsPerMillion + b.outputDollarsPerMillion)
   );
   const picked = survivors.slice(0, SCOUT_SURVIVOR_CAP);
-  const settingsPath = join39(getConfigDir(), "settings.yaml");
+  const settingsPath = join42(getConfigDir(), "settings.yaml");
   const { previousHeadModelId } = writeScoutingProfile(
     settingsPath,
     picked.map((p) => ({ modelId: p.id }))
@@ -236500,11 +236545,11 @@ async function runScoutAccuracyBenchmark(opts = {}) {
   let jsonReportPath;
   try {
     const reportDir = opts.outputDir ?? benchmarkSubReportDir("scout-accuracy-benchmark", opts.mainRoot);
-    mkdirSync21(reportDir, { recursive: true });
+    mkdirSync23(reportDir, { recursive: true });
     const stamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
-    jsonReportPath = join39(reportDir, `${stamp2}-scout-accuracy.json`);
+    jsonReportPath = join42(reportDir, `${stamp2}-scout-accuracy.json`);
     const tmp = `${jsonReportPath}.tmp.${process.pid}`;
-    writeFileSync21(
+    writeFileSync22(
       tmp,
       JSON.stringify(
         {
@@ -236523,7 +236568,7 @@ async function runScoutAccuracyBenchmark(opts = {}) {
       ),
       "utf-8"
     );
-    renameSync18(tmp, jsonReportPath);
+    renameSync20(tmp, jsonReportPath);
   } catch {
     jsonReportPath = void 0;
   }
@@ -237091,8 +237136,8 @@ init_discover();
 init_registry();
 init_usage_history();
 init_project_root();
-import { mkdirSync as mkdirSync23, readFileSync as readFileSync39, renameSync as renameSync20, writeFileSync as writeFileSync23 } from "node:fs";
-import { join as join41 } from "node:path";
+import { mkdirSync as mkdirSync25, readFileSync as readFileSync43, renameSync as renameSync22, writeFileSync as writeFileSync24 } from "node:fs";
+import { join as join44 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
   const n = parseFloat(s);
@@ -237229,11 +237274,11 @@ function computeModelHealth(configured, catalog, baseline, opts = {}) {
   return { findings, updatedBaseline };
 }
 function getBaselinePath() {
-  return join41(getConfigDir(), "model-baseline.json");
+  return join44(getConfigDir(), "model-baseline.json");
 }
 function loadBaseline(path = getBaselinePath()) {
   try {
-    const raw = readFileSync39(path, "utf-8");
+    const raw = readFileSync43(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       return parsed;
@@ -237245,10 +237290,10 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync23(getConfigDir(), { recursive: true });
+    mkdirSync25(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync23(tmp, JSON.stringify(baseline, null, 2));
-    renameSync20(tmp, path);
+    writeFileSync24(tmp, JSON.stringify(baseline, null, 2));
+    renameSync22(tmp, path);
   } catch {
   }
 }
@@ -237322,10 +237367,10 @@ function renderModelHealthMarkdown(report) {
 async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
-  const dir = opts.outputDir ?? join41(defaultScratchDir(), "model-health");
-  mkdirSync23(dir, { recursive: true });
-  const reportPath = join41(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync23(reportPath, renderModelHealthMarkdown(report));
+  const dir = opts.outputDir ?? join44(defaultScratchDir(), "model-health");
+  mkdirSync25(dir, { recursive: true });
+  const reportPath = join44(dir, `${compactStamp()}-model-health-${profile.name}.md`);
+  writeFileSync24(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -237348,8 +237393,8 @@ function renderModelHealthText(report) {
 // src/model-qualification/new-arrivals.ts
 init_config();
 init_discover();
-import { mkdirSync as mkdirSync24, readFileSync as readFileSync40, renameSync as renameSync21, writeFileSync as writeFileSync24 } from "node:fs";
-import { join as join42 } from "node:path";
+import { mkdirSync as mkdirSync26, readFileSync as readFileSync44, renameSync as renameSync23, writeFileSync as writeFileSync25 } from "node:fs";
+import { join as join45 } from "node:path";
 init_usage_history();
 init_project_root();
 function createdToIso(created) {
@@ -237393,11 +237438,11 @@ function diffNewArrivals(catalog, snapshot) {
   };
 }
 function getCatalogSnapshotPath() {
-  return join42(getConfigDir(), "catalog-snapshot.json");
+  return join45(getConfigDir(), "catalog-snapshot.json");
 }
 function loadSnapshot(path = getCatalogSnapshotPath()) {
   try {
-    const raw = readFileSync40(path, "utf-8");
+    const raw = readFileSync44(path, "utf-8");
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const obj = parsed;
@@ -237415,10 +237460,10 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync24(getConfigDir(), { recursive: true });
+    mkdirSync26(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync24(tmp, JSON.stringify(snapshot, null, 2));
-    renameSync21(tmp, path);
+    writeFileSync25(tmp, JSON.stringify(snapshot, null, 2));
+    renameSync23(tmp, path);
   } catch {
   }
 }
@@ -237509,10 +237554,10 @@ function renderNewArrivalsText(report) {
 }
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
-  const dir = opts.outputDir ?? join42(defaultScratchDir(), "model-arrivals");
-  mkdirSync24(dir, { recursive: true });
-  const reportPath = join42(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync24(reportPath, renderNewArrivalsMarkdown(report));
+  const dir = opts.outputDir ?? join45(defaultScratchDir(), "model-arrivals");
+  mkdirSync26(dir, { recursive: true });
+  const reportPath = join45(dir, `${compactStamp()}-new-arrivals.md`);
+  writeFileSync25(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -238097,14 +238142,14 @@ function resolveApiKey7() {
   return k;
 }
 function resolveFixturesDir() {
-  const here = dirname14(fileURLToPath11(import.meta.url));
+  const here = dirname16(fileURLToPath11(import.meta.url));
   const candidates = [
-    join47(here, "fixtures"),
-    join47(here, "..", "src", "benchmark", "fixtures"),
-    join47(here, "..", "..", "src", "benchmark", "fixtures")
+    join50(here, "fixtures"),
+    join50(here, "..", "src", "benchmark", "fixtures"),
+    join50(here, "..", "..", "src", "benchmark", "fixtures")
   ];
   for (const c of candidates) {
-    if (existsSync30(join47(c, "file-01.ts"))) return c;
+    if (existsSync31(join50(c, "file-01.ts"))) return c;
   }
   throw new Error(`Could not locate benchmark fixtures. Tried:
   ${candidates.join("\n  ")}`);
@@ -238153,7 +238198,7 @@ function preflight(opts) {
   }
 }
 function benchmarkCachePath() {
-  return join47(getConfigDir(), "benchmark-results.json");
+  return join50(getConfigDir(), "benchmark-results.json");
 }
 function refuseUnsafeUpdateAll(opts) {
   if (!opts.updateAll || opts.updateMode === "free") return null;
@@ -238607,17 +238652,17 @@ async function runKeywordSweep(opts, freeOnly, fetchImpl, ledger) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync27(dirname14(reportPath), { recursive: true });
-  writeFileSync29(reportPath, markdown, "utf-8");
+  mkdirSync29(dirname16(reportPath), { recursive: true });
+  writeFileSync30(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync27(dirname14(cacheJsonPath), { recursive: true });
-  writeFileSync29(cacheJsonPath, json, "utf-8");
+  mkdirSync29(dirname16(cacheJsonPath), { recursive: true });
+  writeFileSync30(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync27(dirname14(opts.jsonPath), { recursive: true });
-    writeFileSync29(opts.jsonPath, json, "utf-8");
+    mkdirSync29(dirname16(opts.jsonPath), { recursive: true });
+    writeFileSync30(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -239397,9 +239442,9 @@ async function runAutoReplacePhase(opts, freeOnly) {
   });
   const ensemble = planEnsembleRotation({ profileName: targetProfile });
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
-  const reportPath = join47(defaultScratchDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync27(dirname14(reportPath), { recursive: true });
-  writeFileSync29(reportPath, fullReport, "utf-8");
+  const reportPath = join50(defaultScratchDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
+  mkdirSync29(dirname16(reportPath), { recursive: true });
+  writeFileSync30(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;
@@ -239643,7 +239688,7 @@ function runPickPhase(results, opts, reportPath, notes = []) {
   };
 }
 function buildReportPath() {
-  const reportDir = process.env.LLM_EXT_CONFIG_DIR ? join47(getConfigDir(), "reports", "benchmark") : join47(defaultScratchDir(), "benchmark");
+  const reportDir = process.env.LLM_EXT_CONFIG_DIR ? join50(getConfigDir(), "reports", "benchmark") : join50(defaultScratchDir(), "benchmark");
   const now = /* @__PURE__ */ new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const offsetMin = -now.getTimezoneOffset();
@@ -239651,7 +239696,7 @@ function buildReportPath() {
   const offsetAbs = Math.abs(offsetMin);
   const tz = `${offsetSign}${pad(Math.floor(offsetAbs / 60))}${pad(offsetAbs % 60)}`;
   const ts3 = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}${tz}`;
-  return join47(reportDir, `${ts3}-model-comparison.md`);
+  return join50(reportDir, `${ts3}-model-comparison.md`);
 }
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const ownedLockPath = process.env[BENCH_LOCK_PATH_ENV];

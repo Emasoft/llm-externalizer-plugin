@@ -240933,7 +240933,7 @@ var init_phase_c = __esm({
           };
           const fits = async (step, slots2, slotCtx2) => {
             await ctx.stopServer(`measuring free memory for ${step}`);
-            const { free, floor } = await freeMemory(floorPct);
+            const { free, floor } = await (ctx.freeMemory ?? freeMemory)(floorPct);
             const need2 = weights + kvBytes(layers, slots2 * slotCtx2) + WINDOW_HEADROOM_BYTES;
             const mib = (x) => Math.round(x / 2 ** 20);
             const fit = budgetFit(need2, totalmem6() - floor, free - floor);
@@ -276590,6 +276590,20 @@ function localOutputCap(record2, kind, userMaxOutput) {
   const thinkingOn = kind === "bug" && need(record2.thinking_works, record2.model, "thinking_works").on === true;
   return Math.max(need(record2.min_output_tokens, record2.model, "min_output_tokens")[kind], thinkingOn ? CAP_ON : CAP_OFF);
 }
+function localThinkingSwitch(record2, kind) {
+  const works = need(record2.thinking_works, record2.model, "thinking_works");
+  if (kind === "bug") return works.on === true ? true : void 0;
+  return works.off === true ? false : void 0;
+}
+function localThinkingFor(dir, tool, model, api2) {
+  if (tool === void 0 || api2 === void 0) return void 0;
+  const engine = localEngineOf(api2);
+  const entry = taskEntryOf(tool);
+  if (engine === null || entry === void 0) return void 0;
+  if (readRecordStatus(dir, engine, model).state !== "ok") return void 0;
+  const record2 = readRecord(dir, engine, model);
+  return record2 === null ? void 0 : localThinkingSwitch(record2, entry.kind);
+}
 function windowOf(record2, ctx) {
   const w = need(record2.window_tokens, record2.model, "window_tokens");
   return ctx > 0 ? Math.min(ctx, w) : w;
@@ -282618,6 +282632,18 @@ var init_request_overrides = __esm({
   }
 });
 
+// src/provider/strip-thinking.ts
+function stripLeadingThinkBlock(content) {
+  return content.replace(LEADING_THINK_BLOCK, "");
+}
+var LEADING_THINK_BLOCK;
+var init_strip_thinking = __esm({
+  "src/provider/strip-thinking.ts"() {
+    "use strict";
+    LEADING_THINK_BLOCK = /^\s*<think>[\s\S]*?<\/think>\s*/;
+  }
+});
+
 // src/provider/endpoint-flavor.ts
 function getFlavor(baseUrl) {
   return _flavorCache.get(baseUrl) ?? { flavor: "openai", detected: false };
@@ -282991,6 +283017,22 @@ function requestOptionsConnection(conn, deps) {
     ro
   };
 }
+function withLocalThinking(body, conn, explicitRoute, deps) {
+  if (conn.routed || deps.getLocalThinking === void 0 || body.chat_template_kwargs !== void 0) return body;
+  const route = explicitRoute ?? deps.routeForModel(conn.model);
+  const thinking = deps.getLocalThinking(ctxStore.getStore()?.tool, conn.model, route);
+  return thinking === void 0 ? body : { ...body, chat_template_kwargs: { enable_thinking: thinking } };
+}
+function thinkingSent(body, conn, explicitRoute, deps) {
+  const kwargs = body.chat_template_kwargs;
+  if (conn.routed || kwargs?.enable_thinking !== true) return false;
+  if (conn.broker) return true;
+  const route = explicitRoute ?? deps.routeForModel(conn.model);
+  return route !== null && localEngineOf(route.api) !== null;
+}
+function replyContent(content, thinkingOn) {
+  return thinkingOn ? stripLeadingThinkBlock(content) : content;
+}
 function sendChat(conn, body, time3, rl429, clock, scope, signal) {
   throwIfStopped();
   if (conn.broker) {
@@ -283041,11 +283083,14 @@ async function chatCompletionSimple(messages, options, deps, clock, call) {
   try {
     let lastError = null;
     let emitted429 = false;
+    let thinkingOn = false;
     for (const reasoning of reasoningLadder) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
+      body = withLocalThinking(body, conn, options.route, deps);
+      thinkingOn = thinkingSent(body, conn, options.route, deps);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
       dumpRequestBody(body, conn.model);
       const rl429 = { saw429: false };
@@ -283085,7 +283130,7 @@ async function chatCompletionSimple(messages, options, deps, clock, call) {
         throw httpErr;
       }
       const data = await safeReadJson(res);
-      const content = data.choices?.[0]?.message?.content ?? "";
+      const content = replyContent(data.choices?.[0]?.message?.content ?? "", thinkingOn);
       const model = data.model ?? options.model ?? "unknown";
       const finishReason = data.choices?.[0]?.finish_reason ?? "";
       const usage = data.usage;
@@ -283185,11 +283230,14 @@ async function chatCompletionJSON(messages, options, deps) {
     let finishReason = "";
     let gotResponse = false;
     let emitted429 = false;
+    let thinkingOn = false;
     for (const reasoning of reasoningLadder) {
       let body = { ...baseBody };
       if (reasoning) body.reasoning = reasoning;
       body = applyModelOverrides(body, conn.model);
       if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
+      body = withLocalThinking(body, conn, void 0, deps);
+      thinkingOn = thinkingSent(body, conn, void 0, deps);
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
       dumpRequestBody(body, conn.model);
       const rl429 = { saw429: false };
@@ -283260,6 +283308,7 @@ async function chatCompletionJSON(messages, options, deps) {
           partial: rawContent
         });
       }
+      rawContent = replyContent(rawContent, thinkingOn);
       gotResponse = true;
       break;
     }
@@ -283663,6 +283712,8 @@ var init_completion = __esm({
   "src/provider/completion.ts"() {
     "use strict";
     init_request_overrides();
+    init_strip_thinking();
+    init_local_input_budget();
     init_safe_body();
     init_model_events();
     init_usage_history();
@@ -286548,6 +286599,9 @@ function providerDepsFrom(getProfile, getBackend, noHold = false) {
     getDefaultMaxTokens: () => maxTokensFor(getProfile(), getBackend(), ctxStore.getStore()?.tool),
     // TRDD-1OOAH3LD: read through the profile on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
     getRequestOptions: (tool) => resolveRequestOptions(getProfile()?.requestOptions ?? null, tool),
+    // TRDD-1OOAH3LD gap C1-7 / TRDD-ZGSGGHQG gap Z-3: the per-model thinking switch of a calibrated local route. Lives in this ONE field list, so the
+    // boot object and every per-walk object (makeProviderDeps, the local fallback included) send it; completion.ts calls it where the body is built.
+    getLocalThinking: (tool, model, route) => localThinkingFor(getConfigDir(), tool, model, route?.api),
     getActiveProtocol: () => getProfile()?.protocol ?? "openai_api",
     // TRDD-1OOAH3LD broker: read through the profile on EVERY call
     // (reload-safe, like routeForModel above). Only the profile's own primary
@@ -292761,7 +292815,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.4.0";
+var VERSION = "14.4.1";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

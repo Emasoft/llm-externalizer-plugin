@@ -1,6 +1,37 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.4.1] - 2026-11-16
+
+### Added
+
+- Feat(local): send the thinking switch per model and task kind on calibrated local routes, strip a leading think block (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+
+### Documentation
+
+- Docs(trdd): FC2TX9VU resume state before compaction (TRDD-FC2TX9VU)
+
+- Docs(trdd): record the pending Linux proof of the CI fix (TRDD-36L97JC9)
+
+- Docs(trdd): tag the local-profile audit as inferred, move machine state out, record the pending CI proof and the thinking-default decision (TRDD-FC2TX9VU)
+
+- Docs(trdd): current STATE of 1OOAH3LD and ZGSGGHQG from the v14.4.0 audit (TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs(trdd): record the publish-2 load flakes on CBOTP0DY and review corrections on FC2TX9VU (TRDD-FC2TX9VU)
+
+- Docs(trdd): 58CFBQHN box 1 met on installed 14.4.0, to human_review for the box 2 USER decision (TRDD-58CFBQHN)
+
+- Docs(trdd): add 36L97JC9, CI and Release workflows red on the Linux runner since 2026-10-31
+
+- Docs(trdd): close the cards shipped in 14.3.0 and 14.4.0, route USER decisions to human_review (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(ci): the Linux runner gets git-cliff, the macOS-only lsof tests run only on macOS, and the phase-c memory-wait test no longer depends on host free memory (TRDD-36L97JC9)
+
+
 ## [14.4.0] - 2026-11-16
 
 ### Added
