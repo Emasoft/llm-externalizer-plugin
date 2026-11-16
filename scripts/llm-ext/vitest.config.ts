@@ -757,6 +757,8 @@ export default defineConfig({
       'src/or-jev-template.test.ts',
       // PF-04 (TRDD-4GZJL3NH, E83): migration step or-jev-section-added: template added once, hand-written or-jev marked and kept, restore and dedupe; real /tmp files.
       'src/or-jev-migration.test.ts',
+      // TRDD-IO0B25CV: every settings.yaml writer keeps a user's or-jev classifier profile and active_classifier (the include list is explicit).
+      'src/settings-keep-or-jev.test.ts',
       // L2-17 (TRDD-7BT0W914): classifier profile resolution: active_classifier or --profile, PT-03 type check, schema, defaults, no paid gate (D2), catalog checks on the selection path; real catalog, replay fetch.
       'src/classifiers/l2/profile.test.ts',
       // Local decider fallback (mlx-decision, adopt-only, TRDD-O93LFMF3): the three-way /health reading, adopt, the loaded:[] wait,
