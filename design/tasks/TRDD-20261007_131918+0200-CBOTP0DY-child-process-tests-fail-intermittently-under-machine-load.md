@@ -4,7 +4,7 @@ title: Child-process tests fail intermittently under machine load
 column: backburner
 status: tasked
 created: 2026-10-07T13:19:18+0200
-updated: 2026-11-14T18:51:02+0100
+updated: 2026-11-16T20:29:29+0100
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -40,3 +40,4 @@ Before raising any timeout: rerun both trees under identical conditions (both ou
 
 2026-11-14T07:38+0100 2026-11-14 broker.test.ts failed 3 tests in two main-tree runs (full-suite-f63fa46b stage 2 and broker-solo-20261114_065401+0100) but passed 97/2 in clean worktrees of a00ef96d and f63fa46b (reports_dev/o93lfmf3/20261114_073659+0100-broker-bisect.md). Candidate cause: a session node-close hook that ends node and llama-server processes when a tool call finishes (observed killing a broker test's processes at about 07:07); unproven, since one tool call finished during a passing run without breaking it.
 2026-11-14T18:51:01+0100: during the TRDD-3CG178O7 work (d6fad12e), parallel vitest runs over provider, broker, classifiers and the free-rotation files failed in src/broker/broker.test.ts twice. Round 1: M3 sweep timeout. Round 2: M1 re-check queue timeout, M3 sweep timeout, M9 kill ESRCH (not a timeout), and a command_timeout end-to-end assertion. dispatch-reload hit a 15 s timeout once. Every one passed when the file ran serially (97 passed) or alone; no baseline run before the change. A harness hook in the same session reported a leaked llama-server (tiny-llamas stories260K) and a broker bundle node process left after a background test command, and ended them. A test that leaks child processes may explain the cross-test interference. Logs: reports_dev/3cg178o7/logs/vitest-areas.log, fu-vitest-areas.log, fu-broker-serial.log.
+2026-11-16T20:29:29+0100 main agent: recurrence in the v14.4.0 publish-2 full npm test (19:29-19:39, load average 1/5 min about 49/104 at the end): 4 failures, src/empty-pool-wait.test.ts 'stop during the repair wait' (one update requested before the stop: expected 1 record, got 0), src/index.test.ts progress notifications chat and code_task 'runs verbosely against an unreachable backend' (exitCode null, the child was ended by the test timeout), src/benchmark/pick-lock.test.ts '(b) a lock held by a live process makes the writer wait' (lockDir not present at line 176). The same 3 files run alone right after: 78/78 passed (load falling 78 to 18). The production code was the same as the green 16:58 full run. Publish-3 then passed every stage. Cause inferred: machine load, not measured per test.
