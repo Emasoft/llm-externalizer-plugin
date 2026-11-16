@@ -1,10 +1,10 @@
 ---
 trdd-id: WSPV40Y5
 title: Automatic fallback of general commands to a ready local profile on remote service failure
-column: design
+column: dev
 status: tasked
 created: 2026-11-13T18:48:21+0100
-updated: 2026-11-14T21:37:19+0100
+updated: 2026-11-16T11:50:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -17,6 +17,7 @@ approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-13T18:48:21+0100
 parent-trdd: UT7UC025
 derived: true
+implementation-commits: [1e5ca0d7]
 ---
 
 # Automatic fallback of general commands to a ready local profile on remote service failure
@@ -127,3 +128,4 @@ Cross-ref: governor slot priority for the mlx-decision decider is USER Q4; the O
 ## Notes
 
 2026-11-14T20:12+0100 AGENT DECISIONS on the three open questions, under the owner instruction of 2026-11-14, verbatim: 'there are no blockers. You decide and find the best solution for all those issues. just base your decision on verified facts.' Q5: static user-defined remote profiles do NOT fall back; the only ruling that names that profile kind is 2026-09-17 (dfcb81ec), verbatim: 'for normal profiles [...] even if a model fails or an endpoint is unreachable or has exhausted credits, it will simply switch to the next model listed in the selected profile. in no case models outside the selected profile must be used.' Nothing newer names static profiles. Q10: the network give-up window of TRDD-PN0N4290 becomes a settings key plus a command flag; no measured fact fixes the number, and the per-command latch (Q8) makes a wrong early switch cost the whole command, so the default is longer than the provisional 6 s: 30 s (covers a Wi-Fi reassociation and a DNS blip; still far below the 300 s remote retry deadline). Q4: no reserved governor slot for the decider now; the O93LFMF3 60 s lease fast-fail is aligned with the owner rulings in its own commit on TRDD-O93LFMF3 (2026-11-11 5c8c3cc9: 'for mlx-decision increase the defaults to 50 retries and timeout 200 sec and request-timeout 400 sec'; 2026-10-28: not having enough memory is not a failure, requests queue). It does not block 1b or 1d.
+2026-11-16T11:50:24+0100 main agent: increment 1d committed as 1e5ca0d7 on dev/after-14.3.0, held from release with 42c67aa3. Agent decisions this turn: (1) the provider/completion.ts localFallback option is signed off: the SERVICE_HEALTH breaker is process-global and counts the remote service failures, so a local send must neither wait on it, feed it, nor heal it (mutation M6 shows the stall without it). (2) The section 3 opt-out or pin setting is split to TRDD-M4KERGEF (key name and location are an agent proposal; one task per card). (3) Still open before release: an end-to-end test with a real local answer through the bundled CLI and tiny-llamas (card cases 1 2 3 12 13 14), and direct tests for the LocalFallbackNotReady path and the success-does-not-heal gate. The pre-commit UBS scan timed out at 180 s and was skipped; a UBS run on the changed files is owed.
