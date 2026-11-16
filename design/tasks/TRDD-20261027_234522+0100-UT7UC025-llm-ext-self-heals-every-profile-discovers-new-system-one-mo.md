@@ -4,7 +4,7 @@ title: llm-ext self-heals every profile, discovers new system-one models, falls 
 column: design
 status: tasked
 created: 2026-10-27T23:45:22+0100
-updated: 2026-11-13T19:11:24+0100
+updated: 2026-11-16T11:53:34+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-27T23:45:22+0100
-eht: [5Q79QZM7, 28BAL5ER, 8HDAFJ3N, J7AIC7ZW, O93LFMF3, WSPV40Y5, 3CG178O7, PN0N4290, 78LZFUVJ]
+eht: [5Q79QZM7, 28BAL5ER, 8HDAFJ3N, J7AIC7ZW, O93LFMF3, WSPV40Y5, 3CG178O7, PN0N4290, 78LZFUVJ, M4KERGEF]
 ---
 
 # llm-ext self-heals every profile, discovers new system-one models, falls back to a local small model
