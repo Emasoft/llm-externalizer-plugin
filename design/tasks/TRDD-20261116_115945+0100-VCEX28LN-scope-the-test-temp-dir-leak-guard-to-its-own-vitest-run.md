@@ -4,7 +4,7 @@ title: Scope the test temp-dir leak guard to its own vitest run
 column: todo
 status: tasked
 created: 2026-11-16T11:59:45+0100
-updated: 2026-11-16T12:03:41+0100
+updated: 2026-11-16T16:07:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -28,3 +28,4 @@ src/test-tmpdir-guard.ts:35-45 snapshots the whole machine /tmp and tmpdir() and
 ## Notes
 
 2026-11-16T12:03:41+0100 main agent: leftover entries still in /tmp at 12:0x, older than any run now active: 43 __llm_ext_unit_output_, 2 __llm_ext_help_cfg_ and 1 __llm_ext_cfg_ dated 11:40-11:42 (a vitest run killed mid-file cannot run afterAll; at least one worker run was ended by a hook that stops processes); 170 __llm_ext_profile_*/profileflag_* entries (cfg, immut, upgrade) with mtime 00:00 from profile.test.ts, cli/profile-flag-and-output-dir.test.ts and settings-group.test.ts, creation time unknown because the mtime is not the creation time. The guard ignores entries that predate its snapshot, so none of these failed the 14.3.1 gate; whether the profile tests leave the immut dirs behind on a normal run is not checked. Check it when this card is worked.
+- 2026-11-16T16:07:51+0100 main agent: first fix REJECTED, kept as git stash 'VCEX28LN claims-registry attempt (rejected 2026-11-16 ...)' in the dev/after-14.3.0 worktree, stash commit 2198765dbe6462f66e346ea921e334ea33e6ea43. It journaled every mkdir and mkdtemp of a run into a shared claims directory and subtracted other runs' claims at teardown. Rejected because, by the worker's own reproductions (report reports_dev/vcex/20261116_155306+0100-guard.md, not rerun by the main agent): a directory made by a spawned CLI child still failed an innocent concurrent run; a hardcoded name created first by another run stays masked, which hides a real leak (forbidden); and it added a claims registry plus mkdir wrappers in every test worker. Replacement in progress (main agent decision, advisor not consulted, local and reversible): one llm-ext test run per machine, an exclusive lock file under /tmp taken in the guard setup, a second run refused at once naming the holder and the manual fix, a stale lock (dead pid, or a pid reused by a process started after the lock, or an empty lock older than 10 s) replaced by an atomic rename. The leak check itself is unchanged. Consequence to weigh: two single-file vitest runs at once on one machine are refused too.
