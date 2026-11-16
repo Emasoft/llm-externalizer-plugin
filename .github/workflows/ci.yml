@@ -20,7 +20,11 @@ jobs:
     runs-on: ubuntu-latest
     # The default ceiling is 360 min; a hung npm/vitest step would otherwise
     # burn six hours of Actions minutes before anyone noticed.
-    timeout-minutes: 20
+    # TRDD-36L97JC9: 120 is a TEMPORARY diagnostic ceiling. 20 cancelled run
+    # 43961101395 nine minutes into the serial broker/governor stage; the whole
+    # npm test takes about 38 min on a 14-core Mac and stages 2-4 had never run
+    # on Linux. The final value is set from the measured Linux durations.
+    timeout-minutes: 120
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
