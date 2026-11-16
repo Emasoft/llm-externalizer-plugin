@@ -4,7 +4,7 @@ title: Setting to disable or pin the local fallback of general commands
 column: testing
 status: tasked
 created: 2026-11-16T11:50:02+0100
-updated: 2026-11-16T15:06:15+0100
+updated: 2026-11-16T15:46:17+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -17,7 +17,7 @@ approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T11:50:02+0100
 parent-trdd: UT7UC025
 derived: true
-implementation-commits: [5c1ca371]
+implementation-commits: [5c1ca371, 73ebd59c]
 ---
 
 # Setting to disable or pin the local fallback of general commands
@@ -31,3 +31,4 @@ Sibling of TRDD-WSPV40Y5, both EHTs of TRDD-UT7UC025 (WSPV40Y5 card section 3, a
 ## Notes
 
 2026-11-16T15:06:12+0100 main agent: implemented as 5c1ca371 (section name fallback_to_local, gate in readyLocalTarget). Main-agent run: local-fallback-setting, local-fallback-dispatch, settings-keep-or-jev gave 75 passed. Open: full suite (before the next push), a completed UBS scan (the pre-commit scan hit 180 s again), the migrateSettingsTo141 local-profile branches are not exercised by the round-trip test, and the interactive pick.ts handlers that call writeSettingsAtomic are covered only by reading the code.
+- 2026-11-16T15:46:16+0100 main agent: review finding F8 fixed in 73ebd59c: a fallback_to_local.profile pin naming a locals-local profile is now a settings error where Locals cannot run (only macOS on Apple silicon), also with enabled: false, because readyLocalTarget skipped it there and the fallback silently never ran. Consequence open to USER veto: on such a machine every command stops at load until the pin is fixed (a warning instead would be the alternative).
