@@ -353,13 +353,15 @@ function parseFlags(argv: string[], tool: ToolDef, invocation: string): ParsedAr
     // parseFileGroups, compare-files needs exactly two paths, mass-scout-build-fieldset reports a duplicate
     // field name, instruction files are concatenated in order). Consumers that want unique paths
     // (batch_check, check_references, check_imports) already de-duplicate themselves.
-    // A single occurrence is untouched: a lone oneOf value stays a string. Scalar repeats still keep the last
-    // value (TRDD-WB9N5UDV).
+    // A single occurrence is untouched: a lone oneOf value stays a string. A repeated scalar is refused (TRDD-WB9N5UDV), below.
     const value = coerce(flag, raw, prop);
     const kind = schemaTypeOf(prop);
     if ((kind === "array" || kind === "oneOf") && key in out) {
       const prev = out[key];
       out[key] = [...(Array.isArray(prev) ? prev : [prev]), ...(Array.isArray(value) ? value : [value])];
+    } else if (key in out) {
+      // WHY (TRDD-WB9N5UDV): a repeated scalar used to keep only its last value and drop the rest silently; fail fast. Booleans continue above and stay last-wins.
+      die(`--${flag} was given more than once; it takes a single value. If the command also takes a positional input, that input already supplies --${key}.`);
     } else {
       out[key] = value;
     }

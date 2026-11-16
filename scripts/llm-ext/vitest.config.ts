@@ -91,6 +91,7 @@ export default defineConfig({
       'src/cli/dry-run-flags.test.ts',
       // TRDD-OK1NN5RN: built-CLI dry runs incl. repeated array flags (the include list is explicit; this file was never run before).
       'src/cli/estimate-positional-cli.test.ts',
+      'src/cli/repeated-scalar-flag-cli.test.ts',
       // PT-05 follow-up (TRDD-RPEKSYJL): --profile forwarding, active left alone, no active-pool gate/override for scouting-only commands; real bundled CLI entry.
       'src/cli/scouting-profile-forwarding.test.ts',
       'src/cli/grouped-help-shape.test.ts',
