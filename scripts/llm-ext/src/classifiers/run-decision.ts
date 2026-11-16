@@ -23,7 +23,8 @@ import { IdError } from "./l2/ids.js";
 import { InputError } from "./l2/input-error.js";
 import type { CollectOptions } from "./l2/inputs.js";
 import { assertChunkChars } from "./l2/chunker.js";
-import { modelLimits, planRequests, type PlannedRequest } from "./l2/planner.js";
+import { ENVELOPE_TOKENS, modelLimits, planRequests, type PlannedRequest } from "./l2/planner.js";
+import { LOCAL_DECISION_API, LOCAL_DECISION_CONTEXT_TOKENS, localsPlatformSupported } from "../config.js";
 import { PolicyError, resolveThresholds } from "./l2/policy-kit.js";
 import { resolveClassifierApiKey, resolveClassifierProfile, selectClassifierProfile, type ClassifierProfileInput, type ResolvedClassifierProfile } from "./l2/profile.js";
 import { createRedactor } from "./l2/redact.js";
@@ -39,7 +40,7 @@ import { buildEstimate, renderEstimateJson, renderEstimateText } from "./estimat
 import { buildReceipt, lifetimeOrReason, renderReceipt, type Receipt } from "./receipt.js";
 import { ctxStore, withUsageContext } from "../usage-history.js";
 
-import { answerWithLocalDecider } from "./l2/local-fallback.js";
+import { answerWithLocalDecider, localFallbackConfig, localOnlySettings } from "./l2/local-fallback.js";
 import type { LocalDeciderDeps } from "./l2/local-decider.js";
 
 /** llm-ext's 0/1 (cli/main.ts), quicksilver's 3 key/credits, 4 request rejected, 5 failed after retries (attention.ts), Ctrl-C, and 124 when --command_timeout stopped the run. */
@@ -264,6 +265,51 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   // WHY the estimate here too: a noCall input needs no profile (E65), so a dry run of it is 0 requests and 0 USD, not a decision.
   if (noQuestions) return req.estimate === true ? estimateOutcome(buildEstimate(command, [], null)) : conclude(emptyMerged());
 
+  /**
+   * TRDD-1L9VMEY7 (USER 2026-11-16: "do it then! call it local-jev or local-decision"): the run of a local-only profile
+   * (LOCAL_DECISION_API). Every request goes straight to the adopted mlx-decision singleton through answerWithLocalDecider,
+   * the same call the remote path escalates to, so serialization, the governor lease, the retries and the usage record are
+   * the ones the fallback already has. WHY a path of its own and not exec with a remote that always fails: the remote path
+   * needs a key, the catalog and the endpoint limit, and its local escalation says "no remote System One model answered",
+   * which would be false here.
+   */
+  const runLocalOnly = async (local: ResolvedClassifierProfile): Promise<RunOutcome<R>> => {
+    // WHY context_tokens, else LOCAL_DECISION_CONTEXT_TOKENS: the decider reports its window nowhere but in its 422 reply, so the
+    // one named constant measured from that reply (config.ts) is the source when the profile does not set its own value; the
+    // remote path plans under the same constant while the fallback is on, so the two can never disagree.
+    const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
+    const limits = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
+    const plan = planRequests(built, { ...limits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) });
+    if (!plan.ok) throw new Refusal(plan.message);
+    // WHY no checkEstimate: every local request costs 0, so --max-budget can never be exceeded by this run.
+    if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan.requests.map((r) => r.tokens), { id: local.model, promptUsdPerM: 0 }, true));
+    // WHY set: the envelope names the model that answered (answered_by elephant-1), as it does for every local answer.
+    usedOtherModel = true;
+    const ctrlCLocal = installCtrlC(deps.sigint);
+    const execLocal = async (request: PlannedRequest): Promise<ExecReply> => {
+      const answered = await answerWithLocalDecider({
+        settings: localOnlySettings(deps.localFallback),
+        fetchImpl: deps.fetch,
+        signal: AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]),
+        call: { state: request.state, questions: request.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
+        decider: deps.localFallbackDeps,
+      });
+      if (answered.ok) return answered.reply;
+      // WHY throwIfStopped first: a command stop during the wait must end the run as the stop, as on the remote path.
+      throwIfStopped();
+      // WHY the decider's reason is the failure (fail fast, no remote fallback): a local-only profile has nothing else to ask.
+      // A 422 keeps its class (bad-request, exit 4) and the decider text verbatim; anything else is the decider not answering (unavailable, exit 5).
+      const cause = answered.disabled ? undefined : answered.error;
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...(cause?.status === undefined ? {} : { status: cause.status }) });
+    };
+    let mergedLocal: MergedReply;
+    try {
+      mergedLocal = await runPlan(plan, { concurrency: limits.concurrency, timeoutMs: local.timeoutMs, signal: ctrlCLocal.signal, budget, split: spec.split, policy: spec.validation, defaultLabels, exec: execLocal });
+    } finally {
+      ctrlCLocal.dispose();
+    }
+    return conclude(mergedLocal);
+  };
   // Profile: --profile or active_classifier; the key is read from its variable NAME now and lives only in this scope.
   // WHY 5: a throw here is the catalog being unreachable with an expired cache (E16), a failure to reach the service, not a bad input.
   // WHY one memoised load per run: selection and the model lookup below both need the catalog, and each load reads the cache file from disk.
@@ -283,6 +329,8 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
     if (removedRule === undefined) throw new Refusal(selection.error);
     profile = plain.profile;
   }
+  // TRDD-1L9VMEY7: a local-only profile ends the run on its own path: no key, no catalog, no endpoint limit, no System One fallback.
+  if (profile.api === LOCAL_DECISION_API) return runLocalOnly(profile);
   // Review of 727b9f32, finding 7: a dry run sends nothing and prices from the catalog, so it needs no key; requiring one made `--estimate` fail where the user only wants the cost. An empty key is never used: the estimate returns before the first request, and the redactor has nothing to register.
   // WHY 3: resolveClassifierApiKey throws a plain Error when the key variable is unset, and exit 3 is the key/credits code (ExitCode JSDoc).
   const key = req.estimate === true ? "" : refusing(3, () => resolveClassifierApiKey(profile)); // ubs:ignore unsafe_secret_compare: the only comparison is the boolean req.estimate; key is assigned, not compared
@@ -321,7 +369,18 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits }));
   // WHY "ok" in: modelLimits returns ModelLimits or a LimitsRefusal ({ ok: false, message }); only the refusal has an ok key.
   if ("ok" in limits) throw new Refusal(limits.message);
-  const plan = planRequests(built, { ...limits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) });
+  // TRDD-1L9VMEY7 (USER: "ensure reliability and fallbacks"): while the local decider fallback is on, every request is planned to
+  // fit the decider too, min(remote limit, LOCAL_DECISION_CONTEXT_TOKENS), so any request the remote side fails can be answered
+  // locally. Before this, chunks were cut for the remote limit only, and the decider refused them with its 422 over-limit text
+  // (live 2026-11-16: 17141 to 28700 tokens against its 16384). Cost: an input that fitted a remote request between the two limits
+  // now takes up to about twice as many remote requests; an input under the decider limit is planned exactly as before.
+  // WHY not when the fallback is off: only the RunDeps test seam can turn it off now (cli/main.ts refuses a remote-only classify
+  // run), and those tests pin captured replies planned for the remote limit.
+  // WHY the platform gate too: mlx-decision is an MLX server (macOS on Apple silicon only, localsPlatformSupported), so elsewhere the
+  // fallback can never answer, and splitting remote requests for it would only add remote requests.
+  const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
+  const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
+  const plan = planRequests(built, { ...planLimits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) });
   // WHY returned, not thrown, by the planner: a refusal is an answer about the input; nothing was sent.
   if (!plan.ok) throw new Refusal(plan.message);
   refusing(1, () => checkEstimate({ maxBudgetUsd: req.maxBudgetUsd, estimatedInputTokens: plan.requests.reduce((n, r) => n + r.tokens, 0), model: resolved }));

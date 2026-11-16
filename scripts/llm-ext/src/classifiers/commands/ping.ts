@@ -15,7 +15,8 @@ import { resolveClassifierApiKey, resolveClassifierProfile, type ClassifierProfi
 import { createRedactor } from "../l2/redact.js";
 import { recordRequest, withUsageContext } from "../../usage-history.js";
 import { PING_FLAGS } from "./ping-flags.js";
-import { answerWithLocalDecider } from "../l2/local-fallback.js";
+import { answerWithLocalDecider, localOnlySettings } from "../l2/local-fallback.js";
+import { LOCAL_DECISION_API } from "../../config.js";
 import type { LocalDeciderDeps } from "../l2/local-decider.js";
 
 // WHY a constant here: the transport owns the decisions URLs (l0/transport.ts endpointUrl), but the key check is not a decisions call.
@@ -188,6 +189,56 @@ async function askOne(profile: ResolvedClassifierProfile, key: string, deps: Pin
   }
 }
 
+/**
+ * TRDD-1L9VMEY7: ping of a local-only profile (LOCAL_DECISION_API). No key check (there is no key), and the one question goes
+ * straight to the local mlx-decision decider, with the same 30 s cap as the escalation of a remote ping. WHY the same answer
+ * check and exit codes as the remote ping: a script reading ping must not need to know which kind of profile it pinged.
+ * `local_fallback.enabled` is not read: a local-only profile is its own fallback (localOnlySettings).
+ */
+async function pingLocalOnly(profile: ResolvedClassifierProfile, noCall: boolean, deps: PingDeps, say: (line: string, to: (s: string) => void) => void): Promise<PingExit> {
+  say(`key check: skipped (profile ${profile.name} is local-only: the local mlx-decision decider needs no API key)`, deps.stdout);
+  if (noCall) {
+    say("decision call: skipped (--no-call); run without --no-call to ask the local decider one question", deps.stdout);
+    return 0;
+  }
+  const ctrlC = installCtrlC(deps.sigint);
+  try {
+    const answered = await answerWithLocalDecider({
+      settings: localOnlySettings(deps.localFallback),
+      fetchImpl: deps.fetch,
+      signal: AbortSignal.any([ctrlC.signal, commandStopSignal()]),
+      requestTimeoutMs: PING_LOCAL_REQUEST_TIMEOUT_MS,
+      call: { state: PING_STATE, questions: { ping: noul(PING_QUESTION) }, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
+      decider: deps.localFallbackDeps,
+    });
+    if (!answered.ok) {
+      throwIfStopped();
+      const cause = answered.disabled ? undefined : answered.error;
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false });
+    }
+    const a = answered.reply.answers.ping as { noul?: unknown } | undefined;
+    const p = finite(a?.noul);
+    if (p === undefined || p < 0 || p > 1) throw badResponseError("the reply has no usable answer to the ping question");
+    if (p < PING_EXPECTED_ABOVE) say(`warning: the ping answer ${p} is below the expected ${PING_EXPECTED_ABOVE}: the decider answered, but the model got the fixed question wrong`, deps.stderr);
+    say(`decision call: ok (the local decider, no API key used; model ${answered.reply.model}, answer ${p}, expected above ${PING_EXPECTED_ABOVE}, cost 0 USD (local))`, deps.stdout);
+    return 0;
+  } catch (e) {
+    // WHY the same order as runPing: a command stop first, then Ctrl-C, then the classified failure.
+    if (isCommandStopped()) {
+      say(`llm-ext: classify ping was stopped (${commandStopFlag()})`, deps.stderr);
+      return commandStopExitCode();
+    }
+    if (ctrlC.signal.aborted) {
+      say("llm-ext: interrupted by Ctrl-C", deps.stderr);
+      return CTRL_C_EXIT_CODE;
+    }
+    const err: ClassifierError = asClassifierError(e);
+    say(`llm-ext: classify ping failed: ${err.message}${err.remedy_hint ? ` ${err.remedy_hint}` : ""}`, deps.stderr);
+    return exitCodeForError(err);
+  } finally {
+    ctrlC.dispose();
+  }
+}
 /** `argv` is what classifyArgv produced (kebab flags); main.ts strips `--profile`, so the launcher passes it separately. */
 export async function runPing(argv: readonly string[], profileFlag: string | undefined, deps: PingDeps): Promise<PingExit> {
   const redactor = createRedactor();
@@ -209,6 +260,8 @@ export async function runPing(argv: readonly string[], profileFlag: string | und
   const resolved = resolveClassifierProfile({ settings: deps.settings, profileFlag: profileName, command: "classify ping" });
   if (!resolved.ok) return fail(resolved.error);
   const profile = resolved.profile;
+  // TRDD-1L9VMEY7: a local-only profile has no key to check; ping asks the local decider its one question instead.
+  if (profile.api === LOCAL_DECISION_API) return pingLocalOnly(profile, noCall, deps, say);
   let key: string;
   try {
     key = resolveClassifierApiKey(profile);

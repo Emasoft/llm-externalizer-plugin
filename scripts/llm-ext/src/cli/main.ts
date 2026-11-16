@@ -25,6 +25,7 @@ import {
   CLI_TOOLS_WITHOUT_RESOLVED_PROFILE,
   DEFAULT_PROFILE_NAME,
   effectiveProfileName,
+  remoteOnlyClassifierRefusal,
   shouldFailProfileSelection,
   type ProfileType,
 } from "../config.js";
@@ -926,6 +927,11 @@ async function main(): Promise<void> {
 
   // C4-03: a classify command runs the one decision runner. What is and is not loaded: the engine (index.ts) IS loaded above, so settings.yaml is read/created/migrated and its messages go to stderr; boot() is NOT called (it only publishes the free-mode state and installs the usage rule, which a decision never reads); no estimate/preview, no tool dispatch. stdout carries only the envelope. process.exitCode, not process.exit, so stdout is flushed and the runner's code (0, 1, 3, 4, 5, Ctrl-C) reaches the shell unchanged.
   if (isClassify) {
+    // TRDD-1L9VMEY7 (USER 2026-11-16: "a remote only profile must not exist"): a remote classifier profile with the local decider
+    // fallback disabled in settings.yaml is refused here, for ping and every decision alike, and only here: refusing it when
+    // settings.yaml loads would stop every llm-ext command, and the runners' localFallback seam must stay a test seam.
+    const remoteOnly = remoteOnlyClassifierRefusal(settingsAsLoaded, profileOverride);
+    if (remoteOnly !== undefined) die(remoteOnly);
     const io = {
       settings: settingsAsLoaded,
       fetch: globalThis.fetch as GlobalFetch,

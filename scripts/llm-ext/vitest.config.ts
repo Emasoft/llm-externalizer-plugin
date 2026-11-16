@@ -801,6 +801,8 @@ export default defineConfig({
       'src/classifiers/command-timeout.test.ts',
       // TRDD-XJE5DDK2: a remote failure answered by the local decider names the remote error in the stderr line and the local_decider warning.
       'src/classifiers/local-decider-remote-error.test.ts',
+      // TRDD-1L9VMEY7: the local-only classifier profile local-decision and the no-remote-only rule.
+      'src/classifiers/local-decision.test.ts',
       'src/classifiers/system-one-fallback.test.ts',
       // SP-14 (TRDD-OHLMZONY): findings decision spec: four questions per finding, keep/keep_low/drop policy, E71 empty window, index-scoped injection, partial failure; real P-01 noul and score replies.
       'src/classifiers/catalog/findings.test.ts',

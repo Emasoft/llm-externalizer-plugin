@@ -297,12 +297,31 @@ local_fallback:
   maxAttempts: 50                  # 1-100, POST attempts
 ```
 
-- `enabled`: `true` by default; `false` makes the fallback silent and unused.
+- `enabled`: `true` by default; `false` makes the fallback silent and unused, and then a classify command on a remote classifier profile is refused (no remote-only classifier profile, see `local-decision` below).
 - `url`: the first place looked at for the server; `http://127.0.0.1:<port>` or `http://localhost:<port>` only, with a real port, and no path, query or fragment (llm-ext appends `/v1/systemone` itself). Default `http://127.0.0.1:8123`, the port of the login agent. On macOS the running mlx-decision servers are also searched when this address does not answer.
 - `startTimeoutMs`: how long to wait for the adopted server to load its model. Default 300000.
 - `attemptTimeoutMs`: timeout of one decision attempt. Default 200000.
 - `requestTimeoutMs`: overall deadline of the whole escalation; must be at least `attemptTimeoutMs`. Default 400000.
 - `maxAttempts`: how many POST attempts at most. Default 50; lookups do not count.
+
+### The local-only classifier profile `local-decision`
+
+On a Mac with Apple silicon llm-ext adds, once and not active, the built-in classifier profile `local-decision`:
+
+```yaml
+profiles:
+  local-decision:
+    profile-type: classifier
+    api: mlx-decision-local
+    context_tokens: 16384          # the prompt limit the decider names in its own 422 reply
+    max_requests_per_call: 64      # local requests run one at a time: this bounds the run time
+```
+
+- Select it with `--profile local-decision` or `active_classifier: local-decision`. Every classify command and `classify ping` then asks the running mlx-decision server (elephant-1) directly: no OpenRouter call, no API key, cost 0. `--estimate` says the call is local and free and sends nothing.
+- `api: mlx-decision-local` takes no `model`, `api_key`, `endpoint` or `provider` (each is refused with its name). Without `context_tokens` it plans with 16384, without `max_requests_per_call` it allows 64 requests. A request still over the decider limit ends the run with the decider 422 text, exit 4, after one attempt (never retried). A decider that is not running fails the run with its reason, exit 5; nothing remote is tried.
+- A remote classifier profile plans every request to fit the decider too (at most 16384 tokens), so a request the remote side fails can still be answered locally. An input that fitted one remote request between 16384 tokens and the remote limit now takes up to about twice as many remote requests.
+- It reads `url`, the timeouts and `maxAttempts` of `local_fallback`, but not `enabled`: the profile is its own fallback.
+- No remote-only classifier profile: a classify command (ping included) on a remote classifier profile while `local_fallback.enabled` is `false` is refused before anything is sent, with a message pointing to `local-decision`. Other llm-ext commands are not affected.
 
 ## Network give-up window (`network_give_up_seconds`, `--network_give_up`)
 

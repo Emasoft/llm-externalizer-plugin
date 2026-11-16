@@ -55,6 +55,19 @@ export function localFallbackConfig(raw: unknown): LocalDeciderConfig {
   return { ...LOCAL_FALLBACK_DEFAULTS, ...section };
 }
 
+
+/**
+ * TRDD-1L9VMEY7: the `local_fallback` section as a LOCAL-ONLY profile (mlx-decision-local) reads it: the user's url, budgets and
+ * retries, with `enabled` forced true. WHY: `enabled` switches the escalation of a REMOTE profile to the decider; a local-only
+ * profile is its own fallback (USER 2026-11-16), so turning the escalation off must not turn off the profile itself.
+ * A malformed section is passed on unchanged, so answerWithLocalDecider still reports it.
+ */
+export function localOnlySettings(raw: unknown): { local_fallback: unknown } {
+  if (raw === undefined) return { local_fallback: { enabled: true } };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { local_fallback: raw };
+  return { local_fallback: { ...(raw as Record<string, unknown>), enabled: true } };
+}
+
 /** The fixed pause between two looks for a decider that is not ready. WHY fixed and not computeBackoffMs: a look
  * is one probe plus one process scan, so nothing is hammered, and a singleton restart takes seconds, so a growing
  * backoff would only delay adopting it. computeBackoffMs stays for POST failures, where load really is the issue. */
@@ -300,7 +313,7 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
     // WHY this branch precedes the lastError===undefined guard: when the budget ends between attempts there IS a
     // lastError, so without it the run would report the stale per-attempt failure and hide that it ran out of time.
     if (outerDeadline.reason !== undefined && lastError !== undefined) {
-      return { ok: false, disabled: false, reason: `the local decider ran out of its ${requestTimeoutMs} ms budget while retrying (last failure: ${asClassifierError(lastError).message})` };
+      return { ok: false, disabled: false, reason: `the local decider ran out of its ${requestTimeoutMs} ms budget while retrying (last failure: ${asClassifierError(lastError).message})`, error: asClassifierError(lastError) };
     }
     // WHY lastError can be undefined: the loop may break before its first request (an expired outer deadline or
     // an aborted run), and asClassifierError(undefined) would report "undefined" as the failure.
@@ -308,7 +321,9 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
       return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} was not asked: no attempt was started (${outerDeadline.reason ?? "aborted"})` };
     }
     const err = asClassifierError(lastError);
-    return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} could not answer after retries: ${err.message}${err.remedy_hint === undefined ? "" : ` ${err.remedy_hint}`}` };
+    // WHY the error too (TRDD-1L9VMEY7): a local-only profile has no remote error to report instead, so the run maps the decider's own class (a 422 is bad-request) to its exit code.
+    // WHY the attempt count and not "after retries" (TRDD-1L9VMEY7): a non-retryable failure (the decider 422 over its prompt limit) ends the loop after ONE POST, and "after retries" made a live check read it as retried.
+    return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} could not answer (${postAttempts} POST attempt${postAttempts === 1 ? "" : "s"}${err.retryable ? "" : ", not retryable"}): ${err.message}${err.remedy_hint === undefined ? "" : ` ${err.remedy_hint}`}`, error: err };
   });
 }
 
@@ -336,7 +351,8 @@ export type LocalEscalation =
    * refusal the caller itself configured, so it needs to be told apart and said zero times, not once per
    * failed request. */
   | { ok: false; disabled: true; reason: string }
-  | { ok: false; disabled: false; reason: string };
+  /** `error`: the decider's last classified failure, when one was raised (absent when no request was started). */
+  | { ok: false; disabled: false; reason: string; error?: ClassifierError };
 /**
  * Make the decider ready and ask it. NEVER throws: this runs on the failure path of a run that has already
  * lost its remote models, and a throw here would replace that failure with a bug report.

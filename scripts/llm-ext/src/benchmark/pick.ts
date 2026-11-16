@@ -33,6 +33,7 @@ import { registeredTools } from "../model-qualification/registry.js";
 import { dynamicProfilesStatePath } from "../default-profiles-state.js";
 import {
   API_PRESETS,
+  builtinLocalDecisionProfile,
   builtinLocalProfiles,
   builtinProfileType,
   DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M,
@@ -58,6 +59,7 @@ import {
   writeBackupExclusive,
   type DynamicProfileName,
   type MarkedProfileName,
+  type BuiltinLocalProfile,
   type Profile,
   type ProfileType,
 } from "../config.js";
@@ -2309,7 +2311,16 @@ function loadSettingsAllowingNoProfiles(settingsPath: string): SettingsHandle {
 export const LOCAL_PROFILE_STEP_PREFIX = "local-profile-added:";
 /** The step ids of every built-in local profile (tests of OTHER steps mark them applied, as they do for or-jev-section-added). */
 export function localProfileStepIds(): string[] {
-  return builtinLocalProfiles().map((p) => `${LOCAL_PROFILE_STEP_PREFIX}${p.name}`);
+  return addedOnceBuiltinProfiles().map((p) => `${LOCAL_PROFILE_STEP_PREFIX}${p.name}`);
+}
+
+/**
+ * The built-in profiles this add-once step writes: the local text profiles, then (TRDD-1L9VMEY7) the local-only classifier
+ * profile local-decision. WHY one list for both: the same add-once rule, backup and state record (dynamic-profiles-state.json)
+ * apply, and a second copy of the step would drift from this one.
+ */
+function addedOnceBuiltinProfiles(): BuiltinLocalProfile[] {
+  return [...builtinLocalProfiles(), builtinLocalDecisionProfile()];
 }
 
 /**
@@ -2339,7 +2350,7 @@ function runLocalProfileSteps(
   opts: { notify: (msg: string) => void; isApplied: (stepId: string) => boolean; nowMs?: number; platform?: { platform: string; arch: string } },
   recordApplied: (stepId: string) => void,
 ): void {
-  for (const builtin of builtinLocalProfiles()) {
+  for (const builtin of addedOnceBuiltinProfiles()) {
     const step = `${LOCAL_PROFILE_STEP_PREFIX}${builtin.name}`;
     try {
       if (opts.isApplied(step)) continue;
@@ -2370,7 +2381,8 @@ function runLocalProfileSteps(
       }
       if (added) {
         opts.notify(
-          `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or active: ${builtin.name}). ` +
+            // TRDD-1L9VMEY7: a classifier profile is selected by active_classifier:, never by active:.
+            `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or ${builtin.profile["profile-type"] === "classifier" ? "active_classifier" : "active"}: ${builtin.name}). ` +
             `It is added only once: deleting it removes it for good, unless llm-ext's state file dynamic-profiles-state.json is lost. ` +
             `A backup of settings.yaml exists in ${join(getConfigDir(), "backups")}.`,
         );

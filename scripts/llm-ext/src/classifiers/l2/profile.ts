@@ -1,7 +1,8 @@
 // L2-17, plan §3 (l2/profile.ts) and §8: resolve the classifier profile a run uses.
 // Source: `--profile`, else `active_classifier:`. The type check goes through PT-03 (profile-accept.ts); the schema through validateClassifierProfile (config.ts).
 // No paid gate and no allow_paid_models check (D2): classifier calls are billed by design, only `--max-budget` caps them.
-import { CLASSIFIER_DEFAULTS, OPENROUTER_PLUGIN_OPTION_ENV, resolveEnvValue, validateClassifierProfile, type Profile, type Settings } from "../../config.js";
+import { CLASSIFIER_DEFAULTS, LOCAL_DECISION_API, LOCAL_DECISION_MAX_REQUESTS, OPENROUTER_PLUGIN_OPTION_ENV, resolveEnvValue, validateClassifierProfile, type Profile, type Settings } from "../../config.js";
+import { SERVED_MODEL } from "./local-decider.js";
 import { profileSelectionRefusal } from "../../profile-accept.js";
 import type { DecisionsModel } from "../l0/catalog.js";
 import type { DecisionsEndpoint, GlobalFetch } from "../l0/transport.js";
@@ -21,7 +22,9 @@ export interface ResolvedClassifierProfile {
   name: string;
   /** Which setting chose it. */
   source: "flag" | "active_classifier";
-  /** As written in the profile; an alias is resolved against the catalog by the caller (l0/model.ts). */
+  /** TRDD-1L9VMEY7: openrouter-remote, or LOCAL_DECISION_API for a local-only profile, which the runner sends straight to the local mlx-decision decider (no catalog, no key). */
+  api: "openrouter-remote" | typeof LOCAL_DECISION_API;
+  /** As written in the profile; an alias is resolved against the catalog by the caller (l0/model.ts). For a local-only profile, the model the decider serves (SERVED_MODEL). */
   model: string;
   endpoint: DecisionsEndpoint;
   /** The NAME of the environment variable holding the key (default OPENROUTER_API_KEY). WHY a name and never a key: validateClassifierProfile accepts only a `$NAME` reference (plan §8, PF-11), so no key can reach this object, its logs or a report; the caller reads the variable at call time (PF-11). */
@@ -68,16 +71,21 @@ export function resolveClassifierProfile(input: ClassifierProfileInput): Classif
   if (errors.length > 0) return { ok: false, error: errors.join("\n") };
   const p = found as Profile & Record<string, unknown>;
   const num = (key: string): number | undefined => (p[key] as number | undefined);
+  const local = p.api === LOCAL_DECISION_API;
   const profile: ResolvedClassifierProfile = {
     name,
     source,
-    model: p.model as string,
+    api: local ? LOCAL_DECISION_API : "openrouter-remote",
+    // TRDD-1L9VMEY7: a local-only profile has no model key (validateClassifierProfile refuses one); the decider serves exactly SERVED_MODEL.
+    model: local ? SERVED_MODEL : (p.model as string),
     endpoint: (p.endpoint as DecisionsEndpoint | undefined) ?? CLASSIFIER_DEFAULTS.endpoint,
-    apiKeyEnv: ((p.api_key as string | undefined) ?? `$${DEFAULT_API_KEY_ENV}`).slice(1), // validateClassifierProfile guarantees a `$NAME` reference
+    // WHY empty for a local-only profile (TRDD-1L9VMEY7): it reads no key; its callers branch on `api` before any key lookup.
+    apiKeyEnv: local ? "" : ((p.api_key as string | undefined) ?? `$${DEFAULT_API_KEY_ENV}`).slice(1), // validateClassifierProfile guarantees a `$NAME` reference
     timeoutMs: num("timeout_ms") ?? CLASSIFIER_DEFAULTS.timeout_ms,
     maxAttempts: num("max_attempts") ?? CLASSIFIER_DEFAULTS.max_attempts,
     limits: {
-      max_requests_per_call: num("max_requests_per_call") ?? CLASSIFIER_DEFAULTS.max_requests_per_call,
+      // TRDD-1L9VMEY7: a local-only profile defaults to LOCAL_DECISION_MAX_REQUESTS: its cap bounds run time only (requests are free and serialized), see config.ts.
+      max_requests_per_call: num("max_requests_per_call") ?? (local ? LOCAL_DECISION_MAX_REQUESTS : CLASSIFIER_DEFAULTS.max_requests_per_call),
       concurrency: num("concurrency") ?? CLASSIFIER_DEFAULTS.concurrency,
       ...(num("context_tokens") !== undefined ? { context_tokens: num("context_tokens") } : {}),
     },
@@ -95,6 +103,8 @@ export function resolveClassifierProfile(input: ClassifierProfileInput): Classif
  * WHY it throws: an unset variable must stop the run before any request, naming the variable and never a value.
  */
 export function resolveClassifierApiKey(profile: Pick<ResolvedClassifierProfile, "name" | "apiKeyEnv">): string {
+  // TRDD-1L9VMEY7: a local-only profile has no key; reaching here with one is a caller bug, never a missing variable to report.
+  if (profile.apiKeyEnv === "") throw new Error(`resolveClassifierApiKey: profile '${profile.name}' reads no API key (it is local-only)`);
   // WHY trim: a variable holding only whitespace (or a trailing newline from a pasted key) is "not set" and must never be sent as a Bearer token.
   const key = resolveEnvValue(`$${profile.apiKeyEnv}`).trim();
   // WHY the plugin variable is named: resolveEnvValue (config.ts) lets the plugin option win for OPENROUTER_API_KEY only, so that is the one other variable that would have been accepted.
@@ -110,6 +120,8 @@ export function resolveClassifierApiKey(profile: Pick<ResolvedClassifierProfile,
 export async function selectClassifierProfile(input: ClassifierProfileInput, fetch: GlobalFetch, options: SelectionCheckOptions = {}, loadCatalog?: () => Promise<DecisionsModel[]>): Promise<ClassifierProfileResult> {
   const resolved = resolveClassifierProfile(input);
   if (!resolved.ok) return resolved;
+  // TRDD-1L9VMEY7: a local-only profile has nothing to look up in the decisions catalog, and selecting it must never fetch it.
+  if (resolved.profile.api === LOCAL_DECISION_API) return resolved;
   const { name, model, endpoint } = resolved.profile;
   const errors = await selectionCatalogErrors({ name, type: "classifier", model, endpoint, fetch, ...options }, loadCatalog);
   return errors.length > 0 ? { ok: false, error: errors.join("\n") } : resolved;

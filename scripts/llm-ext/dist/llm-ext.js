@@ -10104,15 +10104,49 @@ function profileTypeErrors(name, profile) {
   }
   return [];
 }
+function builtinLocalDecisionProfile() {
+  return {
+    name: LOCAL_DECISION_PROFILE_NAME,
+    header: [
+      " The local-decision profile answers every classify command with the local mlx-decision decider (elephant-1) on this machine:",
+      " no OpenRouter call, no API key, no cost. llm-ext never starts the decider; it must already be running.",
+      " Select it with --profile local-decision or active_classifier: local-decision.",
+      ` context_tokens is the prompt limit the decider reports in its own 422 reply (${LOCAL_DECISION_CONTEXT_TOKENS}).`,
+      ` max_requests_per_call caps the requests of one command: local requests run one at a time, so it bounds the run time.`
+    ],
+    profile: { "profile-type": "classifier", api: LOCAL_DECISION_API, context_tokens: LOCAL_DECISION_CONTEXT_TOKENS, max_requests_per_call: LOCAL_DECISION_MAX_REQUESTS },
+    supported: (platform3, arch) => localsPlatformSupported(platform3, arch)
+  };
+}
+function remoteOnlyClassifierRefusal(settings, profileFlag) {
+  const raw = settings.local_fallback;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw) || raw.enabled !== false) return void 0;
+  const name = profileFlag ?? settings.active_classifier;
+  const profile = name === void 0 ? void 0 : settings.profiles[name];
+  if (name === void 0 || profile === void 0 || profile.api === LOCAL_DECISION_API) return void 0;
+  let type;
+  try {
+    type = inferProfileType(name, profile);
+  } catch {
+    return void 0;
+  }
+  if (type !== "classifier") return void 0;
+  return `profile '${name}' is a remote classifier profile, and local_fallback.enabled is false in settings.yaml: a remote-only classifier profile is not allowed, every remote classifier profile must keep the local mlx-decision decider as its fallback. Fix: delete 'enabled: false' from local_fallback, or use the local-only profile with --profile ${LOCAL_DECISION_PROFILE_NAME} (or active_classifier: ${LOCAL_DECISION_PROFILE_NAME}).`;
+}
 function validateClassifierProfile(name, profile) {
   const errors = [...profileTypeErrors(name, profile)];
   errors.push(...profileTypeFieldIssues(name, profile, "classifier").map((i) => `Profile '${name}': ${i}`));
   const p = profile;
   const where = `Profile '${name}'`;
-  if (p.api !== "openrouter-remote") errors.push(`${where}: a classifier profile requires api: openrouter-remote, got '${String(p.api)}'`);
-  if (typeof p.model !== "string" || p.model.length === 0) errors.push(`${where}: missing required field: model`);
-  if (p.api_key !== void 0 && (typeof p.api_key !== "string" || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(p.api_key))) errors.push(`${where}: api_key must be a reference to an environment variable such as $OPENROUTER_API_KEY; the key itself is never stored in settings.yaml`);
-  if (p.endpoint !== void 0 && p.endpoint !== "decisions" && p.endpoint !== "systemone") errors.push(`${where}: endpoint must be 'decisions' or 'systemone', got '${String(p.endpoint)}'`);
+  const local = p.api === LOCAL_DECISION_API;
+  if (p.api !== "openrouter-remote" && !local) errors.push(`${where}: a classifier profile requires api: openrouter-remote or api: ${LOCAL_DECISION_API}, got '${String(p.api)}'`);
+  if (local) {
+    for (const key of ["model", "api_key", "endpoint", "provider"]) {
+      if (p[key] !== void 0) errors.push(`${where}: ${key} does not apply to api: ${LOCAL_DECISION_API} (the local mlx-decision decider serves its one model and needs no key, endpoint or OpenRouter provider routing). Fix: delete ${key}`);
+    }
+  } else if (typeof p.model !== "string" || p.model.length === 0) errors.push(`${where}: missing required field: model`);
+  if (!local && p.api_key !== void 0 && (typeof p.api_key !== "string" || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(p.api_key))) errors.push(`${where}: api_key must be a reference to an environment variable such as $OPENROUTER_API_KEY; the key itself is never stored in settings.yaml`);
+  if (!local && p.endpoint !== void 0 && p.endpoint !== "decisions" && p.endpoint !== "systemone") errors.push(`${where}: endpoint must be 'decisions' or 'systemone', got '${String(p.endpoint)}'`);
   for (const key of ["max_requests_per_call", "concurrency", "timeout_ms", "max_attempts", "context_tokens"]) {
     const v = p[key];
     if (v !== void 0 && !(typeof v === "number" && Number.isInteger(v) && v > 0)) errors.push(`${where}: ${key} must be a positive integer, got '${String(v)}'`);
@@ -11731,7 +11765,7 @@ function assertFreeOnlyModel(freeOnly, billable, model, isFreeProvider = false) 
     );
   }
 }
-var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, FALLBACK_TO_LOCAL_KEYS, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
+var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, LOCAL_DECISION_API, LOCAL_DECISION_PROFILE_NAME, LOCAL_DECISION_CONTEXT_TOKENS, LOCAL_DECISION_MAX_REQUESTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, FALLBACK_TO_LOCAL_KEYS, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -12006,6 +12040,10 @@ var init_config = __esm({
       timeout_ms: 6e4,
       max_attempts: 3
     };
+    LOCAL_DECISION_API = "mlx-decision-local";
+    LOCAL_DECISION_PROFILE_NAME = "local-decision";
+    LOCAL_DECISION_CONTEXT_TOKENS = 16384;
+    LOCAL_DECISION_MAX_REQUESTS = 64;
     GENERATED_MARKER = "<-- do not touch, generated by llm-ext -->";
     CLI_TOOLS_WITHOUT_RESOLVED_PROFILE = /* @__PURE__ */ new Set([
       "discover",
@@ -240015,9 +240053,6 @@ function brokerSpawnLockPath(dir) {
 function readBrokerState(dir) {
   return parseBrokerState(brokerStatePath(dir));
 }
-function readLegacyBrokerStates(dir) {
-  return LEGACY_BROKER_STATE_FILES.map((f) => parseBrokerState(join31(dir, f))).filter((s) => s !== null);
-}
 function parseBrokerState(file2) {
   try {
     const s = JSON.parse(readFileSync31(file2, "utf8"));
@@ -240056,7 +240091,7 @@ function readCalibratorState(dir) {
 async function isRunnerOf(dir, pid) {
   return readCalibratorState(dir)?.pid === pid && await isCalibratorProcess(pid);
 }
-var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, NO_HOLD_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, BROKER_ARGV, CALIBRATE_ARGV, LEGACY_BROKER_STATE_FILES, calibratorStatePath;
+var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, NO_HOLD_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath;
 var init_protocol = __esm({
   "src/broker/protocol.ts"() {
     "use strict";
@@ -240074,7 +240109,6 @@ var init_protocol = __esm({
     HELD_HEADER = "x-llm-ext-held";
     BROKER_ARGV = "__broker";
     CALIBRATE_ARGV = "__calibrate";
-    LEGACY_BROKER_STATE_FILES = ["broker-llama.json"];
     calibratorStatePath = (dir) => join31(dir, "calibrator-local.json");
   }
 });
@@ -244647,8 +244681,11 @@ function loadSettingsAllowingNoProfiles(settingsPath) {
   if (!(0, import_yaml3.isMap)(d.get("profiles", true))) d.set("profiles", d.createNode({}));
   return { doc: d, root: d.toJS() ?? {} };
 }
+function addedOnceBuiltinProfiles() {
+  return [...builtinLocalProfiles(), builtinLocalDecisionProfile()];
+}
 function runLocalProfileSteps(settingsPath, opts, recordApplied) {
-  for (const builtin of builtinLocalProfiles()) {
+  for (const builtin of addedOnceBuiltinProfiles()) {
     const step = `${LOCAL_PROFILE_STEP_PREFIX}${builtin.name}`;
     try {
       if (opts.isApplied(step)) continue;
@@ -244674,7 +244711,8 @@ function runLocalProfileSteps(settingsPath, opts, recordApplied) {
       }
       if (added) {
         opts.notify(
-          `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or active: ${builtin.name}). It is added only once: deleting it removes it for good, unless llm-ext's state file dynamic-profiles-state.json is lost. A backup of settings.yaml exists in ${join36(getConfigDir(), "backups")}.`
+          // TRDD-1L9VMEY7: a classifier profile is selected by active_classifier:, never by active:.
+          `llm-ext: added the built-in profile '${builtin.name}' to settings.yaml (not active; select it with --profile ${builtin.name} or ${builtin.profile["profile-type"] === "classifier" ? "active_classifier" : "active"}: ${builtin.name}). It is added only once: deleting it removes it for good, unless llm-ext's state file dynamic-profiles-state.json is lost. A backup of settings.yaml exists in ${join36(getConfigDir(), "backups")}.`
         );
       }
       recordApplied(step);
@@ -274603,6 +274641,267 @@ var init_envelope = __esm({
   }
 });
 
+// src/classifiers/l2/local-discovery.ts
+import { execFile as execFile5 } from "node:child_process";
+function isSplitPath(parts) {
+  if (parts.length === 1) return !parts[0].startsWith("-");
+  return parts[0].startsWith("/") && parts.slice(1).every((p) => !p.startsWith("/") && !p.startsWith("-")) && parts[parts.length - 1].includes("/");
+}
+function isServerLauncher(tokens) {
+  if (isSplitPath(tokens)) return true;
+  for (let k = 0; k < tokens.length - 1; k++) {
+    if (!PYTHON_BASENAME.test(tokenBaseName(tokens[k])) || !isSplitPath(tokens.slice(0, k + 1))) continue;
+    let scriptStart = k + 1;
+    while (scriptStart < tokens.length - 1 && tokens[scriptStart].startsWith("-")) scriptStart++;
+    if (isSplitPath(tokens.slice(scriptStart))) return true;
+  }
+  return false;
+}
+function isDeciderServerCommand(command) {
+  const tokens = command.trim().split(/\s+/);
+  return tokens.some(
+    (t, i) => tokenBaseName(t) === "mlx-decision" && tokens[i + 1] === "server" && isServerLauncher(tokens.slice(0, i + 1))
+  );
+}
+function runPs() {
+  return new Promise((resolve23, reject) => {
+    execFile5("ps", ["-ax", "-o", "pid=,command="], { maxBuffer: 8 * 1024 * 1024, timeout: 5e3 }, (err3, stdout) => {
+      if (err3 !== null) reject(err3);
+      else resolve23(stdout);
+    });
+  });
+}
+function parseLsofListeners(stdout) {
+  const result = /* @__PURE__ */ new Map();
+  let pid = null;
+  let type = "";
+  for (const line of stdout.split("\n")) {
+    if (line === "") continue;
+    const tag = line[0];
+    const value = line.slice(1);
+    if (tag === "p") {
+      const n = Number(value);
+      pid = Number.isInteger(n) && n > 0 ? n : null;
+      type = "";
+      if (pid !== null && !result.has(pid)) result.set(pid, []);
+    } else if (tag === "f") {
+      type = "";
+    } else if (tag === "t") {
+      type = value;
+    } else if (tag === "n" && pid !== null) {
+      const m = /^(127\.0\.0\.1|\*):(\d+)$/.exec(value);
+      if (m === null) continue;
+      if (m[1] === "127.0.0.1" && type !== "IPv4") continue;
+      if (type !== "IPv4" && type !== "IPv6") continue;
+      const port = Number(m[2]);
+      if (port < 1 || port > 65535) continue;
+      const url2 = `http://127.0.0.1:${port}`;
+      const urls = result.get(pid);
+      if (!urls.includes(url2)) urls.push(url2);
+    }
+  }
+  return result;
+}
+function listenersOf(pids, lsofPath = "/usr/sbin/lsof") {
+  if (pids.length === 0) return Promise.resolve(/* @__PURE__ */ new Map());
+  return new Promise((resolve23, reject) => {
+    execFile5(
+      lsofPath,
+      ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-p", pids.join(","), "-F", "ptn"],
+      { maxBuffer: 8 * 1024 * 1024, timeout: 5e3 },
+      (err3, stdout, stderr) => {
+        if (err3 === null) {
+          resolve23(parseLsofListeners(stdout));
+          return;
+        }
+        const { code: code2, signal } = err3;
+        if (code2 === 1 && signal == null && stdout === "" && stderr === "") {
+          resolve23(/* @__PURE__ */ new Map());
+          return;
+        }
+        const how = signal != null ? `signal ${String(signal)}` : typeof code2 === "string" ? code2.startsWith("ERR_CHILD_PROCESS") ? `${code2}: ${err3.message}` : `spawn error ${code2}: ${err3.message}` : `exit ${String(code2)}`;
+        reject(new Error(`lsof failed (${how})${stderr.trim() === "" ? "" : `: ${stderr.trim()}`}`));
+      }
+    );
+  });
+}
+async function discoverDeciders() {
+  const output2 = await runPs();
+  const pids = [];
+  for (const line of output2.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "") continue;
+    const space = trimmed.indexOf(" ");
+    if (space === -1) continue;
+    const pid = Number(trimmed.slice(0, space));
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    if (isDeciderServerCommand(trimmed.slice(space + 1))) pids.push(pid);
+  }
+  const listeners = await listenersOf([...new Set(pids)]);
+  return pids.map((pid) => ({ pid, urls: listeners.get(pid) ?? [] }));
+}
+var tokenBaseName, PYTHON_BASENAME;
+var init_local_discovery = __esm({
+  "src/classifiers/l2/local-discovery.ts"() {
+    "use strict";
+    tokenBaseName = (t) => t.split("/").pop() ?? "";
+    PYTHON_BASENAME = /^python[\d.]*$/i;
+  }
+});
+
+// src/classifiers/l2/local-decider.ts
+import { readdirSync as readdirSync12, statSync as statSync21 } from "node:fs";
+import { homedir as homedir5 } from "node:os";
+import { delimiter as delimiter2, join as join45 } from "node:path";
+async function probeHealth(fetchImpl, url2, callerSignal) {
+  const deadline = createDeadline({ timeoutMs: HEALTH_TIMEOUT_MS, signal: callerSignal });
+  try {
+    let res;
+    try {
+      res = await fetchImpl(url2, { method: "GET", redirect: "error", signal: deadline.signal });
+    } catch {
+      return { kind: "unreachable" };
+    }
+    if (!res.ok) return { kind: "not-decider" };
+    try {
+      const data = JSON.parse(await safeReadText(res, MAX_REPLY_BYTES));
+      if (!Array.isArray(data.loaded)) return { kind: "not-decider" };
+      return { kind: "decider", loaded: data.loaded.filter((m) => typeof m === "string") };
+    } catch {
+      return { kind: "not-decider" };
+    }
+  } finally {
+    deadline.dispose();
+  }
+}
+function sleepAbortable(ms, signal) {
+  return new Promise((resolve23) => {
+    if (signal?.aborted) return resolve23();
+    const timer = setTimeout(finish, ms);
+    function finish() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve23();
+    }
+    signal?.addEventListener("abort", finish, { once: true });
+  });
+}
+function healthUrl(url2) {
+  return `${url2.replace(/\/+$/, "")}/health`;
+}
+function isRegularFile(path2) {
+  try {
+    return statSync21(path2).isFile();
+  } catch (e) {
+    const code2 = e.code;
+    if (code2 === "ENOENT" || code2 === "ENOTDIR") return false;
+    throw e;
+  }
+}
+function singletonInstalledAt(home, pathEnv) {
+  if (pathEnv.split(delimiter2).some((dir) => dir !== "" && isRegularFile(join45(dir, "mlx-decision")))) return true;
+  try {
+    return readdirSync12(join45(home, "Library", "LaunchAgents")).some((name) => name.includes("mlx-decision") && name.endsWith(".plist"));
+  } catch (e) {
+    if (e.code === "ENOENT") return false;
+    throw e;
+  }
+}
+function singletonInstalledOnDisk() {
+  return singletonInstalledAt(homedir5(), process.env.PATH ?? "");
+}
+async function adoptDecider(cfg, deps, url2, loaded) {
+  if (loaded.includes(SERVED_MODEL)) return { ok: true, baseUrl: url2 };
+  if (loaded.length === 0) {
+    const waited = await waitForLoaded(cfg, deps, url2);
+    if (waited === null) {
+      return { ok: false, retryable: true, reason: `the mlx-decision server on ${url2} is still loading its model after ${cfg.startTimeoutMs} ms: llm-ext never starts or replaces it` };
+    }
+    if (waited.ok) return waited;
+    return { ...waited, detail: `the mlx-decision server on ${url2} was still loading its model when the lookup ended; llm-ext never starts or replaces it` };
+  }
+  return { ok: false, retryable: false, reason: `the mlx-decision server on ${url2} serves ${loaded.join(", ")}, not ${SERVED_MODEL}: the singleton must serve ${SERVED_MODEL}; llm-ext never starts or replaces it, so this run cannot use it` };
+}
+async function ensureLocalDecider(cfg, deps) {
+  if (deps.signal?.aborted) return ABORTED;
+  const own2 = await probeHealth(deps.fetch, healthUrl(cfg.url), deps.signal);
+  if (deps.signal?.aborted) return ABORTED;
+  if (own2.kind === "decider") return adoptDecider(cfg, deps, cfg.url, own2.loaded);
+  if ((deps.platform ?? process.platform) !== "darwin") {
+    return { ok: false, retryable: false, reason: "the local mlx-decision decider runs only on macOS (Apple silicon)" };
+  }
+  let running;
+  try {
+    running = await (deps.discover ?? discoverDeciders)();
+  } catch (e) {
+    return { ok: false, retryable: true, reason: `cannot list running mlx-decision servers with ps and lsof (${e.message}); llm-ext never starts one` };
+  }
+  if (deps.signal?.aborted) return ABORTED;
+  const urls = [...new Set(running.flatMap((d) => d.urls))];
+  if (urls.length === 0 && running.length > 0) {
+    return {
+      ok: false,
+      retryable: true,
+      reason: `an mlx-decision server process (pid ${running.map((d) => d.pid).join(", ")}) is running but has no listener llm-ext can reach on 127.0.0.1; llm-ext never starts or replaces it`
+    };
+  }
+  if (urls.length > 0) {
+    let refusal = null;
+    for (const url2 of urls) {
+      const health2 = await probeHealth(deps.fetch, healthUrl(url2), deps.signal);
+      if (deps.signal?.aborted) return ABORTED;
+      if (health2.kind === "decider") {
+        const verdict = await adoptDecider(cfg, deps, url2, health2.loaded);
+        if (verdict.ok) return verdict;
+        if (deps.signal?.aborted) return verdict;
+        refusal ??= verdict;
+        continue;
+      }
+      refusal ??= {
+        ok: false,
+        retryable: true,
+        reason: health2.kind === "unreachable" ? `an mlx-decision server is running on ${url2} but did not answer /health; llm-ext never starts or replaces it` : `an mlx-decision server is running on ${url2} but its /health did not answer as a decider (2xx with a loaded list); llm-ext never starts or replaces it`
+      };
+    }
+    return refusal ?? { ok: false, retryable: true, reason: "an mlx-decision server is running but none answered as a decider" };
+  }
+  let installed;
+  try {
+    installed = (deps.singletonInstalled ?? singletonInstalledOnDisk)();
+  } catch (e) {
+    return { ok: false, retryable: false, reason: `cannot check whether mlx-decision is installed: ${e.message}` };
+  }
+  if (installed) {
+    return { ok: false, retryable: true, reason: "no mlx-decision server is running yet (the singleton may be restarting); llm-ext never starts one" };
+  }
+  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one \u2014 install mlx-decision and start its server yourself (this plugin does not install or start it)" };
+}
+async function waitForLoaded(cfg, deps, url2) {
+  const deadline = deps.now() + cfg.startTimeoutMs;
+  for (; ; ) {
+    if (deps.signal?.aborted) return ABORTED;
+    if (deps.now() >= deadline) return null;
+    const health2 = await probeHealth(deps.fetch, healthUrl(url2), deps.signal);
+    if (health2.kind === "decider" && health2.loaded.includes(SERVED_MODEL)) return { ok: true, baseUrl: url2 };
+    await sleepAbortable(POLL_INTERVAL_MS, deps.signal);
+  }
+}
+var SERVED_MODEL, HEALTH_TIMEOUT_MS, POLL_INTERVAL_MS, ABORTED;
+var init_local_decider = __esm({
+  "src/classifiers/l2/local-decider.ts"() {
+    "use strict";
+    init_safe_body();
+    init_deadline();
+    init_transport();
+    init_local_discovery();
+    init_config();
+    SERVED_MODEL = "elephant-1";
+    HEALTH_TIMEOUT_MS = 2e3;
+    POLL_INTERVAL_MS = 500;
+    ABORTED = { ok: false, reason: "the local decider lookup was aborted", retryable: false, aborted: true };
+  }
+});
+
 // src/classifiers/l2/profile.ts
 function resolveClassifierProfile(input8) {
   const { settings, profileFlag, command } = input8;
@@ -274630,17 +274929,22 @@ function resolveClassifierProfile(input8) {
   if (errors.length > 0) return { ok: false, error: errors.join("\n") };
   const p = found;
   const num3 = (key) => p[key];
+  const local = p.api === LOCAL_DECISION_API;
   const profile = {
     name,
     source,
-    model: p.model,
+    api: local ? LOCAL_DECISION_API : "openrouter-remote",
+    // TRDD-1L9VMEY7: a local-only profile has no model key (validateClassifierProfile refuses one); the decider serves exactly SERVED_MODEL.
+    model: local ? SERVED_MODEL : p.model,
     endpoint: p.endpoint ?? CLASSIFIER_DEFAULTS.endpoint,
-    apiKeyEnv: (p.api_key ?? `$${DEFAULT_API_KEY_ENV}`).slice(1),
+    // WHY empty for a local-only profile (TRDD-1L9VMEY7): it reads no key; its callers branch on `api` before any key lookup.
+    apiKeyEnv: local ? "" : (p.api_key ?? `$${DEFAULT_API_KEY_ENV}`).slice(1),
     // validateClassifierProfile guarantees a `$NAME` reference
     timeoutMs: num3("timeout_ms") ?? CLASSIFIER_DEFAULTS.timeout_ms,
     maxAttempts: num3("max_attempts") ?? CLASSIFIER_DEFAULTS.max_attempts,
     limits: {
-      max_requests_per_call: num3("max_requests_per_call") ?? CLASSIFIER_DEFAULTS.max_requests_per_call,
+      // TRDD-1L9VMEY7: a local-only profile defaults to LOCAL_DECISION_MAX_REQUESTS: its cap bounds run time only (requests are free and serialized), see config.ts.
+      max_requests_per_call: num3("max_requests_per_call") ?? (local ? LOCAL_DECISION_MAX_REQUESTS : CLASSIFIER_DEFAULTS.max_requests_per_call),
       concurrency: num3("concurrency") ?? CLASSIFIER_DEFAULTS.concurrency,
       ...num3("context_tokens") !== void 0 ? { context_tokens: num3("context_tokens") } : {}
     },
@@ -274652,6 +274956,7 @@ function resolveClassifierProfile(input8) {
   return { ok: true, profile };
 }
 function resolveClassifierApiKey(profile) {
+  if (profile.apiKeyEnv === "") throw new Error(`resolveClassifierApiKey: profile '${profile.name}' reads no API key (it is local-only)`);
   const key = resolveEnvValue(`$${profile.apiKeyEnv}`).trim();
   const alsoAccepted = profile.apiKeyEnv === "OPENROUTER_API_KEY" ? ` (or the plugin option ${OPENROUTER_PLUGIN_OPTION_ENV})` : "";
   if (key === "") throw new Error(`Profile '${profile.name}': the environment variable ${profile.apiKeyEnv}${alsoAccepted} named by its api_key is not set. Fix: export ${profile.apiKeyEnv}=<your key>.`);
@@ -274660,6 +274965,7 @@ function resolveClassifierApiKey(profile) {
 async function selectClassifierProfile(input8, fetch2, options = {}, loadCatalog) {
   const resolved = resolveClassifierProfile(input8);
   if (!resolved.ok) return resolved;
+  if (resolved.profile.api === LOCAL_DECISION_API) return resolved;
   const { name, model, endpoint } = resolved.profile;
   const errors = await selectionCatalogErrors({ name, type: "classifier", model, endpoint, fetch: fetch2, ...options }, loadCatalog);
   return errors.length > 0 ? { ok: false, error: errors.join("\n") } : resolved;
@@ -274669,6 +274975,7 @@ var init_profile = __esm({
   "src/classifiers/l2/profile.ts"() {
     "use strict";
     init_config();
+    init_local_decider();
     init_profile_accept();
     init_profile_checks();
     DEFAULT_API_KEY_ENV = "OPENROUTER_API_KEY";
@@ -274778,7 +275085,7 @@ var init_redact = __esm({
 // src/classifiers/l2/report.ts
 import { accessSync, constants, mkdirSync as mkdirSync30, renameSync as renameSync25, rmSync as rmSync6, writeFileSync as writeFileSync29 } from "node:fs";
 import { randomUUID as randomUUID4 } from "node:crypto";
-import { join as join45 } from "node:path";
+import { join as join46 } from "node:path";
 function timestamp(d) {
   const p = (n) => String(Math.abs(n)).padStart(2, "0");
   const off = -d.getTimezoneOffset();
@@ -274807,7 +275114,7 @@ function writeAtomic(path2, text2) {
 function writeReport2(dir, decision, text2) {
   if (!/^[a-z][a-z0-9-]*$/.test(decision)) throw new Error(`report decision must be lowercase kebab-case, got "${decision}"`);
   const id = randomUUID4().slice(0, 6);
-  const path2 = join45(dir, `${timestamp(/* @__PURE__ */ new Date())}-${decision}-${id}.json`);
+  const path2 = join46(dir, `${timestamp(/* @__PURE__ */ new Date())}-${decision}-${id}.json`);
   writeAtomic(path2, text2);
   return path2;
 }
@@ -275292,10 +275599,10 @@ var init_input_args = __esm({
 });
 
 // src/classifiers/estimate-output.ts
-function buildEstimate(command, requestTokens2, model) {
+function buildEstimate(command, requestTokens2, model, local = false) {
   const inputTokens = requestTokens2.reduce((n, t) => n + t, 0);
-  if (model === null) return { command, requests: 0, inputTokens: 0, model: null, promptUsdPerMillion: null, estimatedInputCostUsd: 0 };
-  return { command, requests: requestTokens2.length, inputTokens, model: model.id, promptUsdPerMillion: model.promptUsdPerM, estimatedInputCostUsd: model.promptUsdPerM === null ? null : inputTokens * model.promptUsdPerM / 1e6 };
+  if (model === null) return { command, requests: 0, inputTokens: 0, model: null, promptUsdPerMillion: null, estimatedInputCostUsd: 0, local };
+  return { command, requests: requestTokens2.length, inputTokens, model: model.id, promptUsdPerMillion: model.promptUsdPerM, estimatedInputCostUsd: model.promptUsdPerM === null ? null : inputTokens * model.promptUsdPerM / 1e6, local };
 }
 function renderEstimateText(e) {
   const lines = [`${e.command} --estimate: nothing was sent`];
@@ -275306,14 +275613,15 @@ function renderEstimateText(e) {
       `model: ${e.model}`,
       `requests: ${e.requests}`,
       `estimated input tokens: ${e.inputTokens}`,
-      e.estimatedInputCostUsd === null ? `estimated input cost: unknown (the catalog has no prompt price for ${e.model})` : `estimated input cost: ${e.estimatedInputCostUsd.toFixed(6)} USD (${e.promptUsdPerMillion} USD per million tokens)`,
+      // TRDD-1L9VMEY7: a local-only profile is priced by no catalog: the call is local and free, and the line says so instead of a price.
+      e.local ? "estimated input cost: 0 USD (local: the mlx-decision decider on this machine, free, no API key, nothing sent to OpenRouter)" : e.estimatedInputCostUsd === null ? `estimated input cost: unknown (the catalog has no prompt price for ${e.model})` : `estimated input cost: ${e.estimatedInputCostUsd.toFixed(6)} USD (${e.promptUsdPerMillion} USD per million tokens)`,
       "This is an estimate, not a ceiling: it counts input tokens only, and small requests have measured up to 55% below the tokens the API reports."
     );
   }
   return lines.join("\n");
 }
 function renderEstimateJson(e) {
-  return JSON.stringify({ estimate: { command: e.command, requests: e.requests, input_tokens: e.inputTokens, model: e.model, prompt_usd_per_million: e.promptUsdPerMillion, estimated_input_cost_usd: e.estimatedInputCostUsd } }, null, 2);
+  return JSON.stringify({ estimate: { command: e.command, requests: e.requests, input_tokens: e.inputTokens, model: e.model, prompt_usd_per_million: e.promptUsdPerMillion, estimated_input_cost_usd: e.estimatedInputCostUsd, ...e.local ? { local: true } : {} } }, null, 2);
 }
 var init_estimate_output = __esm({
   "src/classifiers/estimate-output.ts"() {
@@ -275459,273 +275767,17 @@ var init_local_transport = __esm({
   }
 });
 
-// src/classifiers/l2/local-discovery.ts
-import { execFile as execFile5 } from "node:child_process";
-function isSplitPath(parts) {
-  if (parts.length === 1) return !parts[0].startsWith("-");
-  return parts[0].startsWith("/") && parts.slice(1).every((p) => !p.startsWith("/") && !p.startsWith("-")) && parts[parts.length - 1].includes("/");
-}
-function isServerLauncher(tokens) {
-  if (isSplitPath(tokens)) return true;
-  for (let k = 0; k < tokens.length - 1; k++) {
-    if (!PYTHON_BASENAME.test(tokenBaseName(tokens[k])) || !isSplitPath(tokens.slice(0, k + 1))) continue;
-    let scriptStart = k + 1;
-    while (scriptStart < tokens.length - 1 && tokens[scriptStart].startsWith("-")) scriptStart++;
-    if (isSplitPath(tokens.slice(scriptStart))) return true;
-  }
-  return false;
-}
-function isDeciderServerCommand(command) {
-  const tokens = command.trim().split(/\s+/);
-  return tokens.some(
-    (t, i) => tokenBaseName(t) === "mlx-decision" && tokens[i + 1] === "server" && isServerLauncher(tokens.slice(0, i + 1))
-  );
-}
-function runPs() {
-  return new Promise((resolve23, reject) => {
-    execFile5("ps", ["-ax", "-o", "pid=,command="], { maxBuffer: 8 * 1024 * 1024, timeout: 5e3 }, (err3, stdout) => {
-      if (err3 !== null) reject(err3);
-      else resolve23(stdout);
-    });
-  });
-}
-function parseLsofListeners(stdout) {
-  const result = /* @__PURE__ */ new Map();
-  let pid = null;
-  let type = "";
-  for (const line of stdout.split("\n")) {
-    if (line === "") continue;
-    const tag = line[0];
-    const value = line.slice(1);
-    if (tag === "p") {
-      const n = Number(value);
-      pid = Number.isInteger(n) && n > 0 ? n : null;
-      type = "";
-      if (pid !== null && !result.has(pid)) result.set(pid, []);
-    } else if (tag === "f") {
-      type = "";
-    } else if (tag === "t") {
-      type = value;
-    } else if (tag === "n" && pid !== null) {
-      const m = /^(127\.0\.0\.1|\*):(\d+)$/.exec(value);
-      if (m === null) continue;
-      if (m[1] === "127.0.0.1" && type !== "IPv4") continue;
-      if (type !== "IPv4" && type !== "IPv6") continue;
-      const port = Number(m[2]);
-      if (port < 1 || port > 65535) continue;
-      const url2 = `http://127.0.0.1:${port}`;
-      const urls = result.get(pid);
-      if (!urls.includes(url2)) urls.push(url2);
-    }
-  }
-  return result;
-}
-function listenersOf(pids, lsofPath = "/usr/sbin/lsof") {
-  if (pids.length === 0) return Promise.resolve(/* @__PURE__ */ new Map());
-  return new Promise((resolve23, reject) => {
-    execFile5(
-      lsofPath,
-      ["-nP", "-a", "-iTCP", "-sTCP:LISTEN", "-p", pids.join(","), "-F", "ptn"],
-      { maxBuffer: 8 * 1024 * 1024, timeout: 5e3 },
-      (err3, stdout, stderr) => {
-        if (err3 === null) {
-          resolve23(parseLsofListeners(stdout));
-          return;
-        }
-        const { code: code2, signal } = err3;
-        if (code2 === 1 && signal == null && stdout === "" && stderr === "") {
-          resolve23(/* @__PURE__ */ new Map());
-          return;
-        }
-        const how = signal != null ? `signal ${String(signal)}` : typeof code2 === "string" ? code2.startsWith("ERR_CHILD_PROCESS") ? `${code2}: ${err3.message}` : `spawn error ${code2}: ${err3.message}` : `exit ${String(code2)}`;
-        reject(new Error(`lsof failed (${how})${stderr.trim() === "" ? "" : `: ${stderr.trim()}`}`));
-      }
-    );
-  });
-}
-async function discoverDeciders() {
-  const output2 = await runPs();
-  const pids = [];
-  for (const line of output2.split("\n")) {
-    const trimmed = line.trim();
-    if (trimmed === "") continue;
-    const space = trimmed.indexOf(" ");
-    if (space === -1) continue;
-    const pid = Number(trimmed.slice(0, space));
-    if (!Number.isInteger(pid) || pid <= 0) continue;
-    if (isDeciderServerCommand(trimmed.slice(space + 1))) pids.push(pid);
-  }
-  const listeners = await listenersOf([...new Set(pids)]);
-  return pids.map((pid) => ({ pid, urls: listeners.get(pid) ?? [] }));
-}
-var tokenBaseName, PYTHON_BASENAME;
-var init_local_discovery = __esm({
-  "src/classifiers/l2/local-discovery.ts"() {
-    "use strict";
-    tokenBaseName = (t) => t.split("/").pop() ?? "";
-    PYTHON_BASENAME = /^python[\d.]*$/i;
-  }
-});
-
-// src/classifiers/l2/local-decider.ts
-import { readdirSync as readdirSync13, statSync as statSync22 } from "node:fs";
-import { homedir as homedir5 } from "node:os";
-import { delimiter as delimiter2, join as join47 } from "node:path";
-async function probeHealth(fetchImpl, url2, callerSignal) {
-  const deadline = createDeadline({ timeoutMs: HEALTH_TIMEOUT_MS, signal: callerSignal });
-  try {
-    let res;
-    try {
-      res = await fetchImpl(url2, { method: "GET", redirect: "error", signal: deadline.signal });
-    } catch {
-      return { kind: "unreachable" };
-    }
-    if (!res.ok) return { kind: "not-decider" };
-    try {
-      const data = JSON.parse(await safeReadText(res, MAX_REPLY_BYTES));
-      if (!Array.isArray(data.loaded)) return { kind: "not-decider" };
-      return { kind: "decider", loaded: data.loaded.filter((m) => typeof m === "string") };
-    } catch {
-      return { kind: "not-decider" };
-    }
-  } finally {
-    deadline.dispose();
-  }
-}
-function sleepAbortable(ms, signal) {
-  return new Promise((resolve23) => {
-    if (signal?.aborted) return resolve23();
-    const timer = setTimeout(finish, ms);
-    function finish() {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", finish);
-      resolve23();
-    }
-    signal?.addEventListener("abort", finish, { once: true });
-  });
-}
-function healthUrl(url2) {
-  return `${url2.replace(/\/+$/, "")}/health`;
-}
-function isRegularFile(path2) {
-  try {
-    return statSync22(path2).isFile();
-  } catch (e) {
-    const code2 = e.code;
-    if (code2 === "ENOENT" || code2 === "ENOTDIR") return false;
-    throw e;
-  }
-}
-function singletonInstalledAt(home, pathEnv) {
-  if (pathEnv.split(delimiter2).some((dir) => dir !== "" && isRegularFile(join47(dir, "mlx-decision")))) return true;
-  try {
-    return readdirSync13(join47(home, "Library", "LaunchAgents")).some((name) => name.includes("mlx-decision") && name.endsWith(".plist"));
-  } catch (e) {
-    if (e.code === "ENOENT") return false;
-    throw e;
-  }
-}
-function singletonInstalledOnDisk() {
-  return singletonInstalledAt(homedir5(), process.env.PATH ?? "");
-}
-async function adoptDecider(cfg, deps, url2, loaded) {
-  if (loaded.includes(SERVED_MODEL)) return { ok: true, baseUrl: url2 };
-  if (loaded.length === 0) {
-    const waited = await waitForLoaded(cfg, deps, url2);
-    if (waited === null) {
-      return { ok: false, retryable: true, reason: `the mlx-decision server on ${url2} is still loading its model after ${cfg.startTimeoutMs} ms: llm-ext never starts or replaces it` };
-    }
-    if (waited.ok) return waited;
-    return { ...waited, detail: `the mlx-decision server on ${url2} was still loading its model when the lookup ended; llm-ext never starts or replaces it` };
-  }
-  return { ok: false, retryable: false, reason: `the mlx-decision server on ${url2} serves ${loaded.join(", ")}, not ${SERVED_MODEL}: the singleton must serve ${SERVED_MODEL}; llm-ext never starts or replaces it, so this run cannot use it` };
-}
-async function ensureLocalDecider(cfg, deps) {
-  if (deps.signal?.aborted) return ABORTED;
-  const own2 = await probeHealth(deps.fetch, healthUrl(cfg.url), deps.signal);
-  if (deps.signal?.aborted) return ABORTED;
-  if (own2.kind === "decider") return adoptDecider(cfg, deps, cfg.url, own2.loaded);
-  if ((deps.platform ?? process.platform) !== "darwin") {
-    return { ok: false, retryable: false, reason: "the local mlx-decision decider runs only on macOS (Apple silicon)" };
-  }
-  let running;
-  try {
-    running = await (deps.discover ?? discoverDeciders)();
-  } catch (e) {
-    return { ok: false, retryable: true, reason: `cannot list running mlx-decision servers with ps and lsof (${e.message}); llm-ext never starts one` };
-  }
-  if (deps.signal?.aborted) return ABORTED;
-  const urls = [...new Set(running.flatMap((d) => d.urls))];
-  if (urls.length === 0 && running.length > 0) {
-    return {
-      ok: false,
-      retryable: true,
-      reason: `an mlx-decision server process (pid ${running.map((d) => d.pid).join(", ")}) is running but has no listener llm-ext can reach on 127.0.0.1; llm-ext never starts or replaces it`
-    };
-  }
-  if (urls.length > 0) {
-    let refusal = null;
-    for (const url2 of urls) {
-      const health2 = await probeHealth(deps.fetch, healthUrl(url2), deps.signal);
-      if (deps.signal?.aborted) return ABORTED;
-      if (health2.kind === "decider") {
-        const verdict = await adoptDecider(cfg, deps, url2, health2.loaded);
-        if (verdict.ok) return verdict;
-        if (deps.signal?.aborted) return verdict;
-        refusal ??= verdict;
-        continue;
-      }
-      refusal ??= {
-        ok: false,
-        retryable: true,
-        reason: health2.kind === "unreachable" ? `an mlx-decision server is running on ${url2} but did not answer /health; llm-ext never starts or replaces it` : `an mlx-decision server is running on ${url2} but its /health did not answer as a decider (2xx with a loaded list); llm-ext never starts or replaces it`
-      };
-    }
-    return refusal ?? { ok: false, retryable: true, reason: "an mlx-decision server is running but none answered as a decider" };
-  }
-  let installed;
-  try {
-    installed = (deps.singletonInstalled ?? singletonInstalledOnDisk)();
-  } catch (e) {
-    return { ok: false, retryable: false, reason: `cannot check whether mlx-decision is installed: ${e.message}` };
-  }
-  if (installed) {
-    return { ok: false, retryable: true, reason: "no mlx-decision server is running yet (the singleton may be restarting); llm-ext never starts one" };
-  }
-  return { ok: false, retryable: false, reason: "mlx-decision is not installed and no singleton server is running; llm-ext never starts one \u2014 install mlx-decision and start its server yourself (this plugin does not install or start it)" };
-}
-async function waitForLoaded(cfg, deps, url2) {
-  const deadline = deps.now() + cfg.startTimeoutMs;
-  for (; ; ) {
-    if (deps.signal?.aborted) return ABORTED;
-    if (deps.now() >= deadline) return null;
-    const health2 = await probeHealth(deps.fetch, healthUrl(url2), deps.signal);
-    if (health2.kind === "decider" && health2.loaded.includes(SERVED_MODEL)) return { ok: true, baseUrl: url2 };
-    await sleepAbortable(POLL_INTERVAL_MS, deps.signal);
-  }
-}
-var SERVED_MODEL, HEALTH_TIMEOUT_MS, POLL_INTERVAL_MS, ABORTED;
-var init_local_decider = __esm({
-  "src/classifiers/l2/local-decider.ts"() {
-    "use strict";
-    init_safe_body();
-    init_deadline();
-    init_transport();
-    init_local_discovery();
-    init_config();
-    SERVED_MODEL = "elephant-1";
-    HEALTH_TIMEOUT_MS = 2e3;
-    POLL_INTERVAL_MS = 500;
-    ABORTED = { ok: false, reason: "the local decider lookup was aborted", retryable: false, aborted: true };
-  }
-});
-
 // src/classifiers/l2/local-fallback.ts
 function localFallbackConfig(raw) {
   const errors = localFallbackErrors(raw);
   if (errors.length > 0) throw new Error(errors.join("; "));
   const section2 = raw ?? {};
   return { ...LOCAL_FALLBACK_DEFAULTS, ...section2 };
+}
+function localOnlySettings(raw) {
+  if (raw === void 0) return { local_fallback: { enabled: true } };
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { local_fallback: raw };
+  return { local_fallback: { ...raw, enabled: true } };
 }
 function oneAtATime(fn) {
   const next = queue.then(fn, fn);
@@ -275836,13 +275888,13 @@ async function answerWithLocalDecider(opts) {
       unavailableUntil = deps.now() + UNAVAILABLE_MEMO_MS;
     }
     if (outerDeadline.reason !== void 0 && lastError !== void 0) {
-      return { ok: false, disabled: false, reason: `the local decider ran out of its ${requestTimeoutMs} ms budget while retrying (last failure: ${asClassifierError(lastError).message})` };
+      return { ok: false, disabled: false, reason: `the local decider ran out of its ${requestTimeoutMs} ms budget while retrying (last failure: ${asClassifierError(lastError).message})`, error: asClassifierError(lastError) };
     }
     if (lastError === void 0) {
       return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} was not asked: no attempt was started (${outerDeadline.reason ?? "aborted"})` };
     }
     const err3 = asClassifierError(lastError);
-    return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} could not answer after retries: ${err3.message}${err3.remedy_hint === void 0 ? "" : ` ${err3.remedy_hint}`}` };
+    return { ok: false, disabled: false, reason: `the local decider at ${baseUrl ?? cfg.url} could not answer (${postAttempts} POST attempt${postAttempts === 1 ? "" : "s"}${err3.retryable ? "" : ", not retryable"}): ${err3.message}${err3.remedy_hint === void 0 ? "" : ` ${err3.remedy_hint}`}`, error: err3 };
   });
 }
 var DECIDER_SINGLETON_PORT, LOCAL_FALLBACK_DEFAULTS, RESCAN_INTERVAL_MS, UNAVAILABLE_MEMO_MS, unavailableUntil, queue;
@@ -275998,6 +276050,35 @@ async function run(spec16, req, deps, redactor, safe) {
   const noQuestions = Object.keys(built.unsplittable).length === 0 && built.units.every((u) => Object.keys(u.questions).length === 0);
   if (noQuestions && built.noCall !== true) throw new Refusal(`${command}: nothing to ask for this input (no question was built)`);
   if (noQuestions) return req.estimate === true ? estimateOutcome(buildEstimate(command, [], null)) : conclude(emptyMerged());
+  const runLocalOnly = async (local) => {
+    const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
+    const limits2 = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
+    const plan2 = planRequests(built, { ...limits2, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } });
+    if (!plan2.ok) throw new Refusal(plan2.message);
+    if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan2.requests.map((r) => r.tokens), { id: local.model, promptUsdPerM: 0 }, true));
+    usedOtherModel = true;
+    const ctrlCLocal = installCtrlC(deps.sigint);
+    const execLocal = async (request) => {
+      const answered = await answerWithLocalDecider({
+        settings: localOnlySettings(deps.localFallback),
+        fetchImpl: deps.fetch,
+        signal: AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]),
+        call: { state: request.state, questions: request.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
+        decider: deps.localFallbackDeps
+      });
+      if (answered.ok) return answered.reply;
+      throwIfStopped();
+      const cause = answered.disabled ? void 0 : answered.error;
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...cause?.status === void 0 ? {} : { status: cause.status } });
+    };
+    let mergedLocal;
+    try {
+      mergedLocal = await runPlan(plan2, { concurrency: limits2.concurrency, timeoutMs: local.timeoutMs, signal: ctrlCLocal.signal, budget, split: spec16.split, policy: spec16.validation, defaultLabels, exec: execLocal });
+    } finally {
+      ctrlCLocal.dispose();
+    }
+    return conclude(mergedLocal);
+  };
   let catalogLoad;
   const loadCatalog = () => catalogLoad ??= loadDecisionsCatalog({ fetch: deps.fetch, ...deps.catalogOptions });
   const selection = await refusingAsync(5, () => selectClassifierProfile({ settings: deps.settings, profileFlag: req.profileFlag, command }, deps.fetch, deps.catalogOptions, loadCatalog));
@@ -276016,6 +276097,7 @@ async function run(spec16, req, deps, redactor, safe) {
     if (removedRule === void 0) throw new Refusal(selection.error);
     profile = plain.profile;
   }
+  if (profile.api === LOCAL_DECISION_API) return runLocalOnly(profile);
   const key = req.estimate === true ? "" : refusing(3, () => resolveClassifierApiKey(profile));
   if (key !== "") redactor.register(key);
   const catalog = await refusingAsync(5, loadCatalog);
@@ -276044,7 +276126,9 @@ async function run(spec16, req, deps, redactor, safe) {
   }
   const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits }));
   if ("ok" in limits) throw new Refusal(limits.message);
-  const plan = planRequests(built, { ...limits, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } });
+  const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
+  const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
+  const plan = planRequests(built, { ...planLimits, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } });
   if (!plan.ok) throw new Refusal(plan.message);
   refusing(1, () => checkEstimate({ maxBudgetUsd: req.maxBudgetUsd, estimatedInputTokens: plan.requests.reduce((n, r) => n + r.tokens, 0), model: resolved }));
   if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan.requests.map((r) => r.tokens), { id: resolved.effective.id, promptUsdPerM: resolved.effective.promptUsdPerM }));
@@ -276348,6 +276432,7 @@ var init_run_decision = __esm({
     init_input_error();
     init_chunker();
     init_planner();
+    init_config();
     init_policy_kit();
     init_profile();
     init_redact();
@@ -276481,6 +276566,49 @@ async function askOne(profile, key, deps, signal, historyFailures) {
     deadline.dispose();
   }
 }
+async function pingLocalOnly(profile, noCall, deps, say) {
+  say(`key check: skipped (profile ${profile.name} is local-only: the local mlx-decision decider needs no API key)`, deps.stdout);
+  if (noCall) {
+    say("decision call: skipped (--no-call); run without --no-call to ask the local decider one question", deps.stdout);
+    return 0;
+  }
+  const ctrlC = installCtrlC(deps.sigint);
+  try {
+    const answered = await answerWithLocalDecider({
+      settings: localOnlySettings(deps.localFallback),
+      fetchImpl: deps.fetch,
+      signal: AbortSignal.any([ctrlC.signal, commandStopSignal()]),
+      requestTimeoutMs: PING_LOCAL_REQUEST_TIMEOUT_MS,
+      call: { state: PING_STATE, questions: { ping: noul(PING_QUESTION) }, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
+      decider: deps.localFallbackDeps
+    });
+    if (!answered.ok) {
+      throwIfStopped();
+      const cause = answered.disabled ? void 0 : answered.error;
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false });
+    }
+    const a = answered.reply.answers.ping;
+    const p = finite(a?.noul);
+    if (p === void 0 || p < 0 || p > 1) throw badResponseError("the reply has no usable answer to the ping question");
+    if (p < PING_EXPECTED_ABOVE) say(`warning: the ping answer ${p} is below the expected ${PING_EXPECTED_ABOVE}: the decider answered, but the model got the fixed question wrong`, deps.stderr);
+    say(`decision call: ok (the local decider, no API key used; model ${answered.reply.model}, answer ${p}, expected above ${PING_EXPECTED_ABOVE}, cost 0 USD (local))`, deps.stdout);
+    return 0;
+  } catch (e) {
+    if (isCommandStopped()) {
+      say(`llm-ext: classify ping was stopped (${commandStopFlag()})`, deps.stderr);
+      return commandStopExitCode();
+    }
+    if (ctrlC.signal.aborted) {
+      say("llm-ext: interrupted by Ctrl-C", deps.stderr);
+      return CTRL_C_EXIT_CODE;
+    }
+    const err3 = asClassifierError(e);
+    say(`llm-ext: classify ping failed: ${err3.message}${err3.remedy_hint ? ` ${err3.remedy_hint}` : ""}`, deps.stderr);
+    return exitCodeForError(err3);
+  } finally {
+    ctrlC.dispose();
+  }
+}
 async function runPing(argv, profileFlag, deps) {
   const redactor = createRedactor();
   const say = (line, to) => to(redactor.redact(line));
@@ -276507,6 +276635,7 @@ async function runPing(argv, profileFlag, deps) {
   const resolved = resolveClassifierProfile({ settings: deps.settings, profileFlag: profileName, command: "classify ping" });
   if (!resolved.ok) return fail3(resolved.error);
   const profile = resolved.profile;
+  if (profile.api === LOCAL_DECISION_API) return pingLocalOnly(profile, noCall, deps, say);
   let key;
   try {
     key = resolveClassifierApiKey(profile);
@@ -276562,6 +276691,7 @@ var init_ping = __esm({
     init_usage_history();
     init_ping_flags();
     init_local_fallback();
+    init_config();
     KEY_URL = "https://openrouter.ai/api/v1/key";
     PING_LOCAL_REQUEST_TIMEOUT_MS = 3e4;
     finite = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
@@ -291132,22 +291262,6 @@ async function runBroker(o) {
   let server2 = null;
   let swapping = false;
   let draining = false;
-  let legacy = null;
-  let legacyAsked = 0;
-  const checkLegacy = async () => {
-    let found = null;
-    for (const s of readLegacyBrokerStates(o.dir)) if (pidState(s.pid) === "alive" && await isBrokerProcess(s.pid)) found = s;
-    if (found && legacyAsked !== found.pid) {
-      legacyAsked = found.pid;
-      o.log(`an older broker (pid ${found.pid}, version ${found.version}, broker-llama.json) is running: asked it to drain; no main server starts until it exits`);
-      await fetch(`http://127.0.0.1:${found.port}/v1/shutdown`, { method: "POST", headers: { [TOKEN_HEADER]: found.token }, signal: AbortSignal.timeout(3e3) }).catch(
-        (e) => o.log(`the drain request to the older broker failed (${e.message}); waiting for it to exit`)
-      );
-    }
-    if (!found && legacy) o.log(`the older broker (pid ${legacy.pid}) exited; main servers start again`);
-    legacy = found;
-  };
-  const legacyHolder = (s) => ({ role: "main", pid: s.pid, pgid: s.pid, port: s.port, argv: [], model: "", ctx: 0, ownerPid: s.pid, startedAt: s.startedAt });
   let exiting = false;
   let lastRequestAt = Date.now();
   let lastServerStopAt = 0;
@@ -291499,8 +291613,6 @@ async function runBroker(o) {
         cacheGb = gb;
       }
       if (server2) await stopServer(`swap to '${key.split("\0")[0]}'`);
-      await checkLegacy();
-      if (legacy) throw new SlotBusyError(`an older broker (pid ${legacy.pid}, broker-llama.json) is still running; it was asked to drain`, legacyHolder(legacy));
       for (const other of BROKER_ENGINES) {
         if (other === engine) continue;
         const held2 = (await sweepEngine(o.dir, other, "main", o.log)).find((e) => e.role === "main");
@@ -291789,11 +291901,6 @@ async function runBroker(o) {
       void releaseEntry(o.dir, dead.engine, dead.pid).catch((e) => o.log(`release failed: ${e.message}`));
       forgetServer(dead.pid);
     }
-    if (legacy) {
-      govSettle(/* @__PURE__ */ new Set(), now4);
-      if (server2 && running.size === 0 && !stopping) void stopServer(`an older broker (pid ${legacy.pid}) is still running`).catch((e) => o.log(`stop failed: ${e.message}`));
-      return;
-    }
     if (deniedSince !== null) {
       sched.noteDenied(now4 - deniedSince);
       deniedSince = now4;
@@ -292051,7 +292158,7 @@ async function runBroker(o) {
       unloadedAt.set(server2.key, Date.now());
       void stopServer("the governor asked for its RAM back").catch((e) => o.log(`stop failed: ${e.message}`));
     }
-    void checkLegacy().finally(pump);
+    pump();
   }, TICK_MS);
   const onSignal = (sig) => void shutdown(`signal ${sig}`);
   process.once("SIGTERM", onSignal);
@@ -293373,6 +293480,8 @@ async function main() {
     if (refusal !== void 0) die(refusal);
   }
   if (isClassify) {
+    const remoteOnly = remoteOnlyClassifierRefusal(settingsAsLoaded, profileOverride);
+    if (remoteOnly !== void 0) die(remoteOnly);
     const io = {
       settings: settingsAsLoaded,
       fetch: globalThis.fetch,

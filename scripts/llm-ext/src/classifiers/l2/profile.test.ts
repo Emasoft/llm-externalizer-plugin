@@ -21,7 +21,7 @@ describe("resolveClassifierProfile", () => {
     expect(r).toEqual({
       ok: true,
       profile: {
-        name: "or-jev", source: "active_classifier", model: "~typesafe/jev-latest", endpoint: "decisions", apiKeyEnv: "OPENROUTER_API_KEY", timeoutMs: 60000, maxAttempts: 3,
+        name: "or-jev", source: "active_classifier", api: "openrouter-remote", model: "~typesafe/jev-latest", endpoint: "decisions", apiKeyEnv: "OPENROUTER_API_KEY", timeoutMs: 60000, maxAttempts: 3,
         limits: { max_requests_per_call: 8, concurrency: 8 }, provider: undefined, sessionId: undefined, user: undefined, trace: undefined,
       },
     });
@@ -32,7 +32,7 @@ describe("resolveClassifierProfile", () => {
     expect(r).toEqual({
       ok: true,
       profile: {
-        name: "tuned", source: "flag", model: "typesafe/jev-1.13", endpoint: "systemone", apiKeyEnv: "MY_KEY", timeoutMs: 5000, maxAttempts: 1,
+        name: "tuned", source: "flag", api: "openrouter-remote", model: "typesafe/jev-1.13", endpoint: "systemone", apiKeyEnv: "MY_KEY", timeoutMs: 5000, maxAttempts: 1,
         limits: { max_requests_per_call: 3, concurrency: 2, context_tokens: 9000 }, provider: { order: ["x"] }, sessionId: "s1", user: "u1", trace: { a: 1 },
       },
     });

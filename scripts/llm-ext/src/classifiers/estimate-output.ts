@@ -11,13 +11,15 @@ export interface EstimateReport {
   promptUsdPerMillion: number | null;
   /** null when the catalog has no prompt price, or when no model is involved the cost is 0. */
   estimatedInputCostUsd: number | null;
+  /** TRDD-1L9VMEY7: true when the profile is local-only (the mlx-decision decider on this machine): free, no key, nothing remote. */
+  local: boolean;
 }
 
 /** Builds the report. WHY one formula with checkEstimate (l2/cost-cap.ts): --max-budget refuses on the same number the user is shown. */
-export function buildEstimate(command: string, requestTokens: readonly number[], model: { id: string; promptUsdPerM: number | null } | null): EstimateReport {
+export function buildEstimate(command: string, requestTokens: readonly number[], model: { id: string; promptUsdPerM: number | null } | null, local = false): EstimateReport {
   const inputTokens = requestTokens.reduce((n, t) => n + t, 0);
-  if (model === null) return { command, requests: 0, inputTokens: 0, model: null, promptUsdPerMillion: null, estimatedInputCostUsd: 0 };
-  return { command, requests: requestTokens.length, inputTokens, model: model.id, promptUsdPerMillion: model.promptUsdPerM, estimatedInputCostUsd: model.promptUsdPerM === null ? null : (inputTokens * model.promptUsdPerM) / 1_000_000 };
+  if (model === null) return { command, requests: 0, inputTokens: 0, model: null, promptUsdPerMillion: null, estimatedInputCostUsd: 0, local };
+  return { command, requests: requestTokens.length, inputTokens, model: model.id, promptUsdPerMillion: model.promptUsdPerM, estimatedInputCostUsd: model.promptUsdPerM === null ? null : (inputTokens * model.promptUsdPerM) / 1_000_000, local };
 }
 
 export function renderEstimateText(e: EstimateReport): string {
@@ -29,7 +31,8 @@ export function renderEstimateText(e: EstimateReport): string {
       `model: ${e.model}`,
       `requests: ${e.requests}`,
       `estimated input tokens: ${e.inputTokens}`,
-      e.estimatedInputCostUsd === null ? `estimated input cost: unknown (the catalog has no prompt price for ${e.model})` : `estimated input cost: ${e.estimatedInputCostUsd.toFixed(6)} USD (${e.promptUsdPerMillion} USD per million tokens)`,
+      // TRDD-1L9VMEY7: a local-only profile is priced by no catalog: the call is local and free, and the line says so instead of a price.
+      e.local ? "estimated input cost: 0 USD (local: the mlx-decision decider on this machine, free, no API key, nothing sent to OpenRouter)" : e.estimatedInputCostUsd === null ? `estimated input cost: unknown (the catalog has no prompt price for ${e.model})` : `estimated input cost: ${e.estimatedInputCostUsd.toFixed(6)} USD (${e.promptUsdPerMillion} USD per million tokens)`,
       "This is an estimate, not a ceiling: it counts input tokens only, and small requests have measured up to 55% below the tokens the API reports.",
     );
   }
@@ -37,5 +40,5 @@ export function renderEstimateText(e: EstimateReport): string {
 }
 
 export function renderEstimateJson(e: EstimateReport): string {
-  return JSON.stringify({ estimate: { command: e.command, requests: e.requests, input_tokens: e.inputTokens, model: e.model, prompt_usd_per_million: e.promptUsdPerMillion, estimated_input_cost_usd: e.estimatedInputCostUsd } }, null, 2);
+  return JSON.stringify({ estimate: { command: e.command, requests: e.requests, input_tokens: e.inputTokens, model: e.model, prompt_usd_per_million: e.promptUsdPerMillion, estimated_input_cost_usd: e.estimatedInputCostUsd, ...(e.local ? { local: true } : {}) } }, null, 2);
 }

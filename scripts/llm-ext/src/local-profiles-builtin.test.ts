@@ -14,7 +14,7 @@ import { parse as parseYaml, parseDocument } from "yaml";
 import { tmpdir } from "./test-tmp-root.js";
 import { LOCAL_PROFILE_STEP_PREFIX, localProfileStepIds, migrateSettingsTo141 } from "./benchmark/pick.js";
 import { isMigrationStepApplied, markMigrationStepApplied } from "./default-profiles-state.js";
-import { builtinLocalProfiles, getSettingsPath, localsPlatformSupported, profileTypeFieldIssues, validateProfile, type Profile } from "./config.js";
+import { builtinLocalDecisionProfile, builtinLocalProfiles, getSettingsPath, localsPlatformSupported, profileTypeFieldIssues, validateProfile, type Profile } from "./config.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ON_APPLE_SILICON = localsPlatformSupported(process.platform, process.arch);
@@ -167,7 +167,25 @@ describe("built-in local profiles: added once (P5)", () => {
   });
 
   it("the step-id list is pinned: a new built-in local profile step must be added here on purpose", () => {
-    expect(localProfileStepIds()).toEqual(["local-profile-added:local_llama", "local-profile-added:locals-mlx"]);
+    // TRDD-1L9VMEY7: the local-only classifier profile local-decision is added by the same step.
+    expect(localProfileStepIds()).toEqual(["local-profile-added:local_llama", "local-profile-added:locals-mlx", "local-profile-added:local-decision"]);
+  });
+
+  it("TRDD-1L9VMEY7: local-decision is added once on a Mac as a valid classifier profile, never made active; elsewhere it is left out and not recorded", () => {
+    writeFileSync(getSettingsPath(), BASE);
+    run({ platform: "linux", arch: "x64" });
+    expect(profiles()["local-decision"]).toBeUndefined();
+    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}local-decision`)).toBe(false);
+    run(MAC);
+    const p = profiles()["local-decision"];
+    expect(p).toEqual(builtinLocalDecisionProfile().profile);
+    expect(p).toEqual({ "profile-type": "classifier", api: "mlx-decision-local", context_tokens: 16384, max_requests_per_call: 64 });
+    expect(validateProfile("local-decision", p as unknown as Profile).errors).toEqual([]);
+    expect(isMigrationStepApplied(`${LOCAL_PROFILE_STEP_PREFIX}local-decision`)).toBe(true);
+    const raw = parseYaml(readFileSync(getSettingsPath(), "utf-8")) as { active: string; active_classifier?: string };
+    expect(raw.active).toBe("mine");
+    expect(raw.active_classifier).not.toBe("local-decision");
+    expect(notices.find((n) => n.includes("'local-decision'"))).toContain("active_classifier: local-decision");
   });
 
   // P5 review M1: the file may hold API keys; the write must not widen its mode.

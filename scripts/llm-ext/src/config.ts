@@ -1579,6 +1579,97 @@ export const CLASSIFIER_DEFAULTS = {
   max_attempts: 3,
 } as const;
 
+
+/**
+ * TRDD-1L9VMEY7 (USER 2026-11-16: "do it then! call it local-jev or local-decision"): the classifier api of a LOCAL-ONLY profile.
+ * WHY a second api value and not a flag on openrouter-remote: a profile of this api sends every request straight to the adopted
+ * mlx-decision singleton (classifiers/l2/local-decider.ts), so it has no model, key, endpoint or OpenRouter routing to configure,
+ * and validateClassifierProfile refuses those keys on it instead of silently ignoring them.
+ */
+export const LOCAL_DECISION_API = "mlx-decision-local";
+/** TRDD-1L9VMEY7: the name of the built-in local-only classifier profile (builtinLocalDecisionProfile). */
+export const LOCAL_DECISION_PROFILE_NAME = "local-decision";
+/**
+ * TRDD-1L9VMEY7: the prompt limit of the local mlx-decision decider (elephant-1), in tokens: the context_tokens of the built-in
+ * local-decision profile, and the ceiling every REMOTE classify request is planned under while the local fallback is on
+ * (run-decision.ts), so a request the remote side fails still fits the decider.
+ * WHY this number and where it comes from: llm-ext has no other source for the decider window (/health and /v1/models of
+ * mlx-decision do not report it; only its 422 reply names it). Measured on 2026-11-16 from that reply:
+ * "the question with its state needs 60103 tokens; the limit is 16384 and input is not cut". WHY no safety margin: the planner
+ * estimate (l1/estimate.ts) counted MORE than the decider on the same request (config.ts text: estimate 34866, decider 25385,
+ * ratio 0.73; a 21304-token estimate was answered under the 16384 limit). Re-measured on six inputs, each repeated until the decider
+ * named its own count (TypeScript 0.71 and 0.73, bundled JS 0.73, catalog JSON 0.73, a small-object JSON fixture 0.91, Japanese text
+ * 0.57; reports_dev/local-decision): each below 1, so such a request planned to 16384 estimated tokens fits. KNOWN EXCEPTION:
+ * random base64 measured 1.99 (estimate 59309, decider 117738): l1/estimate.ts undercounts it, so a base64-heavy request planned
+ * to 16384 can still exceed the decider limit and ends with its verbatim 422 after one attempt (exit 4), never a silent cut.
+ * The fix belongs in the estimator (it serves the remote planning too), not in a margin here: a margin small enough to keep the
+ * request count down would not cover a 2x undercount.
+ * It is written into the profile as context_tokens, so it is visible and editable in settings.yaml; a request the decider still
+ * refuses ends the run with that 422 text verbatim (l0/local-transport.ts), never retried.
+ */
+export const LOCAL_DECISION_CONTEXT_TOKENS = 16384;
+/**
+ * TRDD-1L9VMEY7: the max_requests_per_call of the built-in local-decision profile. WHAT the cap guards (planner.ts E43): the plan is
+ * refused, with the count it needs, before anything is sent. On a remote profile that bounds spend and time; a local request costs
+ * nothing, so here it bounds only TIME, since local requests run one at a time (local-fallback.ts oneAtATime). WHY 64: one local
+ * request took about 3 s on an idle decider (2026-11-16 live label run, 2.9 s), so 64 is a few minutes, while the remote default 8
+ * would refuse ordinary folder runs (43 requests measured). Editable in settings.yaml; a bigger plan is refused with the count.
+ */
+export const LOCAL_DECISION_MAX_REQUESTS = 64;
+
+/**
+ * TRDD-1L9VMEY7: the built-in local-only classifier profile, added ONCE to settings.yaml by the same add-once step as the built-in
+ * local text profiles (benchmark/pick.ts runLocalProfileSteps, recorded in dynamic-profiles-state.json), never made active.
+ * WHY not in builtinLocalProfiles(): that list is the TEXT local profiles (index.ts treats its names as text-profile names), and
+ * this one is a classifier, selected with --profile local-decision or active_classifier: local-decision.
+ * WHY supported only where locals-mlx is: mlx-decision is an MLX server, macOS on Apple silicon only.
+ */
+export function builtinLocalDecisionProfile(): BuiltinLocalProfile {
+  return {
+    name: LOCAL_DECISION_PROFILE_NAME,
+    header: [
+      " The local-decision profile answers every classify command with the local mlx-decision decider (elephant-1) on this machine:",
+      " no OpenRouter call, no API key, no cost. llm-ext never starts the decider; it must already be running.",
+      " Select it with --profile local-decision or active_classifier: local-decision.",
+      ` context_tokens is the prompt limit the decider reports in its own 422 reply (${LOCAL_DECISION_CONTEXT_TOKENS}).`,
+      ` max_requests_per_call caps the requests of one command: local requests run one at a time, so it bounds the run time.`,
+    ],
+    profile: { "profile-type": "classifier", api: LOCAL_DECISION_API, context_tokens: LOCAL_DECISION_CONTEXT_TOKENS, max_requests_per_call: LOCAL_DECISION_MAX_REQUESTS } as unknown as Profile,
+    supported: (platform, arch) => localsPlatformSupported(platform, arch),
+  };
+}
+
+/**
+ * TRDD-1L9VMEY7, second USER directive (2026-11-16): "a remote only profile must not exist, it should always have a local model to
+ * fallback to.. but a profile that is only local is ok, since it is the fallback of itself".
+ * The refusal of a classify run whose profile is remote while settings.yaml disables the local decider fallback; undefined when the
+ * run may go ahead. WHY at the classify launcher (cli/main.ts) and not in validateSettings: settings.yaml is loaded by every
+ * llm-ext command, so a load-time refusal would break every command for such a user, while the rule only concerns classifier
+ * profiles (orchestrator decision). WHY not inside runDecision/runPing: their RunDeps.localFallback is also the test seam that
+ * disables the fallback to pin captured replies, and the spec keeps that seam.
+ * A missing or unknown profile is left to the runner, which names it precisely.
+ */
+export function remoteOnlyClassifierRefusal(settings: Pick<Settings, "active_classifier" | "profiles" | "local_fallback">, profileFlag: string | undefined): string | undefined {
+  const raw = settings.local_fallback;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw) || (raw as Record<string, unknown>).enabled !== false) return undefined;
+  const name = profileFlag ?? settings.active_classifier;
+  const profile = name === undefined ? undefined : settings.profiles[name];
+  if (name === undefined || profile === undefined || profile.api === LOCAL_DECISION_API) return undefined;
+  // WHY inferProfileType and its throw caught: a profile of another type, or one whose type is malformed, is refused by the runner's own type check with the precise text.
+  let type: ProfileType;
+  try {
+    type = inferProfileType(name, profile);
+  } catch {
+    return undefined;
+  }
+  if (type !== "classifier") return undefined;
+  return (
+    `profile '${name}' is a remote classifier profile, and local_fallback.enabled is false in settings.yaml: a remote-only classifier profile is not allowed, ` +
+    `every remote classifier profile must keep the local mlx-decision decider as its fallback. Fix: delete 'enabled: false' from local_fallback, ` +
+    `or use the local-only profile with --profile ${LOCAL_DECISION_PROFILE_NAME} (or active_classifier: ${LOCAL_DECISION_PROFILE_NAME}).`
+  );
+}
+
 /**
  * PF-01 (E84): offline schema check of a `profile-type: classifier` profile.
  * WHY it replaces validateProfile's chat checks: a classifier has no `mode`, and
@@ -1593,11 +1684,17 @@ export function validateClassifierProfile(name: string, profile: Profile): strin
   errors.push(...profileTypeFieldIssues(name, profile, "classifier").map((i) => `Profile '${name}': ${i}`));
   const p = profile as unknown as Record<string, unknown>;
   const where = `Profile '${name}'`;
-  if (p.api !== "openrouter-remote") errors.push(`${where}: a classifier profile requires api: openrouter-remote, got '${String(p.api)}'`);
-  if (typeof p.model !== "string" || p.model.length === 0) errors.push(`${where}: missing required field: model`);
+  // TRDD-1L9VMEY7: a local-only profile (LOCAL_DECISION_API) is valid on its own; it is its own fallback. The remote-only keys are refused on it, never ignored: the decider serves its one model and takes no key, endpoint or OpenRouter routing.
+  const local = p.api === LOCAL_DECISION_API;
+  if (p.api !== "openrouter-remote" && !local) errors.push(`${where}: a classifier profile requires api: openrouter-remote or api: ${LOCAL_DECISION_API}, got '${String(p.api)}'`);
+  if (local) {
+    for (const key of ["model", "api_key", "endpoint", "provider"]) {
+      if (p[key] !== undefined) errors.push(`${where}: ${key} does not apply to api: ${LOCAL_DECISION_API} (the local mlx-decision decider serves its one model and needs no key, endpoint or OpenRouter provider routing). Fix: delete ${key}`);
+    }
+  } else if (typeof p.model !== "string" || p.model.length === 0) errors.push(`${where}: missing required field: model`);
   // WHY only a `$NAME` reference, and the value never in the message: plan section 8 gives the classifier `api_key` as `$VAR` and PF-11 says the key is never written; a literal key in settings.yaml would travel through every resolved profile, log and report.
-  if (p.api_key !== undefined && (typeof p.api_key !== "string" || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(p.api_key))) errors.push(`${where}: api_key must be a reference to an environment variable such as $OPENROUTER_API_KEY; the key itself is never stored in settings.yaml`);
-  if (p.endpoint !== undefined && p.endpoint !== "decisions" && p.endpoint !== "systemone") errors.push(`${where}: endpoint must be 'decisions' or 'systemone', got '${String(p.endpoint)}'`);
+  if (!local && p.api_key !== undefined && (typeof p.api_key !== "string" || !/^\$[A-Za-z_][A-Za-z0-9_]*$/.test(p.api_key))) errors.push(`${where}: api_key must be a reference to an environment variable such as $OPENROUTER_API_KEY; the key itself is never stored in settings.yaml`);
+  if (!local && p.endpoint !== undefined && p.endpoint !== "decisions" && p.endpoint !== "systemone") errors.push(`${where}: endpoint must be 'decisions' or 'systemone', got '${String(p.endpoint)}'`);
   for (const key of ["max_requests_per_call", "concurrency", "timeout_ms", "max_attempts", "context_tokens"]) {
     const v = p[key];
     if (v !== undefined && !(typeof v === "number" && Number.isInteger(v) && v > 0)) errors.push(`${where}: ${key} must be a positive integer, got '${String(v)}'`);
