@@ -31,6 +31,12 @@ export const ENGINE_HEADER = "x-llm-ext-engine";
 export const TIMEOUT_HEADER = "x-llm-ext-timeout-ms";
 /** The job's own queue timeout in ms (--queue_timeout); absent = the broker's default T. */
 export const QUEUE_TIMEOUT_HEADER = "x-llm-ext-queue-timeout-ms";
+/**
+ * TRDD-WSPV40Y5 (decision Q6): "1" = this job must FAIL instead of being held for a calibration. Sent by the local fallback of a
+ * general command, the one path that may never start a calibration or wait for one. A broker that predates the header ignores it,
+ * which is why it ships with a version change (a broker of another version is drained and replaced, spec 11).
+ */
+export const NO_HOLD_HEADER = "x-llm-ext-no-hold";
 /** On a 204 poll reply: the job's state and, once dispatched, its dispatch time (ms epoch, broker clock). */
 export const STATE_HEADER = "x-llm-ext-job-state";
 export const DISPATCHED_HEADER = "x-llm-ext-dispatched-at";

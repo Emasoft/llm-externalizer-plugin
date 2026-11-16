@@ -14,6 +14,16 @@
  * provider/completion.ts (see that file's chatCompletionWithRetry); this
  * iterator never reaches for a model outside `profile`.
  *
+ * TRDD-WSPV40Y5 (increment 1d): addendum 4 is LIFTED for service-level
+ * failure only, by the USER goal of 2026-11-13 ("resistant to any remote
+ * service becoming unavailable to errors, network isolation or credisf
+ * exhaustion, by falling back to local model"). When the remote SERVICE of
+ * the built-in free or paid profile is unusable (outage, no network path,
+ * paid credit at zero, refused key), the CALLER in index.ts
+ * (tryLocalFallback) walks a SECOND, ready local profile. This iterator is
+ * unchanged and still never reaches outside `profile`; a dead model inside
+ * a healthy service, and every static user-defined profile, stay in-profile.
+ *
  * Wiring this into chatCompletionWithRetry's caller (so a real command
  * actually advances through the chain and catches ProfileExhaustedError) is
  * phase 14.1-C2 — CompletionDeps (provider/types.ts) carries no resolved

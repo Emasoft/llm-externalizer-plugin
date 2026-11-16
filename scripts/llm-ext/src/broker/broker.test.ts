@@ -23,7 +23,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { tmpdir } from "../test-tmp-root.js";
 import { extractTimeoutFlags, MAX_TIMEOUT_S } from "../cli/timeout-flags.js";
 import { Scheduler, queueKey, DEFAULT_TIMINGS, type Job } from "./scheduler.js";
-import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, isCalibratorProcess, readBrokerState, readCalibratorState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
+import { BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, isCalibratorProcess, NO_HOLD_HEADER, readBrokerState, readCalibratorState, STATE_HEADER, TOKEN_HEADER, writeBrokerState } from "./protocol.js";
 import { claimAndSpawn, hasLogFileMarker, readRegistry, registryPath, roleLogFile, stopOwnServer, sweepEngine, SlotBusyError } from "./registry.js";
 import { serverStopText } from "./server-commands.js";
 import { FIXTURE_VERSION, HARNESS_VERSION, PRODUCTION_HARNESS_ID, readRecord, recordPath, writeRecord } from "../calibration/record.js";
@@ -1106,6 +1106,43 @@ describe("jobs held for calibration (P6)", () => {
       expect(reply.state).toBe("done");
       expect(reply.status).toBe(200);
     }
+  }, 300_000);
+
+
+  // ── TRDD-WSPV40Y5 (decision Q6): a no-hold job (the local fallback of a general command) never waits for a calibration ──
+
+  const postNoHold = async (dir: string, model: string): Promise<{ job: string; state?: string }> => {
+    const st = readBrokerState(dir)!;
+    const h = { [TOKEN_HEADER]: st.token, [ENGINE_HEADER]: "llama", [CTX_HEADER]: "1024", [NO_HOLD_HEADER]: "1", "content-type": "application/json" };
+    const res = await fetch(`http://127.0.0.1:${st.port}/v1/jobs`, { method: "POST", headers: h, body: JSON.stringify({ model, messages: [{ role: "user", content: "x" }], max_tokens: 2 }) });
+    expect(res.status).toBe(202);
+    return (await res.json()) as { job: string; state?: string };
+  };
+
+  it("TRDD-WSPV40Y5 (Q6): a no-hold job of a model with no record fails at once, is never held, and queues no calibration", async () => {
+    const dir = newDir();
+    uncalibrate(dir, B);
+    await runClient(dir, jobsOf(A, 1));
+    const { job, state } = await postNoHold(dir, B);
+    expect(state, "never held").toBeUndefined();
+    const reply = await pollDone(dir, job);
+    expect(reply.state).toBe("failed");
+    expect(reply.error).toMatch(/has no complete calibration record; the local fallback does not wait for a calibration/);
+    expect(readQueue(dir).filter((q) => q.model === B), "no calibration queued").toEqual([]);
+    expect((await health(dir)).held).toBe(0);
+  }, 300_000);
+
+  it("TRDD-WSPV40Y5 (Q6): a no-hold job whose record turns out stale at load fails instead of being held again, and queues no recalibration", async () => {
+    const id = identities.get(`llama\u0000${B}`)!;
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    writeRecord(dir, { ...recordFixture("llama", B), fingerprint: id.fingerprint, engine_version: "b1-old", engine_version_checked: "b1-old" });
+    const { job } = await postNoHold(dir, B);
+    const reply = await pollDone(dir, job);
+    expect(reply.state).toBe("failed");
+    expect(reply.error).toMatch(/the engine build changed; the local fallback does not wait for a recalibration/);
+    expect(readQueue(dir).filter((q) => q.model === B), "no recalibration queued").toEqual([]);
+    expect((await health(dir)).held).toBe(0);
   }, 300_000);
 
   it("review F1: a broker that exits while a job is held gives it back; the client resubmits it to the next broker (never a model error) and it is served once calibrated", async () => {

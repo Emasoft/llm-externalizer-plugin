@@ -29,6 +29,8 @@ export interface BrokerConnection {
   ctx: number;
   /** --queue_timeout in ms, or undefined for the broker default. */
   queueTimeoutMs?: number;
+  /** TRDD-WSPV40Y5 (Q6): the job must fail instead of being held for a calibration (the local fallback of a general command). */
+  noHold?: boolean;
   /** P6 (review F1): find or start the current broker after this one gave a held job back. */
   reconnect: () => Promise<{ url: string; token: string; pid: number }>;
 }

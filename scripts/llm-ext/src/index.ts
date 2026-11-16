@@ -426,9 +426,10 @@ import {
 // ALONE. That function is gone with the retired machine-owned names, and so are
 // its imports — the dynamic maintainer owns every one of those reads now.
 import { getActiveBillableForModel } from "./config.js";
-import { makeNetworkGiveUp, PROBE_TIMEOUT_MS } from "./network-give-up.js";
+import { makeNetworkGiveUp, PROBE_TIMEOUT_MS, readyLocalTarget } from "./network-give-up.js";
+import { fallbackVerdict, fallbackWarning, type FallbackFacts } from "./remote-fallback.js";
 import { getDynamicProfileRecord } from "./default-profiles-state.js";
-import { freeFailureCauseToError } from "./free-failure-cause.js";
+import { freeFailureCauseToError, FreeRotationNetworkError } from "./free-failure-cause.js";
 import { readCandidates } from "./dynamic-candidates.js";
 import {
   AllFreeModelsExhaustedError,
@@ -1950,7 +1951,9 @@ function routeHeaders(profile: ResolvedProfile | null, route: ResolvedRoute): Re
 // result is never kept, which is what the two reasons above require of the boot object (reload-safe, TDZ-safe); the
 // same list over a fixed profile is makeProviderDeps below. The fields that read the settings file or a constant
 // (getModelPricePerMillion, getEnsemblePriceCeilingUsd, defaultTemperature) do not depend on the profile.
-function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: () => BackendConfig): CompletionDeps {
+// `noHold` (TRDD-WSPV40Y5, Q6): every broker job of these deps fails instead of being held for a calibration; only the local
+// fallback of a general command sets it, so the boot object and every other per-walk object are unchanged.
+function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: () => BackendConfig, noHold = false): CompletionDeps {
   return {
     getBackend,
     apiHeaders: () => apiHeaders(getProfile(), getBackend()),
@@ -2002,6 +2005,7 @@ function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: 
         queueTimeoutMs: brokerQueueTimeoutMs(),
         // P6 (review F1): after a broker exit gave a held job back, the call submits it to the current broker.
         reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true }),
+        ...(noHold ? { noHold: true } : {}),
       };
     },
   };
@@ -2009,11 +2013,11 @@ function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: 
 
 /**
  * The provider deps of ONE fixed profile and backend (TRDD-78LZFUVJ): every field of providerDeps, read from `profile`
- * and `backend` instead of the module's active ones. Nothing calls it with another profile yet (the local fallback of
- * TRDD-WSPV40Y5 will); the module globals and the published spend and free state keep describing the active profile.
+ * and `backend` instead of the module's active ones. The local fallback of TRDD-WSPV40Y5 calls it over the ready local target (with
+ * noHold); the module globals and the published spend and free state keep describing the active profile.
  */
-export function makeProviderDeps(profile: ResolvedProfile | null, backend: BackendConfig): CompletionDeps {
-  return providerDepsFrom(() => profile, () => backend);
+export function makeProviderDeps(profile: ResolvedProfile | null, backend: BackendConfig, o: { noHold?: boolean } = {}): CompletionDeps {
+  return providerDepsFrom(() => profile, () => backend, o.noHold === true);
 }
 
 // The boot object: the same field list over the module's active profile and backend, read at call time.
@@ -2409,8 +2413,8 @@ function failDynamicProfile(
   actionable: (causes: readonly unknown[]) => Error,
   // TRDD-3CG178O7 (a message-only increment): the causes the routing DECISION below reads, when they must differ from the causes
   // carried on the resulting error. Only freeRotationExhausted passes it (the last model detail alone, exactly what it decided on
-  // before typed causes existed); every other caller decides on all of `causes`, unchanged. Whether every cause should drive
-  // routing for the free pool is a 1d decision (TRDD-WSPV40Y5), with its own tests.
+  // before typed causes existed); every other caller decides on all of `causes`, unchanged. TRDD-WSPV40Y5 decided: the in-profile
+  // routing keeps this last-cause input; only the switch to a local profile reads every cause (freeRotationLocalFallback).
   decisionCauses?: readonly unknown[],
 ): Error {
   const decision = decisionCauses ?? causes;
@@ -2594,6 +2598,8 @@ function classifyError(error: unknown): ErrorClassification {
   if (msg.startsWith(IRON_RULE_REFUSAL_PREFIX)) return { unrecoverable: true, serviceLevel: true, reason: msg };
   // TRDD-1OOAH3LD: a raw OUTPUT LIMIT error (reply cut off on a request_options profile). Never "recoverable": the per-file loops would re-run the same costly generation into the same cap. Per-file failure, not service-level.
   if (msg.startsWith(OUTPUT_LIMIT_PREFIX)) return { unrecoverable: true, serviceLevel: false, reason: msg, countsAsFailure: true };
+  // TRDD-WSPV40Y5 (Q9): a request the local fallback refused fails THIS file only; the other files of the command go on locally.
+  if (error instanceof LocalFallbackRefusedError) return { unrecoverable: true, serviceLevel: false, reason: msg, countsAsFailure: true };
   if (/API error 401\b/.test(msg))
     return {
       unrecoverable: true,
@@ -3350,10 +3356,27 @@ function exhaustedFreeRotation(name: string | undefined, err: unknown): unknown 
   // and classifyError read causes as text.
   // WHY the routing decision reads the LAST cause only: before typed causes this site passed one bare Error built from lastDetail,
   // and the key/credit/request-specific/update branches were decided on it. This increment changes messages only, so the decision
-  // input is unchanged ([429, then 402] on paid is still the credit verdict). Whether every cause should drive routing is a 1d
-  // decision (TRDD-WSPV40Y5), with its own tests.
+  // input is unchanged ([429, then 402] on paid is still the credit verdict). TRDD-WSPV40Y5 kept it so: only the switch to a
+  // local profile reads every cause (freeRotationLocalFallback, called before this).
   const causes = err.causes.map(freeFailureCauseToError);
   return failDynamicProfile(name, causes, () => err, causes.slice(-1));
+}
+
+
+/**
+ * TRDD-WSPV40Y5: the local fallback of the two free-rotation sites. The rotation ends in AllFreeModelsExhaustedError (every model
+ * failed) or in a FreeRotationNetworkError (a raw network failure, 1a). WHY every cause decides here while
+ * freeRotationExhausted routes on the LAST cause only (the 1a comment left this to 1d): falling back to another profile is the
+ * bigger step, so it needs the evidence of EVERY model tried (all network-isolation codes, all refused keys), and the in-profile
+ * routing keeps the input it always had. No outage verdict on this path: the free causes carry no base URL to probe (1a), so
+ * a dead network is caught by the network trigger (the 1b window and its strict probe) instead.
+ */
+async function freeRotationLocalFallback<T>(err: unknown, messages: readonly ChatMessage[], maxTokens: number | undefined, clock: RetryClock | undefined, send: LocalSend<T>): Promise<T | undefined> {
+  if (!(err instanceof AllFreeModelsExhaustedError) && !(err instanceof FreeRotationNetworkError)) return undefined;
+  const name = activeResolved?.name;
+  if (name === undefined) return undefined;
+  const causes = err.causes.map(freeFailureCauseToError);
+  return tryLocalFallback(name, causes, { outageConfirmed: false, networkArmed: await giveUpArmed(clock) }, messages, maxTokens, send);
 }
 
 /** Test-only export of the free-rotation exhaustion conversion (TRDD-3CG178O7), same convention as __classifyErrorForTests. */
@@ -3396,6 +3419,9 @@ async function callSingleWithFreeRotation(
   messages: ChatMessage[],
   options: Record<string, unknown>,
 ): Promise<StreamingResult> {
+  // TRDD-WSPV40Y5 (Q8): a command already switched to local never tries the remote again.
+  const latched = latchedLocalFallback();
+  if (latched !== undefined) return sendToLocalTarget(latched, messages, options.maxTokens as number | undefined, streamingLocalSend(messages, options));
   try {
     // Round C item 4: the rotation hands a serviceAbort verdict straight back
     // (classifyUnavailable returns null on "server issue detected" — its
@@ -3426,6 +3452,10 @@ async function callSingleWithFreeRotation(
       ),
     );
   } catch (err) {
+    // TRDD-WSPV40Y5: the free path never reaches chatCompletionWithProfileFallback, so it falls back here, before
+    // freeRotationExhausted (which may spawn an updater through failDynamicProfile).
+    const local = await freeRotationLocalFallback(err, messages, options.maxTokens as number | undefined, options.retryClock as RetryClock | undefined, streamingLocalSend(messages, options));
+    if (local !== undefined) return local;
     throw freeRotationExhausted(err);
   }
 }
@@ -3444,8 +3474,21 @@ async function chatCompletionJSONWithFreeRotation(
   // TRDD-PN0N4290: the JSON path (check_imports) gets the same give-up window as ensembleStreaming.
   const scoped = { ...options, retryClock: { networkGiveUp: newNetworkGiveUp() } as RetryClock };
   const pool = isFreeModeActive() ? buildFreeRotationPool() : [];
+  // TRDD-WSPV40Y5: the check_imports JSON send on the local target (prompt-based JSON there: json_schema is OpenRouter-only).
+  const localSend: LocalSend<JSONCompletionResult> = (model, deps, o) =>
+    chatCompletionJSON(messages, { ...localSendOptions(options), model, maxTokens: o.maxTokens, retryClock: o.retryClock }, deps);
+  // Q8: a command already switched to local never tries the remote again.
+  const latched = latchedLocalFallback();
+  if (latched !== undefined) return sendToLocalTarget(latched, messages, options.maxTokens, localSend);
   if (pool.length === 0) {
-    return chatCompletionJSON(messages, scoped, providerDeps);
+    // TRDD-WSPV40Y5: the single remote JSON call (no pool) is the whole chain of this path, so its one failure is the cause list.
+    // A .catch chain, not try/await: free-rotation-coverage.test.ts pins "no awaited raw chatCompletionJSON call" in index.ts.
+    return chatCompletionJSON(messages, scoped, providerDeps).catch(async (err: unknown) => {
+      const name = activeResolved?.name;
+      const local = name === undefined ? undefined : await tryLocalFallback(name, [err], { outageConfirmed: false, networkArmed: await giveUpArmed(scoped.retryClock) }, messages, options.maxTokens, localSend);
+      if (local !== undefined) return local;
+      throw err;
+    });
   }
   try {
     return await callWithFreeRotation<JSONCompletionResult>(
@@ -3467,6 +3510,9 @@ async function chatCompletionJSONWithFreeRotation(
       },
     );
   } catch (err) {
+    // TRDD-WSPV40Y5: same local fallback as callSingleWithFreeRotation, before freeRotationExhausted.
+    const local = await freeRotationLocalFallback(err, messages, options.maxTokens, scoped.retryClock, localSend);
+    if (local !== undefined) return local;
     throw freeRotationExhausted(err);
   }
 }
@@ -3618,6 +3664,9 @@ async function chatCompletionWithProfileFallback(
   }
   const profileName = activeResolved.name;
   try {
+    // TRDD-WSPV40Y5 (Q8): a command already switched to local never tries the remote again (it would burn the retry window per file).
+    const latched = latchedLocalFallback();
+    if (latched !== undefined) return await sendToLocalTarget(latched, messages, options.maxTokens, streamingLocalSend(messages, options));
     return await walkProfileChainOnce(activeResolved, messages, options, deps, tool);
   } catch (err) {
     if (!(err instanceof ProfileExhaustedError) || err.kind !== "dynamic" || !isDynamicProfileName(profileName)) {
@@ -3632,6 +3681,11 @@ async function chatCompletionWithProfileFallback(
     // WHY serviceLevel + unrecoverable for the batch (classifyError): with the probe confirming the provider is down, every
     // remaining file would hit the same dead provider, so aborting the batch is correct. Without the probe it would not be.
     const outage = await providerOutageError(profileName, err.causes);
+    // TRDD-WSPV40Y5: a service verdict (outage, no network path, paid credit at zero, refused key) finishes on a ready local
+    // profile; evaluated BEFORE failDynamicProfile, which may spawn an updater. Not ready or failed locally: the verdict below, as before.
+    const facts = { outageConfirmed: outage !== undefined, networkArmed: await giveUpArmed(options.retryClock) };
+    const local = await tryLocalFallback(profileName, err.causes, facts, messages, options.maxTokens, streamingLocalSend(messages, options));
+    if (local !== undefined) return local;
     if (outage !== undefined) throw outage;
     // D2: ONE walk, then the verdict. The actionable form is the static
     // exhaustion carrying the causes classifyError keys on (credit verdict,
@@ -3639,6 +3693,160 @@ async function chatCompletionWithProfileFallback(
     // after the update" path produced, unchanged.
     throw failDynamicProfile(profileName, err.causes, (causes) => new ProfileExhaustedError(profileName, "static", causes));
   }
+}
+
+
+// ── TRDD-WSPV40Y5 (increment 1d): automatic fallback of general commands to a ready local profile ──────────────────────
+
+/** A request the local fallback refused (over the local input budget, or the target is not calibrated for this tool): THIS file fails, the batch goes on (Q9). */
+export class LocalFallbackRefusedError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "LocalFallbackRefusedError";
+  }
+}
+
+
+/** The local target has no calibrated input budget for this tool ("await" or "default" sizing, or a tool outside the task-kind table): not ready, so the fallback does not happen. */
+class LocalFallbackNotReady extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LocalFallbackNotReady";
+  }
+}
+
+/** The ready local target of a command: a HEAD-ONLY copy of the profile and its per-walk deps (noHold). */
+interface LocalFallbackTarget {
+  /** The remote profile the command gave up on. */
+  from: string;
+  target: ResolvedProfile;
+  deps: CompletionDeps;
+}
+
+/**
+ * Q8 (never retry the remote within one command once switched): the latch, keyed by the command usage context exactly like
+ * localSizingMemo, so it dies with the command and a later command tries the remote again. Never a process global.
+ */
+const localFallbackLatch = new WeakMap<object, LocalFallbackTarget>();
+
+function latchedLocalFallback(): LocalFallbackTarget | undefined {
+  const ctx = ctxStore.getStore();
+  return ctx === undefined ? undefined : localFallbackLatch.get(ctx);
+}
+
+/**
+ * The first ready local profile (readyLocalTarget, the 1b no-process readiness check: engine on PATH, HEAD model on disk, ok
+ * record), as a HEAD-ONLY profile. WHY head-only: readiness vouches for the head model alone; walking the profile's other models
+ * could reach one with no weights or no record, i.e. a download or a calibration on a failure path (constraint 1).
+ */
+function localFallbackTarget(from: string): LocalFallbackTarget | undefined {
+  const ready = readyLocalTarget(activeSettings, getConfigDir());
+  if (ready === undefined) return undefined;
+  const full = resolveProfile(ready.profile, activeSettings.profiles[ready.profile]);
+  const target: ResolvedProfile = { ...full, model: ready.model, secondModel: "", thirdModel: "", freeModels: [], paidModels: [], toolModels: {}, reservedSlots: [] };
+  return { from, target, deps: makeProviderDeps(target, makeBackendFromProfile(target), { noHold: true }) };
+}
+
+/** The bytes a request carries (every message content), compared with the local input budget. */
+function requestBytes(messages: readonly ChatMessage[]): number {
+  let n = 0;
+  for (const m of messages) n += Buffer.byteLength(typeof m.content === "string" ? m.content : JSON.stringify(m.content), "utf-8");
+  return n;
+}
+
+/** What a local send gets: the target's head model, a max_tokens clamped to the local sizing, and a fresh retry clock (no give-up window: the target is local). */
+type LocalSend<T> = (model: string, deps: CompletionDeps, o: { maxTokens: number; retryClock: RetryClock }) => Promise<T>;
+
+/**
+ * Sends one request to the local target, after the input-budget check (constraint 3, refuse never truncate). The sizing must
+ * be "calibrated" for the running command's tool (read from ctxStore: the call sites receive tool "default"); "await" or
+ * "default" is not ready and is refused, never waited for.
+ */
+async function sendToLocalTarget<T>(t: LocalFallbackTarget, messages: readonly ChatMessage[], maxTokens: number | undefined, send: LocalSend<T>): Promise<T> {
+  const tool = ctxStore.getStore()?.tool;
+  const sizing = localSizingFor(t.target, tool);
+  if (sizing?.state !== "calibrated") {
+    // Not ready (constraint 1), never a switch: tryLocalFallback reads this as "no local target" and changes nothing.
+    throw new LocalFallbackNotReady(`local profile '${t.target.name}' (model ${t.target.model}) has no calibrated input budget for ${tool ?? "this call"}; the local fallback does not wait for a calibration`);
+  }
+  const bytes = requestBytes(messages);
+  if (bytes > sizing.windowBudgetBytes) {
+    throw new LocalFallbackRefusedError(`request of ${bytes} bytes is over the local input budget of ${sizing.windowBudgetBytes} bytes of model ${t.target.model} (profile '${t.target.name}'); refused, never truncated`);
+  }
+  return send(t.target.model, t.deps, { maxTokens: Math.min(maxTokens ?? sizing.maxTokens, sizing.maxTokens), retryClock: {} });
+}
+
+/**
+ * THE shared fallback step of every call site (the chain walk, the free rotation, the check_imports JSON rotation). Given the
+ * causes of a remote failure just caught, returns the local answer, or undefined when the failure stays in-profile: the active
+ * profile is local or not a built-in dynamic one (static user-defined profiles do NOT fall back: the 2026-09-17 ruling, agent
+ * decision Q5 of 2026-11-14), the causes give no service verdict (fallbackVerdict), or NO local profile is ready, in which case
+ * nothing at all changes (no line, no process). WHY before failDynamicProfile: it can spawn a profile updater, which no
+ * fallback trigger wants (item 5: none can succeed against a dead service, an empty wallet or a refused key).
+ * When a target was ready but the local send fails, one stderr line says why and the caller throws its ORIGINAL verdict
+ * (fail fast, nothing masked). WHY the line goes to stderr and not into the error: classifyError reads the error message, and
+ * a local error text appended to it (an "API error 4xx" of the local server) could change the verdict of the remote failure.
+ * An over-budget request is the exception (Q9): the command stays latched on local and THIS file fails with the refusal, so
+ * the other files go on locally instead of the batch aborting on a serviceLevel remote verdict.
+ */
+async function tryLocalFallback<T>(
+  profileName: string,
+  causes: readonly unknown[],
+  facts: FallbackFacts,
+  messages: readonly ChatMessage[],
+  maxTokens: number | undefined,
+  send: LocalSend<T>,
+): Promise<T | undefined> {
+  if (activeResolved === null || activeResolved.isLocal || activeResolved.mode === "local" || !isDynamicProfileName(profileName)) return undefined;
+  const trigger = fallbackVerdict(causes, profileName, facts);
+  if (trigger === undefined) return undefined;
+  const ctx = ctxStore.getStore();
+  // Outside a command there is no tool to size the local request for, so nothing can be sent locally: unchanged behaviour.
+  if (ctx === undefined) return undefined;
+  const t = latchedLocalFallback() ?? localFallbackTarget(profileName);
+  if (t === undefined) return undefined;
+  // WHY latched only once the local side answered or refused by budget (Q8, Q9): the warning says "answered locally", and a
+  // target that failed must not pull the next files away from the remote verdict. First latch prints, a concurrent one does not.
+  const latch = () => {
+    if (localFallbackLatch.has(ctx)) return;
+    localFallbackLatch.set(ctx, t);
+    process.stderr.write(fallbackWarning(trigger, profileName, t.target.name, t.target.model));
+  };
+  try {
+    const answer = await sendToLocalTarget(t, messages, maxTokens, send);
+    latch();
+    return answer;
+  } catch (localErr) {
+    // Not ready for this tool: exactly the no-ready-local case, no line, no latch, the caller throws its verdict.
+    if (localErr instanceof LocalFallbackNotReady) return undefined;
+    if (localErr instanceof LocalFallbackRefusedError) {
+      latch();
+      throw localErr;
+    }
+    // The local target failed: unlatch so the next file does not repeat a dead local send, and let the caller throw its verdict.
+    if (localFallbackLatch.get(ctx) === t) localFallbackLatch.delete(ctx);
+    process.stderr.write(`[llm-externalizer] the local fallback to profile '${t.target.name}' (model ${t.target.model}) failed too: ${failureText(localErr).split("\n")[0].slice(0, 300)}\n`);
+    return undefined;
+  }
+}
+
+/** Whether the 1b give-up window of this dispatch armed (its strict probe got no genuine provider answer and a local target was ready). */
+async function giveUpArmed(clock: RetryClock | undefined): Promise<boolean> {
+  const armed = clock?.networkGiveUp?.armed;
+  return armed === undefined ? false : armed;
+}
+
+/** Remote request options a local send must not carry: the remote model, route, OpenRouter provider routing and prompt cache, and the remote clock. */
+function localSendOptions<O extends object>(options: O): O {
+  return { ...options, model: undefined, route: undefined, provider: undefined, cache: undefined, deadlineAt: undefined, retryClock: undefined, modelOverride: undefined };
+}
+
+/** The streaming local send (chain walk and free rotation): the head model on its own primary route, a breaker verdict thrown, never returned as content. */
+function streamingLocalSend(messages: ChatMessage[], options: object): LocalSend<StreamingResult> {
+  return async (model, deps, o) =>
+    ensureNotServiceAbort(
+      await chatCompletionWithRetry(messages, { ...localSendOptions(options), model, route: deps.routeForModel(model) ?? undefined, maxTokens: o.maxTokens, retryClock: o.retryClock, localFallback: true }, deps),
+    );
 }
 
 async function ensembleStreaming(

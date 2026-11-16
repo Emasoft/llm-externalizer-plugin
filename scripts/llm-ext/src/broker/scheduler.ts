@@ -88,6 +88,8 @@ export interface Job {
   timeoutMs: number;
   /** This job's queue timeout (--queue_timeout, else T): once its deadline nears, its model is rotated in after the current minimum slice (spec 6). Waiting is never an error. */
   queueTimeoutMs: number;
+  /** TRDD-WSPV40Y5 (Q6): the client asked that this job FAIL rather than be held for a calibration (NO_HOLD_HEADER). */
+  noHold?: boolean;
   submittedAt: number;
   /** P6: time spent held for calibration before release (excluded from the retry clock like queue time); submittedAt restarts at release. */
   heldMs?: number;

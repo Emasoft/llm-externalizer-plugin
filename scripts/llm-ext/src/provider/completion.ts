@@ -454,6 +454,9 @@ export interface SimpleCompletionOptions {
    *  leaves it undefined and resolveConnection falls back to
    *  deps.routeForModel(model) — the first serving group, pre-D6a behaviour. */
   route?: ResolvedRoute;
+  /** TRDD-WSPV40Y5: this send is the local fallback of a general command; the SERVICE_HEALTH breaker of the remote service it
+   *  replaced is neither consulted nor fed. Control field: never part of the request body. Undefined/false: unchanged. */
+  localFallback?: boolean;
   /** Absolute epoch-ms end of the retry window (TRDD-YG72CYY7). Omitted =>
    *  chatCompletionWithRetry starts a RETRY_DEADLINE_MS window at the call's
    *  FIRST failure. It gates only the start of new attempts/waits; a request
@@ -549,7 +552,8 @@ function sendChat(
   if (conn.broker) {
     return brokerExchange(
       conn.broker,
-      { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
+      // noHold: TRDD-WSPV40Y5 (Q6), set only by the per-walk deps of the local fallback.
+      { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs, noHold: conn.broker.noHold },
       // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
       // signal: brokerExchange cancels (DELETE) the pending job on abort (see the sendChat parameter comment).
       { scope, signal, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms), reconnect: conn.broker.reconnect },
@@ -1441,7 +1445,10 @@ export async function chatCompletionWithRetry(
   // Check global service health before attempting. The shared clock (when
   // given) is passed so a call entering under an already-started clock never
   // sleeps a breaker rung that does not fit (N8).
-  const healthAbort = await checkServiceHealthOrWait(options.retryClock, options.signal);
+  // TRDD-WSPV40Y5: a local-fallback send never waits on, nor is aborted by, the SERVICE_HEALTH breaker: the breaker counted the
+  // failures of the REMOTE service the command just gave up on, and the local target is another service (with 5 remote failures
+  // counted, every local send would otherwise sleep the 60 s rung or abort as "SERVER ISSUE DETECTED").
+  const healthAbort = options.localFallback === true ? null : await checkServiceHealthOrWait(options.retryClock, options.signal);
   if (healthAbort) {
     return {
       content: healthAbort,
@@ -1580,7 +1587,8 @@ export async function chatCompletionWithRetry(
       // YG72CYY7 D4: a stop verdict (TLS) cannot heal by waiting, so it is not breaker food; refused connections and DNS budgets still are.
       // Request/auth refusals are not outages; their existing retry policy stays separate.
       const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
-      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err)?.final !== "stop")
+      // TRDD-WSPV40Y5: a local-fallback failure is not remote-service breaker food either (it is another service).
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err)?.final !== "stop" && options.localFallback !== true)
         recordServiceFailure();
       // Bumped unconditionally even for a deterministic4xx/price-ceiling
       // refusal that throws below without ever reading it again this call —
@@ -1702,7 +1710,7 @@ export async function chatCompletionWithRetry(
         process.stderr.write(
           `[model-retry] ${retryModel}: request error: ${errMsg} — retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})\n`,
         );
-        const abort = await checkServiceHealthOrWait(clock, options.signal);
+        const abort = options.localFallback === true ? null : await checkServiceHealthOrWait(clock, options.signal); // TRDD-WSPV40Y5: see the call start
         if (abort) {
           return {
             content: abort,
@@ -1740,7 +1748,7 @@ export async function chatCompletionWithRetry(
     // Note: some providers return finishReason="stop" with empty content for
     // problematic prompts. We treat that as an empty response (retryable).
     if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess(); // TRDD-WSPV40Y5: a local answer says nothing about the remote service
       // Task #189c: a content-bearing success HEALS any no-content demotion —
       // the strike store is read-first, so this is a no-op unless strikes exist.
       clearNoContentStrikes(options.model || backend.model || "");
@@ -1768,7 +1776,7 @@ export async function chatCompletionWithRetry(
       // O5: the options ACTUALLY used for the request (recorded by chatCompletionSimple), not a second resolution that a settings reload could change.
       const ro = call.requestOptions ?? null;
       if (ro !== null) {
-        recordServiceSuccess();
+        if (options.localFallback !== true) recordServiceSuccess(); // TRDD-WSPV40Y5: a local answer says nothing about the remote service
         throw new OutputLimitError({
           tool: ctxStore.getStore()?.tool,
           model: resp.model || options.model || backend.model || "unknown",
@@ -1799,7 +1807,7 @@ export async function chatCompletionWithRetry(
     // Falling through routes it to that ladder: retry with less reasoning until
     // real content comes back.
     if (resp.finishReason === "length" && resp.content.trim().length > 0) {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess(); // TRDD-WSPV40Y5: a local answer says nothing about the remote service
       resp.truncated = true;
       resp.content +=
         "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
@@ -1811,7 +1819,7 @@ export async function chatCompletionWithRetry(
 
     // "content_filter" — provider blocked the response. Deterministic, don't retry.
     if (resp.finishReason === "content_filter") {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess(); // TRDD-WSPV40Y5: a local answer says nothing about the remote service
       resp.truncated = true;
       resp.content +=
         "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry — the block is deterministic for this prompt.";
@@ -1839,7 +1847,7 @@ export async function chatCompletionWithRetry(
     // branches above never fire), five sporadic timeouts spread over hours of
     // healthy 200s still summed to the threshold and produced the exact false
     // SERVER ISSUE verdict the transport-only change was written to eliminate.
-    recordServiceSuccess();
+    if (options.localFallback !== true) recordServiceSuccess(); // TRDD-WSPV40Y5: a local answer says nothing about the remote service
     const isEmpty = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
 
@@ -1992,7 +2000,7 @@ export async function chatCompletionWithRetry(
       process.stderr.write(
         `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) — retrying (${currentAttempt}/${limit})\n`,
       );
-      const abort = await checkServiceHealthOrWait(clock, options.signal);
+      const abort = options.localFallback === true ? null : await checkServiceHealthOrWait(clock, options.signal); // TRDD-WSPV40Y5: see the call start
       // Round C item 2 (N4): a breaker wait that returned null can still have
       // marked the clock expired (waitFitsClock's refusal side effect); and
       // any wait here can straddle deadlineAt. When the window closed during

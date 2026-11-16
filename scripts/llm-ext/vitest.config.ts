@@ -195,6 +195,10 @@ export default defineConfig({
       'src/network-give-up.test.ts',
       // TRDD-PN0N4290: the give-up window through the real completion layer and index.ts's dispatch clock (the include list is explicit).
       'src/network-give-up-dispatch.test.ts',
+      // TRDD-WSPV40Y5: which remote failures fall back to a ready local profile, and the warning texts (real errors from a real closed port and a real .invalid host).
+      'src/remote-fallback.test.ts',
+      // TRDD-WSPV40Y5: the local fallback through real dispatch (index.ts call sites, latch, budget refusal, unchanged not-ready path) and the broker noHold flag.
+      'src/local-fallback-dispatch.test.ts',
       'src/retry-clock-consumers.test.ts',
       // Single-profile fallback iterator (phase 14.1-C1, TRDD-OE27RD7I
       // addenda 2/3/4): walks ONLY the resolved profile's own model chain,

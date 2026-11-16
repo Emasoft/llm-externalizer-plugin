@@ -313,3 +313,13 @@ network_give_up_seconds: 30        # top-level key, integer 1-3600; absent = 30
 
 - The flag `--network_give_up <s>` (alias `--network-give-up`; `=` or a space; whole seconds) overrides the key for one command. A malformed key or flag value fails at once; it is never read as the default.
 - A local active profile has no remote to give up on: the window is not set.
+
+What happens after the give-up (automatic local fallback):
+
+- On the built-in `free` and `paid` profiles the command finishes on the ready local profile instead of failing. The same switch happens, with no window involved, when a provider outage is confirmed (two or more models of one provider failing with 5xx, timeouts or network errors AND its reachability probe failing), when every model of `paid` answers a certain 402 (credit at zero), and when the API key is refused (401/403). A request-specific error (400, 413, a context overflow) and a dead model inside a healthy service never switch.
+- Only the head model of the local profile is sent to, and its broker job never waits for a calibration: a missing or stale calibration record fails the local send instead.
+- One stderr warning names the reason, the local profile and model, and the remote profile. Fixed texts: `credit exhausted on the paid profile: top up; answered locally` and `the API key was refused (401/403): fix it; answered locally`.
+- The switch is final for that command: its later requests go straight to the local profile. The next command tries the remote service again.
+- A request larger than the local input budget is refused for that file (the message names the bytes, the budget and the model), never truncated; the other files go on locally.
+- If the local send itself fails, one stderr line says why and the remote error is reported exactly as before. With no local profile ready, nothing changes at all.
+- A static profile you wrote yourself never switches: its call ends with the network error.

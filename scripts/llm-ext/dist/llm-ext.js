@@ -239999,7 +239999,7 @@ function readCalibratorState(dir) {
 async function isRunnerOf(dir, pid) {
   return readCalibratorState(dir)?.pid === pid && await isCalibratorProcess(pid);
 }
-var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, BROKER_ARGV, CALIBRATE_ARGV, LEGACY_BROKER_STATE_FILES, calibratorStatePath;
+var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, NO_HOLD_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, BROKER_ARGV, CALIBRATE_ARGV, LEGACY_BROKER_STATE_FILES, calibratorStatePath;
 var init_protocol = __esm({
   "src/broker/protocol.ts"() {
     "use strict";
@@ -240011,6 +240011,7 @@ var init_protocol = __esm({
     ENGINE_HEADER = "x-llm-ext-engine";
     TIMEOUT_HEADER = "x-llm-ext-timeout-ms";
     QUEUE_TIMEOUT_HEADER = "x-llm-ext-queue-timeout-ms";
+    NO_HOLD_HEADER = "x-llm-ext-no-hold";
     STATE_HEADER = "x-llm-ext-job-state";
     DISPATCHED_HEADER = "x-llm-ext-dispatched-at";
     HELD_HEADER = "x-llm-ext-held";
@@ -241208,6 +241209,7 @@ async function brokerExchange(ep, req, opts = {}) {
           [TIMEOUT_HEADER]: String(req.timeoutMs)
         };
         if (req.queueTimeoutMs !== void 0) h[QUEUE_TIMEOUT_HEADER] = String(req.queueTimeoutMs);
+        if (req.noHold === true) h[NO_HOLD_HEADER] = "1";
         const target = cur;
         const post = (async () => {
           const res2 = await fetch(`${target.url}/v1/jobs`, { method: "POST", headers: h, body: req.body }).catch((e) => {
@@ -282923,7 +282925,8 @@ function sendChat(conn, body, time3, rl429, clock, scope, signal) {
   if (conn.broker) {
     return brokerExchange(
       conn.broker,
-      { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs },
+      // noHold: TRDD-WSPV40Y5 (Q6), set only by the per-walk deps of the local fallback.
+      { engine: conn.broker.engine, body: JSON.stringify(body), model: conn.model, ctx: conn.broker.ctx, timeoutMs: conn.timeout, queueTimeoutMs: conn.broker.queueTimeoutMs, noHold: conn.broker.noHold },
       // Queue time goes on the CALL (review M10), never on the shared clock; clockForCall applies it to this call's deadline.
       // signal: brokerExchange cancels (DELETE) the pending job on abort (see the sendChat parameter comment).
       { scope, signal, onQueued: (ms) => scope && (scope.brokerQueuedMs = (scope.brokerQueuedMs ?? 0) + ms), reconnect: conn.broker.reconnect }
@@ -283297,7 +283300,7 @@ function retryDeadlineError(clock, cause, backendType, opts) {
 }
 async function chatCompletionWithRetry(messages, options, deps) {
   const backend = deps.getBackend();
-  const healthAbort = await checkServiceHealthOrWait(options.retryClock, options.signal);
+  const healthAbort = options.localFallback === true ? null : await checkServiceHealthOrWait(options.retryClock, options.signal);
   if (healthAbort) {
     return {
       content: healthAbort,
@@ -283349,7 +283352,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       const isIronRuleRefusal = errMsg.startsWith(IRON_RULE_REFUSAL_PREFIX);
       const deterministic4xx = /\bAPI error (402|403|404|410)\b/.test(errMsg);
       const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
-      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err3)?.final !== "stop")
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err3)?.final !== "stop" && options.localFallback !== true)
         recordServiceFailure();
       genericAttempts++;
       const currentModelId = options.model || backend.model || "unknown";
@@ -283393,7 +283396,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
           `[model-retry] ${retryModel}: request error: ${errMsg} \u2014 retrying (${genericAttempts}/${MAX_TRUNCATION_RETRIES})
 `
         );
-        const abort = await checkServiceHealthOrWait(clock, options.signal);
+        const abort = options.localFallback === true ? null : await checkServiceHealthOrWait(clock, options.signal);
         if (abort) {
           return {
             content: abort,
@@ -283417,7 +283420,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       throw err3;
     }
     if (resp.finishReason === "stop" && !resp.truncated && resp.content.trim().length > 0) {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess();
       clearNoContentStrikes(options.model || backend.model || "");
       markCredentialSucceeded(
         backend.type,
@@ -283430,7 +283433,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
     if (resp.finishReason === "length") {
       const ro = call.requestOptions ?? null;
       if (ro !== null) {
-        recordServiceSuccess();
+        if (options.localFallback !== true) recordServiceSuccess();
         throw new OutputLimitError({
           tool: ctxStore.getStore()?.tool,
           model: resp.model || options.model || backend.model || "unknown",
@@ -283442,7 +283445,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       }
     }
     if (resp.finishReason === "length" && resp.content.trim().length > 0) {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess();
       resp.truncated = true;
       resp.content += "\n\n---\n**TRUNCATED**: Response hit the output-token limit (finish_reason=length). The analysis above is cut off mid-generation.";
       process.stderr.write(
@@ -283452,7 +283455,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       return resp;
     }
     if (resp.finishReason === "content_filter") {
-      recordServiceSuccess();
+      if (options.localFallback !== true) recordServiceSuccess();
       resp.truncated = true;
       resp.content += "\n\n---\n**BLOCKED**: The provider's content filter blocked this response (finish_reason=content_filter). No retry \u2014 the block is deterministic for this prompt.";
       process.stderr.write(
@@ -283461,7 +283464,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
       );
       return resp;
     }
-    recordServiceSuccess();
+    if (options.localFallback !== true) recordServiceSuccess();
     const isEmpty2 = resp.content.trim().length === 0;
     const reasonLabel = resp.finishReason || "empty";
     const ladderModel = options.model || backend.model;
@@ -283530,7 +283533,7 @@ async function chatCompletionWithRetry(messages, options, deps) {
         `[llm-externalizer] ${useEmptyBudget ? "Empty" : "Invalid"} response (finish_reason=${reasonLabel}) \u2014 retrying (${currentAttempt}/${limit})
 `
       );
-      const abort = await checkServiceHealthOrWait(clock, options.signal);
+      const abort = options.localFallback === true ? null : await checkServiceHealthOrWait(clock, options.signal);
       if (retryWindowClosed(clock) && !abort) {
         closedByWindow = true;
       } else if (abort) {
@@ -285268,6 +285271,33 @@ var init_scan = __esm({
   }
 });
 
+// src/remote-fallback.ts
+function fallbackVerdict(causes, profileName, facts) {
+  if (causes.length === 0) return void 0;
+  if (facts.outageConfirmed) return "outage";
+  if (facts.networkArmed && isNetworkIsolation(causes.map((c) => freeFailureCause("cause", c, failureText(c))))) return "network";
+  const texts = causes.map(failureText);
+  const certain402 = (m) => paymentErrorCertainty(m) === "certain";
+  if (texts.some((m) => KEY_REFUSED_RE.test(m)) && texts.every((m) => KEY_REFUSED_RE.test(m) || certain402(m))) return "key";
+  if (profileName === "paid" && texts.every(certain402)) return "credit";
+  return void 0;
+}
+function fallbackWarning(trigger, from, target, model) {
+  const why = trigger === "credit" ? "credit exhausted on the paid profile: top up; answered locally" : trigger === "key" ? "the API key was refused (401/403): fix it; answered locally" : trigger === "outage" ? "the remote provider appears to be down; answered locally" : "no network path to the remote provider; answered locally";
+  return `[llm-externalizer] ${why} by profile '${target}' (model ${model}) instead of '${from}' for the rest of this command; answers are degraded
+`;
+}
+var KEY_REFUSED_RE;
+var init_remote_fallback = __esm({
+  "src/remote-fallback.ts"() {
+    "use strict";
+    init_free_mode();
+    init_free_failure_cause();
+    init_http();
+    KEY_REFUSED_RE = /API error 40[13]\b/;
+  }
+});
+
 // src/or-model-info.ts
 function sortedPercentiles(obj) {
   if (!obj || typeof obj !== "object") return [];
@@ -285794,6 +285824,7 @@ var init_or_model_info = __esm({
 var index_exports = {};
 __export(index_exports, {
   FREE_FLOOR_MIN_CONTEXT_TOKENS: () => FREE_FLOOR_MIN_CONTEXT_TOKENS,
+  LocalFallbackRefusedError: () => LocalFallbackRefusedError,
   OUTAGE_PROBE_TIMEOUT_MS: () => OUTAGE_PROBE_TIMEOUT_MS,
   ServiceAbortError: () => ServiceAbortError,
   __activeFreePoolForTests: () => __activeFreePoolForTests,
@@ -286415,7 +286446,7 @@ function routeHeaders(profile, route) {
   }
   return h;
 }
-function providerDepsFrom(getProfile, getBackend) {
+function providerDepsFrom(getProfile, getBackend, noHold = false) {
   return {
     getBackend,
     apiHeaders: () => apiHeaders(getProfile(), getBackend()),
@@ -286463,13 +286494,14 @@ function providerDepsFrom(getProfile, getBackend) {
         ctx: brokerSlotCtx(r.contextWindow),
         queueTimeoutMs: brokerQueueTimeoutMs(),
         // P6 (review F1): after a broker exit gave a held job back, the call submits it to the current broker.
-        reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true })
+        reconnect: () => ensureBroker({ dir: getConfigDir(), version: brokerClientVersion(), fresh: true }),
+        ...noHold ? { noHold: true } : {}
       };
     }
   };
 }
-function makeProviderDeps(profile, backend) {
-  return providerDepsFrom(() => profile, () => backend);
+function makeProviderDeps(profile, backend, o = {}) {
+  return providerDepsFrom(() => profile, () => backend, o.noHold === true);
 }
 function __providerDepsForTests() {
   return providerDeps;
@@ -286708,6 +286740,7 @@ function classifyError(error62) {
   }
   if (msg.startsWith(IRON_RULE_REFUSAL_PREFIX)) return { unrecoverable: true, serviceLevel: true, reason: msg };
   if (msg.startsWith(OUTPUT_LIMIT_PREFIX)) return { unrecoverable: true, serviceLevel: false, reason: msg, countsAsFailure: true };
+  if (error62 instanceof LocalFallbackRefusedError) return { unrecoverable: true, serviceLevel: false, reason: msg, countsAsFailure: true };
   if (/API error 401\b/.test(msg))
     return {
       unrecoverable: true,
@@ -287092,6 +287125,13 @@ function exhaustedFreeRotation(name, err3) {
   const causes = err3.causes.map(freeFailureCauseToError);
   return failDynamicProfile(name, causes, () => err3, causes.slice(-1));
 }
+async function freeRotationLocalFallback(err3, messages, maxTokens, clock, send) {
+  if (!(err3 instanceof AllFreeModelsExhaustedError) && !(err3 instanceof FreeRotationNetworkError)) return void 0;
+  const name = activeResolved?.name;
+  if (name === void 0) return void 0;
+  const causes = err3.causes.map(freeFailureCauseToError);
+  return tryLocalFallback(name, causes, { outageConfirmed: false, networkArmed: await giveUpArmed(clock) }, messages, maxTokens, send);
+}
 function __freeRotationExhaustedForTests(name, err3) {
   return exhaustedFreeRotation(name, err3);
 }
@@ -287100,6 +287140,8 @@ function ensureNotServiceAbort(resp) {
   return resp;
 }
 async function callSingleWithFreeRotation(primary, fallbacks, messages, options) {
+  const latched = latchedLocalFallback();
+  if (latched !== void 0) return sendToLocalTarget(latched, messages, options.maxTokens, streamingLocalSend(messages, options));
   try {
     return ensureNotServiceAbort(
       await callWithFreeRotation(
@@ -287126,14 +287168,24 @@ async function callSingleWithFreeRotation(primary, fallbacks, messages, options)
       )
     );
   } catch (err3) {
+    const local = await freeRotationLocalFallback(err3, messages, options.maxTokens, options.retryClock, streamingLocalSend(messages, options));
+    if (local !== void 0) return local;
     throw freeRotationExhausted(err3);
   }
 }
 async function chatCompletionJSONWithFreeRotation(messages, options) {
   const scoped = { ...options, retryClock: { networkGiveUp: newNetworkGiveUp() } };
   const pool = isFreeModeActive() ? buildFreeRotationPool() : [];
+  const localSend = (model, deps, o) => chatCompletionJSON(messages, { ...localSendOptions(options), model, maxTokens: o.maxTokens, retryClock: o.retryClock }, deps);
+  const latched = latchedLocalFallback();
+  if (latched !== void 0) return sendToLocalTarget(latched, messages, options.maxTokens, localSend);
   if (pool.length === 0) {
-    return chatCompletionJSON(messages, scoped, providerDeps);
+    return chatCompletionJSON(messages, scoped, providerDeps).catch(async (err3) => {
+      const name = activeResolved?.name;
+      const local = name === void 0 ? void 0 : await tryLocalFallback(name, [err3], { outageConfirmed: false, networkArmed: await giveUpArmed(scoped.retryClock) }, messages, options.maxTokens, localSend);
+      if (local !== void 0) return local;
+      throw err3;
+    });
   }
   try {
     return await callWithFreeRotation(
@@ -287154,6 +287206,8 @@ async function chatCompletionJSONWithFreeRotation(messages, options) {
       }
     );
   } catch (err3) {
+    const local = await freeRotationLocalFallback(err3, messages, options.maxTokens, scoped.retryClock, localSend);
+    if (local !== void 0) return local;
     throw freeRotationExhausted(err3);
   }
 }
@@ -287205,15 +287259,89 @@ async function chatCompletionWithProfileFallback(messages, options, deps, tool =
   }
   const profileName = activeResolved.name;
   try {
+    const latched = latchedLocalFallback();
+    if (latched !== void 0) return await sendToLocalTarget(latched, messages, options.maxTokens, streamingLocalSend(messages, options));
     return await walkProfileChainOnce(activeResolved, messages, options, deps, tool);
   } catch (err3) {
     if (!(err3 instanceof ProfileExhaustedError) || err3.kind !== "dynamic" || !isDynamicProfileName(profileName)) {
       throw err3;
     }
     const outage = await providerOutageError(profileName, err3.causes);
+    const facts = { outageConfirmed: outage !== void 0, networkArmed: await giveUpArmed(options.retryClock) };
+    const local = await tryLocalFallback(profileName, err3.causes, facts, messages, options.maxTokens, streamingLocalSend(messages, options));
+    if (local !== void 0) return local;
     if (outage !== void 0) throw outage;
     throw failDynamicProfile(profileName, err3.causes, (causes) => new ProfileExhaustedError(profileName, "static", causes));
   }
+}
+function latchedLocalFallback() {
+  const ctx = ctxStore.getStore();
+  return ctx === void 0 ? void 0 : localFallbackLatch.get(ctx);
+}
+function localFallbackTarget(from) {
+  const ready = readyLocalTarget(activeSettings, getConfigDir());
+  if (ready === void 0) return void 0;
+  const full = resolveProfile(ready.profile, activeSettings.profiles[ready.profile]);
+  const target = { ...full, model: ready.model, secondModel: "", thirdModel: "", freeModels: [], paidModels: [], toolModels: {}, reservedSlots: [] };
+  return { from, target, deps: makeProviderDeps(target, makeBackendFromProfile(target), { noHold: true }) };
+}
+function requestBytes(messages) {
+  let n = 0;
+  for (const m of messages) n += Buffer.byteLength(typeof m.content === "string" ? m.content : JSON.stringify(m.content), "utf-8");
+  return n;
+}
+async function sendToLocalTarget(t, messages, maxTokens, send) {
+  const tool = ctxStore.getStore()?.tool;
+  const sizing = localSizingFor(t.target, tool);
+  if (sizing?.state !== "calibrated") {
+    throw new LocalFallbackNotReady(`local profile '${t.target.name}' (model ${t.target.model}) has no calibrated input budget for ${tool ?? "this call"}; the local fallback does not wait for a calibration`);
+  }
+  const bytes = requestBytes(messages);
+  if (bytes > sizing.windowBudgetBytes) {
+    throw new LocalFallbackRefusedError(`request of ${bytes} bytes is over the local input budget of ${sizing.windowBudgetBytes} bytes of model ${t.target.model} (profile '${t.target.name}'); refused, never truncated`);
+  }
+  return send(t.target.model, t.deps, { maxTokens: Math.min(maxTokens ?? sizing.maxTokens, sizing.maxTokens), retryClock: {} });
+}
+async function tryLocalFallback(profileName, causes, facts, messages, maxTokens, send) {
+  if (activeResolved === null || activeResolved.isLocal || activeResolved.mode === "local" || !isDynamicProfileName(profileName)) return void 0;
+  const trigger = fallbackVerdict(causes, profileName, facts);
+  if (trigger === void 0) return void 0;
+  const ctx = ctxStore.getStore();
+  if (ctx === void 0) return void 0;
+  const t = latchedLocalFallback() ?? localFallbackTarget(profileName);
+  if (t === void 0) return void 0;
+  const latch = () => {
+    if (localFallbackLatch.has(ctx)) return;
+    localFallbackLatch.set(ctx, t);
+    process.stderr.write(fallbackWarning(trigger, profileName, t.target.name, t.target.model));
+  };
+  try {
+    const answer = await sendToLocalTarget(t, messages, maxTokens, send);
+    latch();
+    return answer;
+  } catch (localErr) {
+    if (localErr instanceof LocalFallbackNotReady) return void 0;
+    if (localErr instanceof LocalFallbackRefusedError) {
+      latch();
+      throw localErr;
+    }
+    if (localFallbackLatch.get(ctx) === t) localFallbackLatch.delete(ctx);
+    process.stderr.write(`[llm-externalizer] the local fallback to profile '${t.target.name}' (model ${t.target.model}) failed too: ${failureText(localErr).split("\n")[0].slice(0, 300)}
+`);
+    return void 0;
+  }
+}
+async function giveUpArmed(clock) {
+  const armed = clock?.networkGiveUp?.armed;
+  return armed === void 0 ? false : armed;
+}
+function localSendOptions(options) {
+  return { ...options, model: void 0, route: void 0, provider: void 0, cache: void 0, deadlineAt: void 0, retryClock: void 0, modelOverride: void 0 };
+}
+function streamingLocalSend(messages, options) {
+  return async (model, deps, o) => ensureNotServiceAbort(
+    await chatCompletionWithRetry(messages, { ...localSendOptions(options), model, route: deps.routeForModel(model) ?? void 0, maxTokens: o.maxTokens, retryClock: o.retryClock, localFallback: true }, deps)
+  );
 }
 async function ensembleStreaming(messages, callerOptions, ensemble, fileLineCount, retryClock = {}) {
   const freeMode = isFreeModeActive();
@@ -290528,7 +290656,7 @@ function writeBootBanner() {
   process.stderr.write(`Session log: ${LOG_FILE}
 `);
 }
-var localSizingMemo, SETTINGS_FILE, settingsValid, settingsError, activeSettings, activeResolved, profileSelectionSource, DEFAULT_OPENROUTER_RPS, DEFAULT_MAX_IN_FLIGHT_REMOTE, DEFAULT_TEMPERATURE, SOFT_TIMEOUT_MS, FALLBACK_CONTEXT_LENGTH, MODEL_CACHE_TTL_MS, RELOAD_VERSION, currentBackend, inlineRegeneratedThisProcess, openRouterModelCache, openRouterCacheTime, cachedRateLimitConfig, rateLimitCacheTime, session, creditExhausted, forceFreeByMasterSwitch, _activeRequests, _activeRequestsDrained, SESSION_ID, SESSION_START, LOG_DIR, LOG_FILE, STATS_FILE, providerDeps, OUTAGE_PROBE_TIMEOUT_MS, ProviderOutageError, SERVICE_LEVEL_STATUS_RE, NON_TRANSIENT_4XX_RE, RECONCILE_SKIP_TOOLS, scoutingOnlyTools, ServiceAbortError, LLM_TOOLS_SET, _booted;
+var localSizingMemo, SETTINGS_FILE, settingsValid, settingsError, activeSettings, activeResolved, profileSelectionSource, DEFAULT_OPENROUTER_RPS, DEFAULT_MAX_IN_FLIGHT_REMOTE, DEFAULT_TEMPERATURE, SOFT_TIMEOUT_MS, FALLBACK_CONTEXT_LENGTH, MODEL_CACHE_TTL_MS, RELOAD_VERSION, currentBackend, inlineRegeneratedThisProcess, openRouterModelCache, openRouterCacheTime, cachedRateLimitConfig, rateLimitCacheTime, session, creditExhausted, forceFreeByMasterSwitch, _activeRequests, _activeRequestsDrained, SESSION_ID, SESSION_START, LOG_DIR, LOG_FILE, STATS_FILE, providerDeps, OUTAGE_PROBE_TIMEOUT_MS, ProviderOutageError, SERVICE_LEVEL_STATUS_RE, NON_TRANSIENT_4XX_RE, RECONCILE_SKIP_TOOLS, scoutingOnlyTools, ServiceAbortError, LocalFallbackRefusedError, LocalFallbackNotReady, localFallbackLatch, LLM_TOOLS_SET, _booted;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
@@ -290590,6 +290718,7 @@ var init_index = __esm({
     init_model_reconcile();
     init_config();
     init_network_give_up();
+    init_remote_fallback();
     init_default_profiles_state();
     init_free_failure_cause();
     init_dynamic_candidates();
@@ -290760,6 +290889,19 @@ Settings file: ${SETTINGS_FILE}`;
         this.name = "ServiceAbortError";
       }
     };
+    LocalFallbackRefusedError = class extends Error {
+      constructor(message, options) {
+        super(message, options);
+        this.name = "LocalFallbackRefusedError";
+      }
+    };
+    LocalFallbackNotReady = class extends Error {
+      constructor(message) {
+        super(message);
+        this.name = "LocalFallbackNotReady";
+      }
+    };
+    localFallbackLatch = /* @__PURE__ */ new WeakMap();
     LLM_TOOLS_SET = /* @__PURE__ */ new Set([
       "chat",
       "code_task",
@@ -291043,13 +291185,20 @@ async function runBroker(o) {
       finish(j, "failed", error62);
     }
   };
-  const holdQueued = (key) => {
+  const holdQueued = (key, why) => {
+    let heldCount = 0;
     for (const j of sched.allQueued(key)) {
       sched.remove(j);
+      if (j.noHold === true) {
+        finish(j, "failed", why);
+        continue;
+      }
       j.state = "held";
       held.set(j.id, j);
       notify(j);
+      heldCount++;
     }
+    return heldCount;
   };
   const failModel = (engine, model, error62) => {
     for (const j of sched.allQueued()) {
@@ -291326,8 +291475,9 @@ async function runBroker(o) {
         }
         o.log(`model '${first.model}' (${engine}): ${stale}; its queued jobs are held again until it is calibrated`);
         staleRecords.set(mk, { stamp: recordStamp(engine, first.model), at: Date.now() });
-        holdQueued(key);
-        requestCalibration(engine, first.model, "stale");
+        if (holdQueued(key, `model '${first.model}' (${engine}): ${stale}; the local fallback does not wait for a recalibration`) > 0) {
+          requestCalibration(engine, first.model, "stale");
+        }
         return;
       }
       staleLoads.delete(mk);
@@ -291621,6 +291771,7 @@ async function runBroker(o) {
         body,
         timeoutMs: intHeader(req, TIMEOUT_HEADER, DEFAULT_EXEC_TIMEOUT_MS),
         queueTimeoutMs: intHeader(req, QUEUE_TIMEOUT_HEADER, t.starveMs),
+        noHold: req.headers[NO_HOLD_HEADER] === "1",
         submittedAt: now4,
         lastPolledAt: now4,
         pollers: 0,
@@ -291630,6 +291781,11 @@ async function runBroker(o) {
       lastRequestAt = now4;
       const verdict = calibrationVerdict(engine, model);
       if (verdict.state === "missing") {
+        if (job.noHold === true) {
+          finish(job, "failed", `model '${model}' (${engine}) has no complete calibration record; the local fallback does not wait for a calibration`);
+          reply(res, 202, { job: job.id });
+          return;
+        }
         job.state = "held";
         held.set(job.id, job);
         o.log(`held job ${job.id}: model '${model}' (${engine}) has no complete calibration record`);

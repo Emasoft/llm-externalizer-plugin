@@ -60,6 +60,7 @@ import {
   HELD_HEADER,
   ENGINE_HEADER,
   QUEUE_TIMEOUT_HEADER,
+  NO_HOLD_HEADER,
   STATE_HEADER,
   TIMEOUT_HEADER,
   TOKEN_HEADER,
@@ -487,14 +488,25 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
   };
 
-  /** P6: move every queued job of `key` back to held (its record went stale or away). */
-  const holdQueued = (key: string): void => {
+  /**
+   * P6: move every queued job of `key` back to held (its record went stale or away); returns how many were held.
+   * TRDD-WSPV40Y5 (Q6): a no-hold job fails with `why` instead, so a stale record found at load never makes the local
+   * fallback of a general command wait for a calibration.
+   */
+  const holdQueued = (key: string, why: string): number => {
+    let heldCount = 0;
     for (const j of sched.allQueued(key)) {
       sched.remove(j);
+      if (j.noHold === true) {
+        finish(j, "failed", why);
+        continue;
+      }
       j.state = "held";
       held.set(j.id, j);
       notify(j);
+      heldCount++;
     }
+    return heldCount;
   };
 
   /** P6 (review C1): fail every queued and held job of a model with `error` (a model error: the client falls back). */
@@ -877,8 +889,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         }
         o.log(`model '${first.model}' (${engine}): ${stale}; its queued jobs are held again until it is calibrated`);
         staleRecords.set(mk, { stamp: recordStamp(engine, first.model), at: Date.now() });
-        holdQueued(key);
-        requestCalibration(engine, first.model, "stale");
+        // TRDD-WSPV40Y5 (Q6): no-hold jobs fail here; a calibration is requested only when some job really waits for it.
+        if (holdQueued(key, `model '${first.model}' (${engine}): ${stale}; the local fallback does not wait for a recalibration`) > 0) {
+          requestCalibration(engine, first.model, "stale");
+        }
         return;
       }
       staleLoads.delete(mk);
@@ -1259,6 +1273,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         body,
         timeoutMs: intHeader(req, TIMEOUT_HEADER, DEFAULT_EXEC_TIMEOUT_MS),
         queueTimeoutMs: intHeader(req, QUEUE_TIMEOUT_HEADER, t.starveMs),
+        noHold: req.headers[NO_HOLD_HEADER] === "1",
         submittedAt: now,
         lastPolledAt: now,
         pollers: 0,
@@ -1274,6 +1289,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // that cannot run.
       const verdict = calibrationVerdict(engine, model);
       if (verdict.state === "missing") {
+        // TRDD-WSPV40Y5 (Q6): a no-hold job (the local fallback of a general command) fails at once instead of waiting for a
+        // calibration, and queues none: a failure path must never start a calibration.
+        if (job.noHold === true) {
+          finish(job, "failed", `model '${model}' (${engine}) has no complete calibration record; the local fallback does not wait for a calibration`);
+          reply(res, 202, { job: job.id });
+          return;
+        }
         job.state = "held";
         held.set(job.id, job);
         o.log(`held job ${job.id}: model '${model}' (${engine}) has no complete calibration record`);

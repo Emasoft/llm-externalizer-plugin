@@ -22,6 +22,7 @@ import {
   ENGINE_HEADER,
   DISPATCHED_HEADER,
   QUEUE_TIMEOUT_HEADER,
+  NO_HOLD_HEADER,
   STATE_HEADER,
   HELD_HEADER,
   TIMEOUT_HEADER,
@@ -242,6 +243,8 @@ export interface BrokerJobRequest {
   timeoutMs: number;
   /** --queue_timeout in ms; undefined = the broker's default T. */
   queueTimeoutMs?: number;
+  /** TRDD-WSPV40Y5 (Q6): fail with a model error instead of being held when the record is missing or turns out stale. */
+  noHold?: boolean;
 }
 
 /** Jobs submitted but not yet finished, per logical call (chatCompletionWithRetry's call object) and request identity: a retry of that call reuses its pending job (spec 4). */
@@ -350,6 +353,8 @@ export async function brokerExchange(
           [TIMEOUT_HEADER]: String(req.timeoutMs),
         };
         if (req.queueTimeoutMs !== undefined) h[QUEUE_TIMEOUT_HEADER] = String(req.queueTimeoutMs);
+        // TRDD-WSPV40Y5 (Q6): the local fallback job fails instead of being held for a calibration.
+        if (req.noHold === true) h[NO_HOLD_HEADER] = "1";
         // Review m1: the job is tracked from the START of its POST. The submission
         // promise is in `submitting` until the id is in `active`, so a
         // --command_timeout firing mid-POST waits for it and cancels the job,
