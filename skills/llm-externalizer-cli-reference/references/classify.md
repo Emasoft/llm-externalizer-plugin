@@ -22,7 +22,7 @@
 
 Output: a classify command prints its text form on stdout and the receipt line (items, time, Jev tokens and cost) as the last line. Add `--json` to print the JSON envelope instead; the receipt then goes to stderr, so stdout stays one parseable JSON document. A script that parses the output must pass `--json`. `--estimate` prices the run from the catalog and sends nothing (no API key needed; it writes no `-o` report). `-o <dir>` saves the JSON envelope of every completed run, whichever output form was printed. `classify ping --estimate` is refused with `llm-ext: --estimate is not available for classify yet.` (exit 1, measured on a development build of commit 153fe531); ping does not take `--estimate`, and its help says `--no_call` sends no question.
 
-The `--estimate` row in the flag tables below comes from the help of a build that includes commit 153fe531; that row needs a release that includes it. The flag itself already works on a development build of commit 9e036052, which is in no release (measured 2026-11-04: `classify filter`, `rank` and `label` with `--estimate` exit 0 and print that nothing was sent). The installed llm-ext 14.2.0 (measured 2026-11-04) has neither: `classify filter --help` does not list `--estimate`, and `llm-ext classify filter "is this a rule" ./small.txt --estimate` exits 1 with `llm-ext: --estimate is not available for classify yet.` The same 14.2.0 message appears for `classify label ... --estimate`.
+The `--estimate` row in the flag tables below ships in llm-ext 14.3.0 and later. The flag already worked on a development build (measured 2026-11-04: `classify filter`, `rank` and `label` with `--estimate` exit 0 and print that nothing was sent). llm-ext 14.2.0 (measured 2026-11-04) has neither: `classify filter --help` does not list `--estimate`, and `llm-ext classify filter "is this a rule" ./small.txt --estimate` exits 1 with `llm-ext: --estimate is not available for classify yet.` The same 14.2.0 message appears for `classify label ... --estimate`.
 
 Flags are written `--name value`. Boolean flags (measured for `--json` and `--estimate` on `classify filter` and `classify requirements`) are bare switches: a value after one is taken as an extra positional (file) argument. With `--input` the error is `llm-ext: --input cannot be combined with files, --items or the other file options; pass one or the other` (command `classify filter --input filter-text.json --estimate true`); without `--input` it is the usage line `llm-ext: usage: llm-ext classify requirements <file, - for stdin> [--max-bytes N]`. `--estimate` alone works. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see cli-conventions.md). All text below comes from `llm-ext <group> <action> --help`, except the sections that say they come from live runs and the source.
 
@@ -149,7 +149,7 @@ Classify decision "label" (catalog spec; flags, defaults and ranges are generate
 Example:
 ```bash
 llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl
-llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --context ./context.txt   # needs a release that includes --context
+llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --context ./context.txt   # ships in llm-ext 14.3.0 and later
 ```
 
 ### `llm-ext classify rank`
@@ -431,7 +431,7 @@ llm-ext classify test-output --input ./request.json
 
 ### `llm-ext classify requirements`
 
-`classify requirements` needs a release that includes it; an installed llm-ext without it exits 1 with `llm-ext: unknown action 'requirements' in group 'classify'.` (measured on llm-ext 14.2.0, 2026-11-04). The runs quoted in this section used a build that includes it.
+`classify requirements` ships in llm-ext 14.3.0 and later; an installed llm-ext without it exits 1 with `llm-ext: unknown action 'requirements' in group 'classify'.` (measured on llm-ext 14.2.0, 2026-11-04). The runs quoted in this section used a build that includes it.
 
 - Usage: `llm-ext classify requirements <file, - for stdin> [--max-bytes N] [--flag value ...]`, or `llm-ext classify requirements --input <file.json> [--flag value ...]` (or the JSON input on stdin)
 - Bare argument: the prompt file (or `-` for stdin); the earlier messages go in `--context`
@@ -523,7 +523,7 @@ Propositions mode: `propositions` 1 to 64 entries, each `text` not blank and at 
 
 `items` at least 1 (`text` required, `id` optional); `classes` 2 to 255, `id` non-empty and unique, never `__proto__`, `description` a string, null or absent; `mode` `json` (default) or `files`; `default`, when given, must be one of the class ids; `purpose` and `context` optional strings (run live with `context` and `default` "new" added, `label-ctx.json`: exit 0, same label as without them); the JSON of `classes` must be at most 8000 characters (`label.ts`). Output rows: `{id, label, confidence, probabilities, accepted, auto, review, tie, runnerUp, margin, invalid}`.
 
-`--context FILE` fills `context` (a file of earlier messages, `-` reads stdin; needs a release that includes it). Giving it together with a JSON `context` is refused with `llm-ext: --context sets context, which the JSON input already holds; give it in one place`. The context travels in every request, so the cost grows with the number of requests (`--estimate` counts it), and a context too large for the model window is refused before anything is sent.
+`--context FILE` fills `context` (a file of earlier messages, `-` reads stdin; ships in llm-ext 14.3.0 and later). Giving it together with a JSON `context` is refused with `llm-ext: --context sets context, which the JSON input already holds; give it in one place`. The context travels in every request, so the cost grows with the number of requests (`--estimate` counts it), and a context too large for the model window is refused before anything is sent.
 
 `classify find` (`catalog/find.ts`, not strict):
 
@@ -537,7 +537,7 @@ Propositions mode: `propositions` 1 to 64 entries, each `text` not blank and at 
 ### `llm-ext classify ping`
 
 - Usage: `llm-ext classify ping [--no_call]`
-- Release: not in llm-ext 14.2.0 (measured 2026-11-04: `llm-ext classify ping --no_call` exits 1 with `llm-ext: unknown action 'ping' in group 'classify'.`); it needs a release that includes it.
+- Release: ships in llm-ext 14.3.0 and later (measured 2026-11-04 on llm-ext 14.2.0: `llm-ext classify ping --no_call` exits 1 with `llm-ext: unknown action 'ping' in group 'classify'.`).
 - Accepted profile types: classifier
 
 Checks the classifier key and the decisions service: a free key check (`GET /api/v1/key`, which reports the key spend and limit, never the key), then one tiny paid question to the profile model. The question is fixed and unambiguous: does the state "Water boils at 100 degrees Celsius at sea level." say that water boils at 100 degrees Celsius at sea level? A working model answers high, and the answer is printed with the side it is expected on:
@@ -549,7 +549,7 @@ decision call: ok (the remote service; model typesafe/jev-1.14-20261014, answer 
 
 Ping is a round-trip check: it exits non-zero when the key check fails; when the call fails and the local decider does not answer either; when the reply has no usable answer; or when the command is stopped (`--command_timeout`, exit 124). An answer below 0.5 prints a warning line on stderr and still exits 0. The question is recorded in the usage history (a local answer is recorded under the local decider's endpoint at no cost); `--max_budget` does not apply to it.
 
-Local decider fallback (in a build that includes it; in no release yet):
+Local decider fallback (ships in llm-ext 14.3.0 and later):
 
 - When: only after the remote decision call fails or times out. A failed key check and `--no_call` never use it. Ctrl-C never starts it, and neither does a `--command_timeout` stop that came before it. The fallback is on by default and can be turned off; when it is off, ping says nothing about it.
 - Where: the mlx-decision server that runs as a machine-wide singleton, looked up at the configured decider address first, then (macOS only) among the mlx-decision servers running on this machine. llm-ext never starts or replaces that server.
@@ -562,4 +562,4 @@ Local decider fallback (in a build that includes it; in no release yet):
 
 | Flag | Type | Meaning |
 |---|---|---|
-| `--no_call` | boolean | Only the free key check; send no question (nothing is billed). It checks only that the key is accepted, not the credit balance or the model call: a key can pass while paid calls fail with HTTP 402 Insufficient credits; the output says so (needs a release that includes it). |
+| `--no_call` | boolean | Only the free key check; send no question (nothing is billed). It checks only that the key is accepted, not the credit balance or the model call: a key can pass while paid calls fail with HTTP 402 Insufficient credits; the output says so (ships in llm-ext 14.3.0 and later). |

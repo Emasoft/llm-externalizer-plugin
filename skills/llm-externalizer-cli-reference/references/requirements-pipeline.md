@@ -35,7 +35,7 @@ Files used by the examples: `prompt.txt` holds `the colors are horrible. let's i
 
 ## Step 1: extract the requirements from the prompt (C1 and C2)
 
-`classify requirements` needs a release that includes it; an installed llm-ext without it exits 1 with `llm-ext: unknown action 'requirements' in group 'classify'.` (measured on llm-ext 14.2.0, 2026-11-04). The runs quoted below used a build that includes it.
+`classify requirements` ships in llm-ext 14.3.0 and later; an installed llm-ext without it exits 1 with `llm-ext: unknown action 'requirements' in group 'classify'.` (measured on llm-ext 14.2.0, 2026-11-04). The runs quoted below used a build that includes it.
 
 ### 1a. Score every sentence with Jev, using the earlier messages as context
 
@@ -87,7 +87,7 @@ The same instruction without labels (no label prefixes, no "labels are hints" li
 
 Candidate rules come from the rules file (one rule per line is easiest). The examples use four rules: r1 "make the background color of the loading dialog of a shade of blue" (a duplicate of the new phrase), r2 "the background of the load panel must not be transparent." (an earlier version of the same requirement), u1 "every API response must include a request id header" and u2 "the settings page must be reachable from the main menu" (unrelated).
 
-`--json` on `classify find` and `classify label` (steps 2a and 2b) needs a release that includes it: llm-ext 14.2.0 exits 1 with `llm-ext: unknown option --json for classify find` (the same for `classify label`; measured 2026-11-04).
+`--json` on `classify find` and `classify label` (steps 2a and 2b) ships in llm-ext 14.3.0 and later: llm-ext 14.2.0 exits 1 with `llm-ext: unknown option --json for classify find` (the same for `classify label`; measured 2026-11-04).
 
 ### 2a. Does one of the rules say the same thing? (C3)
 
@@ -127,7 +127,7 @@ Repeated in sequence (n=1, 2026-11-04), 2b on the top-ranked candidate of 2a: fi
 
 ```bash
 llm-ext classify label --input ./label-r2.json --json
-llm-ext classify label --input ./label-r2.json --json --context ./context.txt   # earlier messages as background; needs a release that includes --context (label-r2.json must not hold a `context` key)
+llm-ext classify label --input ./label-r2.json --json --context ./context.txt   # earlier messages as background; ships in llm-ext 14.3.0 and later (label-r2.json must not hold a `context` key)
 ```
 
 Results (exit 0 each, first row of `decision.rows`):
