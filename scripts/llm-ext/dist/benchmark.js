@@ -8282,6 +8282,17 @@ var init_command_stop = __esm({
   }
 });
 
+// src/retry-window.ts
+var RETRY_DEADLINE_MS, NETWORK_GIVE_UP_MAX_S, NETWORK_GIVE_UP_MAX_WHY;
+var init_retry_window = __esm({
+  "src/retry-window.ts"() {
+    "use strict";
+    RETRY_DEADLINE_MS = 3e5;
+    NETWORK_GIVE_UP_MAX_S = RETRY_DEADLINE_MS / 1e3 - 1;
+    NETWORK_GIVE_UP_MAX_WHY = `the remote retry window closes after ${RETRY_DEADLINE_MS / 1e3} s, so a larger give-up window could never fire`;
+  }
+});
+
 // src/provider/http.ts
 async function fetchWithTimeout(url, options, timeoutMs = CONNECT_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -8325,6 +8336,7 @@ var init_http = __esm({
     "use strict";
     init_command_stop();
     init_free_mode();
+    init_retry_window();
     CONNECT_TIMEOUT_MS = 5e3;
     OUTAGE_NETWORK_CODES = /* @__PURE__ */ new Set([
       "ECONNREFUSED",
@@ -9876,6 +9888,7 @@ var init_config = __esm({
     init_registry();
     init_local_locals_server();
     init_local_llama_server();
+    init_retry_window();
     init_controller();
     init_default_profiles_state();
     init_paid_switch();

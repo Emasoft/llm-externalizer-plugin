@@ -309,7 +309,7 @@ local_fallback:
 When this machine cannot reach the remote service at all (connection refused or reset, name lookup failing, network unreachable), llm-ext normally keeps retrying for up to 5 minutes. With a local profile ready to answer, it stops after this many seconds of consecutive network failures and ends the call with the network error. The window is armed only when ALL THREE hold: the failure is a network-level one (a slow model that hits its own timeout does not count), a strict probe of the provider (`GET <base>/v1/models`, redirects not followed; only a 200 answer carrying a JSON `data` array counts, so a captive portal does not) gets no genuine answer, and a local profile is ready now (`locals-mlx` where the machine can run it, else `local_llama`: engine binary on the PATH, head model on disk, calibration record ok; nothing is started, downloaded or calibrated to check). Otherwise nothing changes and the existing retries run. A network blip shorter than the window still heals, and any answer from the provider, whatever its status, ends the run of failures.
 
 ```yaml
-network_give_up_seconds: 30        # top-level key, integer 1-3600; absent = 30
+network_give_up_seconds: 30        # top-level key, integer 1-299 (below the 300 s retry window, a larger value is an error); absent = 30
 ```
 
 - The flag `--network_give_up <s>` (alias `--network-give-up`; `=` or a space; whole seconds) overrides the key for one command. A malformed key or flag value fails at once; it is never read as the default.

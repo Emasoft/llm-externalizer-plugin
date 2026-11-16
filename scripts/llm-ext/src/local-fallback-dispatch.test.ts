@@ -159,6 +159,81 @@ async function resetServer(): Promise<string> {
   return `http://127.0.0.1:${(server!.address() as { port: number }).port}`;
 }
 
+describe("TRDD-WSPV40Y5 N2: --stop_on_errors ends the command before the local fallback starts", () => {
+  it("free profile, dead network, a READY local profile: the stop wins, no local send is tried and the stop reason is set (control: the test above, same fixture, falls back)", async () => {
+    fixture(FREE(true), true);
+    redirectFetchTo(await closedPortUrl());
+    const idx = await loadIndex();
+    // The module instance index.ts reads: loadIndex reset the module registry, so this import is the post-reset one.
+    const stop = await import("./command-stop.js");
+    stop.enableStopOnErrors();
+    const err = captureStderr();
+    const r = await idx.dispatchCallTool("chat", { instructions: "Say hello.", output_dir: tempDir("out") });
+    expect(r.isError).toBe(true);
+    expect(err(), "the local fallback must not start").not.toMatch(/local fallback|answered locally/);
+    expect(stop.commandStopReason()).toMatch(/^--stop_on_errors: model /);
+    expect(stop.commandStopExitCode()).toBe(stop.STOP_ON_ERRORS_EXIT);
+  }, 60_000);
+});
+describe("TRDD-WSPV40Y5 N2: the free rotation raw-failure throw (free-rotation.ts, before its own stop) under --stop_on_errors", () => {
+  // Reached through a `:free` modelOverride, which rotates through callSingleWithFreeRotation without needing a benchmark-approved pool
+  // (a `chat` command on the free profile in this fixture has an EMPTY pool and walks the profile chain, which stops on its own: the test
+  // above it passes on the pre-fix code). An unresolvable name (ENOTFOUND, "fetch failed") is neither an availability verdict nor a
+  // payment error, so the rotation THROWS the typed raw failure before its own stop; only the stop in tryLocalFallback can end the command.
+  const run = async (stopOnErrors: boolean) => {
+    fixture(FREE(true), true);
+    redirectFetchTo("http://llmx-no-such-host.invalid");
+    const idx = await loadIndex();
+    const stop = await import("./command-stop.js");
+    const { ctxStore } = await import("./usage-history.js");
+    if (stopOnErrors) stop.enableStopOnErrors();
+    const err = captureStderr();
+    const outcome = await ctxStore.run({ tool: "chat", params: "", project: "/tmp", opId: "op-00000000" }, () =>
+      idx.__ensembleStreamingForTests([{ role: "user", content: "Say hello." }], { modelOverride: "vendor/free-a:free" }, {}).then(() => "resolved", (e: unknown) => (e as Error).message),
+    );
+    return { outcome, stderr: err(), stop };
+  };
+
+  it("control, no flag: the local fallback is tried after the raw network failure", async () => {
+    const { stderr } = await run(false);
+    expect(stderr).toContain(`the local fallback to profile \x27local_llama\x27 (model ${MODEL}) failed too:`);
+  }, 120_000);
+
+  it("--stop_on_errors: the command stops before any local send", async () => {
+    const { outcome, stderr, stop } = await run(true);
+    expect(outcome).not.toBe("resolved");
+    expect(stderr, "the local fallback must not start").not.toMatch(/local fallback|answered locally/);
+    expect(stop.commandStopReason()).toMatch(/^--stop_on_errors: model /);
+  }, 120_000);
+});
+describe("TRDD-WSPV40Y5 N2: check_imports on a pool-less profile (the JSON .catch, no stop of its own) under --stop_on_errors", () => {
+  // The free-profile case above passes on the pre-fix code too (that path already stops), so THIS pair is the one that discriminates:
+  // the control reaches the local step on the pool-less JSON path, the stop run must not.
+  const run = async (stopOnErrors: boolean) => {
+    fixture(PAID(true), true);
+    redirectFetchTo(await closedPortUrl());
+    const idx = await loadIndex();
+    const stop = await import("./command-stop.js");
+    if (stopOnErrors) stop.enableStopOnErrors();
+    const err = captureStderr();
+    const src = join(tempDir("src"), "a.ts");
+    writeFileSync(src, "import { x } from \"./b.js\";\nexport const y = x;\n", "utf-8");
+    const r = await idx.dispatchCallTool("check_imports", { input_files_paths: [src], output_dir: tempDir("out") });
+    return { r, stderr: err(), stop };
+  };
+
+  it("control, no flag: the local fallback is tried (it fails here, the broker cannot start in-process)", async () => {
+    const { stderr } = await run(false);
+    expect(stderr).toContain(`the local fallback to profile \x27local_llama\x27 (model ${MODEL}) failed too:`);
+  }, 60_000);
+
+  it("--stop_on_errors: the command stops before any local send", async () => {
+    const { r, stderr, stop } = await run(true);
+    expect(r.isError).toBe(true);
+    expect(stderr, "the local fallback must not start").not.toMatch(/local fallback|answered locally/);
+    expect(stop.commandStopReason()).toMatch(/^--stop_on_errors: model /);
+  }, 60_000);
+});
 describe("the 1b give-up error is consumed: a server resetting every connection, window 2 s", () => {
   for (const [label, yaml] of [["free (callSingleWithFreeRotation)", FREE(true)], ["paid (the chain walk)", PAID(true)]] as const) {
     it(`${label}: the give-up ends the remote retries and the local step is reached in under 15 s`, async () => {

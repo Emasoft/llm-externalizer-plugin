@@ -153,6 +153,30 @@ describe("TRDD-WSPV40Y5: a ready local profile with no calibrated sizing for the
     expect(withLocal.postsAfter).toEqual(without.postsAfter);
   }, 120_000);
 
+  it("TRDD-PN0N4290 N1: the give-up window is NOT armed on a branch with no local fallback site (the paid modelOverride of high_quality_scan), and is on the chain walk (control, same ready fixture)", async () => {
+    fixture(true);
+    const s = await creditServer();
+    redirectFetchTo(s.url);
+    vi.resetModules();
+    const idx = await import("./index.js");
+    await idx.boot();
+    const validated = await import("./benchmark/validated.js");
+    validated.setValidationBypassForTests(true);
+    const { ctxStore } = await import("./usage-history.js");
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    // An expired seeded clock makes both dispatches end at once without a request; only whether the window was built is read.
+    const run = (clock: RetryClock, options: { modelOverride?: string }) =>
+      ctxStore.run({ tool: "chat", params: "", project: "/tmp", opId: "op-00000000" }, () => idx.__ensembleStreamingForTests([{ role: "user", content: "Say hello." }], options, clock).then(() => undefined, () => undefined));
+    const pinned: RetryClock = { startedAt: Date.now() - 10, expired: true };
+    await run(pinned, { modelOverride: "vendor/paid-head" });
+    expect(pinned.networkGiveUp, "the pinned paid model throws a static exhaustion and never falls back: no window").toBeUndefined();
+    const walked: RetryClock = { startedAt: Date.now() - 10, expired: true };
+    await run(walked, {});
+    expect(walked.networkGiveUp, "the chain walk reaches tryLocalFallback: window armed").toBeDefined();
+    const freeOverride: RetryClock = { startedAt: Date.now() - 10, expired: true };
+    await run(freeOverride, { modelOverride: "vendor/free-x:free" });
+    expect(freeOverride.networkGiveUp, "a :free override rotates through callSingleWithFreeRotation, a fallback site: window armed").toBeDefined();
+  }, 120_000);
   it("TRDD-WSPV40Y5 F3: a filesystem error while resolving the local target (EISDIR on the model cache ref) leaves the original verdict, one stderr line per failed call", async () => {
     const broken = await runTwice(true, true);
     const without = await runTwice(false);

@@ -8336,6 +8336,17 @@ var init_command_stop = __esm({
   }
 });
 
+// src/retry-window.ts
+var RETRY_DEADLINE_MS, NETWORK_GIVE_UP_MAX_S, NETWORK_GIVE_UP_MAX_WHY;
+var init_retry_window = __esm({
+  "src/retry-window.ts"() {
+    "use strict";
+    RETRY_DEADLINE_MS = 3e5;
+    NETWORK_GIVE_UP_MAX_S = RETRY_DEADLINE_MS / 1e3 - 1;
+    NETWORK_GIVE_UP_MAX_WHY = `the remote retry window closes after ${RETRY_DEADLINE_MS / 1e3} s, so a larger give-up window could never fire`;
+  }
+});
+
 // src/provider/http.ts
 async function fetchWithTimeout(url2, options, timeoutMs = CONNECT_TIMEOUT_MS) {
   const controller = new AbortController();
@@ -8732,12 +8743,13 @@ function sanitizeProviderError(raw, maxLen = 200) {
   if (reason2.length > maxLen) reason2 = reason2.slice(0, maxLen - 1) + "\u2026";
   return reason2 || "(unparseable error body)";
 }
-var CONNECT_TIMEOUT_MS, OPENROUTER_ATTRIBUTION_HEADERS, RETRY_MAX_ATTEMPTS, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS, RETRYABLE_STATUS, RETRY_DEADLINE_MS, RetryDeadlineError, NETWORK_CODE_MAX_DEPTH, OUTAGE_NETWORK_CODES, NETWORK_ISOLATION_CODES, RESPONSE_VERDICTS, TLS_CODES, GATEWAY_TIMEOUT_TRIES, REFUSED_TRIES, NAME_LOOKUP_TRIES, NETWORK_GIVE_UP_KEY;
+var CONNECT_TIMEOUT_MS, OPENROUTER_ATTRIBUTION_HEADERS, RETRY_MAX_ATTEMPTS, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS, RETRYABLE_STATUS, RetryDeadlineError, NETWORK_CODE_MAX_DEPTH, OUTAGE_NETWORK_CODES, NETWORK_ISOLATION_CODES, RESPONSE_VERDICTS, TLS_CODES, GATEWAY_TIMEOUT_TRIES, REFUSED_TRIES, NAME_LOOKUP_TRIES, NETWORK_GIVE_UP_KEY;
 var init_http = __esm({
   "src/provider/http.ts"() {
     "use strict";
     init_command_stop();
     init_free_mode();
+    init_retry_window();
     CONNECT_TIMEOUT_MS = 5e3;
     OPENROUTER_ATTRIBUTION_HEADERS = {
       "HTTP-Referer": "https://github.com/Emasoft/llm-externalizer-plugin",
@@ -8747,7 +8759,6 @@ var init_http = __esm({
     RETRY_BASE_DELAY_MS = 1e3;
     RETRY_MAX_DELAY_MS = 3e4;
     RETRYABLE_STATUS = /* @__PURE__ */ new Set([408, 429, 500, 502, 503, 504]);
-    RETRY_DEADLINE_MS = 3e5;
     RetryDeadlineError = class extends Error {
       code = "RETRY_DEADLINE";
       trail;
@@ -11159,7 +11170,7 @@ function localFallbackErrors(raw) {
 function networkGiveUpErrors(raw) {
   if (raw === void 0 || raw === null) return [];
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < NETWORK_GIVE_UP_MIN_S || raw > NETWORK_GIVE_UP_MAX_S) {
-    return [`network_give_up_seconds must be an integer from ${NETWORK_GIVE_UP_MIN_S} to ${NETWORK_GIVE_UP_MAX_S}, got ${JSON.stringify(raw)}`];
+    return [`network_give_up_seconds must be an integer from ${NETWORK_GIVE_UP_MIN_S} to ${NETWORK_GIVE_UP_MAX_S} (${NETWORK_GIVE_UP_MAX_WHY}), got ${JSON.stringify(raw)}`];
   }
   return [];
 }
@@ -11720,7 +11731,7 @@ function assertFreeOnlyModel(freeOnly, billable, model, isFreeProvider = false) 
     );
   }
 }
-var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, NETWORK_GIVE_UP_MAX_S, FALLBACK_TO_LOCAL_KEYS, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
+var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, FALLBACK_TO_LOCAL_KEYS, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -11728,6 +11739,7 @@ var init_config = __esm({
     init_registry();
     init_local_locals_server();
     init_local_llama_server();
+    init_retry_window();
     init_controller();
     init_default_profiles_state();
     init_paid_switch();
@@ -12017,7 +12029,6 @@ var init_config = __esm({
     };
     LOCAL_FALLBACK_REMOVED_KEYS = /* @__PURE__ */ new Set(["contextTokens", "minFreeMemoryGb", "maxCpuLoad"]);
     NETWORK_GIVE_UP_MIN_S = 1;
-    NETWORK_GIVE_UP_MAX_S = 3600;
     FALLBACK_TO_LOCAL_KEYS = ["enabled", "profile"];
     FREE_POOL_SEED = Object.freeze([
       "poolside/laguna-m.1:free",
@@ -287389,6 +287400,7 @@ async function tryLocalFallback(profileName, causes, facts, messages, maxTokens,
     return void 0;
   }
   if (found === void 0) return void 0;
+  stopIfStopOnErrors(failureOf(causes[causes.length - 1])?.modelId ?? profileName, causes[causes.length - 1]);
   const t = found;
   const latch = () => {
     if (localFallbackLatch.has(ctx)) return;
@@ -287425,10 +287437,13 @@ function streamingLocalSend(messages, options) {
 }
 async function ensembleStreaming(messages, callerOptions, ensemble, fileLineCount, retryClock = {}) {
   const freeMode = isFreeModeActive();
-  retryClock.networkGiveUp ??= newNetworkGiveUp();
+  const armGiveUp = () => {
+    retryClock.networkGiveUp ??= newNetworkGiveUp();
+  };
   const options = { ...callerOptions, retryClock };
   if (options.modelOverride) {
     if (isFreeSuffixModelId(options.modelOverride)) {
+      armGiveUp();
       const primaryLimits = resolveEnsembleModelLimits(options.modelOverride, void 0);
       const pool = buildFreeRotationPool(
         fileLineCount,
@@ -287466,6 +287481,7 @@ async function ensembleStreaming(messages, callerOptions, ensemble, fileLineCoun
   // rotates, paid walks its chain), and fanning them out would triple the requests and the bill of every file.
   (activeResolved?.mode === "remote-ensemble" && activeResolved.dynamic !== true || ensembleModels.every((m) => m.route !== void 0));
   if (!ensemble || ensembleModels.length === 0 || !canFanOut) {
+    armGiveUp();
     const pool = freeMode ? buildFreeRotationPool(fileLineCount) : [];
     if (pool.length > 0) {
       return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
@@ -287476,6 +287492,7 @@ async function ensembleStreaming(messages, callerOptions, ensemble, fileLineCoun
     (m) => !fileLineCount || fileLineCount <= m.maxInputLines
   );
   if (models.length === 0) {
+    armGiveUp();
     const pool = freeMode ? buildFreeRotationPool(fileLineCount) : [];
     if (pool.length > 0) {
       return callSingleWithFreeRotation(pool[0], pool.slice(1), messages, options);
@@ -292397,6 +292414,7 @@ init_ping_flags();
 init_definitions();
 
 // src/cli/timeout-flags.ts
+init_retry_window();
 var QUEUE_TIMEOUT_FLAGS = ["--queue_timeout", "--queue-timeout"];
 var COMMAND_TIMEOUT_FLAGS = ["--command_timeout", "--command-timeout", "--timeout"];
 var STOP_ON_ERRORS_FLAGS = ["--stop_on_errors", "--stop-on-errors"];
@@ -292428,6 +292446,7 @@ function extractTimeoutFlags(argv) {
       continue;
     }
     const value = seconds(name, eq > 0 ? token.slice(eq + 1) : argv[++i]);
+    if (isGiveUp && value > NETWORK_GIVE_UP_MAX_S) throw new Error(`${name} is at most ${NETWORK_GIVE_UP_MAX_S} seconds (${NETWORK_GIVE_UP_MAX_WHY}), got ${value}`);
     if (isQueue) res.queueTimeoutS = value;
     else if (isGiveUp) res.networkGiveUpS = value;
     else res.commandTimeoutS = value;
@@ -292721,6 +292740,7 @@ init_protocol();
 init_client2();
 init_command_stop();
 import { readFileSync as readFileSync61 } from "node:fs";
+init_retry_window();
 init_network_give_up();
 
 // src/cli/read-all.ts
@@ -292974,7 +292994,7 @@ Global flags:
                                 jobs and exit 124 (aliases --command-timeout, --timeout)
   ${NETWORK_GIVE_UP_FLAGS[0].padEnd(30)}stop retrying the remote service after <s> seconds of consecutive network failures,
                                 only when a local profile is ready now (default 30; alias --network-give-up;
-                                settings.yaml: network_give_up_seconds, 1-3600)
+                                settings.yaml: network_give_up_seconds; 1-${NETWORK_GIVE_UP_MAX_S}, below the ${RETRY_DEADLINE_MS / 1e3} s retry window)
   ${STOP_ON_ERRORS_FLAGS[0].padEnd(30)}end the command on the first model that does not respond or is not
                                 found, instead of falling back; finished results are kept;
                                 exit ${STOP_ON_ERRORS_EXIT} (alias ${STOP_ON_ERRORS_FLAGS[1]}); waiting for memory is no failure

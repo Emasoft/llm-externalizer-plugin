@@ -9,6 +9,7 @@
 
 import { CommandStoppedError, commandStopReason, isStopOnErrors, STOP_ON_ERRORS_EXIT, stopCommand, stoppableSleep } from "../command-stop.js";
 import { errorStatusOfText, paymentErrorCertainty } from "../benchmark/free-mode.js";
+import { RETRY_DEADLINE_MS } from "../retry-window.js";
 
 export const CONNECT_TIMEOUT_MS = 5000;
 
@@ -129,10 +130,9 @@ const RETRY_MAX_DELAY_MS = 30_000;
 export const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 
 
-/** Wall-clock window for retrying one logical call, measured from its FIRST
- *  failure. Independent of the settings.yaml request timeout, which bounds a
- *  single request, not the whole retry story. */
-export const RETRY_DEADLINE_MS = 300_000;
+// TRDD-PN0N4290 N3: RETRY_DEADLINE_MS (the retry window of one logical call, documented there) is defined in retry-window.ts, next to the
+// largest give-up window it can contain (config.ts must not import provider/*); re-exported so every importer of http.js is unchanged.
+export { RETRY_DEADLINE_MS };
 
 /**
  * The retry clock of one logical call (TRDD-YG72CYY7 increment 1).

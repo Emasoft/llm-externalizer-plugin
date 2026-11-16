@@ -8,7 +8,7 @@
  *     limits the WHOLE command; on expiry it stops and exits non-zero.
  *   --network_give_up / --network-give-up <s>   (TRDD-PN0N4290)
  *     how long consecutive network-level failures of the remote service are retried before the
- *     command gives up on it; armed only when a local fallback target is ready. Default 30.
+ *     command gives up on it; armed only when a local fallback target is ready. Default 30, at most NETWORK_GIVE_UP_MAX_S (below the retry window).
  *
  * Stripped from argv centrally, before the command word is looked at, like
  * --profile: as a per-tool schema field some command would miss it, and the
@@ -16,6 +16,7 @@
  * `--x N`; the value is whole seconds.
  */
 
+import { NETWORK_GIVE_UP_MAX_S, NETWORK_GIVE_UP_MAX_WHY } from "../retry-window.js";
 export const QUEUE_TIMEOUT_FLAGS: readonly string[] = ["--queue_timeout", "--queue-timeout"];
 export const COMMAND_TIMEOUT_FLAGS: readonly string[] = ["--command_timeout", "--command-timeout", "--timeout"];
 
@@ -69,6 +70,9 @@ export function extractTimeoutFlags(argv: readonly string[]): TimeoutFlags {
       continue;
     }
     const value = seconds(name, eq > 0 ? token.slice(eq + 1) : argv[++i]);
+    // TRDD-PN0N4290 N3: the SAME top as the settings key (retry-window.ts). The retry clock closes at 300 s, so a larger window could
+    // never fire and the command would end with no local answer; refused here, never clamped.
+    if (isGiveUp && value > NETWORK_GIVE_UP_MAX_S) throw new Error(`${name} is at most ${NETWORK_GIVE_UP_MAX_S} seconds (${NETWORK_GIVE_UP_MAX_WHY}), got ${value}`);
     if (isQueue) res.queueTimeoutS = value;
     else if (isGiveUp) res.networkGiveUpS = value;
     else res.commandTimeoutS = value;

@@ -357,14 +357,15 @@ describe("the window: settings key, flag, default", () => {
   });
 
   it("a malformed key is an error naming the key and the range, never the default", () => {
-    for (const bad of [0, -3, 3601, 1.5, "30", true, [30], {}]) {
-      expect(networkGiveUpErrors(bad)[0]).toContain("network_give_up_seconds must be an integer from 1 to 3600");
+    // TRDD-PN0N4290 N3: the top is below the 300 s retry window (a window of 300 s or more could never fire), the same constant as the flag.
+    for (const bad of [0, -3, 300, 3600, 3601, 1.5, "30", true, [30], {}]) {
+      expect(networkGiveUpErrors(bad)[0]).toContain("network_give_up_seconds must be an integer from 1 to 299 (the remote retry window closes after 300 s, so a larger give-up window could never fire)");
       expect(() => networkGiveUpMs(plain({ network_give_up_seconds: bad }))).toThrow(/network_give_up_seconds/);
     }
     expect(networkGiveUpErrors(undefined)).toEqual([]);
     expect(networkGiveUpErrors(null)).toEqual([]);
     expect(networkGiveUpErrors(1)).toEqual([]);
-    expect(networkGiveUpErrors(3600)).toEqual([]);
+    expect(networkGiveUpErrors(299)).toEqual([]);
   });
 
   it("the flag takes both spellings, `--x N` and `--x=N`, whole seconds >= 1, and is stripped from argv", () => {
@@ -376,6 +377,16 @@ describe("the window: settings key, flag, default", () => {
     }
   });
 
+  it("TRDD-PN0N4290 N3: the flag has the SAME range as the key, 1 to 299 (below the 300 s retry window); a larger value is an error naming the limit and why", () => {
+    expect(extractTimeoutFlags(["--network_give_up", "299"]).networkGiveUpS).toBe(299);
+    expect(networkGiveUpErrors(299)).toEqual([]);
+    for (const tooBig of ["300", "3600", "2147483"]) {
+      expect(() => extractTimeoutFlags(["--network_give_up", tooBig])).toThrow(`--network_give_up is at most 299 seconds (the remote retry window closes after 300 s, so a larger give-up window could never fire), got ${tooBig}`);
+      expect(() => extractTimeoutFlags([`--network-give-up=${tooBig}`])).toThrow(/--network-give-up is at most 299 seconds/);
+    }
+    // The other two flags keep their own, larger range: only the give-up window must fit under the retry window.
+    expect(extractTimeoutFlags(["--command_timeout", "3600"]).commandTimeoutS).toBe(3600);
+  });
   it("a settings.yaml with a malformed key fails validateSettings (a typo is reported, not defaulted)", async () => {
     const cfgDir = tempDir("badkey");
     writeFileSync(join(cfgDir, "settings.yaml"), ["active: lc", "network_give_up_seconds: soon", "profiles:", "  lc:", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:1", "    model: m", ""].join("\n"), "utf-8");
@@ -385,7 +396,7 @@ describe("the window: settings key, flag, default", () => {
     expect(settings?.network_give_up_seconds).toBe("soon");
     const result = validateSettings(settings as Settings);
     expect(result.valid).toBe(false);
-    expect(result.errors.join("\n")).toContain("network_give_up_seconds must be an integer from 1 to 3600, got \"soon\"");
+    expect(result.errors.join("\n")).toContain("network_give_up_seconds must be an integer from 1 to 299 (the remote retry window closes after 300 s, so a larger give-up window could never fire), got \"soon\"");
   });
 });
 

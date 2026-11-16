@@ -41,6 +41,7 @@ import { BROKER_ARGV, CALIBRATE_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
 import { commandStopExitCode, commandStopReason, enableStopOnErrors, STOP_ON_ERRORS_EXIT, stopCommand } from "../command-stop.js";
 import { extractTimeoutFlags, NETWORK_GIVE_UP_FLAGS, STOP_ON_ERRORS_FLAGS, type TimeoutFlags } from "./timeout-flags.js";
+import { NETWORK_GIVE_UP_MAX_S, RETRY_DEADLINE_MS } from "../retry-window.js";
 import { setNetworkGiveUpOverrideS } from "../network-give-up.js";
 import { readAllFrom } from "./read-all.js";
 import { stopNoticeLine } from "./stop-notice.js";
@@ -476,7 +477,7 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n" +
       `  ${NETWORK_GIVE_UP_FLAGS[0].padEnd(30)}stop retrying the remote service after <s> seconds of consecutive network failures,\n` +
       "                                only when a local profile is ready now (default 30; alias --network-give-up;\n" +
-      "                                settings.yaml: network_give_up_seconds, 1-3600)\n" +
+      `                                settings.yaml: network_give_up_seconds; 1-${NETWORK_GIVE_UP_MAX_S}, below the ${RETRY_DEADLINE_MS / 1000} s retry window)\n` +
       `  ${STOP_ON_ERRORS_FLAGS[0].padEnd(30)}end the command on the first model that does not respond or is not\n` +
       "                                found, instead of falling back; finished results are kept;\n" +
       `                                exit ${STOP_ON_ERRORS_EXIT} (alias ${STOP_ON_ERRORS_FLAGS[1]}); waiting for memory is no failure\n\n` +

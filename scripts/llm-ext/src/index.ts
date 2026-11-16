@@ -3829,6 +3829,12 @@ async function tryLocalFallback<T>(
     return undefined;
   }
   if (found === undefined) return undefined;
+  // TRDD-WSPV40Y5 N2 (review 20261116_162203): --stop_on_errors wins over the fallback (its help: the command ends instead of falling back).
+  // WHY here and not at the callers: this is exactly where a fallback would START (a trigger holds AND a target is ready), and two paths
+  // reach it with no stop of their own: the free rotation throws a raw network failure at free-rotation.ts before its own stop, and the
+  // no-pool check_imports JSON .catch has none. When nothing is ready no stop is needed: the caller throws its verdict as before.
+  // The stop names the failed model of the last cause, else the profile.
+  stopIfStopOnErrors(failureOf(causes[causes.length - 1])?.modelId ?? profileName, causes[causes.length - 1]);
   const t = found;
   // WHY latched only once the local side answered or refused by budget (Q8, Q9): the warning says "answered locally", and a
   // target that failed must not pull the next files away from the remote verdict. First latch prints, a concurrent one does not.
@@ -3903,7 +3909,13 @@ async function ensembleStreaming(
   // model, chain entry and ensemble slot below spreads `options`, so all of
   // them share one five-minute window instead of getting a fresh one each.
   // TRDD-PN0N4290: the give-up window rides on this shared clock so it covers every model of the dispatch; a clock a test seeded with its own wins.
-  retryClock.networkGiveUp ??= newNetworkGiveUp();
+  // TRDD-PN0N4290 N1 (review 20261116_162203): armed LAZILY, only on the branches below that can reach a local fallback site
+  // (callSingleWithFreeRotation, chatCompletionWithProfileFallback). WHY not here at the top: the paid modelOverride branch
+  // (high_quality_scan), the single-model send and the fan-out Promise.all never fall back, so a window armed for them only cut
+  // the 300 s retry budget to the give-up window on a network blip and then threw, with no local answer.
+  const armGiveUp = (): void => {
+    retryClock.networkGiveUp ??= newNetworkGiveUp();
+  };
   const options = { ...callerOptions, retryClock };
 
   // Model override: skip the ensemble, use the specified model.
@@ -3917,6 +3929,7 @@ async function ensembleStreaming(
   // which is the one thing rotation must never do.
   if (options.modelOverride) {
     if (isFreeSuffixModelId(options.modelOverride)) {
+      armGiveUp(); // N1: callSingleWithFreeRotation below is a fallback site; the paid override branch further down is not
       const primaryLimits = resolveEnsembleModelLimits(options.modelOverride, undefined);
       const pool = buildFreeRotationPool(
         fileLineCount,
@@ -3977,6 +3990,7 @@ async function ensembleStreaming(
     ensembleModels.length === 0 ||
     !canFanOut
   ) {
+    armGiveUp(); // N1: both returns below are fallback sites (callSingleWithFreeRotation / chatCompletionWithProfileFallback)
     // Free mode ONLY: one model at a time is still ONE model at a time —
     // rotation is failover, not ensembling — so a rate-limited free model hands
     // off to the next approved free one instead of failing the call. A funded
@@ -3996,6 +4010,7 @@ async function ensembleStreaming(
     (m) => !fileLineCount || fileLineCount <= m.maxInputLines,
   );
   if (models.length === 0) {
+    armGiveUp(); // N1: this branch ends in a fallback site (callSingleWithFreeRotation / chatCompletionWithProfileFallback)
     // Every ensemble primary is too small for this file. Under free mode the
     // approved pool may still hold a larger-context model BEYOND the top 3, so
     // rotate over the size-filtered pool before giving up on the file.

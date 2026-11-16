@@ -26,6 +26,8 @@ import { parse as yamlParse, Document as YamlDocument, isScalar, parseDocument, 
 import { registeredTools } from "./model-qualification/registry.js";
 import { parseLocalsModel } from "./local-locals-server.js";
 import { parseManagedModel } from "./local-llama-server.js";
+// TRDD-PN0N4290 N3: leaf module (no imports), so no cycle; provider/http.ts re-exports RETRY_DEADLINE_MS from it.
+import { NETWORK_GIVE_UP_MAX_S, NETWORK_GIVE_UP_MAX_WHY } from "./retry-window.js";
 // Governor D13: the local_governor key table lives with the resolver; controller.ts imports only types, so no cycle.
 import { LOCAL_GOVERNOR_KEYS, ramLimitMin } from "./governor/controller.js";
 // PT-02: cyclic with default-profiles-state (it imports getConfigDir); safe because both sides only call the other inside functions.
@@ -3698,18 +3700,21 @@ export function localFallbackErrors(raw: unknown): string[] {
   return errors;
 }
 
-/** The range of settings.yaml network_give_up_seconds, whole seconds. The top is one hour: the remote retry deadline is 300 s, so a larger window only disables the give-up. */
+/**
+ * The range of settings.yaml network_give_up_seconds, whole seconds. TRDD-PN0N4290 N3: the top is NETWORK_GIVE_UP_MAX_S (retry-window.ts), shared with the
+ * --network_give_up flag: the retry window closes at 300 s, so a window of that length or more could never fire and the command would end with no
+ * local answer. Refused here, never clamped.
+ */
 const NETWORK_GIVE_UP_MIN_S = 1;
-const NETWORK_GIVE_UP_MAX_S = 3600;
 
 /**
- * Every error in a raw `network_give_up_seconds` value (TRDD-PN0N4290): not an integer from 1 to 3600. Absent (undefined or null)
+ * Every error in a raw `network_give_up_seconds` value (TRDD-PN0N4290): not an integer from 1 to NETWORK_GIVE_UP_MAX_S. Absent (undefined or null)
  * is no error: the default applies. Fail fast: a typo is reported, never read as the default. Same shape as localFallbackErrors.
  */
 export function networkGiveUpErrors(raw: unknown): string[] {
   if (raw === undefined || raw === null) return [];
   if (typeof raw !== "number" || !Number.isInteger(raw) || raw < NETWORK_GIVE_UP_MIN_S || raw > NETWORK_GIVE_UP_MAX_S) {
-    return [`network_give_up_seconds must be an integer from ${NETWORK_GIVE_UP_MIN_S} to ${NETWORK_GIVE_UP_MAX_S}, got ${JSON.stringify(raw)}`];
+    return [`network_give_up_seconds must be an integer from ${NETWORK_GIVE_UP_MIN_S} to ${NETWORK_GIVE_UP_MAX_S} (${NETWORK_GIVE_UP_MAX_WHY}), got ${JSON.stringify(raw)}`];
   }
   return [];
 }
