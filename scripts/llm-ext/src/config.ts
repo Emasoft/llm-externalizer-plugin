@@ -2810,8 +2810,12 @@ export function validateProfile(
     }
     const pool = coerceFreeModels(profile.free_models);
     if (pool.length === 0) {
+      // WHY: a fresh settings.yaml ships free_models: [] as a placeholder, so the bare refusal gave no hint how to fill the pool (GitHub issue 16 item 4; TRDD-8CCKM4XE). update-all refuses a GENERATED profile (free, paid, local), so those get --populate-default-profile.
+      const fill = isDynamicProfileName(name)
+        ? `Fill it with \`llm-ext-benchmark --populate-default-profile ${name}\` (zero cost for free), or list ':free' model ids under free_models in settings.yaml.`
+        : `Fill it with \`llm-ext-benchmark --update-all --profile ${name}\` or the \`/llm-externalizer:llm-externalizer-update-all\` command, or list ':free' model ids under free_models in settings.yaml.`;
       errors.push(
-        `Profile '${name}': free_only requires a non-empty 'free_models' list.`,
+        `Profile '${name}': free_only requires a non-empty 'free_models' list. ${fill}`,
       );
     }
     // A non-':free' id is still allowed IFF it is served ONLY by `providers[]`

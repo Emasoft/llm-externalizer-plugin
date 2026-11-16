@@ -95,8 +95,17 @@ describe("validateProfile — free_only zero-spend invariants", () => {
       const r = validateProfile("my-free-only", freeProfile({ free_models: [] }));
     expect(r.valid).toBe(false);
     expect(r.errors.join("\n")).toMatch(/non-empty 'free_models'/);
+    expect(r.errors.join("\n")).toMatch(/llm-ext-benchmark --update-all --profile/);
+    expect(r.errors.join("\n")).toMatch(/\/llm-externalizer:llm-externalizer-update-all/);
+    expect(r.errors.join("\n")).toMatch(/free_models in settings\.yaml/);
   });
 
+  it("names the populate command, not update-all, for the built-in free profile", () => {
+    const r = validateProfile("free", freeProfile({ free_models: [] }));
+    expect(r.valid).toBe(false);
+    expect(r.errors.join("\n")).toMatch(/llm-ext-benchmark --populate-default-profile free/);
+    expect(r.errors.join("\n")).not.toMatch(/--update-all/);
+  });
   it("REJECTS free_only on a local preset (':free' is OpenRouter-only)", () => {
       const r = validateProfile("my-free-only", freeProfile({ mode: "local", api: "lmstudio-local", url: undefined }));
     expect(r.valid).toBe(false);
