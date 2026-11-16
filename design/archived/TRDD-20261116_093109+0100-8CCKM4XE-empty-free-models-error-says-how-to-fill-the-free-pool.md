@@ -1,10 +1,10 @@
 ---
 trdd-id: 8CCKM4XE
 title: Empty free_models error says how to fill the free pool
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-16T09:31:09+0100
-updated: 2026-11-16T09:41:33+0100
+updated: 2026-11-16T15:14:16+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -37,3 +37,4 @@ Append to that message how to fill it: run llm-ext-benchmark --update-all --prof
 
 - 2026-11-16T09:31:09+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T09:41:33+0100 — column → testing by main-agent@llm-externalizer-plugin. fix landed 7b0a76d8; dist rebuild and full suite owed at release
+- 2026-11-16T15:14:16+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. fix 7b0a76d8 shipped in v14.3.1; both acceptance boxes ticked.

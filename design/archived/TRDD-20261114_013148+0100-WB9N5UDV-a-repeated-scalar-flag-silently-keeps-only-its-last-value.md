@@ -1,10 +1,10 @@
 ---
 trdd-id: WB9N5UDV
 title: A repeated scalar flag silently keeps only its last value
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T01:31:48+0100
-updated: 2026-11-16T10:02:19+0100
+updated: 2026-11-16T15:14:07+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -35,6 +35,7 @@ Acceptance:
 
 - 2026-11-14T01:31:48+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T10:02:19+0100 — column → testing by main-agent@llm-externalizer-plugin. fix and built-CLI test committed; full suite before push
+- 2026-11-16T15:14:07+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. fix 21cb9770 and bundle f4d1cb2f shipped in v14.3.1; both acceptance boxes ticked.
 
 ## Notes
 

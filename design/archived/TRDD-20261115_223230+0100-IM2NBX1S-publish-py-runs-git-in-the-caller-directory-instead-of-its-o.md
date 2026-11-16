@@ -1,10 +1,10 @@
 ---
 trdd-id: IM2NBX1S
 title: publish.py runs git in the caller directory instead of its own repository
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-15T22:32:30+0100
-updated: 2026-11-16T09:30:56+0100
+updated: 2026-11-16T15:14:17+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -24,6 +24,7 @@ implementation-commits: [e744d9c6]
 
 - 2026-11-15T22:32:30+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T09:30:56+0100 — column → testing by main-agent@llm-externalizer-plugin. fix and tests landed; full suite owed pre-push
+- 2026-11-16T15:14:17+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. fix e744d9c6 shipped in v14.3.1; both acceptance boxes ticked.
 
 ## Problem
 
