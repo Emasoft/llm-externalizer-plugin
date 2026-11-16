@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-11-16T22:37:52+0100
+updated: 2026-11-16T23:07:27+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -80,3 +80,4 @@ USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces
 ## Notes
 
 2026-11-16 22:37+0100: shares commit 97fdae64 with TRDD-1OOAH3LD. The main agent read its completion.ts hunks after the 14.4.1 publish: withLocalThinking skips routed sends, a missing dep and a body that already has chat_template_kwargs; thinkingSent is true only for a non-routed local (broker, or llama.cpp/Locals api) send with enable_thinking true. filterBodyForSupportedParams cannot drop chat_template_kwargs (it is not in FILTERABLE_REQUEST_FIELDS, completion.ts:280). Tests are in local-input-budget.test.ts lines 548-728 (switch per kind and model, strip on and off, JSON path, unclosed tag, routed and remote sends). Not verified live: whether Locals puts a think block in content.
+2026-11-16 23:07+0100: decision B1 (main agent, under the USER delegation of 2026-11-15, started WITHOUT a harness review of its proposal): retire the pre-ZGSGGHQG broker drain path (review F-1: protocol.ts LEGACY_BROKER_STATE_FILES/readLegacyBrokerStates, server.ts checkLegacy, broker.test.ts legacy test). Why: no commit on origin/main ever shipped a broker that writes broker-llama.json (18 broker dists scanned, all carry broker-local.json; shipped code only reads the file), the test needs local-only commit fd7c3862 (GitHub API 422) so it can never pass on CI, and the project forbids legacy code. Process snapshot at 23:07+0100: no __broker process running on this machine. Reversible from git.

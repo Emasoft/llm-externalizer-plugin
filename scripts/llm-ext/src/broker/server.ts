@@ -64,12 +64,9 @@ import {
   STATE_HEADER,
   TIMEOUT_HEADER,
   TOKEN_HEADER,
-  isBrokerProcess,
-  readLegacyBrokerStates,
   removeBrokerStateIfOwn,
   writeBrokerState,
   type BrokerEngine,
-  type BrokerState,
   type JobReply,
 } from "./protocol.js";
 
@@ -200,25 +197,6 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   let server: RunningServer | null = null;
   let swapping = false;
   let draining = false;
-  /** Review F-1: a live pre-ZGSGGHQG broker (broker-llama.json), null when none. */
-  let legacy: BrokerState | null = null;
-  let legacyAsked = 0;
-  const checkLegacy = async (): Promise<void> => {
-    let found: BrokerState | null = null;
-    for (const s of readLegacyBrokerStates(o.dir)) if (pidState(s.pid) === "alive" && (await isBrokerProcess(s.pid))) found = s;
-    if (found && legacyAsked !== found.pid) {
-      legacyAsked = found.pid;
-      o.log(`an older broker (pid ${found.pid}, version ${found.version}, broker-llama.json) is running: asked it to drain; no main server starts until it exits`);
-      // The same drain request as a version handover: it refuses new jobs, finishes its queue and exits.
-      await fetch(`http://127.0.0.1:${found.port}/v1/shutdown`, { method: "POST", headers: { [TOKEN_HEADER]: found.token }, signal: AbortSignal.timeout(3000) }).catch((e: Error) =>
-        o.log(`the drain request to the older broker failed (${e.message}); waiting for it to exit`),
-      );
-    }
-    if (!found && legacy) o.log(`the older broker (pid ${legacy.pid}) exited; main servers start again`);
-    legacy = found;
-  };
-  /** A registry-shaped holder for SlotBusyError, so the wait is the busy-slot wait (retried by the tick, never an error). */
-  const legacyHolder = (s: BrokerState): RegistryEntry => ({ role: "main", pid: s.pid, pgid: s.pid, port: s.port, argv: [], model: "", ctx: 0, ownerPid: s.pid, startedAt: s.startedAt });
   let exiting = false;
   let lastRequestAt = Date.now();
   /** Spec 10 "no server and no request": the idle exit also counts from the end of the last server stop. */
@@ -730,9 +708,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // main orphaned by a SIGKILLed broker is stopped here, or it would run
       // beside the new one. A main still owned by a live broker (an old one
       // draining during a version handover) is waited for, exactly as a busy
-      // main slot of the same engine. A pre-ZGSGGHQG broker is waited for too.
-      await checkLegacy();
-      if (legacy) throw new SlotBusyError(`an older broker (pid ${legacy.pid}, broker-llama.json) is still running; it was asked to drain`, legacyHolder(legacy));
+      // main slot of the same engine.
       for (const other of BROKER_ENGINES) {
         if (other === engine) continue;
         const held = (await sweepEngine(o.dir, other, "main", o.log)).find((e) => e.role === "main");
@@ -1109,15 +1085,6 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       void releaseEntry(o.dir, dead.engine, dead.pid).catch((e: Error) => o.log(`release failed: ${e.message}`));
       forgetServer(dead.pid);
     }
-    // Review F-1: while a pre-ZGSGGHQG broker lives, this broker runs no main
-    // server (that broker sees only the llama registry and could start a llama
-    // main beside ours): the running requests finish, the server stops, and
-    // nothing starts until that broker drained and exited (checkLegacy).
-    if (legacy) {
-      govSettle(new Set(), now);
-      if (server && running.size === 0 && !stopping) void stopServer(`an older broker (pid ${legacy.pid}) is still running`).catch((e: Error) => o.log(`stop failed: ${e.message}`));
-      return;
-    }
     // Before wantRotation, on every pump: credited only at the grant, the time rule would fire in the middle of a denial.
     if (deniedSince !== null) {
       sched.noteDenied(now - deniedSince);
@@ -1393,7 +1360,6 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   // No lock here: the CLIENT spawns under the broker spawn lock and waits for this file, so taking that lock here would deadlock.
   writeBrokerState(o.dir, { pid: process.pid, port, token, version: o.version, startedAt: new Date().toISOString() });
   o.log(`broker listening on 127.0.0.1:${port} (pid ${process.pid}, version ${o.version}, engines ${BROKER_ENGINES.join(", ")})`);
-  // TRDD-ZGSGGHQG review F-1: every tick also looks for a pre-ZGSGGHQG broker.
   let heldCheckedAt = 0;
   let calSweptAt = Date.now();
   /** When the config dir was first found missing in the current absence; null while it is there (coordinator decision 2026-10-30). */
@@ -1438,7 +1404,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       unloadedAt.set(server.key, Date.now());
       void stopServer("the governor asked for its RAM back").catch((e: Error) => o.log(`stop failed: ${e.message}`));
     }
-    void checkLegacy().finally(pump);
+    pump();
   }, TICK_MS);
   const onSignal = (sig: string): void => void shutdown(`signal ${sig}`);
   process.once("SIGTERM", onSignal);

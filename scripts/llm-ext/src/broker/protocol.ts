@@ -89,19 +89,6 @@ export function readBrokerState(dir: string): BrokerState | null {
   return parseBrokerState(brokerStatePath(dir));
 }
 
-/**
- * The state files of brokers from before TRDD-ZGSGGHQG: one broker per engine
- * (`__broker llama`), its state in broker-llama.json. Such a broker sees only
- * the llama registry, so it could start a llama main beside this broker's
- * Locals main; the broker asks it to drain and starts no main until it exits.
- */
-export const LEGACY_BROKER_STATE_FILES = ["broker-llama.json"] as const;
-
-/** The legacy brokers' state (file contents only; the caller checks the pid is still a broker). */
-export function readLegacyBrokerStates(dir: string): BrokerState[] {
-  return LEGACY_BROKER_STATE_FILES.map((f) => parseBrokerState(join(dir, f))).filter((s): s is BrokerState => s !== null);
-}
-
 function parseBrokerState(file: string): BrokerState | null {
   try {
     const s = JSON.parse(readFileSync(file, "utf8")) as Partial<BrokerState>;
