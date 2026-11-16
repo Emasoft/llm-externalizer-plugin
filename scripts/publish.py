@@ -139,7 +139,7 @@ def bump_version(current: str, part: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
-def git_cliff_bumped_version() -> str | None:
+def git_cliff_bumped_version(repo_root: Path) -> str | None:
     """Ask git-cliff to compute the next version from unreleased commits.
 
     git-cliff inspects the commits since the last matching tag and uses
@@ -153,6 +153,7 @@ def git_cliff_bumped_version() -> str | None:
         ["git-cliff", "--bumped-version"],
         check=False,
         capture=True,
+        cwd=str(repo_root),
     )
     if result.returncode != 0:
         return None
@@ -167,7 +168,7 @@ def git_cliff_bumped_version() -> str | None:
     return version
 
 
-def determine_next_version(args, current: str) -> str:
+def determine_next_version(args, current: str, repo_root: Path) -> str:
     """Pick the next version. Flags override, otherwise git-cliff auto-detects.
 
     Order of precedence:
@@ -190,7 +191,7 @@ def determine_next_version(args, current: str) -> str:
     if args.patch:
         return bump_version(current, "patch")
     # Auto-detection via git-cliff (conventional commits).
-    auto = git_cliff_bumped_version()
+    auto = git_cliff_bumped_version(repo_root)
     if auto and auto != current:
         print(f"  git-cliff --bumped-version: {current} -> {auto}")
         return auto
@@ -893,7 +894,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ── 1. Pre-flight: working tree must be clean ──
     # Mutating version in a dirty tree mixes user changes with publish artifacts.
     print("\n── 1. Pre-flight: working tree check ──")
-    pf_status = run(["git", "status", "--porcelain"], check=False)
+    # WHY (TRDD-IM2NBX1S): run() leaves cwd unset by default, so a child would
+    # act on the CALLER'S working directory; a publish started from another
+    # checkout then added/committed/tagged/pushed THAT checkout instead of the
+    # release tree. repo_root is the only authoritative repository, so every
+    # git/git-cliff/gh call in this file is passed it explicitly (a test in
+    # tests/test_publish_runs_git_in_repo_root.py fails if one is missed).
+    pf_status = run(["git", "status", "--porcelain"], check=False, cwd=str(repo_root))
     pf_dirty = [
         line
         for line in (pf_status.stdout or "").strip().splitlines()
@@ -943,7 +950,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print(f"ERROR: {plugin_json} is not valid JSON: {exc}", file=sys.stderr)
         sys.exit(1)
     current = manifest.get("version", "0.0.0")
-    new_version = determine_next_version(args, current)
+    new_version = determine_next_version(args, current, repo_root)
     tag = f"v{new_version}"
     # Also push the plugin-dependency resolver tag (see resolver_tag_for).
     try:
@@ -955,11 +962,11 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # Verify neither tag already exists (local + remote) — a stale copy of
     # either aborts, since both are pushed together.
     for t in (tag, resolver_tag):
-        local = run(["git", "tag", "--list", t], check=False)
+        local = run(["git", "tag", "--list", t], check=False, cwd=str(repo_root))
         if local.stdout and local.stdout.strip() == t:
             print(f"ERROR: tag '{t}' already exists locally", file=sys.stderr)
             sys.exit(1)
-        remote = run(["git", "ls-remote", "--tags", "origin", t], check=False)
+        remote = run(["git", "ls-remote", "--tags", "origin", t], check=False, cwd=str(repo_root))
         if remote.stdout and remote.stdout.strip():
             print(f"ERROR: tag '{t}' already exists on remote origin", file=sys.stderr)
             sys.exit(1)
@@ -989,6 +996,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         ["git-cliff", "--unreleased", "--tag", tag, "--prepend", str(changelog)],
         capture=True,
         check=False,
+        cwd=str(repo_root),
     )
     cliff_output = (cliff_result.stderr or "") + (cliff_result.stdout or "")
     if "were skipped" in cliff_output:
@@ -1226,9 +1234,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     dist_dir = repo_root / "scripts" / "llm-ext" / "dist"
     if dist_dir.exists():
         files_to_stage.append(str(dist_dir))
-    run(["git", "add"] + files_to_stage, capture=False)
+    run(["git", "add"] + files_to_stage, capture=False, cwd=str(repo_root))
     # Warn if any modified files were missed
-    porcelain = run(["git", "status", "--porcelain"], check=False)
+    porcelain = run(["git", "status", "--porcelain"], check=False, cwd=str(repo_root))
     if porcelain.stdout:
         unstaged = [
             line for line in porcelain.stdout.strip().splitlines() if len(line) >= 2 and line[1] not in (" ", "?")
@@ -1237,7 +1245,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print("WARNING: unstaged modified files detected:", file=sys.stderr)
             for line in unstaged:
                 print(f"  {line}", file=sys.stderr)
-    run(["git", "commit", "-m", f"chore(release): {tag}"], capture=False)
+    run(["git", "commit", "-m", f"chore(release): {tag}"], capture=False, cwd=str(repo_root))
     print()
 
     # ── 9. Tag ──
@@ -1245,8 +1253,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # tag and the resolver tag the plugin-dependency system requires. Both
     # are annotated so `git push --follow-tags` carries them.
     print("── 9. Tag ──")
-    run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False)
-    run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False)
+    run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False, cwd=str(repo_root))
+    run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False, cwd=str(repo_root))
     print()
 
     # ── 10. Push ──
@@ -1254,7 +1262,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ancestor of `git push`, which is what authorises the push. There is no
     # lock file and no env var — both are spoofable, ancestry is not.
     print("── 10. Push ──")
-    push_result = run(["git", "push", "--follow-tags"], capture=True, check=False)
+    push_result = run(["git", "push", "--follow-tags"], capture=True, check=False, cwd=str(repo_root))
     if push_result.returncode != 0:
         # WHY: a failed push must preserve local work and recovery evidence.
         # The previous branch ran `git reset --hard HEAD~1` and deleted both
@@ -1281,6 +1289,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     run(
         ["gh", "release", "create", tag, "--title", tag, "--notes", notes],
         capture=False,
+        cwd=str(repo_root),
     )
 
     print(f"\nPublished {tag}")
