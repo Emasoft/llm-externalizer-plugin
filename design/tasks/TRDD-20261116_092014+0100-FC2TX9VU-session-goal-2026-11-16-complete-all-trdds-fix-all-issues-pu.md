@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-16T09:20:14+0100
+updated: 2026-11-16T09:22:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -38,3 +38,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 ## Approval log
 
 - 2026-11-16T09:20:14+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Triage log
+
+2026-11-16T09:22:25+0100 — dev+testing cards (14): every implementation-commits SHA is an ancestor of release/13.6.1, and git diff origin/main release/13.6.1 touches only version files, CHANGELOG, dist and the 2 cherry-picked cards, so all that code shipped in 14.3.0 (main was a squash, so SHAs are not on main by ancestry). RL-01..13 and DOC-11 belong to the ZB41KG62 classifiers plan and target a release named 14.3.0; that version number is now taken, so they are the checklist for the next release, not done. Stranded work to check: worktree .claude/worktrees/agent-a8a10649113528eb3 (base 016f03c1, v14.1.x) has uncommitted edits to src/index.ts, profile-fallback.ts and 2 tests; builds_dev/wt-oziiably-parent has an uncommitted classify-launch.test.ts edit. Issue retest delegated (report under reports_dev/issue-triage/).
