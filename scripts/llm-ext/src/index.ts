@@ -426,7 +426,7 @@ import {
 // ALONE. That function is gone with the retired machine-owned names, and so are
 // its imports — the dynamic maintainer owns every one of those reads now.
 import { getActiveBillableForModel } from "./config.js";
-import { makeNetworkGiveUp, PROBE_TIMEOUT_MS, readyLocalTarget } from "./network-give-up.js";
+import { makeNetworkGiveUp, PROBE_TIMEOUT_MS, readyLocalTarget, remoteFallbackApplies } from "./network-give-up.js";
 import { fallbackVerdict, fallbackWarning, type FallbackFacts } from "./remote-fallback.js";
 import { getDynamicProfileRecord } from "./default-profiles-state.js";
 import { freeFailureCauseToError, FreeRotationNetworkError } from "./free-failure-cause.js";
@@ -2287,8 +2287,22 @@ export function detectProviderOutage(causes: readonly unknown[]): { baseUrl: str
  * the readiness of the local profiles are read when the dispatch starts, so a settings change between commands is honoured.
  */
 function newNetworkGiveUp(): NetworkGiveUp | undefined {
-  if (activeResolved === null || activeResolved.mode === "local") return undefined;
-  return makeNetworkGiveUp(activeSettings, getConfigDir());
+  // TRDD-WSPV40Y5 F1: the SAME predicate tryLocalFallback asks (remoteFallbackApplies), so the window is armed only where a fallback can
+  // follow it. Armed for a static user profile it only cut that profile's retry budget to the window and then threw, with no fallback.
+  if (activeResolved === null || !remoteFallbackApplies(activeResolved, activeResolved.name)) return undefined;
+  const profileName = activeResolved.name;
+  return makeNetworkGiveUp(activeSettings, getConfigDir(), {
+    // TRDD-WSPV40Y5 F2: readyLocalTarget vouches for the engine, the weights and an ok record; sendToLocalTarget also needs a
+    // "calibrated" sizing for the running tool, which is absent for a tool with no task kind or a model unfit for its kind. Without
+    // this check the window armed and the fallback then refused (LocalFallbackNotReady): a cut retry budget with no local answer.
+    // Outside a command (no ctx) tryLocalFallback sends nothing, so the window must not arm either.
+    sendReady: () => {
+      const ctx = ctxStore.getStore();
+      if (ctx === undefined) return false;
+      const t = localFallbackTarget(profileName);
+      return t !== undefined && localSizingFor(t.target, ctx.tool)?.state === "calibrated";
+    },
+  });
 }
 
 /** Timeout of the reachability probe that confirms a suspected provider outage. */
@@ -3797,14 +3811,25 @@ async function tryLocalFallback<T>(
   maxTokens: number | undefined,
   send: LocalSend<T>,
 ): Promise<T | undefined> {
-  if (activeResolved === null || activeResolved.isLocal || activeResolved.mode === "local" || !isDynamicProfileName(profileName)) return undefined;
+  // TRDD-WSPV40Y5 F1: the predicate is shared with newNetworkGiveUp (remoteFallbackApplies), so the window and this step cannot disagree.
+  if (!remoteFallbackApplies(activeResolved, profileName)) return undefined;
   const trigger = fallbackVerdict(causes, profileName, facts);
   if (trigger === undefined) return undefined;
   const ctx = ctxStore.getStore();
   // Outside a command there is no tool to size the local request for, so nothing can be sent locally: unchanged behaviour.
   if (ctx === undefined) return undefined;
-  const t = latchedLocalFallback() ?? localFallbackTarget(profileName);
-  if (t === undefined) return undefined;
+  // TRDD-WSPV40Y5 F3: localFallbackTarget reads the filesystem (cache dir, calibration record, settings) and can throw. Outside the
+  // try below that throw would replace the caller's ORIGINAL verdict with an fs error. Same handling as a failed local send: one
+  // stderr line naming the cause, then undefined so the caller throws its own verdict.
+  let found: LocalFallbackTarget | undefined;
+  try {
+    found = latchedLocalFallback() ?? localFallbackTarget(profileName);
+  } catch (targetErr) {
+    process.stderr.write(`[llm-externalizer] the local fallback target could not be determined, the original error is thrown: ${failureText(targetErr).split("\n")[0].slice(0, 300)}\n`);
+    return undefined;
+  }
+  if (found === undefined) return undefined;
+  const t = found;
   // WHY latched only once the local side answered or refused by budget (Q8, Q9): the warning says "answered locally", and a
   // target that failed must not pull the next files away from the remote verdict. First latch prints, a concurrent one does not.
   const latch = () => {

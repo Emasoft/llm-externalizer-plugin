@@ -276818,15 +276818,25 @@ function readyLocalTarget(settings, configDir, o = {}) {
   }
   return void 0;
 }
+function remoteFallbackApplies(resolved, profileName) {
+  return resolved !== null && !resolved.isLocal && resolved.mode !== "local" && isDynamicProfileName(profileName);
+}
 function makeNetworkGiveUp(settings, configDir, o = {}) {
   return {
     windowMs: networkGiveUpMs(settings),
     arm: async (err3, url2) => {
-      if (readyLocalTarget(settings, configDir, o) === void 0) return false;
-      if (!isNetworkIsolation([freeFailureCause("request", err3, failureText(err3))])) return false;
-      const base = probeBaseUrl(url2);
-      if (base === void 0) return false;
-      return !await strictProviderAnswer(base);
+      try {
+        if (readyLocalTarget(settings, configDir, o) === void 0) return false;
+        if (o.sendReady !== void 0 && !o.sendReady()) return false;
+        if (!isNetworkIsolation([freeFailureCause("request", err3, failureText(err3))])) return false;
+        const base = probeBaseUrl(url2);
+        if (base === void 0) return false;
+        return !await strictProviderAnswer(base);
+      } catch (armErr) {
+        process.stderr.write(`[llm-externalizer] the network give-up window stays unarmed, the original network error is thrown: ${failureText(armErr).split("\n")[0].slice(0, 300)}
+`);
+        return false;
+      }
     }
   };
 }
@@ -286674,8 +286684,20 @@ function detectProviderOutage(causes) {
   return { baseUrl: entries2[0].baseUrl, observed: [...new Set(entries2.map((e) => e.observed))] };
 }
 function newNetworkGiveUp() {
-  if (activeResolved === null || activeResolved.mode === "local") return void 0;
-  return makeNetworkGiveUp(activeSettings, getConfigDir());
+  if (activeResolved === null || !remoteFallbackApplies(activeResolved, activeResolved.name)) return void 0;
+  const profileName = activeResolved.name;
+  return makeNetworkGiveUp(activeSettings, getConfigDir(), {
+    // TRDD-WSPV40Y5 F2: readyLocalTarget vouches for the engine, the weights and an ok record; sendToLocalTarget also needs a
+    // "calibrated" sizing for the running tool, which is absent for a tool with no task kind or a model unfit for its kind. Without
+    // this check the window armed and the fallback then refused (LocalFallbackNotReady): a cut retry budget with no local answer.
+    // Outside a command (no ctx) tryLocalFallback sends nothing, so the window must not arm either.
+    sendReady: () => {
+      const ctx = ctxStore.getStore();
+      if (ctx === void 0) return false;
+      const t = localFallbackTarget(profileName);
+      return t !== void 0 && localSizingFor(t.target, ctx.tool)?.state === "calibrated";
+    }
+  });
 }
 async function providerReachable(baseUrl) {
   try {
@@ -287351,13 +287373,21 @@ async function sendToLocalTarget(t, messages, maxTokens, send) {
   return send(t.target.model, t.deps, { maxTokens: Math.min(maxTokens ?? sizing.maxTokens, sizing.maxTokens), retryClock: {} });
 }
 async function tryLocalFallback(profileName, causes, facts, messages, maxTokens, send) {
-  if (activeResolved === null || activeResolved.isLocal || activeResolved.mode === "local" || !isDynamicProfileName(profileName)) return void 0;
+  if (!remoteFallbackApplies(activeResolved, profileName)) return void 0;
   const trigger = fallbackVerdict(causes, profileName, facts);
   if (trigger === void 0) return void 0;
   const ctx = ctxStore.getStore();
   if (ctx === void 0) return void 0;
-  const t = latchedLocalFallback() ?? localFallbackTarget(profileName);
-  if (t === void 0) return void 0;
+  let found;
+  try {
+    found = latchedLocalFallback() ?? localFallbackTarget(profileName);
+  } catch (targetErr) {
+    process.stderr.write(`[llm-externalizer] the local fallback target could not be determined, the original error is thrown: ${failureText(targetErr).split("\n")[0].slice(0, 300)}
+`);
+    return void 0;
+  }
+  if (found === void 0) return void 0;
+  const t = found;
   const latch = () => {
     if (localFallbackLatch.has(ctx)) return;
     localFallbackLatch.set(ctx, t);

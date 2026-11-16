@@ -21,6 +21,7 @@ import {
   networkGiveUpMs,
   probeBaseUrl,
   readyLocalTarget,
+  remoteFallbackApplies,
   setNetworkGiveUpOverrideS,
   strictProviderAnswer,
 } from "./network-give-up.js";
@@ -280,6 +281,65 @@ describe("the arming condition: ALL THREE (ready local target, trigger c, no gen
     expect(probeBaseUrl("https://x.example/api/v1/chat")).toBeUndefined();
     expect(await gu.arm(refused(), "https://x.example/api/v1/chat")).toBe(false);
     expect(probeBaseUrl("https://openrouter.ai/api/v1/chat/completions")).toBe("https://openrouter.ai/api");
+  });
+
+  it("sendReady false (TRDD-WSPV40Y5 F2: a ready target with no calibrated sizing for the tool) keeps the window unarmed, probe never sent", async () => {
+    const f = readyFixture();
+    const up = await modelsServer(200, "text/html", "x");
+    const gu = makeNetworkGiveUp(f.settings, f.cfgDir, { ...LINUX, env: f.env, sendReady: () => false });
+    expect(await gu.arm(refused(), `${up.url}/v1/chat/completions`)).toBe(false);
+    expect(up.seen()).toBe(0);
+  });
+
+  it("sendReady true leaves the other conditions in force (armed on a closed port)", async () => {
+    const f = readyFixture();
+    const gu = makeNetworkGiveUp(f.settings, f.cfgDir, { ...LINUX, env: f.env, sendReady: () => true });
+    expect(await gu.arm(refused(), `${await closedPortUrl()}/v1/chat/completions`)).toBe(true);
+  });
+
+  it("an arm that throws (TRDD-WSPV40Y5 F3) resolves false and writes exactly one stderr line naming the cause", async () => {
+    const f = readyFixture();
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    });
+    try {
+      const gu = makeNetworkGiveUp(f.settings, f.cfgDir, {
+        ...LINUX,
+        env: f.env,
+        sendReady: () => {
+          throw new Error("EACCES: cannot read the calibration record");
+        },
+      });
+      expect(await gu.arm(refused(), `${await closedPortUrl()}/v1/chat/completions`)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\[llm-externalizer\] .*EACCES: cannot read the calibration record\n$/);
+  });
+});
+
+describe("remoteFallbackApplies (TRDD-WSPV40Y5 F1: the one predicate of the give-up window and the fallback step)", () => {
+  const remote = { isLocal: false, mode: "remote" as const };
+
+  it.each([["free"], ["paid"]])("the built-in remote dynamic profile '%s' applies", (name) => {
+    expect(remoteFallbackApplies(remote, name)).toBe(true);
+  });
+
+  it("a static user-defined remote profile does not apply (no fallback follows, so no window)", () => {
+    expect(remoteFallbackApplies(remote, "my-openrouter")).toBe(false);
+  });
+
+  it("a local profile does not apply, even under the dynamic name 'local'", () => {
+    expect(remoteFallbackApplies({ isLocal: true, mode: "local" }, "local")).toBe(false);
+    expect(remoteFallbackApplies({ isLocal: false, mode: "local" }, "free")).toBe(false);
+    expect(remoteFallbackApplies({ isLocal: true, mode: "remote" }, "free")).toBe(false);
+  });
+
+  it("no resolved profile does not apply", () => {
+    expect(remoteFallbackApplies(null, "free")).toBe(false);
   });
 });
 

@@ -8,7 +8,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import type { BrokerEngine } from "./broker/protocol.js";
 import { snapshotWeightFiles, ggufShards } from "./calibration/fingerprint.js";
 import { readRecordStatus } from "./calibration/record.js";
-import { fallbackToLocalSetting, localsPlatformSupported, networkGiveUpErrors, type Settings } from "./config.js";
+import { fallbackToLocalSetting, isDynamicProfileName, localsPlatformSupported, networkGiveUpErrors, type ResolvedProfile, type Settings } from "./config.js";
 import { freeFailureCause, isNetworkIsolation } from "./free-failure-cause.js";
 import { localEngineOf } from "./local-input-budget.js";
 import { hfCacheDir, parseManagedModel } from "./local-llama-server.js";
@@ -173,21 +173,49 @@ export function readyLocalTarget(settings: Settings, configDir: string, o: Ready
   return undefined;
 }
 
+/** makeNetworkGiveUp options: the readiness environment plus an optional extra readiness check the caller owns. */
+export interface GiveUpOptions extends ReadyNowEnv {
+  /** Run by arm right after the readyLocalTarget check; false leaves the window unarmed. Throws are caught by arm (stderr line, unarmed). */
+  sendReady?: () => boolean;
+}
+
+/**
+ * TRDD-PN0N4290 + TRDD-WSPV40Y5: the ONE predicate of "a remote failure of this profile may finish on a local profile". WHY shared:
+ * the give-up window (newNetworkGiveUp) and the fallback step (tryLocalFallback) both ask it, so they can never disagree. A
+ * disagreement armed the window for a static user profile (retry budget cut to the window) while the fallback never ran after it.
+ * Only the built-in remote dynamic profiles qualify (static user-defined profiles do NOT fall back: the 2026-09-17 ruling); a
+ * local active profile has no remote to give up on, and `local` is dynamic by name but local by mode.
+ */
+export function remoteFallbackApplies(resolved: Pick<ResolvedProfile, "isLocal" | "mode"> | null, profileName: string): boolean {
+  return resolved !== null && !resolved.isLocal && resolved.mode !== "local" && isDynamicProfileName(profileName);
+}
+
 /**
  * The give-up window of one dispatch. `arm` runs once, at the first isolation failure, and needs ALL THREE: (iii) a local target is
- * ready now, (i) trigger (c) holds over the causes seen so far (the one failure that started the run), (ii) the strict probe gives
- * no genuine provider answer. WHY this order: cheapest first, so a user with no ready local profile (the common case) does no
- * network I/O at all and keeps the existing retries exactly as before, and the 5 s probe is the last resort.
+ * ready now (readyLocalTarget, plus the caller's sendReady: the local send also needs a calibrated sizing for the running tool, which
+ * readiness alone does not vouch for, TRDD-WSPV40Y5 F2), (i) trigger (c) holds over the causes seen so far (the one failure that
+ * started the run), (ii) the strict probe gives no genuine provider answer. WHY this order: cheapest first, so a user with no ready
+ * local profile (the common case) does no network I/O at all and keeps the existing retries exactly as before, and the 5 s probe is
+ * the last resort.
+ * WHY arm catches: its promise is memoized by http.ts (giveUp.armed), so a throw (an unreadable cache dir or record, a model unfit
+ * for the tool's sizing) would replace the real network error of every later failure with the fs error. A caught throw writes one
+ * stderr line naming the cause and leaves the window unarmed, so the caller throws its ORIGINAL verdict (never silent).
  */
-export function makeNetworkGiveUp(settings: Settings, configDir: string, o: ReadyNowEnv = {}): NetworkGiveUp {
+export function makeNetworkGiveUp(settings: Settings, configDir: string, o: GiveUpOptions = {}): NetworkGiveUp {
   return {
     windowMs: networkGiveUpMs(settings),
     arm: async (err, url) => {
-      if (readyLocalTarget(settings, configDir, o) === undefined) return false;
-      if (!isNetworkIsolation([freeFailureCause("request", err, failureText(err))])) return false;
-      const base = probeBaseUrl(url);
-      if (base === undefined) return false;
-      return !(await strictProviderAnswer(base));
+      try {
+        if (readyLocalTarget(settings, configDir, o) === undefined) return false;
+        if (o.sendReady !== undefined && !o.sendReady()) return false;
+        if (!isNetworkIsolation([freeFailureCause("request", err, failureText(err))])) return false;
+        const base = probeBaseUrl(url);
+        if (base === undefined) return false;
+        return !(await strictProviderAnswer(base));
+      } catch (armErr) {
+        process.stderr.write(`[llm-externalizer] the network give-up window stays unarmed, the original network error is thrown: ${failureText(armErr).split("\n")[0].slice(0, 300)}\n`);
+        return false;
+      }
     },
   };
 }

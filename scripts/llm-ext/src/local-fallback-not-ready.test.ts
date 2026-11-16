@@ -14,6 +14,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
+import type { RetryClock } from "./provider/http.js";
 
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const created: string[] = [];
@@ -51,7 +52,8 @@ const PAID = (local: boolean) =>
   ].join("\n");
 
 /** A config dir; `ready` adds what readyLocalTarget needs (llama-server on PATH, the weights in a hub-layout cache, an ok record). */
-function fixture(ready: boolean): void {
+/** `brokenCache` (TRDD-WSPV40Y5 F3): refs/main of the model cache is a DIRECTORY, so readyLocalTarget throws EISDIR from readFileSync (a real fs error). */
+function fixture(ready: boolean, brokenCache = false): void {
   const cfgDir = tempDir("cfg");
   writeFileSync(join(cfgDir, "settings.yaml"), PAID(ready), "utf-8");
   const ids = ["vendor/paid-head", "vendor/paid-a"];
@@ -63,7 +65,8 @@ function fixture(ready: boolean): void {
     chmodSync(join(binDir, "llama-server"), 0o755);
     const repo = join(cache, "models--ggml-org--tiny-llamas");
     mkdirSync(join(repo, "refs"), { recursive: true });
-    writeFileSync(join(repo, "refs", "main"), "rev1", "utf-8");
+    if (brokenCache) mkdirSync(join(repo, "refs", "main"));
+    else writeFileSync(join(repo, "refs", "main"), "rev1", "utf-8");
     mkdirSync(join(repo, "snapshots", "rev1"), { recursive: true });
     writeFileSync(join(repo, "snapshots", "rev1", "stories15M-q4_0.gguf"), "readiness only checks that the file exists", "utf-8");
     writeRecord(cfgDir, recordFixture("llama", MODEL));
@@ -105,8 +108,8 @@ function redirectFetchTo(base: string): void {
 }
 
 /** One run of the chain walk under a mass_scout usage context, twice in the SAME context: both errors, the stderr text and the POST counts. */
-async function runTwice(ready: boolean): Promise<{ errors: Error[]; stderr: string; postsAfter: number[] }> {
-  fixture(ready);
+async function runTwice(ready: boolean, brokenCache = false): Promise<{ errors: Error[]; stderr: string; postsAfter: number[] }> {
+  fixture(ready, brokenCache);
   const s = await creditServer();
   redirectFetchTo(s.url);
   vi.resetModules();
@@ -148,5 +151,45 @@ describe("TRDD-WSPV40Y5: a ready local profile with no calibrated sizing for the
     expect(withLocal.postsAfter[0]).toBeGreaterThan(0);
     expect(withLocal.postsAfter[1]).toBeGreaterThan(withLocal.postsAfter[0]);
     expect(withLocal.postsAfter).toEqual(without.postsAfter);
+  }, 120_000);
+
+  it("TRDD-WSPV40Y5 F3: a filesystem error while resolving the local target (EISDIR on the model cache ref) leaves the original verdict, one stderr line per failed call", async () => {
+    const broken = await runTwice(true, true);
+    const without = await runTwice(false);
+    expect(broken.errors[0].message).not.toBe("resolved");
+    // The caller's own verdict, never the fs error: identical to the run with no local profile at all.
+    expect(broken.errors.map((e) => [e.name, e.message])).toEqual(without.errors.map((e) => [e.name, e.message]));
+    expect(broken.errors.map((e) => e.message).join("\n")).not.toMatch(/EISDIR/);
+    // Never silent: one line per call that tried the target (nothing is latched), each naming the cause.
+    const lines = broken.stderr.split("\n").filter((l) => l.includes("the local fallback target could not be determined"));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("EISDIR");
+  }, 120_000);
+
+  it("TRDD-WSPV40Y5 F2: the window that index.ts builds does NOT arm for a tool with no task kind (mass_scout: the send would be refused), and does for chat (control, same ready fixture)", async () => {
+    fixture(true);
+    const s = await creditServer();
+    redirectFetchTo(s.url);
+    vi.resetModules();
+    const idx = await import("./index.js");
+    await idx.boot();
+    const validated = await import("./benchmark/validated.js");
+    validated.setValidationBypassForTests(true);
+    const { ctxStore } = await import("./usage-history.js");
+    vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const clock: RetryClock = { startedAt: Date.now() - 10, expired: true };
+    await ctxStore.run({ tool: "chat", params: "", project: "/tmp", opId: "op-00000000" }, () => idx.__ensembleStreamingForTests([{ role: "user", content: "Say hello." }], {}, clock).then(() => undefined, () => undefined));
+    expect(clock.networkGiveUp, "a paid remote active profile gets a window").toBeDefined();
+    // WHY restore: the fetch redirect would send the strict probe to the credit server, whose 200 JSON models list is a genuine provider answer and vetoes the window.
+    vi.restoreAllMocks();
+    const closed = createServer();
+    await new Promise<void>((r) => closed.listen(0, "127.0.0.1", r));
+    const { port } = closed.address() as { port: number };
+    await new Promise<void>((r) => closed.close(() => r()));
+    const url = `http://127.0.0.1:${port}/v1/chat/completions`;
+    const refused = Object.assign(new Error("fetch failed"), { failure: { networkCode: "ECONNREFUSED" } });
+    const armUnder = (tool: string) => ctxStore.run({ tool, params: "", project: "/tmp", opId: "op-00000000" }, () => clock.networkGiveUp!.arm(refused, url));
+    expect(await armUnder("chat"), "control: calibrated sizing for chat").toBe(true);
+    expect(await armUnder("mass_scout"), "no task kind: sizing is null, the window stays unarmed").toBe(false);
   }, 120_000);
 });

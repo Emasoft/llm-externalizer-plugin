@@ -317,7 +317,11 @@ describe("enabled: false gates readyLocalTarget: no ready target, so the window 
       const clock: RetryClock = { startedAt: Date.now() - 10, expired: true };
       await caught(idx.__ensembleStreamingForTests(MESSAGES, { modelOverride: "vendor/free-a:free" }, clock));
       expect(clock.networkGiveUp, "a remote active profile gets a window").toBeDefined();
-      expect(await clock.networkGiveUp!.arm(refused(), url)).toBe(expected);
+      // TRDD-WSPV40Y5 F2: arm also asks whether the local send could run, which needs the running command's tool (sizing is null without one),
+      // so the arm runs inside a command context exactly as a dispatch does.
+      const { ctxStore } = await import("./usage-history.js");
+      const ctx = { tool: "chat", params: "", project: "/tmp", opId: "op-00000000" };
+      expect(await ctxStore.run(ctx, () => clock.networkGiveUp!.arm(refused(), url))).toBe(expected);
     }
   }, 60_000);
 });
