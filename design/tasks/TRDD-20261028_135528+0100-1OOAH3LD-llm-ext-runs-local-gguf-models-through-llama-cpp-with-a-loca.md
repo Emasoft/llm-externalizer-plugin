@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-11-16T20:56:12+0100
+updated: 2026-11-16T22:36:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-28T13:55:28+0100
-implementation-commits: [f105c646]
+implementation-commits: [f105c646, 97fdae64]
 ---
 
 # llm-ext runs local GGUF models through llama.cpp with a local_llama profile
@@ -137,3 +137,4 @@ Sent by the coordinator to the calibration worker on 2026-10-29 at 17:50 +0100; 
 ## Notes
 
 2026-11-14T16:20+0100 TRDD-SWNIIFTF (--stop_on_errors) closed its box (c), a request queued for memory still completes, on the governor queue (164fa021), not on the broker memory queue its npt named (this card and ZGSGGHQG). When the broker memory wait lands, re-check that a broker job held for memory never trips --stop_on_errors (the user ruling of 2026-10-28: not having enough memory is not a failure, it only queues the request).
+2026-11-16 22:36+0100: the main agent read the shipped completion.ts hunks of 97fdae64 AFTER the 14.4.1 publish (git show 97fdae64 -- scripts/llm-ext/src/provider/completion.ts). withLocalThinking skips routed sends, a missing dep and a body that already has chat_template_kwargs; thinkingSent is true only for a non-routed local (broker, or llama.cpp/Locals api) send with enable_thinking true; the JSON path strips after the length check and before the parse. Matches the worker report. Not verified live: whether llama-server or Locals put a think block in content.

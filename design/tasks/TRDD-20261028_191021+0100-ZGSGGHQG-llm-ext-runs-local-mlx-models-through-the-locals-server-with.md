@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-11-16T20:56:15+0100
+updated: 2026-11-16T22:36:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-28T19:10:21+0100
+implementation-commits: [97fdae64]
 ---
 
 # llm-ext runs local MLX models through the Locals server with a mac-only locals-mlx profile

@@ -4,7 +4,7 @@ title: GitHub CI and Release workflows fail on the Linux runner since 2026-10-31
 column: dev
 status: tasked
 created: 2026-11-16T20:18:19+0100
-updated: 2026-11-16T21:05:03+0100
+updated: 2026-11-16T22:36:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T20:18:19+0100
+implementation-commits: [ffdc019b]
 ---
 
 # GitHub CI and Release workflows fail on the Linux runner since 2026-10-31
