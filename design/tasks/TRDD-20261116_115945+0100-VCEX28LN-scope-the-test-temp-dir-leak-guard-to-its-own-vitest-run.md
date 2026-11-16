@@ -1,10 +1,10 @@
 ---
 trdd-id: VCEX28LN
 title: Scope the test temp-dir leak guard to its own vitest run
-column: todo
+column: testing
 status: tasked
 created: 2026-11-16T11:59:45+0100
-updated: 2026-11-16T16:07:51+0100
+updated: 2026-11-16T16:13:10+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T11:59:45+0100
+implementation-commits: [b239d2b4]
 ---
 
 # Scope the test temp-dir leak guard to its own vitest run
@@ -24,6 +25,7 @@ src/test-tmpdir-guard.ts:35-45 snapshots the whole machine /tmp and tmpdir() and
 ## Approval log
 
 - 2026-11-16T11:59:45+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T16:13:10+0100 — column → testing by main-agent@llm-externalizer-plugin. lock landed in b239d2b4; proven with real single-file runs, full suite pending the pre-push run
 
 ## Notes
 
