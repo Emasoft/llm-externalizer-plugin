@@ -10010,6 +10010,8 @@ function loadSettings() {
       local_fallback: parsed.local_fallback,
       // Raw like the caps above: networkGiveUpErrors reports a malformed value in validateSettings.
       network_give_up_seconds: parsed.network_give_up_seconds,
+      // TRDD-M4KERGEF: raw like the caps above: fallbackToLocalErrors reports a malformed section in validateSettings.
+      fallback_to_local: parsed.fallback_to_local,
       // Computed from the raw text, because `yamlParse` discards comments and
       // the marker IS a comment. Only when a marked-name section is actually
       // present, so the ordinary load costs no second parse. PT-04: `scouting` carries the marker too, so it is checked here (MARKED_PROFILE_NAMES), not only the three dynamic names.
@@ -11169,6 +11171,44 @@ function appendLocalFallbackErrors(result, settings) {
   const errors = localFallbackErrors(settings.local_fallback);
   return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
 }
+function isFallbackLocalProfile(profile) {
+  return profile !== void 0 && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
+}
+function fallbackToLocalErrors(raw, profiles) {
+  const known2 = FALLBACK_TO_LOCAL_KEYS.join(", ");
+  if (raw === void 0 || raw === null) return [];
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return [`fallback_to_local must be a mapping of ${known2}, got ${JSON.stringify(raw)}`];
+  }
+  const errors = [];
+  for (const [key, value] of Object.entries(raw)) {
+    if (!FALLBACK_TO_LOCAL_KEYS.includes(key)) {
+      errors.push(`fallback_to_local.${key} is not a known key (known: ${known2})`);
+    } else if (key === "enabled") {
+      if (typeof value !== "boolean") errors.push(`fallback_to_local.enabled must be true or false, got ${JSON.stringify(value)}`);
+    } else if (value !== null) {
+      if (typeof value !== "string" || value === "") {
+        errors.push(`fallback_to_local.profile must be the name of a local profile, got ${JSON.stringify(value)}`);
+      } else if (!Object.hasOwn(profiles, value)) {
+        errors.push(`fallback_to_local.profile names '${value}', which is not a profile of settings.yaml (profiles: ${Object.keys(profiles).join(", ") || "(none)"})`);
+      } else if (!isFallbackLocalProfile(profiles[value])) {
+        errors.push(`fallback_to_local.profile names '${value}', which is not a local profile: it needs server: managed and api llamacpp-local or locals-local`);
+      }
+    }
+  }
+  return errors;
+}
+function fallbackToLocalSetting(settings) {
+  const raw = settings.fallback_to_local;
+  const errors = fallbackToLocalErrors(raw, settings.profiles);
+  if (errors.length > 0) throw new Error(errors[0]);
+  const section2 = raw ?? {};
+  return { enabled: section2.enabled ?? true, profile: section2.profile ?? void 0 };
+}
+function appendFallbackToLocalErrors(result, settings) {
+  const errors = fallbackToLocalErrors(settings.fallback_to_local, settings.profiles);
+  return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
+}
 function appendCapErrors(result, settings) {
   if (settings.paid_benchmark_daily_cap_usd === void 0) return result;
   const cap = settings.paid_benchmark_daily_cap_usd;
@@ -11195,7 +11235,7 @@ function settingsLevelErrors(settings) {
   }
   errors.push(...profileTypesSettingsErrors(settings));
   errors.push(...activeClassifierErrors(settings));
-  return appendNetworkGiveUpErrors(appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings), settings).errors;
+  return appendFallbackToLocalErrors(appendNetworkGiveUpErrors(appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings), settings), settings).errors;
 }
 function validateSettings(settings) {
   const unmarked = settings.unmarkedDynamicProfiles;
@@ -11213,10 +11253,13 @@ function validateSettings(settings) {
   }
   const typeErrors = [...profileTypesSettingsErrors(settings, name), ...activeClassifierErrors(settings)];
   const result = validateProfile(name, profile);
-  return appendNetworkGiveUpErrors(
-    appendLocalFallbackErrors(
-      appendLocalGovernorErrors(
-        appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+  return appendFallbackToLocalErrors(
+    appendNetworkGiveUpErrors(
+      appendLocalFallbackErrors(
+        appendLocalGovernorErrors(
+          appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+          settings
+        ),
         settings
       ),
       settings
@@ -11675,7 +11718,7 @@ function assertFreeOnlyModel(freeOnly, billable, model, isFreeProvider = false) 
     );
   }
 }
-var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, NETWORK_GIVE_UP_MAX_S, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
+var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, TEXT_TYPES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, CLASSIFIER_DEFAULTS, GENERATED_MARKER, CLI_TOOLS_WITHOUT_RESOLVED_PROFILE, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, PROVISIONAL_LOCAL_CTX, LOCAL_FALLBACK_KEYS, LOCAL_FALLBACK_REMOVED_KEYS, NETWORK_GIVE_UP_MIN_S, NETWORK_GIVE_UP_MAX_S, FALLBACK_TO_LOCAL_KEYS, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -11973,6 +12016,7 @@ var init_config = __esm({
     LOCAL_FALLBACK_REMOVED_KEYS = /* @__PURE__ */ new Set(["contextTokens", "minFreeMemoryGb", "maxCpuLoad"]);
     NETWORK_GIVE_UP_MIN_S = 1;
     NETWORK_GIVE_UP_MAX_S = 3600;
+    FALLBACK_TO_LOCAL_KEYS = ["enabled", "profile"];
     FREE_POOL_SEED = Object.freeze([
       "poolside/laguna-m.1:free",
       "deepseek/deepseek-v4-flash:free",
@@ -276755,12 +276799,16 @@ function localsModelOnDisk(model, env) {
 }
 function readyLocalTarget(settings, configDir, o = {}) {
   const env = o.env ?? process.env;
-  const names2 = [...localsPlatformSupported(o.platform, o.arch) ? ["locals-mlx"] : [], "local_llama"];
+  const setting = fallbackToLocalSetting(settings);
+  if (!setting.enabled) return void 0;
+  const locals = localsPlatformSupported(o.platform, o.arch);
+  const names2 = setting.profile !== void 0 ? [setting.profile] : [...locals ? ["locals-mlx"] : [], "local_llama"];
   for (const name of names2) {
     const profile = settings.profiles[name];
     if (profile === void 0 || profile.server !== "managed") continue;
     const engine = localEngineOf(profile.api);
     if (engine === null) continue;
+    if (engine === "locals" && !locals) continue;
     const model = profile.model;
     const binary = engine === "llama" ? "llama-server" : "locals";
     if (!onPath(binary, env)) continue;

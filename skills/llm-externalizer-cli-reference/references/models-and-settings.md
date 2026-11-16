@@ -21,6 +21,7 @@ Flags are written `--name value`; booleans take `true`/`false`. Every action als
 - Local inference governor
 - Local decider fallback (`local_fallback`)
 - Network give-up window (`network_give_up_seconds`, `--network_give_up`)
+- Switching off or pinning the local fallback (`fallback_to_local`)
 
 ## `models` group
 
@@ -323,3 +324,17 @@ What happens after the give-up (automatic local fallback):
 - A request larger than the local input budget is refused for that file (the message names the bytes, the budget and the model), never truncated; the other files go on locally.
 - If the local send itself fails, one stderr line says why and the remote error is reported exactly as before. With no local profile ready, nothing changes at all.
 - A static profile you wrote yourself never switches: its call ends with the network error.
+
+## Switching off or pinning the local fallback (`fallback_to_local`)
+
+This top-level section controls the automatic local fallback described above. It is not the `local_fallback` section, which configures the mlx-decision decider.
+
+```yaml
+fallback_to_local:
+  enabled: true          # default true; false switches the fallback off
+  profile: local_llama   # optional; absent = automatic (locals-mlx where the machine can run it, else local_llama)
+```
+
+- `enabled: false`: no local profile is ever treated as ready. No command switches to a local profile, and the network give-up window is never armed, so the remote retries run exactly as they would with no local profile at all. The remote error is reported unchanged.
+- `profile: <name>`: only this profile is considered. It must be a profile of settings.yaml with `server: managed` and `api: llamacpp-local` or `locals-local`, so a profile you defined yourself is accepted. If it is not ready (engine binary, head model, calibration record), there is no fallback; the automatic profiles are never tried instead. A `locals-local` profile is ready only on macOS with Apple silicon. `profile:` left empty (null) means automatic, like no key; an empty string `""` is an error.
+- An unknown key, a non-boolean `enabled`, or a `profile` that is empty, not a string, names no profile of settings.yaml, or names one that is not a managed local profile fails every command at once, also when `enabled: false`. An error is never read as the default.

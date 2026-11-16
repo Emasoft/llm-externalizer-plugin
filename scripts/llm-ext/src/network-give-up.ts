@@ -8,7 +8,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import type { BrokerEngine } from "./broker/protocol.js";
 import { snapshotWeightFiles, ggufShards } from "./calibration/fingerprint.js";
 import { readRecordStatus } from "./calibration/record.js";
-import { localsPlatformSupported, networkGiveUpErrors, type Settings } from "./config.js";
+import { fallbackToLocalSetting, localsPlatformSupported, networkGiveUpErrors, type Settings } from "./config.js";
 import { freeFailureCause, isNetworkIsolation } from "./free-failure-cause.js";
 import { localEngineOf } from "./local-input-budget.js";
 import { hfCacheDir, parseManagedModel } from "./local-llama-server.js";
@@ -144,15 +144,25 @@ function localsModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
  * local_llama (agent decision B, section 3). Pure reads, no process: an unmanaged profile has no record and is never ready.
  * WHY the Locals check is PATH-only: localsPython also runs `uv tool dir`, a process; a `locals` installed only that way reads as
  * not ready here, which leaves the window unarmed (the existing retries), the safe side.
+ * TRDD-M4KERGEF: settings.yaml `fallback_to_local` gates this. `enabled: false` returns undefined, so no fallback runs AND the 1b
+ * window never arms (makeNetworkGiveUp asks this first). `profile` replaces the automatic list with that one profile: when it is
+ * not ready the answer is undefined, never the automatic list (a pin is the user saying which model may load on this machine).
+ * WHY gated here and not in the callers: the window and the fallback both ask this function, so one gate covers both.
  */
 export function readyLocalTarget(settings: Settings, configDir: string, o: ReadyNowEnv = {}): ReadyLocalTarget | undefined {
   const env = o.env ?? process.env;
-  const names = [...(localsPlatformSupported(o.platform, o.arch) ? ["locals-mlx"] : []), "local_llama"];
+  const setting = fallbackToLocalSetting(settings);
+  if (!setting.enabled) return undefined;
+  const locals = localsPlatformSupported(o.platform, o.arch);
+  const names = setting.profile !== undefined ? [setting.profile] : [...(locals ? ["locals-mlx"] : []), "local_llama"];
   for (const name of names) {
     const profile = settings.profiles[name];
     if (profile === undefined || profile.server !== "managed") continue;
     const engine = localEngineOf(profile.api);
     if (engine === null) continue;
+    // TRDD-M4KERGEF: the platform gate is per ENGINE, so a pinned Locals profile is not tried where Locals cannot run; for the
+    // automatic list it is the same gate as before (locals-mlx is the only locals-local candidate there).
+    if (engine === "locals" && !locals) continue;
     const model = profile.model;
     const binary = engine === "llama" ? "llama-server" : "locals";
     if (!onPath(binary, env)) continue;

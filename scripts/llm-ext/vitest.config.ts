@@ -199,6 +199,8 @@ export default defineConfig({
       'src/remote-fallback.test.ts',
       // TRDD-WSPV40Y5: the local fallback through real dispatch (index.ts call sites, latch, budget refusal, unchanged not-ready path) and the broker noHold flag.
       'src/local-fallback-dispatch.test.ts',
+      // TRDD-M4KERGEF: settings.yaml fallback_to_local (enabled / profile pin) gating readyLocalTarget: validation, the unarmed 1b window and the dispatch (the include list is explicit, so a new test file runs only once listed here).
+      'src/local-fallback-setting.test.ts',
       // TRDD-WSPV40Y5: a REAL local answer end to end (the esbuild-bundled CLI, a resetting remote, a ready managed local_llama on tiny-llamas): exit 0, the warning, the time bound, the latch.
       'src/local-fallback-e2e.test.ts',
       // TRDD-WSPV40Y5: tryLocalFallback with a tool that has no calibrated sizing changes nothing (LocalFallbackNotReady), through the real call site and a real 402 server.

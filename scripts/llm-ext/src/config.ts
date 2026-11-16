@@ -450,6 +450,13 @@ export interface Settings {
    * (only when a local fallback target is ready). Absent = 30. The --network_give_up flag wins. Read by network-give-up.ts.
    */
   network_give_up_seconds?: unknown;
+  /**
+   * TRDD-M4KERGEF: the raw top-level `fallback_to_local` section, uncoerced like local_governor so fallbackToLocalErrors can quote
+   * what the user wrote: `enabled` (default true) switches off the automatic local fallback of the free/paid profiles, `profile`
+   * pins it to one managed local profile (absent = automatic). WHY not under `local_fallback`: that section holds the mlx-decision
+   * decider settings, whose survival TRDD-O93LFMF3 leaves open. Read by network-give-up.ts readyLocalTarget.
+   */
+  fallback_to_local?: unknown;
 }
 
 /** Fully resolved profile with concrete values (no env var refs) */
@@ -1213,6 +1220,8 @@ export function loadSettings(): Settings | null {
       local_fallback: parsed.local_fallback as unknown,
       // Raw like the caps above: networkGiveUpErrors reports a malformed value in validateSettings.
       network_give_up_seconds: parsed.network_give_up_seconds as unknown,
+      // TRDD-M4KERGEF: raw like the caps above: fallbackToLocalErrors reports a malformed section in validateSettings.
+      fallback_to_local: parsed.fallback_to_local as unknown,
       // Computed from the raw text, because `yamlParse` discards comments and
       // the marker IS a comment. Only when a marked-name section is actually
       // present, so the ordinary load costs no second parse. PT-04: `scouting` carries the marker too, so it is checked here (MARKED_PROFILE_NAMES), not only the three dynamic names.
@@ -3714,6 +3723,71 @@ function appendLocalFallbackErrors(result: ValidationResult, settings: Settings)
   return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
 }
 
+/** TRDD-M4KERGEF: the known keys of the top-level `fallback_to_local` section. Names in the error text come from this list. */
+const FALLBACK_TO_LOCAL_KEYS: readonly string[] = ["enabled", "profile"];
+
+/**
+ * TRDD-M4KERGEF: whether a profile can be a local fallback target, the SAME predicate readyLocalTarget (network-give-up.ts) applies:
+ * `server: managed` and a local-engine api. WHY the two api literals and not localEngineOf (local-input-budget.ts): that module
+ * imports config.ts, so importing it back would be a cycle; the two lists must stay in step. WHY the predicates must match: a pin
+ * that passed validation but that readyLocalTarget can never return would silently switch the fallback off.
+ */
+export function isFallbackLocalProfile(profile: Profile | undefined): boolean {
+  return profile !== undefined && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
+}
+
+/**
+ * Every error in a raw `fallback_to_local` section (TRDD-M4KERGEF): not a mapping, an unknown key, `enabled` not a boolean, or a
+ * `profile` that is not a non-empty string naming a managed local profile of settings.yaml. Absent (undefined or null), and a null
+ * `profile`, are no error: the defaults apply (enabled, automatic). The pin is checked even with `enabled: false`, so a typo is
+ * reported at once and not when the fallback is switched back on. Fail fast: a typo is reported, never read as the default.
+ * Same shape as localFallbackErrors.
+ */
+export function fallbackToLocalErrors(raw: unknown, profiles: Record<string, Profile>): string[] {
+  const known = FALLBACK_TO_LOCAL_KEYS.join(", ");
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    return [`fallback_to_local must be a mapping of ${known}, got ${JSON.stringify(raw)}`];
+  }
+  const errors: string[] = [];
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!FALLBACK_TO_LOCAL_KEYS.includes(key)) {
+      errors.push(`fallback_to_local.${key} is not a known key (known: ${known})`);
+    } else if (key === "enabled") {
+      if (typeof value !== "boolean") errors.push(`fallback_to_local.enabled must be true or false, got ${JSON.stringify(value)}`);
+    } else if (value !== null) {
+      if (typeof value !== "string" || value === "") {
+        errors.push(`fallback_to_local.profile must be the name of a local profile, got ${JSON.stringify(value)}`);
+      } else if (!Object.hasOwn(profiles, value)) {
+        errors.push(`fallback_to_local.profile names '${value}', which is not a profile of settings.yaml (profiles: ${Object.keys(profiles).join(", ") || "(none)"})`);
+      } else if (!isFallbackLocalProfile(profiles[value])) {
+        errors.push(`fallback_to_local.profile names '${value}', which is not a local profile: it needs server: managed and api llamacpp-local or locals-local`);
+      }
+    }
+  }
+  return errors;
+}
+
+/** The parsed `fallback_to_local` section (TRDD-M4KERGEF): `profile` undefined means automatic. */
+export interface FallbackToLocalSetting {
+  enabled: boolean;
+  profile: string | undefined;
+}
+
+/** TRDD-M4KERGEF: the `fallback_to_local` section of `settings`, defaults applied. A malformed section throws (fail fast; validateSettings reports it first at load). */
+export function fallbackToLocalSetting(settings: Settings): FallbackToLocalSetting {
+  const raw = settings.fallback_to_local;
+  const errors = fallbackToLocalErrors(raw, settings.profiles);
+  if (errors.length > 0) throw new Error(errors[0]);
+  const section = (raw ?? {}) as { enabled?: boolean; profile?: string | null };
+  return { enabled: section.enabled ?? true, profile: section.profile ?? undefined };
+}
+
+function appendFallbackToLocalErrors(result: ValidationResult, settings: Settings): ValidationResult {
+  const errors = fallbackToLocalErrors(settings.fallback_to_local, settings.profiles);
+  return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
+}
+
 /**
  * Fold the Settings-level `paid_benchmark_daily_cap_usd` check into a
  * profile's ValidationResult. A tiny wrapper (not inlined into
@@ -3780,7 +3854,8 @@ export function settingsLevelErrors(settings: Settings): string[] {
   // PT-01: E81g / E81d / E113 are settings-level too (any profile, not just the effective one).
   errors.push(...profileTypesSettingsErrors(settings));
   errors.push(...activeClassifierErrors(settings));
-  return appendNetworkGiveUpErrors(appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings), settings).errors;
+  // TRDD-M4KERGEF: a malformed fallback_to_local is a settings-level error too, whichever profile is effective.
+  return appendFallbackToLocalErrors(appendNetworkGiveUpErrors(appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings), settings), settings).errors;
 }
 
 /**
@@ -3836,10 +3911,14 @@ export function validateSettings(settings: Settings): ValidationResult {
   // Governor D13: a malformed local_governor fails the load like a malformed cap, whichever profile is effective.
   // Local decider fallback: a malformed local_fallback does too, for the same reason (a typo is never the default).
   // TRDD-PN0N4290: a malformed network_give_up_seconds fails the load for the same reason: a typo is never the default.
-  return appendNetworkGiveUpErrors(
-    appendLocalFallbackErrors(
-      appendLocalGovernorErrors(
-        appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+  // TRDD-M4KERGEF: a malformed fallback_to_local does too (an unknown key, a wrong type, a pin to a missing or non-local profile).
+  return appendFallbackToLocalErrors(
+    appendNetworkGiveUpErrors(
+      appendLocalFallbackErrors(
+        appendLocalGovernorErrors(
+          appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+          settings,
+        ),
         settings,
       ),
       settings,
