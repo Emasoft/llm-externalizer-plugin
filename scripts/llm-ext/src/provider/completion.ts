@@ -43,6 +43,8 @@
 import { appendFileSync } from "node:fs";
 
 import { applyModelOverrides } from "../request-overrides.js";
+import { stripLeadingThinkBlock } from "./strip-thinking.js";
+import { localEngineOf } from "../local-input-budget.js";
 import { safeReadText, safeReadJson } from "../safe-body.js";
 import { appendModelEvent } from "../model-events.js";
 import { ctxStore, recordOutputTokensSample, recordRequest } from "../usage-history.js";
@@ -518,6 +520,56 @@ function requestOptionsConnection(
 }
 
 /**
+ * TRDD-1OOAH3LD gap C1-7 / TRDD-ZGSGGHQG gap Z-3: add the per-model thinking switch of a calibrated local route to one request body
+ * (deps.getLocalThinking, local-input-budget.ts localThinkingFor). Called where the body is built because only there the model of THIS
+ * send is known: an ensemble member or a fallback target has its own record, so a head-only decision would be wrong for them.
+ * Never overrides: a body that already carries chat_template_kwargs (the profile request_options thinking, applyRequestOptions) wins.
+ * A routed (non-primary) group gets nothing, as it gets no request_options (O7): the profile-wide calibration describes the primary
+ * server. A native conn never reaches a body build (chatCompletionNative), so it is untouched. `explicitRoute` is the chain walk's
+ * own entry (options.route, D6a); else the first group serving the model, exactly as resolveConnection chose it.
+ */
+function withLocalThinking(
+  body: Record<string, unknown>,
+  conn: ConnectionSetup,
+  explicitRoute: ResolvedRoute | undefined,
+  deps: CompletionDeps,
+): Record<string, unknown> {
+  if (conn.routed || deps.getLocalThinking === undefined || body.chat_template_kwargs !== undefined) return body;
+  const route = explicitRoute ?? deps.routeForModel(conn.model);
+  const thinking = deps.getLocalThinking(ctxStore.getStore()?.tool, conn.model, route);
+  return thinking === undefined ? body : { ...body, chat_template_kwargs: { enable_thinking: thinking } };
+}
+
+/**
+ * Did THIS send ask for thinking ON, judged from the body actually sent (after applyRequestOptions and withLocalThinking): chat_template_kwargs
+ * .enable_thinking === true on a non-routed connection. That covers both sources, the per-model switch of withLocalThinking and the profile's own
+ * request_options thinking:true; a routed group gets no request options and no switch, so its body never carries one.
+ */
+function thinkingSent(
+  body: Record<string, unknown>,
+  conn: ConnectionSetup,
+  explicitRoute: ResolvedRoute | undefined,
+  deps: CompletionDeps,
+): boolean {
+  const kwargs = body.chat_template_kwargs as { enable_thinking?: unknown } | undefined;
+  if (conn.routed || kwargs?.enable_thinking !== true) return false;
+  // Local only: a broker-managed connection, or a route whose api is a llama.cpp or Locals preset. A remote send is never touched.
+  if (conn.broker) return true;
+  const route = explicitRoute ?? deps.routeForModel(conn.model);
+  return route !== null && localEngineOf(route.api) !== null;
+}
+
+/**
+ * USER directive 2026-10-28 (TRDD-1OOAH3LD gap C1-7): strip the thinking block. A reply to a thinking-on send to a local route (thinkingSent)
+ * loses a LEADING <think>...</think> block (stripLeadingThinkBlock) before anyone reads it; on the JSON path that block in front of the object
+ * makes JSON.parse throw. Every other reply, every remote or routed one, and every cut-off one (unclosed tag) is returned byte for byte, so
+ * the existing empty / length handling of the callers is exactly what it was. reasoning_content is never read here, so it is untouched.
+ */
+function replyContent(content: string, thinkingOn: boolean): string {
+  return thinkingOn ? stripLeadingThinkBlock(content) : content;
+}
+
+/**
  * The start of one call, which a governor wait moves forward (design D9), and
  * where that wait is recorded so clockForCall keeps it off the call's retry
  * deadline, as for broker queue time.
@@ -657,6 +709,8 @@ export async function chatCompletionSimple(
     // ladder rungs. Set-and-guard booleans keep the ledger at "this model X'd on
     // this call", mirroring the existing 429-flood collapse. Logging-only.
     let emitted429 = false;
+    // Set per send by withLocalThinking; read by replyContent when the reply arrives.
+    let thinkingOn = false;
 
     for (const reasoning of reasoningLadder) {
       let body: Record<string, unknown> = { ...baseBody };
@@ -666,6 +720,8 @@ export async function chatCompletionSimple(
       body = applyModelOverrides(body, conn.model);
       // TRDD-1OOAH3LD: profile request_options win over the static model table.
       if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
+      body = withLocalThinking(body, conn, options.route, deps);
+      thinkingOn = thinkingSent(body, conn, options.route, deps);
       // Filter to only fields this model supports. Does nothing for
       // non-OpenRouter backends and for models with unknown metadata.
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
@@ -743,7 +799,7 @@ export async function chatCompletionSimple(
         };
       }>(res);
 
-      const content = data.choices?.[0]?.message?.content ?? "";
+      const content = replyContent(data.choices?.[0]?.message?.content ?? "", thinkingOn);
       const model = data.model ?? options.model ?? "unknown";
       const finishReason = data.choices?.[0]?.finish_reason ?? "";
       const usage = data.usage;
@@ -945,6 +1001,8 @@ export async function chatCompletionJSON(
     // A1/A7 model-health: emit rate_limit_429 at most once per logical call
     // (across ladder rungs). Same set-and-guard pattern as chatCompletionSimple.
     let emitted429 = false;
+    // Set per send by withLocalThinking; read by replyContent when the reply arrives.
+    let thinkingOn = false;
 
     for (const reasoning of reasoningLadder) {
       let body: Record<string, unknown> = { ...baseBody };
@@ -953,6 +1011,8 @@ export async function chatCompletionJSON(
       body = applyModelOverrides(body, conn.model);
       // TRDD-1OOAH3LD: profile request_options win over the static model table.
       if (ro !== null) body = applyRequestOptions(body, ro, options.maxTokens);
+      body = withLocalThinking(body, conn, undefined, deps);
+      thinkingOn = thinkingSent(body, conn, undefined, deps);
       // Filter to only fields this model supports (Nemotron drops
       // frequency_penalty etc., other models may drop reasoning).
       body = filterBodyForSupportedParams(body, supportedParams, conn.model);
@@ -1049,6 +1109,8 @@ export async function chatCompletionJSON(
           partial: rawContent,
         });
       }
+      // After the length check (its partial is the raw text) and before the JSON parse below: see replyContent.
+      rawContent = replyContent(rawContent, thinkingOn);
       gotResponse = true;
       break;
     }

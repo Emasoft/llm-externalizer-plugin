@@ -214,4 +214,12 @@ export interface CompletionDeps extends ProviderDeps {
    * never use request_options (benchmark runners, fixtures) return null.
    */
   getRequestOptions(tool: string | undefined): ResolvedRequestOptions | null;
+  /**
+   * The chat_template_kwargs.enable_thinking value for a send of `tool` to `model` over `route` (local-input-budget.ts
+   * localThinkingFor), or undefined = send nothing. PER MODEL, read where the body is built, because ensemble members and
+   * fallback targets each have their own calibration record. OPTIONAL: a deps object without it (benchmark runners,
+   * fixtures) sends no switch. Kept apart from getRequestOptions on purpose: a non-null ResolvedRequestOptions also appends
+   * the stop sentence, turns a length finish into OutputLimitError and rewrites a native URL, none of which calibration measured.
+   */
+  getLocalThinking?(tool: string | undefined, model: string, route: ResolvedRoute | null): boolean | undefined;
 }

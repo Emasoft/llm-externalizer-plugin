@@ -455,7 +455,7 @@ import {
 
 import { clearEndpointFlavorCache } from "./provider/endpoint-flavor.js";
 import { OUTPUT_LIMIT_PREFIX, resolveRequestOptions } from "./provider/request-options.js";
-import { localEngineOf, planLocalSizing, taskEntryOf, waitForCalibration, type LocalMember, type LocalSizing } from "./local-input-budget.js";
+import { localEngineOf, localThinkingFor, planLocalSizing, taskEntryOf, waitForCalibration, type LocalMember, type LocalSizing } from "./local-input-budget.js";
 
 // Settings path (cross-platform, see config.ts)
 const SETTINGS_FILE = getSettingsPath();
@@ -1984,6 +1984,9 @@ function providerDepsFrom(getProfile: () => ResolvedProfile | null, getBackend: 
     getDefaultMaxTokens: () => maxTokensFor(getProfile(), getBackend(), ctxStore.getStore()?.tool),
     // TRDD-1OOAH3LD: read through the profile on EVERY call (reload-safe, like routeForModel above); null when the profile sets no request_options.
     getRequestOptions: (tool) => resolveRequestOptions(getProfile()?.requestOptions ?? null, tool),
+    // TRDD-1OOAH3LD gap C1-7 / TRDD-ZGSGGHQG gap Z-3: the per-model thinking switch of a calibrated local route. Lives in this ONE field list, so the
+    // boot object and every per-walk object (makeProviderDeps, the local fallback included) send it; completion.ts calls it where the body is built.
+    getLocalThinking: (tool, model, route) => localThinkingFor(getConfigDir(), tool, model, route?.api),
     getActiveProtocol: () => getProfile()?.protocol ?? "openai_api",
     // TRDD-1OOAH3LD broker: read through the profile on EVERY call
     // (reload-safe, like routeForModel above). Only the profile's own primary

@@ -16,13 +16,15 @@ import { recordFixture } from "./calibration/test-record.js";
 import { CAP_OFF, CAP_ON } from "./calibration/phase-a.js";
 import { progressPath, queuePath } from "./calibration/state.js";
 import { BREVITY_RULES, FILE_FORMAT_EXAMPLE } from "./scan-pipeline.js";
-import { PROVISIONAL_LOCAL_CTX } from "./config.js";
+import { PROVISIONAL_LOCAL_CTX, type Profile, type ResolvedRoute } from "./config.js";
 import {
   CALIBRATION_POLL_MS,
   CHARS_PER_TOKEN_SAFETY,
   localEngineOf,
   localInputBudget,
   localOutputCap,
+  localThinkingFor,
+  localThinkingSwitch,
   planLocalSizing,
   TASK_KIND_BY_TOOL,
   taskEntryOf,
@@ -30,6 +32,7 @@ import {
   type LocalMember,
 } from "./local-input-budget.js";
 import { CommandStoppedError } from "./command-stop.js";
+import { localsOutgoingModel } from "./local-locals-server.js";
 
 const servers: Server[] = [];
 const cleanups: Array<() => void> = [];
@@ -248,8 +251,14 @@ describe("waitForCalibration (round 2 gap 1, round 3 item 1)", () => {
   }, 10_000);
 });
 
+/** The part of a POST body the tests read; chat_template_kwargs is the thinking switch (TRDD-1OOAH3LD gap C1-7). */
+interface Body {
+  max_tokens?: number;
+  messages: Array<{ content: string }>;
+  chat_template_kwargs?: { enable_thinking?: boolean };
+}
 /** A loopback chat-completions server that keeps every POST body; 404 for anything else (the endpoint-flavor probe). */
-async function serve(bodies: Array<{ max_tokens?: number; messages: Array<{ content: string }> }>): Promise<string> {
+async function serve(bodies: Array<Body>, reply = "the files define constants a and b.", finish = "stop"): Promise<string> {
   const server = createServer((req, res) => {
     if (req.method !== "POST") {
       res.writeHead(404, { "Content-Type": "application/json" });
@@ -259,7 +268,7 @@ async function serve(bodies: Array<{ max_tokens?: number; messages: Array<{ cont
     let body = "";
     req.on("data", (c: Buffer) => (body += c.toString("utf8")));
     req.on("end", () => {
-      const parsed = JSON.parse(body) as { model?: unknown; max_tokens?: number; messages: Array<{ content: string }> };
+      const parsed = JSON.parse(body) as Body & { model?: unknown };
       bodies.push(parsed);
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
@@ -267,7 +276,7 @@ async function serve(bodies: Array<{ max_tokens?: number; messages: Array<{ cont
           id: "x",
           object: "chat.completion",
           model: String(parsed.model),
-          choices: [{ index: 0, message: { role: "assistant", content: "the files define constants a and b." }, finish_reason: "stop" }],
+          choices: [{ index: 0, message: { role: "assistant", content: reply }, finish_reason: finish }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         }),
       );
@@ -307,7 +316,7 @@ interface EntryOpts {
  */
 async function throughEntry(record: CalibrationRecord | null, o: EntryOpts = {}) {
   const tool = o.tool ?? "chat";
-  const bodies: Array<{ max_tokens?: number; messages: Array<{ content: string }> }> = [];
+  const bodies: Array<Body> = [];
   const url = await serve(bodies);
   const cfgDir = tempDir("llm-ext-p7-cfg-");
   const homeDir = tempDir("llm-ext-p7-home-");
@@ -495,5 +504,230 @@ describe("local input sizing through the entry (P7)", () => {
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/no file fits the calibrated input budget/);
     expect(r.bodies).toEqual([]);
+  }, 60_000);
+});
+
+/**
+ * Real completion layer over makeProviderDeps local-fallback deps (noHold) against the loopback server, which answers `reply`: a llamacpp-local
+ * profile whose head model m-clean proves thinking off and on, and a second model m-leaky whose off mode is leaky. One module registry for all
+ * imports, so completion.ts reads the same ctxStore this helper writes. `requestOptions` is the profile request_options block, when given.
+ */
+async function localWalk(reply?: string, requestOptions?: Record<string, unknown>, finish?: string) {
+  const bodies: Array<Body> = [];
+  const url = await serve(bodies, reply, finish);
+  const cfgDir = tempDir("llm-ext-thinking-walk-cfg-");
+  const homeDir = tempDir("llm-ext-thinking-walk-home-");
+  cleanups.push(() => vi.unstubAllEnvs());
+  writeFileSync(join(cfgDir, "settings.yaml"), ["active: lc", "profiles:", "  lc:", "    mode: local", "    api: llamacpp-local", `    url: ${url}`, "    model: m-clean", ""].join("\n"), "utf-8");
+  writeRecord(cfgDir, rec("m-clean", { thinking_works: { off: true, on: true } }));
+  writeRecord(cfgDir, rec("m-leaky", { thinking_works: { off: "leaky", on: true } }));
+  vi.stubEnv("LLM_EXT_CONFIG_DIR", cfgDir);
+  vi.stubEnv("HOME", homeDir);
+  vi.stubEnv("LLM_EXT_INSTALL_RULE", "0");
+  vi.stubEnv("LLM_EXT_DISABLE_AUTO_RECONCILE", "1");
+  vi.stubEnv("LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION", "1");
+  vi.resetModules();
+  const { ctxStore } = await import("./usage-history.js");
+  const { chatCompletionSimple, chatCompletionJSON, chatCompletionWithRetry } = await import("./provider/completion.js");
+  const { resolveProfile } = await import("./config.js");
+  const idx = await import("./index.js");
+  await idx.boot();
+  const profile = resolveProfile("lc", { mode: "local", api: "llamacpp-local", url, model: "m-clean", ...(requestOptions !== undefined ? { request_options: requestOptions } : {}) } as Profile);
+  const backend = { type: "local" as const, billable: false, isLocal: true, baseUrl: url, apiKey: "", model: "m-clean", __version: 1 };
+  const deps = idx.makeProviderDeps(profile, backend, { noHold: true });
+  const inTool = <T>(tool: string, fn: () => T): T => ctxStore.run({ tool, params: "", project: "/tmp", opId: "op-00000000" }, fn);
+  return {
+    bodies,
+    deps,
+    retry: (tool: string, model: string) => inTool(tool, () => chatCompletionWithRetry([{ role: "user", content: "hi" }], { model, maxTokens: 64 }, deps)),
+    send: (tool: string, model: string, over: Partial<typeof deps> = {}) => inTool(tool, () => chatCompletionSimple([{ role: "user", content: "hi" }], { model, maxTokens: 64 }, { ...deps, ...over })),
+    sendJson: (tool: string, model: string) => inTool(tool, () => chatCompletionJSON([{ role: "user", content: "hi" }], { model, maxTokens: 64 }, deps)),
+  };
+}
+// TRDD-1OOAH3LD gap C1-7 / TRDD-ZGSGGHQG gap Z-3: the thinking switch is decided per model from its own calibration record.
+describe("per-model thinking switch on a calibrated local route", () => {
+  const works = (off: boolean | "leaky", on: boolean) => rec("m-one", { thinking_works: { off, on } });
+
+  it("bug sends enable_thinking true only when thinking on is proven, and never an explicit false", () => {
+    expect(localThinkingSwitch(works(true, true), "bug")).toBe(true);
+    expect(localThinkingSwitch(works(true, false), "bug")).toBeUndefined();
+    expect(localThinkingSwitch(works(false, false), "bug")).toBeUndefined();
+  });
+
+  it("fact and aggregate send enable_thinking false only when thinking off is proven; leaky or unproven sends nothing", () => {
+    for (const kind of ["fact", "aggregate"] as const) {
+      expect(localThinkingSwitch(works(true, true), kind)).toBe(false);
+      expect(localThinkingSwitch(works("leaky", true), kind)).toBeUndefined();
+      expect(localThinkingSwitch(works(false, true), kind)).toBeUndefined();
+    }
+  });
+
+  it("localThinkingFor answers undefined for a remote api, a tool outside the table, no tool, and a model with no ok record", () => {
+    const dir = tempDir("llm-ext-thinking-for-");
+    writeRecord(dir, works(true, true));
+    expect(localThinkingFor(dir, "code_task", "m-one", "llamacpp-local")).toBe(true);
+    expect(localThinkingFor(dir, "code_task", "m-one", "openrouter-remote")).toBeUndefined();
+    expect(localThinkingFor(dir, "code_task", "m-one", undefined)).toBeUndefined();
+    expect(localThinkingFor(dir, "not_a_tool", "m-one", "llamacpp-local")).toBeUndefined();
+    expect(localThinkingFor(dir, undefined, "m-one", "llamacpp-local")).toBeUndefined();
+    expect(localThinkingFor(dir, "code_task", "m-other", "llamacpp-local")).toBeUndefined();
+    writeRecord(dir, recordFixture("llama", "m-failed", { step: "B", message: "boom" }));
+    expect(localThinkingFor(dir, "code_task", "m-failed", "llamacpp-local")).toBeUndefined();
+  });
+
+  it("localThinkingFor decides per model: two models in one config dir with different records get different switches", () => {
+    const dir = tempDir("llm-ext-thinking-per-model-");
+    writeRecord(dir, rec("m-clean", { thinking_works: { off: true, on: true } }));
+    writeRecord(dir, rec("m-leaky", { thinking_works: { off: "leaky", on: true } }));
+    expect(localThinkingFor(dir, "chat", "m-clean", "llamacpp-local")).toBe(false);
+    expect(localThinkingFor(dir, "chat", "m-leaky", "llamacpp-local")).toBeUndefined();
+  });
+
+  it("a Locals bug-kind request makes localsOutgoingModel pick the -thinking id, a fact-kind one the base id", () => {
+    const dir = tempDir("llm-ext-thinking-locals-");
+    writeRecord(dir, { ...rec("x-model", { thinking_works: { off: true, on: true } }), engine: "locals" });
+    const ids = ["x-model", "x-model-thinking"];
+    const bug = localThinkingFor(dir, "code_task", "x-model", "locals-local");
+    const fact = localThinkingFor(dir, "chat", "x-model", "locals-local");
+    expect(localsOutgoingModel(ids, { chat_template_kwargs: { enable_thinking: bug } })).toBe("x-model-thinking");
+    expect(localsOutgoingModel(ids, { chat_template_kwargs: { enable_thinking: fact } })).toBe("x-model");
+  });
+
+  it("through the entry: a fact-kind command to a llama route whose record proves thinking off sends enable_thinking false", async () => {
+    const r = await throughEntry(works(true, true));
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies.length, r.text).toBe(1);
+    expect(r.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: false });
+  }, 60_000);
+
+  it("through the entry: a leaky thinking-off record sends no chat_template_kwargs", async () => {
+    const r = await throughEntry(works("leaky", true));
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies[0]).toBeDefined();
+    expect(r.bodies[0]?.chat_template_kwargs).toBeUndefined();
+  }, 60_000);
+
+  it("through the entry: a bug-kind command whose record proves thinking on sends enable_thinking true", async () => {
+    const r = await throughEntry(works(true, true), { tool: "compare_files", sizes: [800, 800] });
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies.length, r.text).toBe(1);
+    expect(r.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+  }, 60_000);
+
+  it("through the entry: a bug-kind command whose record does not prove thinking on sends no chat_template_kwargs", async () => {
+    const r = await throughEntry(works(true, false), { tool: "compare_files", sizes: [800, 800] });
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies[0]).toBeDefined();
+    expect(r.bodies[0]?.chat_template_kwargs).toBeUndefined();
+  }, 60_000);
+
+  it("through chatCompletionSimple with makeProviderDeps local-fallback deps (noHold): each model gets the switch from its OWN record, per tool kind", async () => {
+    const w = await localWalk();
+    await w.send("code_task", "m-clean");
+    await w.send("chat", "m-clean");
+    await w.send("code_task", "m-leaky");
+    await w.send("chat", "m-leaky");
+    expect(w.bodies.map((b) => b.chat_template_kwargs)).toEqual([{ enable_thinking: true }, { enable_thinking: false }, { enable_thinking: true }, undefined]);
+  }, 60_000);
+
+  it("a reply to a send that carried enable_thinking true loses its <think> block (USER 2026-10-28: strip the thinking block)", async () => {
+    const w = await localWalk("<think>x</think>answer");
+    expect((await w.send("code_task", "m-clean")).content).toBe("answer");
+  }, 60_000);
+
+  it("the same reply on a send that did not carry true comes back unchanged: thinking off proven, and a leaky off record", async () => {
+    const w = await localWalk("<think>x</think>answer");
+    expect((await w.send("chat", "m-clean")).content).toBe("<think>x</think>answer");
+    expect((await w.send("chat", "m-leaky")).content).toBe("<think>x</think>answer");
+  }, 60_000);
+
+  it("a send whose thinking true comes from the profile request_options is stripped too (the body decides); thinking false from it is not", async () => {
+    const on = await localWalk("<think>x</think>answer", { default: { max_output_tokens: 600, thinking: true } });
+    expect((await on.send("chat", "m-clean")).content).toBe("answer");
+    expect(on.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+    const off = await localWalk("<think>x</think>answer", { default: { max_output_tokens: 600, thinking: false } });
+    expect((await off.send("code_task", "m-clean")).content).toBe("<think>x</think>answer");
+    expect(off.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: false });
+  }, 60_000);
+
+  it("the JSON path strips the block before the parse on a thinking-on send, and still fails on a send that did not carry true", async () => {
+    const w = await localWalk("<think>x</think>{\"a\":1}");
+    expect((await w.sendJson("code_task", "m-clean")).parsed).toEqual({ a: 1 });
+    await expect(w.sendJson("chat", "m-clean")).rejects.toThrow(/malformed JSON/);
+  }, 60_000);
+
+  it("a thinking-on reply with no think tag is returned byte for byte (no trim, no cut)", async () => {
+    const w = await localWalk("  plain answer\n");
+    expect((await w.send("code_task", "m-clean")).content).toBe("  plain answer\n");
+  }, 60_000);
+
+  it("only a LEADING think block is removed, with the whitespace right after it (and before it); the answer after it is untouched", async () => {
+    const w = await localWalk("<think>x</think>\n  answer");
+    expect((await w.send("code_task", "m-clean")).content).toBe("answer");
+    const lead = await localWalk("  <think>x</think>answer");
+    expect((await lead.send("code_task", "m-clean")).content).toBe("answer");
+  }, 60_000);
+
+  it("a reply that quotes a think tag mid-text is returned byte for byte, even on a thinking-on send", async () => {
+    const orphan = await localWalk("use </think> carefully");
+    expect((await orphan.send("code_task", "m-clean")).content).toBe("use </think> carefully");
+    const later = await localWalk("answer: <think>x</think> done");
+    expect((await later.send("code_task", "m-clean")).content).toBe("answer: <think>x</think> done");
+  }, 60_000);
+
+  it("a reply cut inside the think block (unclosed <think>, finish_reason length) behaves exactly as an untouched send: same content, finish reason, JSON error and retry outcome", async () => {
+    const cut = "<think>unclosed";
+    const on = await localWalk(cut, undefined, "length");
+    const off = await localWalk(cut, undefined, "length");
+    // code_task sends enable_thinking true; chat on the same model sends false (not stripped): the control.
+    const rOn = await on.send("code_task", "m-clean");
+    const rOff = await off.send("chat", "m-clean");
+    expect(on.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(off.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(rOn.content).toBe(cut);
+    expect(rOn.content).toBe(rOff.content);
+    expect(rOn.finishReason).toBe(rOff.finishReason);
+    await expect(on.sendJson("code_task", "m-clean")).rejects.toThrow(/malformed JSON/);
+    await expect(off.sendJson("chat", "m-clean")).rejects.toThrow(/malformed JSON/);
+    // The retry loop (chatCompletionWithRetry, local route: MAX_TRUNCATION_RETRIES 3): same number of requests and same labelled reply.
+    const retryOn = await localWalk(cut, undefined, "length");
+    const retryOff = await localWalk(cut, undefined, "length");
+    const a = await retryOn.retry("code_task", "m-clean");
+    const b = await retryOff.retry("chat", "m-clean");
+    expect(retryOn.bodies.length).toBe(retryOff.bodies.length);
+    expect(a.content).toBe(b.content);
+    expect(a.truncated).toBe(b.truncated);
+  }, 120_000);
+
+  it("a send with enable_thinking true on a route that is not llama.cpp or Locals is returned unchanged (remote sends are never touched)", async () => {
+    const w = await localWalk("<think>x</think>answer", { default: { max_output_tokens: 600, thinking: true } });
+    const head = w.deps.routeForModel("m-clean");
+    expect(head).not.toBeNull();
+    const route = { ...(head as ResolvedRoute), api: "openrouter-remote" };
+    const r = await w.send("chat", "m-clean", { routeForModel: () => route });
+    expect(w.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true });
+    expect(r.content).toBe("<think>x</think>answer");
+  }, 60_000);
+
+  it("a routed (non-primary) group gets no switch and no strip: the body carries no chat_template_kwargs and the reply is unchanged", async () => {
+    const w = await localWalk("<think>x</think>answer");
+    const head = w.deps.routeForModel("m-clean");
+    expect(head).not.toBeNull();
+    const route = { ...(head as ResolvedRoute), name: "second", primary: false };
+    const r = await w.send("code_task", "m-clean", { routeForModel: () => route });
+    expect(w.bodies[0]?.chat_template_kwargs).toBeUndefined();
+    expect(r.content).toBe("<think>x</think>answer");
+  }, 60_000);
+  it("through the entry: no calibration record sends no chat_template_kwargs", async () => {
+    const r = await throughEntry(null);
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies[0]).toBeDefined();
+    expect(r.bodies[0]?.chat_template_kwargs).toBeUndefined();
+  }, 60_000);
+
+  it("through the entry: the user request_options thinking wins over the record", async () => {
+    const r = await throughEntry(works(true, true), { yaml: ["    request_options:", "      default:", "        max_output_tokens: 600", "        thinking: on"] });
+    expect(r.isError, r.text).toBe(false);
+    expect(r.bodies[0]?.chat_template_kwargs).toEqual({ enable_thinking: true });
   }, 60_000);
 });

@@ -9,6 +9,8 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { resolveProfile, type Profile, type ResolvedRoute } from "./config.js";
 import type { BackendConfig } from "./provider/types.js";
+import { writeRecord } from "./calibration/record.js";
+import { recordFixture } from "./calibration/test-record.js";
 
 let cfgDir: string | undefined;
 let prevCfgDir: string | undefined;
@@ -103,8 +105,24 @@ describe("makeProviderDeps over a profile other than the active one", () => {
     expect(deps.routeForModel("vendor/first")).toEqual(other.routeForModel("vendor/first"));
     expect(deps.isManualModel("vendor/other")).toBe(false);
     expect(deps.getRequestOptions("chat")).toBeNull();
+// The thinking switch is one field of the one list: both objects carry it, and a remote route gets nothing (TRDD-1OOAH3LD gap C1-7).
+    expect(typeof boot.getLocalThinking).toBe("function");
+expect(typeof deps.getLocalThinking).toBe("function");
+    expect(deps.getLocalThinking?.("chat", "vendor/other", other.routeForModel("vendor/other"))).toBeUndefined();
   });
 
+it("a per-walk object over a calibrated local profile carries the per-model thinking switch (the local fallback uses it, TRDD-1OOAH3LD gap C1-7)", async () => {
+    const index = await loadFreshIndex();
+    // The fallback target is resolveProfile of a local profile (index.ts localFallbackTarget): its head route is its primary group, so resolveConnection never takes the routed branch.
+    const local = resolveProfile("loc", { mode: "local", api: "llamacpp-local", url: "http://127.0.0.1:9", model: "m-loc" } as Profile);
+    writeRecord(cfgDir as string, { ...recordFixture("llama", "m-loc"), thinking_works: { off: true, on: true } });
+    const deps = index.makeProviderDeps(local, backendFor("m-loc", ""), { noHold: true });
+    const route = local.routeForModel("m-loc");
+    expect(route?.primary).toBe(true);
+    expect(deps.getLocalThinking?.("chat", "m-loc", route)).toBe(false);
+    expect(deps.getLocalThinking?.("code_task", "m-loc", route)).toBe(true);
+    expect(deps.getLocalThinking?.("code_task", "m-unrecorded", route)).toBeUndefined();
+  });
   it("builds its headers from that profile's attribution and that backend's key, not the active ones", async () => {
     const index = await loadFreshIndex();
     const withAttribution = resolveProfile("attributed", { ...OTHER, api: "openrouter-remote", free_only: false, http_referer: "https://other.test/referer", app_name: "OtherApp" });

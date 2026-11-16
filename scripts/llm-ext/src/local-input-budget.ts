@@ -136,6 +136,36 @@ export function localOutputCap(record: CalibrationRecord, kind: TaskKind, userMa
   return Math.max(need(record.min_output_tokens, record.model, "min_output_tokens")[kind], thinkingOn ? CAP_ON : CAP_OFF);
 }
 
+/**
+ * The chat_template_kwargs.enable_thinking value a request of task kind `kind` sends to a model with this ok record, or
+ * undefined (send nothing: a template without the switch sees no change). USER directive 2026-10-28: thinking ON for bug
+ * search, OFF for simple tasks (TRDD-1OOAH3LD gap C1-7, TRDD-ZGSGGHQG gap Z-3). WHY the asymmetry: the switch is sent only
+ * where Phase A PROVED it works. bug sends true only when thinking_works.on === true (never an explicit false for bug);
+ * fact and aggregate send false only when thinking_works.off === true ("leaky" means the model reasons in its visible
+ * answer anyway, so an off request is not honoured and is not sent).
+ */
+export function localThinkingSwitch(record: CalibrationRecord, kind: TaskKind): boolean | undefined {
+  const works = need(record.thinking_works, record.model, "thinking_works");
+  if (kind === "bug") return works.on === true ? true : undefined;
+  return works.off === true ? false : undefined;
+}
+
+/**
+ * localThinkingSwitch for one send: undefined unless the route is a llama.cpp or Locals api, `tool` is in the task-kind
+ * table, and `model` has an ok calibration record (the same readRecordStatus + readRecord pair planLocalSizing uses, so a
+ * stale-harness or failed record never switches anything). `api` is the api preset of the route the request is sent to.
+ * PER MODEL on purpose: every ensemble member and fallback target has its own record and its own thinking behaviour.
+ */
+export function localThinkingFor(dir: string, tool: string | undefined, model: string, api: string | undefined): boolean | undefined {
+  if (tool === undefined || api === undefined) return undefined;
+  const engine = localEngineOf(api);
+  const entry = taskEntryOf(tool);
+  if (engine === null || entry === undefined) return undefined;
+  if (readRecordStatus(dir, engine, model).state !== "ok") return undefined;
+  const record = readRecord(dir, engine, model);
+  return record === null ? undefined : localThinkingSwitch(record, entry.kind);
+}
+
 /** The window a request of this record gets on a route giving `ctx` tokens (0: unset): min(ctx, window_tokens). */
 function windowOf(record: CalibrationRecord, ctx: number): number {
   const w = need(record.window_tokens, record.model, "window_tokens");
