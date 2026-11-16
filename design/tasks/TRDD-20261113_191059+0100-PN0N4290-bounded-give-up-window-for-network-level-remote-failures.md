@@ -4,7 +4,7 @@ title: Bounded give-up window for network-level remote failures
 column: testing
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-16T10:51:29+0100
+updated: 2026-11-16T10:53:33+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -74,3 +74,4 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 2026-11-16T10:05:07+0100 UNBLOCKED by the main agent: the WAITING note of 2026-11-13 is superseded. Q10 was decided 2026-11-14T20:12 in TRDD-WSPV40Y5 line 129 (agent decision under the owner instruction of 2026-11-14): the give-up window is a settings key plus a command flag, default 30 s (not the provisional 6 s). Prerequisites 1a TRDD-3CG178O7 and 1c TRDD-78LZFUVJ are in testing.
 2026-11-16T10:08:22+0100 Main agent: Required test 3 (typed error in under 5 s) was written for the provisional 6 s window. With the 30 s default, test 3 must set the window through the new settings key or flag (for example 2 s) and keep the under-5 s bound; test 5 (unarmed, elapsed at least the old retry time) is unchanged.
 2026-11-16T10:51:28+0100 DONE by the main agent (worker report reports_dev/pn0n4290/20261116_102612+0100-report.md): 42c67aa3. Verified: tsc 0, eslint 0 on the changed files, 286 tests in 8 touched-area files (incl. index.test.ts, free-rotation, ensemble-all-failed, retry-clock-consumers) and 39 in provider http and retry-clock pass. On a disarmed copy the ECONNRESET, strict-probe and dispatch-reset tests fail. KNOWN LIMIT: Required test 3 closed-port case does not discriminate (the ECONNREFUSED budget of 2 tries ends the call before any window of 1 s or more), kept as a bound check. UNRESOLVED: the first dispatch-test run had no HOME stub; recent writes in ~/.llm-externalizer match a Reminzer benchmark at 10:25-10:27, but no backup exists to prove the test wrote nothing. UBS pre-commit scan timed out (900 s). Full suite owed before the push.
+2026-11-16T10:53:33+0100 Main agent, settles the UNRESOLVED line above: the ~/.llm-externalizer entries changed near the un-stubbed run all date 10:21:12-10:21:15 (catalog caches, decisions endpoint, profile-detect log and throttle), before that run started at 10:21:36; settings.yaml last changed 10:27:07 (Reminzer benchmark). No sign the test wrote there. RELEASE NOTE: 42c67aa3 must NOT ship before TRDD-WSPV40Y5 (1d) consumes the give-up error; alone it ends a command after 30 s where it used to retry up to 300 s, with no switch to local.
