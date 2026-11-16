@@ -23,6 +23,7 @@ import {
   serviceFailureCountForTests,
   type SimpleCompletionOptions,
 } from "./completion.js";
+import { resetGovernorPollersForTests } from "../governor/client.js";
 import type { BackendConfig, CompletionDeps, ChatMessage } from "./types.js";
 import type { ResolvedRoute } from "../config.js";
 import {
@@ -40,6 +41,8 @@ import { RetryDeadlineError } from "./http.js";
 import { OutputLimitError, OUTPUT_LIMIT_PREFIX, resetNoToolContextWarningForTests, type ResolvedRequestOptions } from "./request-options.js";
 
 let server: Server | undefined;
+// TRDD-FC2TX9VU: the governor switch as the file found it, restored by the shared afterEach below.
+const GOVERNOR_ENABLED_BEFORE = process.env.LLM_EXT_GOVERNOR_ENABLED;
 
 afterEach(() => {
   // TRDD-WTKO255N: vitest abandons the body of a test that hits its timeout,
@@ -48,6 +51,14 @@ afterEach(() => {
   // until the test timeout (run 3, 2026-11-04). No test pins this line: this
   // comment is its only guard.
   vi.useRealTimers();
+  // TRDD-FC2TX9VU: a lease wait begun under fake timers parks its poll on a timer that never fires, and the dead poller
+  // (governor/client.ts, one per dir+kind) then makes every later loopback test in the file wait for ever: measured
+  // 2026-11-16 with the breaker test unguarded, 9 later tests each hit the test timeout (the publish hung ~80 min).
+  resetGovernorPollersForTests();
+  // The breaker test switches the local governor off through this variable and its own finally does not
+  // run on a timeout, so the restore lives here.
+  if (GOVERNOR_ENABLED_BEFORE === undefined) delete process.env.LLM_EXT_GOVERNOR_ENABLED;
+  else process.env.LLM_EXT_GOVERNOR_ENABLED = GOVERNOR_ENABLED_BEFORE;
   server?.close();
   server = undefined;
   // runUnusable AND the circuit breaker are process-wide module state —
@@ -831,6 +842,13 @@ describe("payment errors — skip when certain, retry once when not, never a bre
     // chatCompletionWithRetry's own loop and the breaker, not the HTTP layer's
     // separate 5xx retries.
     const deps: CompletionDeps = { ...baseDeps(backendAt(url), null), getSoftTimeoutMs: () => 700 };
+    // TRDD-FC2TX9VU, root cause of the 30 s timeout: the server is on 127.0.0.1, so every send takes a local-governor
+    // lease (governor/direct.ts), and a lease wait polls on setTimeout. The governor needs a CPU/RAM reading no older
+    // than 2 s (METRICS_MAX_AGE_MS). Measured: reqs=0 for the whole 30 s, and under the same load the test fails 3/3 with
+    // the governor on and passes 3/3 with it off. Inferred from code, not logged: a cold or busy host has no fresh reading,
+    // the first attempt is denied "stale", and its retry poll is parked on the FAKE setTimeout below, which nothing advances.
+    // This test is about the breaker, not the governor, so the governor is off for it; afterEach restores the variable.
+    process.env.LLM_EXT_GOVERNOR_ENABLED = "false";
     const stderr = captureStderr();
     // Only setTimeout/clearTimeout are faked: the breaker's pauses become
     // instant to advance, while Date and the real loopback sockets stay real.

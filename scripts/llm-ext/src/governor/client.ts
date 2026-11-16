@@ -564,6 +564,21 @@ function endPoller(p: Poller): void {
   pollers.delete(p.key);
 }
 
+/**
+ * Test hook (TRDD-FC2TX9VU): drop every lease poller of this process. WHY: acquire() starts tick() only for the first
+ * waiter of a dir+kind and later waiters rely on that poller's timer. A test that abandons a wait (a timeout, or fake
+ * timers whose setTimeout never fires) leaves a poller whose timer is dead, and every later acquire in the file queues
+ * behind it for ever. The abandoned waits are neither resolved nor rejected (entry.stop only removes the abort listener,
+ * so no unhandled rejection): their callers are already gone.
+ */
+export function resetGovernorPollersForTests(): void {
+  for (const p of pollers.values()) {
+    if (p.timer) clearTimeout(p.timer);
+    for (const entry of p.queue) entry.stop();
+  }
+  pollers.clear();
+}
+
 function failAll(p: Poller, err: unknown): void {
   const queue = p.queue.splice(0);
   endPoller(p);
