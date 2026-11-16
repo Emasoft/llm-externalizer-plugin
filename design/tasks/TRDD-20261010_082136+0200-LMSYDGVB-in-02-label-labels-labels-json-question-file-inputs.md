@@ -1,10 +1,10 @@
 ---
 trdd-id: LMSYDGVB
 title: IN-02 label (--labels, --labels-json, --question, file inputs)
-column: blocked
+column: testing
 status: tasked
 created: 2026-10-10T08:21:36+0200
-updated: 2026-11-14T18:51:00+0100
+updated: 2026-11-16T09:24:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,11 +16,11 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-10T08:21:36+0200
 implementation-commits: [a77c0f96, 04e9b517]
-blocked-by: [G0MS9B63]
+blocked-by: []
 unblock-when: [trdd:G0MS9B63]
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*G0MS9B63\*'
 blocker-holds-if: exit-nonzero
-pre-block-column: testing
+pre-block-column: 
 ---
 
 # IN-02 label (--labels, --labels-json, --question, file inputs)
@@ -57,6 +57,7 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 - 2026-11-04T13:57:32+0100 — column → blocked. Waits on the owner ruling in TRDD-M2H4RJVQ; the box also waits on a full suite at a HEAD that includes ddf17705 and a committed dist rebuilt from HEAD, which the host's memory pressure delays.
 - 2026-11-05T01:43:55+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b passed npm test; no blocker left Cleared blocked-by (all blockers terminal).
 - 2026-11-14T18:51:00+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
+- 2026-11-16T09:24:51+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
 
 ## Notes
 

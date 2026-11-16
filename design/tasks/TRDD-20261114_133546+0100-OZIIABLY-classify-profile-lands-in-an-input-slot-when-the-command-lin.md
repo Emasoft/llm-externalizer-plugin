@@ -1,10 +1,10 @@
 ---
 trdd-id: OZIIABLY
 title: classify --profile lands in an input slot when the command line has a bare --
-column: blocked
+column: testing
 status: tasked
 created: 2026-11-14T13:35:46+0100
-updated: 2026-11-14T14:33:56+0100
+updated: 2026-11-16T09:24:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,9 +16,9 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-14T13:35:46+0100
 implementation-commits: [f90f1055]
-blocked-by: [G0MS9B63]
+blocked-by: []
 unblock-when: [trdd:G0MS9B63]
-pre-block-column: testing
+pre-block-column: 
 blocker-probe: node -e "new (require('./scripts/llm-ext/node_modules/better-sqlite3'))(':memory:')"
 blocker-holds-if: exit-nonzero
 ---
@@ -32,6 +32,7 @@ Symptom: llm-ext classify <cmd> with --profile and a bare -- fails with llm-ext:
 - 2026-11-14T13:35:46+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-14T14:04:15+0100 — column → dev by main-agent@llm-externalizer-plugin. keep-going mode; confirmed defect with a located cause
 - 2026-11-14T14:33:01+0100 — column → blocked by main-agent@llm-externalizer-plugin. fix landed (f90f1055); only box 6, the full npm test, remains and it needs the better-sqlite3 binding (TRDD-G0MS9B63)
+- 2026-11-16T09:24:51+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
 
 ## Notes
 

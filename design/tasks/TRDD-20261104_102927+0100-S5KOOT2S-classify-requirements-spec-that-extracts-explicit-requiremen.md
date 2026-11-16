@@ -4,7 +4,7 @@ title: classify requirements spec that extracts explicit requirements from a pro
 column: blocked
 status: tasked
 created: 2026-11-04T10:29:27+0100
-updated: 2026-11-14T18:51:16+0100
+updated: 2026-11-16T09:24:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,7 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:29:27+0100
 implementation-commits: [d362b340]
-blocked-by: [G0MS9B63, DX4YLNI6]
+blocked-by: [DX4YLNI6]
 unblock-when: [trdd:G0MS9B63, trdd:DX4YLNI6]
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*G0MS9B63\*'
 blocker-holds-if: exit-nonzero

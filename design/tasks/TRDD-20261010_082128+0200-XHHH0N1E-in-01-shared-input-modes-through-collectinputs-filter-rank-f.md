@@ -1,10 +1,10 @@
 ---
 trdd-id: XHHH0N1E
 title: IN-01 Shared input modes through collectInputs (filter, rank, find)
-column: blocked
+column: testing
 status: tasked
 created: 2026-10-10T08:21:28+0200
-updated: 2026-11-14T18:50:58+0100
+updated: 2026-11-16T09:24:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,11 +15,11 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-10T08:21:28+0200
-blocked-by: [G0MS9B63]
+blocked-by: []
 unblock-when: [trdd:G0MS9B63]
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*G0MS9B63\*'
 blocker-holds-if: exit-nonzero
-pre-block-column: testing
+pre-block-column: 
 implementation-commits: [b159d89b, 61efae4e, 948870d4]
 ---
 
@@ -62,6 +62,7 @@ None. First card of the set; dispatchable as is.
 - 2026-11-04T13:57:27+0100 — column → blocked. Waits on the owner ruling in TRDD-M2H4RJVQ; the box also waits on a full suite at a HEAD that includes ddf17705 and a committed dist rebuilt from HEAD, which the host's memory pressure delays.
 - 2026-11-05T01:43:55+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b passed npm test; no blocker left Cleared blocked-by (all blockers terminal).
 - 2026-11-14T18:50:58+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
+- 2026-11-16T09:24:50+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
 
 ## Notes
 
