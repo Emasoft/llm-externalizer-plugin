@@ -1,10 +1,10 @@
 ---
 trdd-id: IM2NBX1S
 title: publish.py runs git in the caller directory instead of its own repository
-column: todo
+column: testing
 status: tasked
 created: 2026-11-15T22:32:30+0100
-updated: 2026-11-15T22:32:44+0100
+updated: 2026-11-16T09:30:56+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-15T22:32:30+0100
+implementation-commits: [e744d9c6]
 ---
 
 # publish.py runs git in the caller directory instead of its own repository
@@ -22,6 +23,7 @@ approval-datetime: 2026-11-15T22:32:30+0100
 ## Approval log
 
 - 2026-11-15T22:32:30+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T09:30:56+0100 — column → testing by main-agent@llm-externalizer-plugin. fix and tests landed; full suite owed pre-push
 
 ## Problem
 
@@ -35,5 +37,9 @@ approval-datetime: 2026-11-15T22:32:30+0100
 
 ## Acceptance
 
-- [ ] every git invocation in publish.py runs with cwd=repo_root
-- [ ] a test started from a different directory proves the preflight and tag checks use repo_root
+- [x] every git invocation in publish.py runs with cwd=repo_root
+- [x] a test started from a different directory proves the preflight and tag checks use repo_root
+
+## Notes
+
+2026-11-16T09:30:55+0100 fixed in e744d9c6. tests/test_publish_runs_git_in_repo_root.py + test_publish_failed_push.py + test_publish_resolver_tag.py: 12 passed (run by the main agent in builds_dev/dev-after-14.3.0); ruff clean. Not covered by the guard: the CPV uvx calls (lines 731, 753), which pass the repo path as an explicit argument. Full suite owed before the push.
