@@ -11,7 +11,7 @@
   "scripts": {
     "build": "tsc --noEmit && node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs",
-    "test": "vitest run --exclude 'src/live*.test.ts' --exclude src/broker/broker.test.ts --exclude src/broker/broker-governor.test.ts --exclude src/governor/governor-direct.test.ts --exclude src/governor/governor-load.test.ts --exclude src/governor/governor-threads.test.ts --exclude src/governor/governor-burn.test.ts && vitest run --no-file-parallelism src/broker/broker.test.ts src/broker/broker-governor.test.ts src/governor/governor-direct.test.ts src/governor/governor-load.test.ts src/governor/governor-threads.test.ts && vitest run --no-file-parallelism src/governor/governor-burn.test.ts",
+    "test": "vitest run --exclude 'src/live*.test.ts' --exclude src/broker/broker.test.ts --exclude src/local-fallback-e2e.test.ts --exclude src/broker/broker-governor.test.ts --exclude src/governor/governor-direct.test.ts --exclude src/governor/governor-load.test.ts --exclude src/governor/governor-threads.test.ts --exclude src/governor/governor-burn.test.ts && vitest run --no-file-parallelism src/broker/broker.test.ts src/broker/broker-governor.test.ts src/governor/governor-direct.test.ts src/governor/governor-load.test.ts src/governor/governor-threads.test.ts && vitest run --no-file-parallelism src/governor/governor-burn.test.ts && vitest run src/local-fallback-e2e.test.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:all": "vitest run",
     "test:watch": "vitest",
