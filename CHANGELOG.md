@@ -1,6 +1,85 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.4.0] - 2026-11-16
+
+### Added
+
+- Feat(config): fallback_to_local setting disables or pins the local fallback (TRDD-M4KERGEF)
+
+- Feat(provider): fall back to a ready local profile after a remote give-up (TRDD-WSPV40Y5)
+
+- Feat(provider): bounded give-up window for network-level remote failures (TRDD-PN0N4290)
+
+
+### Changed
+
+- Merge remote-tracking branch 'origin/main' into dev/after-14.3.0
+
+
+### Documentation
+
+- Docs(trdd): record the hung 14.4.0 publish and the next step (TRDD-FC2TX9VU)
+
+- Docs(trdd): VCEX28LN to testing (TRDD-VCEX28LN)
+
+- Docs(trdd): record the rejected VCEX28LN claims design and the lock replacement (TRDD-VCEX28LN)
+
+- Docs(trdd): correct the classifyError reading on WSPV40Y5 (TRDD-WSPV40Y5)
+
+- Docs(trdd): record the F8 fix on M4KERGEF (TRDD-M4KERGEF)
+
+- Docs(trdd): verify the 403 and classifyError claims on WSPV40Y5 (TRDD-WSPV40Y5)
+
+- Docs(trdd): record the fallback review outcome on WSPV40Y5 (TRDD-WSPV40Y5)
+
+- Docs(trdd): reopen 0ETFCKCU and 97FOZOO2 to human_review (TRDD-FC2TX9VU)
+
+- Docs(trdd): close cards shipped in 14.3.1 (TRDD-FC2TX9VU)
+
+- Docs(trdd): M4KERGEF implemented as 5c1ca371, to testing (TRDD-M4KERGEF)
+
+- Docs(trdd): 14.3.1 published and installed (TRDD-FC2TX9VU)
+
+- Docs(trdd): only the broker SIGTERM is tied to node-close; governor-threads failure unattributed; dry run 3 processes carry no CLAUDE_PID (TRDD-FC2TX9VU)
+
+- Docs(trdd): correct the dry-run leak timing (the failing stage was governor-burn) and note leftover temp entries (TRDD-FC2TX9VU)
+
+- Docs(trdd): attribute the 14.3.1 dry-run leak to a concurrent vitest run; add VCEX28LN to scope the guard (TRDD-FC2TX9VU)
+
+- Docs(trdd): link M4KERGEF as an EHT of UT7UC025, record the 1d test run and the release-hold check (TRDD-WSPV40Y5)
+
+- Docs(trdd): WSPV40Y5 1d committed, breaker bypass signed off; split the opt-out setting to M4KERGEF (TRDD-WSPV40Y5)
+
+- Docs(trdd): FC2TX9VU leak evidence correction (TRDD-FC2TX9VU)
+
+- Docs(trdd): FC2TX9VU STATE before compaction (TRDD-FC2TX9VU)
+
+- Docs(trdd): PN0N4290 home-write check settled; hold from release until WSPV40Y5 (TRDD-PN0N4290)
+
+- Docs(trdd): PN0N4290 to testing (TRDD-PN0N4290)
+
+
+### Fixed
+
+- Fix(test): breaker test no longer hangs on a local-governor lease, and a dead lease poller cannot hang later tests (TRDD-FC2TX9VU)
+
+- Fix(fallback): arm the give-up window per branch, stop before a fallback, cap the window below the retry deadline (TRDD-WSPV40Y5)
+
+- Fix(test): allow one llm-ext test run per machine so the temp-dir guard blames no other run (TRDD-VCEX28LN)
+
+- Fix(config): reject a pinned locals-local fallback profile where Locals cannot run (TRDD-M4KERGEF)
+
+- Fix(fallback): arm the give-up window only where a local fallback can follow (TRDD-WSPV40Y5)
+
+
+### Testing
+
+- Test(fallback): a static profile keeps its full retry window, so the dead-network test needs it (TRDD-WSPV40Y5)
+
+- Test(fallback): end-to-end local answer, not-ready path and breaker heal gate (TRDD-WSPV40Y5)
+
+
 ## [14.3.1] - 2026-11-16
 
 ### Changed
