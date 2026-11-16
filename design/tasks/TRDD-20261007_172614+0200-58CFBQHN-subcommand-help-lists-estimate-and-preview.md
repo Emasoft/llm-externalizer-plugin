@@ -1,10 +1,10 @@
 ---
 trdd-id: 58CFBQHN
 title: Subcommand help lists --estimate and --preview
-column: todo
+column: human_review
 status: tasked
 created: 2026-10-07T17:26:14+0200
-updated: 2026-11-14T13:38:54+0100
+updated: 2026-11-16T20:21:22+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -36,14 +36,16 @@ Issue 16 item 5: --estimate is not in the subcommand help.
 OPEN. llm-ext scan folder --help and llm-ext llm ask --help print no line containing estimate (nor --preview); llm-ext --help has none either (only scout estimate). The flags are stripped in cli/launcher.ts:206-218 and handled in cli/main.ts:696-779 but never rendered in help.
 
 ## Acceptance
-- [ ] both help screens list --estimate and --preview with one sentence each
+- [x] both help screens list --estimate and --preview with one sentence each
 - [ ] a test that every LLM-sending tool's help contains both
 
 Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 2026-10-07; part of the 14.1.0 release (TRDD-WBZJRSQB).
+2026-11-16T20:21:21+0100 main agent, measured on the installed 14.4.0 binary (temp HOME and config dir): llm-ext scan folder --help and llm-ext llm ask --help each list --estimate and --preview with one sentence (exit 0); llm summarize lists only --estimate and scan security neither, which matches DRY_RUN_SUPPORT (gaps TRDD-51JRJ3M6, TRDD-ZVZFKNLP). Steps 1 and 2 shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0. Box 1 ticked on this evidence; box 2 wording stays the USER decision named in STATE; the OWED list in STATE is still open.
 
 ## Approval log
 
 - 2026-10-07T17:26:14+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T20:21:22+0100 — column → human_review by main-agent@llm-externalizer-plugin. box 1 met on installed 14.4.0; box 2 rewording is a USER decision; OWED items in STATE still open
 
 ## Notes
 
