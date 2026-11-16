@@ -14,7 +14,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync 
 import { join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
-import { fallbackToLocalErrors, fallbackToLocalSetting, GENERATED_MARKER, getSettingsPath, isFallbackLocalProfile, loadSettings, settingsLevelErrors, unpopulatedDefaultProfile, validateSettings, type Profile, type Settings } from "./config.js";
+import { fallbackToLocalErrors, fallbackToLocalSetting, GENERATED_MARKER, getSettingsPath, isFallbackLocalProfile, loadSettings, localsPlatformSupported, settingsLevelErrors, unpopulatedDefaultProfile, validateSettings, type Profile, type Settings } from "./config.js";
 import { localEngineOf } from "./local-input-budget.js";
 import { parse as parseYaml } from "yaml";
 import {
@@ -200,7 +200,7 @@ describe("config validation of fallback_to_local (the real loader and validateSe
     ["enabled true", ["fallback_to_local:", "  enabled: true"]],
     ["enabled false", ["fallback_to_local:", "  enabled: false"]],
     ["a pin to a managed llama.cpp profile", ["fallback_to_local:", "  profile: my_llama"]],
-    ["a pin to a managed Locals profile", ["fallback_to_local:", "  profile: my_mlx"]],
+    ["a pin to a managed Locals profile (judged on injected macOS arm64)", ["fallback_to_local:", "  profile: my_mlx"]],
     ["profile null (automatic)", ["fallback_to_local:", "  profile:"]],
     ["both keys", ["fallback_to_local:", "  enabled: false", "  profile: local_llama"]],
   ];
@@ -208,9 +208,15 @@ describe("config validation of fallback_to_local (the real loader and validateSe
     it(`good: ${label}`, () => {
       fixture(FREE(section, [...LOCAL_LLAMA, ...MY_LLAMA, ...managed("my_mlx", MLX, "locals-local"), ...extra]), []);
       const s = loaded();
-      expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles)).toEqual([]);
-      expect(settingsLevelErrors(s).join("\n")).not.toContain("fallback_to_local");
-      expect(validateSettings(s).errors.join("\n")).not.toContain("fallback_to_local");
+      expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles, MAC.platform, MAC.arch)).toEqual([]);
+      // TRDD-M4KERGEF F8: the load-time validators judge the REAL machine (CI is ubuntu), so a Locals pin is an error exactly where
+      // Locals cannot run, and no error where it can: both branches assert, none is skipped.
+      const loadErrors = [...settingsLevelErrors(s), ...validateSettings(s).errors].join("\n");
+      if ((s.fallback_to_local as { profile?: string } | undefined)?.profile === "my_mlx" && !localsPlatformSupported()) {
+        expect(loadErrors).toContain("fallback_to_local.profile names 'my_mlx', a locals-local profile, but Locals runs only on macOS on Apple silicon");
+      } else {
+        expect(loadErrors).not.toContain("fallback_to_local");
+      }
     });
   }
 
@@ -365,11 +371,62 @@ describe("a pinned profile is the only one tried", () => {
     expect(readyLocalTarget(loaded(), g.cfgDir, { ...LINUX, env: g.env })).toBeUndefined();
   });
 
-  it("readyLocalTarget: a pinned Locals profile is ready only where Locals can run", () => {
+  it("readyLocalTarget: a pinned Locals profile is ready where Locals can run, and a fail-fast error elsewhere (TRDD-M4KERGEF F8)", () => {
     const yaml = FREE(["fallback_to_local:", "  profile: my_mlx"], [...LOCAL_LLAMA, ...managed("my_mlx", MLX, "locals-local")]);
     const f = fixture(yaml, [MODEL, MLX]);
     expect(readyLocalTarget(loaded(), f.cfgDir, { ...MAC, env: f.env })).toEqual({ profile: "my_mlx", engine: "locals", model: MLX });
-    expect(readyLocalTarget(loaded(), f.cfgDir, { ...LINUX, env: f.env }), "not local_llama either: the pin is the only candidate").toBeUndefined();
+    expect(() => readyLocalTarget(loaded(), f.cfgDir, { ...LINUX, env: f.env }), "validation and readiness judge the same platform").toThrow("a locals-local profile, but Locals runs only on macOS on Apple silicon");
+  });
+
+  // TRDD-M4KERGEF F8: a locals-local pin used to validate on any platform while readyLocalTarget skipped it where Locals cannot run,
+  // so the fallback silently never ran and the 1b window never armed. Every case injects platform AND arch: CI runs on ubuntu, so
+  // the host is never relied on. The pin is judged even with `enabled: false` (as every other pin check is).
+  describe("a locals-local pin is judged on the injected platform (F8)", () => {
+    const section = (enabled = true) => ["fallback_to_local:", `  enabled: ${enabled}`, "  profile: my_mlx"];
+    const pinned = (enabled?: boolean): Settings => {
+      fixture(FREE(section(enabled), [...LOCAL_LLAMA, ...managed("my_mlx", MLX, "locals-local")]), []);
+      return loaded();
+    };
+    const MESSAGE = "fallback_to_local.profile names 'my_mlx', a locals-local profile, but Locals runs only on macOS on Apple silicon";
+    const UNSUPPORTED: Array<[string, string, string]> = [["linux x64", "linux", "x64"], ["darwin x64", "darwin", "x64"]];
+
+    for (const [label, platform, arch] of UNSUPPORTED) {
+      it(`${label}: an error naming the profile, from fallbackToLocalErrors and fallbackToLocalSetting`, () => {
+        const s = pinned();
+        expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles, platform, arch)).toEqual([MESSAGE]);
+        expect(() => fallbackToLocalSetting(s, platform, arch)).toThrow(MESSAGE);
+      });
+    }
+    it("linux x64: an error even with enabled false", () => {
+      const s = pinned(false);
+      expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles, LINUX.platform, LINUX.arch)).toEqual([MESSAGE]);
+    });
+    it("darwin arm64: no error, and the setting is read as written", () => {
+      const s = pinned();
+      expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles, MAC.platform, MAC.arch)).toEqual([]);
+      expect(fallbackToLocalSetting(s, MAC.platform, MAC.arch)).toEqual({ enabled: true, profile: "my_mlx" });
+    });
+    it("a llamacpp-local pin is fine on linux x64 (control: only Locals is platform-gated)", () => {
+      fixture(FREE(["fallback_to_local:", "  profile: my_llama"]), []);
+      const s = loaded();
+      expect(fallbackToLocalErrors(s.fallback_to_local, s.profiles, LINUX.platform, LINUX.arch)).toEqual([]);
+      expect(fallbackToLocalSetting(s, LINUX.platform, LINUX.arch)).toEqual({ enabled: true, profile: "my_llama" });
+    });
+    // The load-time validators take no platform (they judge the real machine), so this makes the host report linux x64 for the
+    // call: the unsupported-host branch then runs on any machine, not only on ubuntu CI.
+    it("load time on a linux x64 host: settingsLevelErrors and validateSettings both report the Locals pin", () => {
+      const s = pinned();
+      const real = { platform: process.platform, arch: process.arch };
+      Object.defineProperty(process, "platform", { value: LINUX.platform, configurable: true });
+      Object.defineProperty(process, "arch", { value: LINUX.arch, configurable: true });
+      try {
+        expect(settingsLevelErrors(s)).toContain(MESSAGE);
+        expect(validateSettings(s).errors).toContain(MESSAGE);
+      } finally {
+        Object.defineProperty(process, "platform", { value: real.platform, configurable: true });
+        Object.defineProperty(process, "arch", { value: real.arch, configurable: true });
+      }
+    });
   });
 
   it("dispatch: a ready pin is the profile the fallback goes to (its line names my_llama, not local_llama)", async () => {

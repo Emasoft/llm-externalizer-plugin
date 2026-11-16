@@ -11174,7 +11174,7 @@ function appendLocalFallbackErrors(result, settings) {
 function isFallbackLocalProfile(profile) {
   return profile !== void 0 && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
 }
-function fallbackToLocalErrors(raw, profiles) {
+function fallbackToLocalErrors(raw, profiles, platform3, arch) {
   const known2 = FALLBACK_TO_LOCAL_KEYS.join(", ");
   if (raw === void 0 || raw === null) return [];
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -11193,14 +11193,16 @@ function fallbackToLocalErrors(raw, profiles) {
         errors.push(`fallback_to_local.profile names '${value}', which is not a profile of settings.yaml (profiles: ${Object.keys(profiles).join(", ") || "(none)"})`);
       } else if (!isFallbackLocalProfile(profiles[value])) {
         errors.push(`fallback_to_local.profile names '${value}', which is not a local profile: it needs server: managed and api llamacpp-local or locals-local`);
+      } else if (profiles[value].api === "locals-local" && !localsPlatformSupported(platform3, arch)) {
+        errors.push(`fallback_to_local.profile names '${value}', a locals-local profile, but Locals runs only on macOS on Apple silicon`);
       }
     }
   }
   return errors;
 }
-function fallbackToLocalSetting(settings) {
+function fallbackToLocalSetting(settings, platform3, arch) {
   const raw = settings.fallback_to_local;
-  const errors = fallbackToLocalErrors(raw, settings.profiles);
+  const errors = fallbackToLocalErrors(raw, settings.profiles, platform3, arch);
   if (errors.length > 0) throw new Error(errors[0]);
   const section2 = raw ?? {};
   return { enabled: section2.enabled ?? true, profile: section2.profile ?? void 0 };
@@ -276799,7 +276801,7 @@ function localsModelOnDisk(model, env) {
 }
 function readyLocalTarget(settings, configDir, o = {}) {
   const env = o.env ?? process.env;
-  const setting = fallbackToLocalSetting(settings);
+  const setting = fallbackToLocalSetting(settings, o.platform, o.arch);
   if (!setting.enabled) return void 0;
   const locals = localsPlatformSupported(o.platform, o.arch);
   const names2 = setting.profile !== void 0 ? [setting.profile] : [...locals ? ["locals-mlx"] : [], "local_llama"];

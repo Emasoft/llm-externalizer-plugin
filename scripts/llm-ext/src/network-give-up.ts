@@ -151,7 +151,8 @@ function localsModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
  */
 export function readyLocalTarget(settings: Settings, configDir: string, o: ReadyNowEnv = {}): ReadyLocalTarget | undefined {
   const env = o.env ?? process.env;
-  const setting = fallbackToLocalSetting(settings);
+  // TRDD-M4KERGEF F8: validation judges the pin on the same platform as the readiness check below, so a locals-local pin on a platform Locals cannot run on fails fast instead of silently never running.
+  const setting = fallbackToLocalSetting(settings, o.platform, o.arch);
   if (!setting.enabled) return undefined;
   const locals = localsPlatformSupported(o.platform, o.arch);
   const names = setting.profile !== undefined ? [setting.profile] : [...(locals ? ["locals-mlx"] : []), "local_llama"];

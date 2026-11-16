@@ -3743,7 +3743,7 @@ export function isFallbackLocalProfile(profile: Profile | undefined): boolean {
  * reported at once and not when the fallback is switched back on. Fail fast: a typo is reported, never read as the default.
  * Same shape as localFallbackErrors.
  */
-export function fallbackToLocalErrors(raw: unknown, profiles: Record<string, Profile>): string[] {
+export function fallbackToLocalErrors(raw: unknown, profiles: Record<string, Profile>, platform?: string, arch?: string): string[] {
   const known = FALLBACK_TO_LOCAL_KEYS.join(", ");
   if (raw === undefined || raw === null) return [];
   if (typeof raw !== "object" || Array.isArray(raw)) {
@@ -3762,6 +3762,11 @@ export function fallbackToLocalErrors(raw: unknown, profiles: Record<string, Pro
         errors.push(`fallback_to_local.profile names '${value}', which is not a profile of settings.yaml (profiles: ${Object.keys(profiles).join(", ") || "(none)"})`);
       } else if (!isFallbackLocalProfile(profiles[value])) {
         errors.push(`fallback_to_local.profile names '${value}', which is not a local profile: it needs server: managed and api llamacpp-local or locals-local`);
+      } else if (profiles[value].api === "locals-local" && !localsPlatformSupported(platform, arch)) {
+        // TRDD-M4KERGEF F8: readyLocalTarget (network-give-up.ts) skips a locals-local candidate where Locals cannot run, so a pin
+        // that passed here would silently switch the fallback (and the 1b window) off. Fail fast instead. Like the other pin checks
+        // this applies even with `enabled: false`: the typo-class error is reported at once, not when the fallback is switched on.
+        errors.push(`fallback_to_local.profile names '${value}', a locals-local profile, but Locals runs only on macOS on Apple silicon`);
       }
     }
   }
@@ -3774,10 +3779,13 @@ export interface FallbackToLocalSetting {
   profile: string | undefined;
 }
 
-/** TRDD-M4KERGEF: the `fallback_to_local` section of `settings`, defaults applied. A malformed section throws (fail fast; validateSettings reports it first at load). */
-export function fallbackToLocalSetting(settings: Settings): FallbackToLocalSetting {
+/**
+ * TRDD-M4KERGEF: the `fallback_to_local` section of `settings`, defaults applied. A malformed section throws (fail fast; validateSettings reports it first at load).
+ * TRDD-M4KERGEF F8: `platform`/`arch` are the platform the pin is judged on (default: this machine); readyLocalTarget passes its own, so validation and readiness judge the same platform.
+ */
+export function fallbackToLocalSetting(settings: Settings, platform?: string, arch?: string): FallbackToLocalSetting {
   const raw = settings.fallback_to_local;
-  const errors = fallbackToLocalErrors(raw, settings.profiles);
+  const errors = fallbackToLocalErrors(raw, settings.profiles, platform, arch);
   if (errors.length > 0) throw new Error(errors[0]);
   const section = (raw ?? {}) as { enabled?: boolean; profile?: string | null };
   return { enabled: section.enabled ?? true, profile: section.profile ?? undefined };
