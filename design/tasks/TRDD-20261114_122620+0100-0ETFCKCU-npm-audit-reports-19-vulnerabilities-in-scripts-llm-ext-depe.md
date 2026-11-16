@@ -1,10 +1,10 @@
 ---
 trdd-id: 0ETFCKCU
 title: npm audit reports 19 vulnerabilities in scripts/llm-ext dependencies
-column: published
-status: archived
+column: human_review
+status: tasked
 created: 2026-11-14T12:26:20+0100
-updated: 2026-11-16T15:14:28+0100
+updated: 2026-11-16T15:20:00+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -29,6 +29,7 @@ blocker-holds-if:
 - 2026-11-14T12:26:20+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-14T12:45:49+0100 — column → blocked by main-agent@llm-externalizer-plugin. zod commit waits for a full suite; better-sqlite3 binding missing, rebuild needs the user
 - 2026-11-16T15:14:28+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. zod 4.6.7, vitest 4.1.12, eslint 10.15.0 in the v14.3.1 lock; high advisories 0; remaining 8 accepted.
+- 2026-11-16T15:19:47+0100 — column → human_review by main-agent@llm-externalizer-plugin. reopened: wrongly archived by the closing worker; USER decides
 
 ## Problem
 
@@ -60,3 +61,4 @@ blocker-holds-if:
 2026-11-16T10:08:22+0100 Main agent: 170f9f5b bumps vitest ^4.1.12 and eslint ^10.15.0; audit 14 -> 8 (7 moderate, 1 low, 0 high), all dev-only; no runtime lock entry changed (41 of 41, version and integrity); better-sqlite3 binding loads; tsc and eslint exit 0. AGENT DECISION (the USER may veto), under the 2026-11-15 delegation: accept the remaining 8. typescript-eslint chain: its newest 8.72.2 is still in the minimatch advisory range, no in-range fix. esbuild: the advisory is its development server; esbuild.config.mjs only calls build(). The sqlite-file rerun box stays open for the full suite before the push.
 2026-11-16T10:11:21+0100 Main agent: box 2 unticked again; the moderate fixes (vitest, eslint chain) are triaged and committed but not yet run under the full suite, which runs once before the push.
 2026-11-16T15:14:17+0100 Closed after v14.3.1: tag lock has zod 4.6.7, vitest 4.1.12, eslint 10.15.0; 170f9f5b is in the tag (the zod commit 67f3a89f is not an ancestor, content shipped under another SHA); G0MS9B63 is complete; full suite passed in the 14.3.1 publish run (per caller); the 8 remaining dev-only advisories stay accepted by the 2026-11-16T10:08 agent decision, USER may veto.
+- 2026-11-16T15:20:00+0100 main agent: reopened to human_review. The closing worker archived this card on a risk an agent accepted (8 dev-only advisories left, 1 low and 7 moderate, 0 high) and ticked box 1 on the main agent's report that the 14.3.1 publish suite passed (it did, run 14:14-14:48). Accepting those 8 advisories is a USER decision: approve to close, or veto and keep it open.
