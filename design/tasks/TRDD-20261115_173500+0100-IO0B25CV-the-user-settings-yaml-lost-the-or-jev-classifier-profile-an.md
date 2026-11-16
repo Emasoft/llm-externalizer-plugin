@@ -1,10 +1,10 @@
 ---
 trdd-id: IO0B25CV
 title: The user settings.yaml lost the or-jev classifier profile and active_classifier after 2026-10-29
-column: todo
+column: testing
 status: tasked
 created: 2026-11-15T17:35:00+0100
-updated: 2026-11-15T17:39:29+0100
+updated: 2026-11-16T10:02:20+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-15T17:35:00+0100
+implementation-commits: [b41cdc26]
 ---
 
 # The user settings.yaml lost the or-jev classifier profile and active_classifier after 2026-10-29
@@ -24,7 +25,9 @@ Reported 2026-11-15 by the apple-docs-mcp Claude session (peer report, not verif
 ## Approval log
 
 - 2026-11-15T17:35:00+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T10:02:20+0100 — column → testing by main-agent@llm-externalizer-plugin. writers covered by a mutation-checked test; restore of the user file waits for the USER
 
 ## Notes
 
 2026-11-15T17:39:27+0100 CHECKED by the main agent (read-only grep of profile-name lines only, no content diff, 2026-11-15). Live ~/.llm-externalizer/settings.yaml (mtime 2026-11-15 17:30, 3218 bytes) has profiles scouting, free, local_llama, locals-mlx; no or-jev, no paid, no active_classifier, no top-level active line. backups/settings.yaml.bak-pre-local-restore-20261114_200442+0100 already lacked or-jev and active_classifier (profiles scouting, free only). Both backups/settings-before-local-profiles-*-20261029_120112+0100.yaml have active free, or-jev, paid and active_classifier or-jev. So the loss happened between 2026-10-29 12:01 and 2026-11-14 20:04, and the classifier profile was already missing before today's 17:30 rewrite (what that rewrite changed is not known). The 17:30 rewrite is unattributed: candidates are two unisolated --version runs by a research worker (its report in reports_dev/sonnet-worker/20261115_173458+0100-classify-local-fallback-howto.md) or another session using llm-ext.
+2026-11-16T10:02:18+0100 Items 1-3 by the main agent: (1) settings.yaml writers are writeSettingsAtomic (benchmark/pick.ts) and the two writes in ensureSettingsExist (config.ts); other renameSync/writeFileSync sites write JSON sidecars or reports. (2) No current writer drops or-jev or active_classifier: settings-keep-or-jev.test.ts 19/19 (b41cdc26); with writeSettingsAtomic mutated to delete both, all 14 writer tests fail. So no code fix was needed. The cause of the 10-29 to 11-14 loss is not proven: there is no .corrupt- backup in ~/.llm-externalizer, so the corrupt-file regenerate did not do it; the vitest guard 1616fb78 landed 2026-11-14 20:30, after the window closed (20:04), so a test run writing the real file before the guard is the leading suspect (inferred). (4) Restoring the user settings.yaml waits for the USER.

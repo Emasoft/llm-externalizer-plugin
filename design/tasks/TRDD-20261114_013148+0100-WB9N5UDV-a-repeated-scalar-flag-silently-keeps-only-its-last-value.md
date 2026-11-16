@@ -1,10 +1,10 @@
 ---
 trdd-id: WB9N5UDV
 title: A repeated scalar flag silently keeps only its last value
-column: todo
+column: testing
 status: tasked
 created: 2026-11-14T01:31:48+0100
-updated: 2026-11-16T09:44:32+0100
+updated: 2026-11-16T10:02:19+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -18,6 +18,7 @@ approval-datetime: 2026-11-14T01:31:48+0100
 unblock-when: []
 blocker-probe: 
 blocker-holds-if: 
+implementation-commits: [21cb9770, f4d1cb2f]
 ---
 
 # A repeated scalar flag silently keeps only its last value
@@ -27,12 +28,13 @@ blocker-holds-if:
 Proposed direction (fail fast, not decided): refuse a repeated scalar flag with an error naming the flag, instead of keeping the last value.
 
 Acceptance:
-- [ ] a repeated scalar flag exits non-zero with a message naming the flag, or a recorded decision says last-wins is intended
-- [ ] a built-CLI test covers it
+- [x] a repeated scalar flag exits non-zero with a message naming the flag, or a recorded decision says last-wins is intended
+- [x] a built-CLI test covers it
 
 ## Approval log
 
 - 2026-11-14T01:31:48+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T10:02:19+0100 — column → testing by main-agent@llm-externalizer-plugin. fix and built-CLI test committed; full suite before push
 
 ## Notes
 
@@ -42,3 +44,4 @@ Acceptance:
 2026-11-14T14:41+0100 Blocked on the owner decision. To unblock, the owner records a line starting OWNER DECISION: in these Notes (refuse or last-wins, and whether it covers the stripped flags). The blocker-probe greps for that line; a decision has no other runnable check.
 2026-11-14T14:42+0100 Correction to the previous note: the card is NOT blocked. A blocked card must name an open card in blocked-by and no card covers this decision, so it follows the board's existing form for owner-gated work: assignee user, column todo (like TRDD-58CFBQHN and TRDD-RPLLP8CF). Agents should not pull it; the owner unblocks it by recording a line starting OWNER DECISION: here and reassigning it.
 2026-11-16T09:44:31+0100 DECISION (main agent, under the USER delegation of 2026-11-15 "on the other things, do as you think is better. but base your decisions on verified facts" and the 2026-11-16 goal "complete all TRDDs"; the USER may veto): refuse a repeated scalar flag (string, number, object) with an error naming the flag and exit non-zero, because the global rule is fail fast with no silent fallback and last-wins silently drops a value. Booleans stay last-wins (harmless, and --x false after --x true is an intentional override). Implementation follows.
+2026-11-16T10:02:18+0100 DONE by the main agent: parseFlags refuses a repeated scalar (21cb9770, bundle f4d1cb2f); arrays and oneOf merge, booleans last-wins. repeated-scalar-flag-cli.test.ts 8/8; against the pre-change bundle 5 refusal tests fail, 3 controls pass. PCRE sweep of skills, commands, hooks, agents, bin, README, scripts and tests: no documented call repeats a scalar flag (repeats found are array flags: check diff --input_files_paths, scout search-xjob --job_ids, which still parse). Full suite owed before the push.
