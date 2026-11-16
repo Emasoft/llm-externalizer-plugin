@@ -4,7 +4,7 @@ title: Wire the hq scan quality benchmark so high_quality_scan gets verdicts
 column: todo
 status: tasked
 created: 2026-11-15T00:24:58+0100
-updated: 2026-11-15T00:24:58+0100
+updated: 2026-11-16T09:44:31+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -25,3 +25,4 @@ runHqScanQualityBenchmark is exported in scripts/llm-ext/src/benchmark/hq-scan-q
 ## Approval log
 
 - 2026-11-15T00:24:58+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-11-16T09:44:31+0100 — closing evidence (main agent): benchmark/cli-args.ts:369 parses --hq-scan-quality; benchmark/index.ts:2413-2456 runHqScanQualityPhase calls runHqScanQualityBenchmark with the cost guards; hq-scan-quality.ts:271 records the verdict in the ledger; all in v14.3.0 (card triage reports_dev/card-triage/20261116_094135+0100-todo-design-cards.md).

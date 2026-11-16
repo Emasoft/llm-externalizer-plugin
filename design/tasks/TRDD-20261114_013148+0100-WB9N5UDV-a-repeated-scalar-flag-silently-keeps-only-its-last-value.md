@@ -4,7 +4,7 @@ title: A repeated scalar flag silently keeps only its last value
 column: todo
 status: tasked
 created: 2026-11-14T01:31:48+0100
-updated: 2026-11-14T14:42:16+0100
+updated: 2026-11-16T09:44:32+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -41,3 +41,4 @@ Acceptance:
 2026-11-14T14:41+0100 Qualifiers to the previous note (review): the no-repeat claim rests on one single-line regex over skills, commands, agents, docs, README and src *.md/*.test.ts; it misses commands split across lines, mixed --flag=value/--flag value, kebab vs underscore spellings, shell scripts and argv built in .ts. The a.txt/b.txt behaviour is from code reading, not a run. Whether security_scan (category_rubrics) reaches main.ts parseFlags is unverified. The decision should also cover: a second --profile, --estimate or --preview, which today dies as unknown flag (misleading), and the timeout flags, which keep last-wins outside parseFlags, so a refusal would leave two flag families inconsistent.
 2026-11-14T14:41+0100 Blocked on the owner decision. To unblock, the owner records a line starting OWNER DECISION: in these Notes (refuse or last-wins, and whether it covers the stripped flags). The blocker-probe greps for that line; a decision has no other runnable check.
 2026-11-14T14:42+0100 Correction to the previous note: the card is NOT blocked. A blocked card must name an open card in blocked-by and no card covers this decision, so it follows the board's existing form for owner-gated work: assignee user, column todo (like TRDD-58CFBQHN and TRDD-RPLLP8CF). Agents should not pull it; the owner unblocks it by recording a line starting OWNER DECISION: here and reassigning it.
+2026-11-16T09:44:31+0100 DECISION (main agent, under the USER delegation of 2026-11-15 "on the other things, do as you think is better. but base your decisions on verified facts" and the 2026-11-16 goal "complete all TRDDs"; the USER may veto): refuse a repeated scalar flag (string, number, object) with an error naming the flag and exit non-zero, because the global rule is fail fast with no silent fallback and last-wins silently drops a value. Booleans stay last-wins (harmless, and --x false after --x true is an intentional override). Implementation follows.
