@@ -4,7 +4,7 @@ title: RL-02 tsc + eslint + full vitest
 column: todo
 status: tasked
 created: 2026-10-07T20:40:16+0200
-updated: 2026-11-14T15:43:48+0100
+updated: 2026-11-16T10:27:59+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -64,3 +64,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 ## Notes
 
 2026-11-14T15:40+0100 owed for the full vitest: src/cli/classify-stdin-cli.test.ts (TRDD-XM2OSVC0, 1c41b721) has not run inside a full suite as of 2026-11-14 (sqlite binding missing, TRDD-G0MS9B63) and not on Linux as of this date (local macOS runs only, not pushed).
+2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.

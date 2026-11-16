@@ -4,7 +4,7 @@ title: RL-08 Cross-platform checks
 column: todo
 status: tasked
 created: 2026-10-07T20:41:19+0200
-updated: 2026-11-14T15:49:40+0100
+updated: 2026-11-16T10:28:00+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -64,3 +64,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 ## Notes
 
 2026-11-14T15:49+0100 for the Linux run of classify-stdin-cli.test.ts (TRDD-2GC5DHR7): if the pty test goes red, look first at util-linux script closing the session at once because its own stdin is /dev/null (EOF), which can drop or truncate the child's stdin is a terminal message; with -e the exit stays 1, so it fails on the message assertion. A skip, not a failure, means the util-linux probe missed.
+2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
