@@ -1,10 +1,10 @@
 ---
 trdd-id: PN0N4290
 title: Bounded give-up window for network-level remote failures
-column: design
+column: todo
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-13T19:20:23+0100
+updated: 2026-11-16T10:05:07+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -65,3 +65,8 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 
 - 2026-11-13T19:10:59+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-13T19:20:23+0100 — column → design. value and existence of the give-up window pending USER Q10
+- 2026-11-16T10:05:07+0100 — column → todo by main-agent@llm-externalizer-plugin. Q10 decided 2026-11-14 (30 s, settings key plus flag)
+
+## Notes
+
+2026-11-16T10:05:07+0100 UNBLOCKED by the main agent: the WAITING note of 2026-11-13 is superseded. Q10 was decided 2026-11-14T20:12 in TRDD-WSPV40Y5 line 129 (agent decision under the owner instruction of 2026-11-14): the give-up window is a settings key plus a command flag, default 30 s (not the provisional 6 s). Prerequisites 1a TRDD-3CG178O7 and 1c TRDD-78LZFUVJ are in testing.
