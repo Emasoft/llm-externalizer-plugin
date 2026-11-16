@@ -4,7 +4,7 @@ title: Bounded give-up window for network-level remote failures
 column: todo
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-16T10:05:07+0100
+updated: 2026-11-16T10:08:24+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -70,3 +70,4 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 ## Notes
 
 2026-11-16T10:05:07+0100 UNBLOCKED by the main agent: the WAITING note of 2026-11-13 is superseded. Q10 was decided 2026-11-14T20:12 in TRDD-WSPV40Y5 line 129 (agent decision under the owner instruction of 2026-11-14): the give-up window is a settings key plus a command flag, default 30 s (not the provisional 6 s). Prerequisites 1a TRDD-3CG178O7 and 1c TRDD-78LZFUVJ are in testing.
+2026-11-16T10:08:22+0100 Main agent: Required test 3 (typed error in under 5 s) was written for the provisional 6 s window. With the 30 s default, test 3 must set the window through the new settings key or flag (for example 2 s) and keep the under-5 s bound; test 5 (unarmed, elapsed at least the old retry time) is unchanged.
