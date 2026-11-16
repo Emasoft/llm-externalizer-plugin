@@ -4,7 +4,7 @@ title: Local-only classifier profile local-decision that sends classify requests
 column: dev
 status: tasked
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-16T23:20:49+0100
+updated: 2026-11-17T00:23:08+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T23:20:23+0100
+implementation-commits: [fc3052b0]
 ---
 
 # Local-only classifier profile local-decision that sends classify requests straight to mlx-decision
@@ -55,3 +56,7 @@ A classifier profile named `local-decision` that sends every classify request st
 ## Approval log
 
 - 2026-11-16T23:20:23+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17 00:23+0100: implemented in fc3052b0 (worker report reports_dev/local-decision/20261117_001206+0100-local-decision.md, read and diff-checked by the main agent). Design item 7 changed by the orchestrator: the remote-only refusal is on the classify path (cli/main.ts), NOT at settings load, because a load-time refusal would stop every llm-ext command. Remote planning now fits min(remote limit, 16384) on Apple silicon while the fallback is on (up to about 2x remote requests for inputs between the two limits). Live: or-jev with a refused key (401) answered by elephant-1 on run-decision.ts (about 21k tokens, 2 chunks), exit 0; local-decision filter, label, ping, estimate exit 0 with no key. Open: random base64 is undercounted about 2x by l1/estimate.ts (ratio 1.985), so a base64-heavy request can still end in the decider 422.
