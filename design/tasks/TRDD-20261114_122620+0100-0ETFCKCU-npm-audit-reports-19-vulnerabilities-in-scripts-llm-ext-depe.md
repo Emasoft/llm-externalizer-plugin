@@ -4,7 +4,7 @@ title: npm audit reports 19 vulnerabilities in scripts/llm-ext dependencies
 column: todo
 status: tasked
 created: 2026-11-14T12:26:20+0100
-updated: 2026-11-16T10:08:23+0100
+updated: 2026-11-16T10:08:32+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -40,7 +40,7 @@ blocker-holds-if:
 
 ## Acceptance
 
-- [x] each high or critical advisory is fixed by a dependency update that keeps npm ci and the full test suite green, or recorded with the reason it does not apply
+- [ ] each high or critical advisory is fixed by a dependency update that keeps npm ci and the full test suite green, or recorded with the reason it does not apply
 - [x] moderate and low advisories triaged the same way
 - [x] each high advisory is classified runtime or dev-only with evidence (npm ls or the bundle)
 - [ ] Rerun the 15 sqlite-backed test files on zod 4.6.7 once TRDD-G0MS9B63 is resolved (needs the better-sqlite3 binding)
