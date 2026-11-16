@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-16T22:36:04+0100
+updated: 2026-11-16T22:37:52+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -63,3 +63,4 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 ## Notes
 
 2026-11-16 22:36+0100: the per-task local thinking switch (97fdae64) shipped in patch release 14.4.1 before the USER could veto it, so a veto now means a revert release. Publish test stages read from reports_dev/publish/test.log: 6357 passed 7 skipped, 221 passed 2 skipped, 12 passed, 1 passed. Tag v14.4.1 released 21:32Z. The 14.4.1 cache binary prints 14.4.1. push.default and extensions.worktreeConfig both unset (checked).
+2026-11-16 22:37+0100: correction to the previous note. The test totals come from reports_dev/publish/test.log, last written 22:30:44+0100, 79 s before the v14.4.1 release commit 9e6069d7 (22:32:03+0100) and two hours after v14.4.0 (20:10:49+0100), so they belong to the 14.4.1 publish. The v14.4.1 GitHub release exists with 0 assets until Release run 43961101755 attaches SHA256SUMS and provenance. The cache-binary version check self-installed better-sqlite3 into the temp config dir (cfg/native), not into the plugin cache.
