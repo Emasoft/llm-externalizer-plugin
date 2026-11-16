@@ -9098,8 +9098,9 @@ function validateProfile(name, profile) {
     }
     const pool = coerceFreeModels(profile.free_models);
     if (pool.length === 0) {
+      const fill = isDynamicProfileName(name) ? `Fill it with \`llm-ext-benchmark --populate-default-profile ${name}\` (zero cost for free), or list ':free' model ids under free_models in settings.yaml.` : `Fill it with \`llm-ext-benchmark --update-all --profile ${name}\` or the \`/llm-externalizer:llm-externalizer-update-all\` command, or list ':free' model ids under free_models in settings.yaml.`;
       errors.push(
-        `Profile '${name}': free_only requires a non-empty 'free_models' list.`
+        `Profile '${name}': free_only requires a non-empty 'free_models' list. ${fill}`
       );
     }
     const { routesFor, routes: allGroups } = resolveGroups(profile);

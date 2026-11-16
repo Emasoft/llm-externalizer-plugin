@@ -10585,8 +10585,9 @@ function validateProfile(name, profile) {
     }
     const pool = coerceFreeModels(profile.free_models);
     if (pool.length === 0) {
+      const fill = isDynamicProfileName(name) ? `Fill it with \`llm-ext-benchmark --populate-default-profile ${name}\` (zero cost for free), or list ':free' model ids under free_models in settings.yaml.` : `Fill it with \`llm-ext-benchmark --update-all --profile ${name}\` or the \`/llm-externalizer:llm-externalizer-update-all\` command, or list ':free' model ids under free_models in settings.yaml.`;
       errors.push(
-        `Profile '${name}': free_only requires a non-empty 'free_models' list.`
+        `Profile '${name}': free_only requires a non-empty 'free_models' list. ${fill}`
       );
     }
     const { routesFor, routes: allGroups } = resolveGroups(profile);
@@ -292486,6 +292487,8 @@ function parseFlags2(argv, tool, invocation) {
     if ((kind === "array" || kind === "oneOf") && key in out) {
       const prev = out[key];
       out[key] = [...Array.isArray(prev) ? prev : [prev], ...Array.isArray(value) ? value : [value]];
+    } else if (key in out) {
+      die(`--${flag} was given more than once; it takes a single value. If the command also takes a positional input, that input already supplies --${key}.`);
     } else {
       out[key] = value;
     }
