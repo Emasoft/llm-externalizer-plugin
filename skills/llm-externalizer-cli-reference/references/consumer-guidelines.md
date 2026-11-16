@@ -2,7 +2,7 @@
 
 For a project whose Claude session, scripts, hooks or CI run `llm-ext`. Nine questions, each answered as imperative guidance plus the reason. The release markers were checked against the installed 14.3.0 release (its `--help` output and source); the latest release is 14.3.0.
 
-Marker: "(since 14.3.0)" means the behaviour is in the 14.3.0 release; "(since 14.2.0)" means it is in the 14.2.0 release and later. "(next release after 14.3.0: TRDD-xxxx)" means it is in the committed source at HEAD but not in 14.3.0. "(planned, not in 14.3.0 or HEAD: TRDD-xxxx)" means it is only designed or still in progress. Each marker was decided by comparing the code, not commit ancestry. If `llm-ext --version` prints less than the version in a "(since ...)" marker, do not rely on that behaviour; do not rely on a "next release" or "planned" behaviour until a release is documented to carry it. Live `llm-ext <group> <action> --help` always wins over this file.
+Marker: "(since 14.3.0)" means the behaviour is in the 14.3.0 release; "(since 14.2.0)" means it is in the 14.2.0 release and later. "(next release after 14.3.0: TRDD-xxxx)" means it is in the committed source at HEAD but not in 14.3.0. "(planned, not in 14.3.0 or HEAD: TRDD-xxxx)" means it is only designed or still in progress. Each 14.3.0 marker was checked against the installed 14.3.0 help and source, not commit ancestry. If `llm-ext --version` prints less than the version in a "(since ...)" marker, do not rely on that behaviour; do not rely on a "next release" or "planned" behaviour until a release is documented to carry it. Live `llm-ext <group> <action> --help` always wins over this file.
 
 ## 1. Which profile to pass, and the missing `active:` key
 
