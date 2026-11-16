@@ -1,6 +1,76 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.3.1] - 2026-11-16
+
+### Changed
+
+- Build(deps-dev): vitest ^4.1.12 and eslint ^10.15.0 fix dev audit advisories (TRDD-0ETFCKCU)
+
+- Build(dist): rebuild bundles for TRDD-8CCKM4XE and TRDD-WB9N5UDV
+
+
+### Documentation
+
+- Docs(trdd): release checklist cards now target the release after 14.3.0 (TRDD-FC2TX9VU)
+
+- Docs(skill): guidelines legend names the real check for 14.3.0 markers (TRDD-FC2TX9VU)
+
+- Docs(skill): drop the stale tag-history sentence from the guidelines legend (TRDD-FC2TX9VU, TRDD-0ETFCKCU)
+
+- Docs(trdd): 0ETFCKCU box 1 waits for the full suite (TRDD-0ETFCKCU)
+
+- Docs(trdd): IO0B25CV claim narrowed, 0ETFCKCU advisories triaged, PN0N4290 test 3 bound (TRDD-IO0B25CV, TRDD-0ETFCKCU, TRDD-PN0N4290)
+
+- Docs(skill): consumer guidelines keyed to the 14.3.0 release
+
+- Docs(trdd): PN0N4290 unblocked, Q10 decided 30 s on 2026-11-14 (TRDD-PN0N4290)
+
+- Docs(trdd): WB9N5UDV, IO0B25CV and 97FOZOO2 to testing with their commits (TRDD-WB9N5UDV, TRDD-IO0B25CV, TRDD-97FOZOO2)
+
+- Docs(skill): classify ping and the classify group ship in 14.3.0 (TRDD-97FOZOO2)
+
+- Docs(trdd): FC2TX9VU log, FUHTNE04 close basis and WB9N5UDV decision basis (TRDD-FC2TX9VU)
+
+- Docs(trdd): close FUHTNE04, the hq scan quality benchmark is wired in 14.3.0 (TRDD-FUHTNE04)
+
+- Docs(trdd): close FUHTNE04 (wired in 14.3.0); record WB9N5UDV decision, refuse repeated scalar flags (TRDD-FUHTNE04, TRDD-WB9N5UDV)
+
+- Docs(trdd): 8CCKM4XE to testing (TRDD-8CCKM4XE)
+
+- Docs(trdd): add 8CCKM4XE, empty free_models error says how to fill the pool (issue 16 item 4)
+
+- Docs(trdd): IM2NBX1S to testing, fix landed (TRDD-IM2NBX1S)
+
+- Docs(trdd): FC2TX9VU log, G0MS9B63 evidence correction and summary corrections (TRDD-FC2TX9VU)
+
+- Docs(trdd): unblock XHHH0N1E, LMSYDGVB, OZIIABLY; S5KOOT2S now waits only on DX4YLNI6 (TRDD-G0MS9B63)
+
+- Docs(trdd): close G0MS9B63, the sqlite binding works in the worktrees and npm test passed in the 14.3.0 publish (TRDD-G0MS9B63)
+
+- Docs(trdd): FC2TX9VU triage log, shipped cards and stranded worktrees (TRDD-FC2TX9VU)
+
+- Docs(trdd): add FC2TX9VU, session goal 2026-11-16 complete all TRDDs, fix all issues, publish (TRDD-FC2TX9VU)
+
+- Docs(trdd): EB1XGLMJ goal reached, 14.3.0 published and installed; card to human_review (TRDD-EB1XGLMJ)
+
+- Docs(trdd): add IM2NBX1S, publish.py runs git in the caller directory instead of its own repository
+
+
+### Fixed
+
+- Fix(cli): refuse a scalar flag given more than once (TRDD-WB9N5UDV)
+
+- Fix(config): the empty free_models refusal says how to fill the pool (TRDD-8CCKM4XE)
+
+- Fix(publish): run every git, git-cliff and gh call in repo_root, not the caller directory (TRDD-IM2NBX1S)
+
+
+### Testing
+
+- Test(settings): every settings.yaml writer keeps a user's or-jev (TRDD-IO0B25CV)
+
+
 ## [14.3.0] - 2026-11-15
 
 ### Added
