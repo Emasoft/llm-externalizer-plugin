@@ -1,10 +1,10 @@
 ---
 trdd-id: 4HRFC42S
 title: Tests can overwrite the real settings.yaml when vitest runs outside scripts/llm-ext
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T20:12:42+0100
-updated: 2026-11-14T20:40:23+0100
+updated: 2026-11-16T20:15:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -24,6 +24,7 @@ implementation-commits: [1616fb78]
 
 - 2026-11-14T20:12:42+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-14T20:40:23+0100 — column → testing by main-agent@llm-externalizer-plugin. landed 1616fb78, full suite at pre-push
+- 2026-11-16T20:15:26+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. code shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0; acceptance boxes checked against the v14.4.0 source and the green full npm test of the v14.4.0 publish.
 
 ## Problem
 
@@ -33,3 +34,9 @@ implementation-commits: [1616fb78]
 
 getConfigDir() throws when process.env.VITEST is set and the resolved dir is the real ~/.llm-externalizer (realpath compare), fail fast; one guard covers every test, every spawned CLI child (they inherit VITEST) and every writer, independent of cwd. An explicit opt-in env exists only if a test that legitimately needs the real dir is found.
 2026-11-14T20:40:22+0100 Landed 1616fb78: assertNotRealConfigDirUnderTest in config.ts, called by getConfigDir; 3 unit tests pass. data-dir.mjs not guarded (native-deps path only). Full suite owed at the pre-push run.
+
+## Acceptance
+
+- [x] getConfigDir throws under VITEST when it resolves to the real ~/.llm-externalizer (assertNotRealConfigDirUnderTest, 1616fb78; present in v14.4.0 source, checked 2026-11-16T20:15:14+0100)
+- [x] the full npm test passes: v14.4.0 publish run 2026-11-16, all 4 stages green (6334, 221, 12, 1 passed), so no existing test needed the real config dir
+- [x] known gap recorded, not fixed here: data-dir.mjs is not guarded (native-deps path only), stated in the Fix section

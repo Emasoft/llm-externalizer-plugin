@@ -4,7 +4,7 @@ title: The completion.test.ts circuit-breaker test exceeds its 30 s cap under he
 column: backburner
 status: tasked
 created: 2026-11-05T00:08:55+0100
-updated: 2026-11-05T01:37:29+0100
+updated: 2026-11-16T20:16:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -41,6 +41,7 @@ Copied from TRDD-WTKO255N (2026-11-05): when this test times out, its stderr spy
 The stderr-spy item is tracked on TRDD-DTROKVVY.
 Before closing this card, move TRDD-WTKO255N known limits 1 and 2 to a live card (the stderr-spy item is already tracked on TRDD-DTROKVVY); the boxes of this card do not cover them.
 2026-11-05T01:27+0100 Run 4b did not exercise the 46b88412 afterEach reset: the breaker test did not time out.
+2026-11-16T20:16:26+0100 main agent (TRDD-FC2TX9VU, fix d8c82728): measured that the test made 0 requests in its 30 s under load and that, at the same load (two bounded yes burners, load 13-67), it fails 3/3 with the local governor on and passes 3/3 with it off. Inferred from code, not logged: a send to 127.0.0.1 takes a governor lease, a stale CPU/RAM reading denies it, and the retry poll waits on the faked setTimeout. A timed-out run also left a dead lease poller that hung 9 later tests (reproduced). Fix: the test switches the governor off, and the file afterEach resets the pollers and restores the variable. Box 1 is met for the hang, not for the stale-denial step. Box 2 is still owed: no run has shown a pass at a 1-minute load of 80 or more.
 
 ## Approval log
 

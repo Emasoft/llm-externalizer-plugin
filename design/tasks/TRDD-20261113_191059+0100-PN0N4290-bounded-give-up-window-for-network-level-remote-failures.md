@@ -1,10 +1,10 @@
 ---
 trdd-id: PN0N4290
 title: Bounded give-up window for network-level remote failures
-column: testing
+column: human_review
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-16T10:53:33+0100
+updated: 2026-11-16T20:16:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -68,6 +68,7 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 - 2026-11-13T19:20:23+0100 — column → design. value and existence of the give-up window pending USER Q10
 - 2026-11-16T10:05:07+0100 — column → todo by main-agent@llm-externalizer-plugin. Q10 decided 2026-11-14 (30 s, settings key plus flag)
 - 2026-11-16T10:51:29+0100 — column → testing by main-agent@llm-externalizer-plugin. implemented, touched-area tests green; full suite before push
+- 2026-11-16T20:16:01+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.4.0 (42c67aa3, cap ff08557f); USER review of the agent choices for Q10: 30 s default window, 299 s cap below the retry deadline
 
 ## Notes
 

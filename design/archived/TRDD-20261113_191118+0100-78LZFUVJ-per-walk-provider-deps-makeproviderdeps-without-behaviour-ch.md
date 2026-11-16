@@ -1,10 +1,10 @@
 ---
 trdd-id: 78LZFUVJ
 title: Per-walk provider deps (makeProviderDeps) without behaviour change
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-13T19:11:18+0100
-updated: 2026-11-15T17:21:52+0100
+updated: 2026-11-16T20:15:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -57,7 +57,14 @@ A pure seam refactor, NO behaviour change: nothing calls the new functions with 
 - 2026-11-13T19:11:18+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-14T18:56:54+0100 — column → dev by main-agent@llm-externalizer-plugin. dispatched to a worker 2026-11-14
 - 2026-11-14T19:58:57+0100 — column → testing by main-agent@llm-externalizer-plugin. landed ca2c097f; full suite owed at the pre-push run
+- 2026-11-16T20:15:26+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. code shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0; acceptance boxes checked against the v14.4.0 source and the green full npm test of the v14.4.0 publish.
 
 ## Notes
 
 2026-11-14T19:58+0100 landed as ca2c097f (src/index.ts, vitest.config.ts, dist, new src/provider-deps-seam.test.ts). Main agent read the src diff: the inlined timeout and context fallback equal SOFT_TIMEOUT_MS and FALLBACK_CONTEXT_LENGTH, both assigned from the same profile in the settings swap (index.ts:736-737, 1062-1063). Worker-reported: tsc, eslint, build pass; the two seam test files pass 10/10; a killed full run showed 5 failures from the missing better-sqlite3 binding (TRDD-G0MS9B63) and 1 in governor-load.test.ts, which does not import index.ts (read, not rerun). The full-suite proof moves to the pre-push run (owner rule 2026-11-14: tests only before a push; RL-02 TRDD-6PIGEAN0).
+
+## Acceptance
+
+- [x] makeProviderDeps(profile, backend) and localSizingFor(profile, tool) exist and are the one source (ca2c097f; present in v14.4.0 source, checked 2026-11-16T20:15:14+0100)
+- [x] seam test src/provider-deps-seam.test.ts ships in v14.4.0
+- [x] the full npm test passes: v14.4.0 publish run 2026-11-16, all 4 stages green (6334, 221, 12, 1 passed), the card's stated proof of no behaviour change

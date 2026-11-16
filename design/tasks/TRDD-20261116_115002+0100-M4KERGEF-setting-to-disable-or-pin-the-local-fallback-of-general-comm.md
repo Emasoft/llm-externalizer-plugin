@@ -1,10 +1,10 @@
 ---
 trdd-id: M4KERGEF
 title: Setting to disable or pin the local fallback of general commands
-column: testing
+column: human_review
 status: tasked
 created: 2026-11-16T11:50:02+0100
-updated: 2026-11-16T15:46:17+0100
+updated: 2026-11-16T20:16:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -27,6 +27,7 @@ Sibling of TRDD-WSPV40Y5, both EHTs of TRDD-UT7UC025 (WSPV40Y5 card section 3, a
 ## Approval log
 
 - 2026-11-16T11:50:02+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T20:16:01+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.4.0 (5c1ca371, 73ebd59c); USER review of the agent decision F8: a locals-local pin is a settings error at load where Locals cannot run, even with enabled false
 
 ## Notes
 

@@ -1,10 +1,10 @@
 ---
 trdd-id: OZIIABLY
 title: classify --profile lands in an input slot when the command line has a bare --
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T13:35:46+0100
-updated: 2026-11-16T09:24:51+0100
+updated: 2026-11-16T20:14:29+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -33,6 +33,7 @@ Symptom: llm-ext classify <cmd> with --profile and a bare -- fails with llm-ext:
 - 2026-11-14T14:04:15+0100 — column → dev by main-agent@llm-externalizer-plugin. keep-going mode; confirmed defect with a located cause
 - 2026-11-14T14:33:01+0100 — column → blocked by main-agent@llm-externalizer-plugin. fix landed (f90f1055); only box 6, the full npm test, remains and it needs the better-sqlite3 binding (TRDD-G0MS9B63)
 - 2026-11-16T09:24:51+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
+- 2026-11-16T20:14:29+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. code shipped in v14.3.0 (squash c4dc6bd5; sampled added lines of its commits present in v14.3.0); full npm test green in the v14.4.0 publish 2026-11-16.
 
 ## Notes
 
@@ -42,6 +43,7 @@ Symptom: llm-ext classify <cmd> with --profile and a bare -- fails with llm-ext:
 2026-11-14T14:33+0100 Box 4: a fresh worktree at f90f1055 (builds_dev/wt-oziiably), npm ci --ignore-scripts and npm run build both exit 0; dist/llm-ext.js and dist/benchmark.js cmp identical to the committed files (llm-ext.js SHA-1 69efd764032797...), worktree status empty after the build. Box 1 exact proof: in a worktree at the parent 6eb08a3a with the new test file copied in, the repo vitest 4.1.8 runs the new test and it fails with llm-ext: no such file or directory: --profile (exit 1).
 2026-11-14T14:33+0100 Not covered (review of f90f1055): no test drives main.ts with --profile and -- together, so the CLI-level symptom stays inferred; a second --profile typed by the user is not stripped by main.ts (only the first is) and was not tested before or after the fix. The test's stderr filter (lines starting with an em dash and a space) matches the neighbouring paid test at classify-launch.test.ts:185.
 2026-11-14T14:33+0100 Unblock rules: the blocker-probe is the ground truth (run it from the repo root; exit 1 is also produced by a wrong cwd, a node ABI or architecture mismatch, so confirm with the error text Could not locate the bindings file). When it passes, close TRDD-G0MS9B63 too, so unblock-when agrees; then the card returns to testing (pre-block-column) for the box-6 full npm test. Scratch worktrees from the proofs: builds_dev/wt-oziiably (f90f1055, clean, used for box 4) and builds_dev/wt-oziiably-parent (6eb08a3a plus an uncommitted copy of the new test, used only for the box-1 fail-before run); neither is a source of truth.
+2026-11-16T20:14:20+0100 main agent: full npm test green in the v14.4.0 publish run (all 4 stages: 6334, 221, 12, 1 passed; log builds_dev/dev-after-14.3.0/reports_dev/publish/test.log), with the better-sqlite3 binding rebuilt by publish.py. Box ticked on this evidence.
 
 ## Acceptance
 
@@ -50,4 +52,4 @@ Symptom: llm-ext classify <cmd> with --profile and a bare -- fails with llm-ext:
 - [x] classify-launch tests and every test file using runClassifyCommand pass; tsc and eslint clean
 - [x] dist rebuilt from the fixed source and committed, byte-identical to a build in a fresh worktree after npm ci; better-sqlite3 stays external
 - [x] main.ts handling of a --profile typed after -- is reported with file:line, and either covered by this fix or filed as its own card
-- [ ] full npm test green after TRDD-G0MS9B63 (the box-3 run is a subset while the sqlite binding is missing)
+- [x] full npm test green after TRDD-G0MS9B63 (the box-3 run is a subset while the sqlite binding is missing)

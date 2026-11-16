@@ -1,10 +1,10 @@
 ---
 trdd-id: 3SNQAGIC
 title: session-summary runs no chunk while a free-profile benchmark runs, so a 600 s caller gets no summary (issue 19)
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T21:20:43+0100
-updated: 2026-11-15T17:22:06+0100
+updated: 2026-11-16T20:15:27+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -33,3 +33,10 @@ Source: GitHub Emasoft/llm-externalizer-plugin#19, filed 2026-11-14 by the perch
 2026-11-15T01:21:57+0100 Local-racer follow-up revised after review: the broker POST no longer takes the caller signal. The abort is honoured right after the 202, when the job id is known, so the finally DELETEs the job. WHY: the abandon rule drops only queued jobs (broker/scheduler.ts:166), so a job a mid-POST abort left behind could run on the local server until its timeout. broker-abort.test.ts has 3 tests, all passing. Negative controls: with the old POST code the POST-abort test fails on a missing DELETE; with no signal in sendChat both abort tests fail; the control test is unaffected by design.
 2026-11-15T01:24:29+0100 Hedge loser + speculative racers (uncommitted, driver.ts): hedge primary and hedge each get an AbortController and raceForFirstOk aborts the loser on the first ok; fan-out owner and speculative calls go through trackedChunkCall and fireChunkSettled (commit or supersession) aborts every still-running call on the chunk, so a replaced slot holding the local model is covered too; an aborted owner (ChunkAbortedError) is treated as decided elsewhere, never thrown. New src/session_summary/driver-abort.test.ts, 4 tests, real timers, all pass; driver.test.ts not run (pre-push).
 - 2026-11-15T17:22:05+0100 the notes saying 'uncommitted' are stale: 43974a33, cf7873ae and 4825feee landed (git log). Left: the pre-push full run.
+- 2026-11-16T20:15:27+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. code shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0; acceptance boxes checked against the v14.4.0 source and the green full npm test of the v14.4.0 publish.
+
+## Acceptance
+
+- [x] single-chunk racer losers are aborted on commit (166a0861)
+- [x] owed follow-ups landed: broker job cancel on abort, hedge loser and speculative racers aborted (43974a33, cf7873ae, 4825feee; broker-abort.test.ts and driver-abort.test.ts ship in v14.4.0)
+- [x] the full npm test passes: v14.4.0 publish run 2026-11-16, all 4 stages green (6334, 221, 12, 1 passed)

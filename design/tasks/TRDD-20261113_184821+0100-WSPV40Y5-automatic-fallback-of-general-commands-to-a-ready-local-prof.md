@@ -1,10 +1,10 @@
 ---
 trdd-id: WSPV40Y5
 title: Automatic fallback of general commands to a ready local profile on remote service failure
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-13T18:48:21+0100
-updated: 2026-11-16T16:01:29+0100
+updated: 2026-11-16T20:16:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -17,7 +17,7 @@ approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-13T18:48:21+0100
 parent-trdd: UT7UC025
 derived: true
-implementation-commits: [1e5ca0d7, 033ff771]
+implementation-commits: [1e5ca0d7, 033ff771, ff08557f, 5e1e4ee1]
 ---
 
 # Automatic fallback of general commands to a ready local profile on remote service failure
@@ -124,6 +124,7 @@ Cross-ref: governor slot priority for the mlx-decision decider is USER Q4; the O
 - 2026-11-13T19:17:33+0100 — column → blocked. prerequisites 1a, 1b, 1c land first
 - 2026-11-13T19:23:19+0100 — column → design. design stage; order 1a 1b 1c first is recorded in section 1 Cleared blocked-by (--clear-blocker override).
 2026-11-14T21:37:18+0100 Q5 SUPERSEDED by the USER directive of 2026-11-14 recorded verbatim on TRDD-SZ7TO9FW: 'the new fallbacks to local models [...] should be implicit in every profile, even those fixed written by the user or by other tools.' Static user-defined and tool-written profiles DO fall back to local models; the 2026-09-17 'no models outside the selected profile' ruling is narrowed by it to remote models. Design lives on TRDD-SZ7TO9FW.
+- 2026-11-16T20:16:01+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.4.0 (full npm test green); USER items: the paid 401/403 end-to-end test needs OpenRouter credit, and agent decisions open to veto (30 s give-up window, 401/403 under --stop_on_errors still falls back)
 
 ## Notes
 

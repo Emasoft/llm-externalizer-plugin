@@ -1,10 +1,10 @@
 ---
 trdd-id: 3CG178O7
 title: Typed remote failure causes in free-rotation and a network-level failure classification
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-13T19:10:42+0100
-updated: 2026-11-15T17:23:12+0100
+updated: 2026-11-16T20:14:28+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -68,12 +68,13 @@ Behaviour change limited to clearer error messages: no fallback, no retry change
 - 2026-11-14T18:49:41+0100 — column → testing by main-agent@llm-externalizer-plugin. implemented in d6fad12e; full npm test owed after the sqlite binding fix
 - 2026-11-14T18:50:57+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
 - 2026-11-14T20:00:26+0100 — column → testing by main-agent@llm-externalizer-plugin. owner rule 2026-11-14: tests run only before a push; required test 4 (full npm test) moves to the pre-push run RL-02 Cleared blocked-by (--clear-blocker override).
+- 2026-11-16T20:14:28+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. code shipped in v14.3.0 (squash c4dc6bd5; sampled added lines of its commits present in v14.3.0); full npm test green in the v14.4.0 publish 2026-11-16.
 
 ## Acceptance
 
 - [x] Required tests 1-3 (classifier units; closed port gives a typed ECONNREFUSED error after one model; three 503 models give three causes passed on), each of 2-3 failing before the change (d6fad12e).
 - [x] Routing unchanged: the exhaustion decision reads the last cause only; a paid [429, then 402] pool still returns the credit verdict, pinned by a test that failed on the first draft.
-- [ ] Required test 4: the full npm test passes unchanged. Blocked by the missing better-sqlite3 native binding (TRDD-G0MS9B63); the scoped areas pass, and broker.test.ts and dispatch-reload timeouts under parallel load pass serially or alone.
+- [x] Required test 4: the full npm test passes unchanged. Blocked by the missing better-sqlite3 native binding (TRDD-G0MS9B63); the scoped areas pass, and broker.test.ts and dispatch-reload timeouts under parallel load pass serially or alone.
 
 ## Notes
 
@@ -82,3 +83,4 @@ Behaviour change limited to clearer error messages: no fallback, no retry change
 2026-11-14T20:00+0100 unblocked: owner rule 2026-11-14 (~/.claude/rules/run_tests_only_on_push.md) runs the full suite only right before a push, so required test 4 is owed at the pre-push run (RL-02, TRDD-6PIGEAN0) together with the better-sqlite3 rebuild (TRDD-G0MS9B63); the card stays in testing until that run passes.
 2026-11-15T17:22:05+0100 G0MS9B63 binding now loads; box 3 waits only for the pre-push full run RL-02.
 2026-11-15T17:23:11+0100 correction to the G0MS9B63 line above: the binding does NOT load (new Database(':memory:') fails with Could not locate the bindings file). Box 3 waits on the native binding (G0MS9B63) and on the pre-push full run RL-02.
+2026-11-16T20:14:20+0100 main agent: full npm test green in the v14.4.0 publish run (all 4 stages: 6334, 221, 12, 1 passed; log builds_dev/dev-after-14.3.0/reports_dev/publish/test.log), with the better-sqlite3 binding rebuilt by publish.py. Box ticked on this evidence.

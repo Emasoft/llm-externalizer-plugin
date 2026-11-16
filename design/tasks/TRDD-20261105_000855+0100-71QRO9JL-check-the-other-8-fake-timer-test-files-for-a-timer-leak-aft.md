@@ -4,7 +4,7 @@ title: Check the other 8 fake-timer test files for a timer leak after a timeout
 column: backburner
 status: tasked
 created: 2026-11-05T00:08:55+0100
-updated: 2026-11-05T00:08:55+0100
+updated: 2026-11-16T20:16:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -33,6 +33,7 @@ A single-line grep could not tell whether any of them restores real timers in a 
 ## Notes
 
 Related: TRDD-WTKO255N (the leak that hung completion.test.ts).
+2026-11-16T20:16:26+0100 main agent: new hazard to check in each file, found by TRDD-FC2TX9VU (folded in from the duplicate TRDD-LVJHDIHI): a send to 127.0.0.1 through chatCompletionWithRetry or fetchWithRetry429 takes a local-governor lease whose retry poll waits on setTimeout, so faked setTimeout plus the governor on can hang the test, and the dead poller then hangs later tests in the file. Guards used in completion.test.ts: LLM_EXT_GOVERNOR_ENABLED=false in the test, and resetGovernorPollersForTests() plus the variable restore in the file afterEach. Also check provider/http.test.ts and local-fallback.test.ts. Do not put the reset in the shared setup: governor test files run real concurrent lease waits.
 
 ## Approval log
 

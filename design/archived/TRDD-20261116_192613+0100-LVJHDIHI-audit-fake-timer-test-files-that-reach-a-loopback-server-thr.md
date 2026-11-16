@@ -1,10 +1,10 @@
 ---
 trdd-id: LVJHDIHI
 title: Audit fake-timer test files that reach a loopback server through the local governor
-column: todo
-status: tasked
+column: superseded
+status: archived
 created: 2026-11-16T19:26:13+0100
-updated: 2026-11-16T19:26:13+0100
+updated: 2026-11-16T20:16:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T19:26:13+0100
+superseded-by: [71QRO9JL]
 ---
 
 # Audit fake-timer test files that reach a loopback server through the local governor
@@ -24,3 +25,4 @@ Follow-up of TRDD-FC2TX9VU. The breaker test in provider/completion.test.ts hung
 ## Approval log
 
 - 2026-11-16T19:26:13+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T20:16:26+0100 — SUPERSEDED by main-agent@llm-externalizer-plugin. duplicate of the older 71QRO9JL; its content was appended there.

@@ -1,10 +1,10 @@
 ---
 trdd-id: ZTO9K8EK
 title: Machine-wide governor caps RAM and CPU use of local inference
-column: testing
+column: human_review
 status: tasked
 created: 2026-10-31T03:23:49+0100
-updated: 2026-11-14T20:40:24+0100
+updated: 2026-11-16T20:16:02+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -22,6 +22,7 @@ approval-datetime: 2026-10-31T03:23:49+0100
 ## Approval log
 
 - 2026-10-31T03:23:49+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-16T20:16:02+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.3.0; governor-burn stage green in the v14.4.0 publish (12 passed); the card's Open questions for the USER remain
 
 ## USER goal
 
