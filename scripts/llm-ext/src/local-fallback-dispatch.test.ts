@@ -258,10 +258,13 @@ describe("a static user-defined remote profile never falls back (agent decision 
     redirectFetchTo(await resetServer());
     const idx = await loadIndex();
     const err = captureStderr();
+    const t0 = Date.now();
     const r = await idx.dispatchCallTool("chat", { instructions: "Say hello.", output_dir: tempDir("out") });
     expect(r.isError).toBe(true);
     expect(err()).not.toMatch(/local fallback|answered locally/);
-  }, 60_000);
+    // the window did not cut the retries (TRDD-WSPV40Y5 F1: a static profile keeps its full retry window)
+    expect(Date.now() - t0).toBeGreaterThan(30_000);
+  }, 240_000); // full retry window, measured about 125 s; the old 60 s limit was below that
 });
 
 
