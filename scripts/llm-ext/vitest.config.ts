@@ -191,6 +191,10 @@ export default defineConfig({
       // TRDD-3CG178O7: typed failure causes of the free rotation + the pure network-isolation classifier (real servers, a real closed port).
       'src/free-failure-cause.test.ts',
       'src/free-rotation-typed-causes.test.ts',
+      // TRDD-PN0N4290: the bounded network give-up window, the strict provider probe and the three-part arming condition (real servers, a real closed port; the include list is explicit).
+      'src/network-give-up.test.ts',
+      // TRDD-PN0N4290: the give-up window through the real completion layer and index.ts's dispatch clock (the include list is explicit).
+      'src/network-give-up-dispatch.test.ts',
       'src/retry-clock-consumers.test.ts',
       // Single-profile fallback iterator (phase 14.1-C1, TRDD-OE27RD7I
       // addenda 2/3/4): walks ONLY the resolved profile's own model chain,

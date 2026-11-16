@@ -8744,6 +8744,8 @@ function loadSettings() {
       local_governor: parsed.local_governor,
       // Raw like the caps above: localFallbackErrors reports a malformed section in validateSettings.
       local_fallback: parsed.local_fallback,
+      // Raw like the caps above: networkGiveUpErrors reports a malformed value in validateSettings.
+      network_give_up_seconds: parsed.network_give_up_seconds,
       // Computed from the raw text, because `yamlParse` discards comments and
       // the marker IS a comment. Only when a marked-name section is actually
       // present, so the ordinary load costs no second parse. PT-04: `scouting` carries the marker too, so it is checked here (MARKED_PROFILE_NAMES), not only the three dynamic names.

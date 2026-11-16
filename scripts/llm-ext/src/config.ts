@@ -444,6 +444,12 @@ export interface Settings {
    * so localFallbackErrors can quote what the user wrote. Read for the decider by classifiers/l2/local-decider.ts.
    */
   local_fallback?: unknown;
+  /**
+   * TRDD-PN0N4290: the raw `network_give_up_seconds` key, uncoerced like local_governor so networkGiveUpErrors can quote what the
+   * user wrote: how long consecutive network-level failures of the remote service are retried before the command gives up on it
+   * (only when a local fallback target is ready). Absent = 30. The --network_give_up flag wins. Read by network-give-up.ts.
+   */
+  network_give_up_seconds?: unknown;
 }
 
 /** Fully resolved profile with concrete values (no env var refs) */
@@ -1205,6 +1211,8 @@ export function loadSettings(): Settings | null {
       local_governor: parsed.local_governor as unknown,
       // Raw like the caps above: localFallbackErrors reports a malformed section in validateSettings.
       local_fallback: parsed.local_fallback as unknown,
+      // Raw like the caps above: networkGiveUpErrors reports a malformed value in validateSettings.
+      network_give_up_seconds: parsed.network_give_up_seconds as unknown,
       // Computed from the raw text, because `yamlParse` discards comments and
       // the marker IS a comment. Only when a marked-name section is actually
       // present, so the ordinary load costs no second parse. PT-04: `scouting` carries the marker too, so it is checked here (MARKED_PROFILE_NAMES), not only the three dynamic names.
@@ -3681,6 +3689,26 @@ export function localFallbackErrors(raw: unknown): string[] {
   return errors;
 }
 
+/** The range of settings.yaml network_give_up_seconds, whole seconds. The top is one hour: the remote retry deadline is 300 s, so a larger window only disables the give-up. */
+const NETWORK_GIVE_UP_MIN_S = 1;
+const NETWORK_GIVE_UP_MAX_S = 3600;
+
+/**
+ * Every error in a raw `network_give_up_seconds` value (TRDD-PN0N4290): not an integer from 1 to 3600. Absent (undefined or null)
+ * is no error: the default applies. Fail fast: a typo is reported, never read as the default. Same shape as localFallbackErrors.
+ */
+export function networkGiveUpErrors(raw: unknown): string[] {
+  if (raw === undefined || raw === null) return [];
+  if (typeof raw !== "number" || !Number.isInteger(raw) || raw < NETWORK_GIVE_UP_MIN_S || raw > NETWORK_GIVE_UP_MAX_S) {
+    return [`network_give_up_seconds must be an integer from ${NETWORK_GIVE_UP_MIN_S} to ${NETWORK_GIVE_UP_MAX_S}, got ${JSON.stringify(raw)}`];
+  }
+  return [];
+}
+
+function appendNetworkGiveUpErrors(result: ValidationResult, settings: Settings): ValidationResult {
+  const errors = networkGiveUpErrors(settings.network_give_up_seconds);
+  return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
+}
 function appendLocalFallbackErrors(result: ValidationResult, settings: Settings): ValidationResult {
   const errors = localFallbackErrors(settings.local_fallback);
   return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
@@ -3752,7 +3780,7 @@ export function settingsLevelErrors(settings: Settings): string[] {
   // PT-01: E81g / E81d / E113 are settings-level too (any profile, not just the effective one).
   errors.push(...profileTypesSettingsErrors(settings));
   errors.push(...activeClassifierErrors(settings));
-  return appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings).errors;
+  return appendNetworkGiveUpErrors(appendLocalFallbackErrors(appendLocalGovernorErrors(appendCapErrors({ valid: errors.length === 0, errors }, settings), settings), settings), settings).errors;
 }
 
 /**
@@ -3807,9 +3835,13 @@ export function validateSettings(settings: Settings): ValidationResult {
   const result = validateProfile(name, profile);
   // Governor D13: a malformed local_governor fails the load like a malformed cap, whichever profile is effective.
   // Local decider fallback: a malformed local_fallback does too, for the same reason (a typo is never the default).
-  return appendLocalFallbackErrors(
-    appendLocalGovernorErrors(
-      appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+  // TRDD-PN0N4290: a malformed network_give_up_seconds fails the load for the same reason: a typo is never the default.
+  return appendNetworkGiveUpErrors(
+    appendLocalFallbackErrors(
+      appendLocalGovernorErrors(
+        appendCapErrors(typeErrors.length === 0 ? result : { valid: false, errors: [...result.errors, ...typeErrors] }, settings),
+        settings,
+      ),
       settings,
     ),
     settings,

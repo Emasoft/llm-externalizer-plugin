@@ -40,7 +40,8 @@ import type { GlobalFetch } from "../classifiers/l0/transport.js";
 import { BROKER_ARGV, CALIBRATE_ARGV } from "../broker/protocol.js";
 import { cancelAllBrokerJobs, setBrokerClientVersion, setBrokerQueueTimeoutMs } from "../broker/client.js";
 import { commandStopExitCode, commandStopReason, enableStopOnErrors, STOP_ON_ERRORS_EXIT, stopCommand } from "../command-stop.js";
-import { extractTimeoutFlags, STOP_ON_ERRORS_FLAGS, type TimeoutFlags } from "./timeout-flags.js";
+import { extractTimeoutFlags, NETWORK_GIVE_UP_FLAGS, STOP_ON_ERRORS_FLAGS, type TimeoutFlags } from "./timeout-flags.js";
+import { setNetworkGiveUpOverrideS } from "../network-give-up.js";
 import { readAllFrom } from "./read-all.js";
 import { stopNoticeLine } from "./stop-notice.js";
 
@@ -473,6 +474,9 @@ function printGlobalHelp(tools: ToolDef[]): void {
       "                                a large value lets the job wait; waiting is never an error)\n" +
       "  --command_timeout <s>         stop the whole command after <s> seconds, cancel its queued\n" +
       "                                jobs and exit 124 (aliases --command-timeout, --timeout)\n" +
+      `  ${NETWORK_GIVE_UP_FLAGS[0].padEnd(30)}stop retrying the remote service after <s> seconds of consecutive network failures,\n` +
+      "                                only when a local profile is ready now (default 30; alias --network-give-up;\n" +
+      "                                settings.yaml: network_give_up_seconds, 1-3600)\n" +
       `  ${STOP_ON_ERRORS_FLAGS[0].padEnd(30)}end the command on the first model that does not respond or is not\n` +
       "                                found, instead of falling back; finished results are kept;\n" +
       `                                exit ${STOP_ON_ERRORS_EXIT} (alias ${STOP_ON_ERRORS_FLAGS[1]}); waiting for memory is no failure\n\n` +
@@ -744,6 +748,8 @@ async function main(): Promise<void> {
     die((err as Error).message);
   }
   if (timeouts.queueTimeoutS !== undefined) setBrokerQueueTimeoutMs(timeouts.queueTimeoutS * 1000);
+  // TRDD-PN0N4290: the flag wins over settings.yaml network_give_up_seconds (read when each dispatch builds its retry clock).
+  setNetworkGiveUpOverrideS(timeouts.networkGiveUpS);
   if (timeouts.commandTimeoutS !== undefined) armCommandTimeout(timeouts.commandTimeoutS);
   if (timeouts.stopOnErrors === true) enableStopOnErrors(endStoppedCommand);
   let engine = isClassifyWord(leadingToken(timeouts.argv)) ? undefined : await loadEngine();

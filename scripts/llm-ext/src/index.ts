@@ -155,7 +155,7 @@ import {
   type TextToolsDeps,
 } from "./text-tools/core.js";
 
-import type { RetryClock } from "./provider/http.js";
+import type { NetworkGiveUp, RetryClock } from "./provider/http.js";
 import { brokerClientVersion, brokerQueueTimeoutMs, defaultBrokerEntry, endpointFailureKind, ensureBroker } from "./broker/client.js";
 import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
 import { enqueueUnlocked, withStateLock } from "./calibration/state.js";
@@ -426,6 +426,7 @@ import {
 // ALONE. That function is gone with the retired machine-owned names, and so are
 // its imports — the dynamic maintainer owns every one of those reads now.
 import { getActiveBillableForModel } from "./config.js";
+import { makeNetworkGiveUp, PROBE_TIMEOUT_MS } from "./network-give-up.js";
 import { getDynamicProfileRecord } from "./default-profiles-state.js";
 import { freeFailureCauseToError } from "./free-failure-cause.js";
 import { readCandidates } from "./dynamic-candidates.js";
@@ -2276,8 +2277,18 @@ export function detectProviderOutage(causes: readonly unknown[]): { baseUrl: str
   return { baseUrl: entries[0].baseUrl, observed: [...new Set(entries.map((e) => e.observed))] };
 }
 
+/**
+ * TRDD-PN0N4290: the network give-up window of one dispatch, or undefined where it cannot apply: a LOCAL active profile has no
+ * remote to give up on and no other local profile to switch to. WHY built per dispatch and not once: the settings, the flag and
+ * the readiness of the local profiles are read when the dispatch starts, so a settings change between commands is honoured.
+ */
+function newNetworkGiveUp(): NetworkGiveUp | undefined {
+  if (activeResolved === null || activeResolved.mode === "local") return undefined;
+  return makeNetworkGiveUp(activeSettings, getConfigDir());
+}
+
 /** Timeout of the reachability probe that confirms a suspected provider outage. */
-export const OUTAGE_PROBE_TIMEOUT_MS = 5_000;
+export const OUTAGE_PROBE_TIMEOUT_MS = PROBE_TIMEOUT_MS; // TRDD-PN0N4290: one bound shared with the strict probe (network-give-up.ts)
 
 /**
  * CONTROL CHECK (TRDD-5Q79QZM7 scope 3): is the provider itself reachable? GET `<base>/v1/models` (the endpoint
@@ -3430,7 +3441,8 @@ async function chatCompletionJSONWithFreeRotation(
 ): Promise<JSONCompletionResult> {
   // One retry clock for this whole dispatch (TRDD-YG72CYY7): every rotated
   // model shares one five-minute window instead of getting its own.
-  const scoped = { ...options, retryClock: {} as RetryClock };
+  // TRDD-PN0N4290: the JSON path (check_imports) gets the same give-up window as ensembleStreaming.
+  const scoped = { ...options, retryClock: { networkGiveUp: newNetworkGiveUp() } as RetryClock };
   const pool = isFreeModeActive() ? buildFreeRotationPool() : [];
   if (pool.length === 0) {
     return chatCompletionJSON(messages, scoped, providerDeps);
@@ -3657,6 +3669,8 @@ async function ensembleStreaming(
   // One retry clock for this whole dispatch (TRDD-YG72CYY7): every rotated
   // model, chain entry and ensemble slot below spreads `options`, so all of
   // them share one five-minute window instead of getting a fresh one each.
+  // TRDD-PN0N4290: the give-up window rides on this shared clock so it covers every model of the dispatch; a clock a test seeded with its own wins.
+  retryClock.networkGiveUp ??= newNetworkGiveUp();
   const options = { ...callerOptions, retryClock };
 
   // Model override: skip the ensemble, use the specified model.

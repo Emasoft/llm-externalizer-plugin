@@ -169,6 +169,40 @@ export interface RetryClock {
    *  an error of its own; without this it would throw a RetryDeadlineError with
    *  no cause. */
   lastError?: unknown;
+  /**
+   * TRDD-PN0N4290: the bounded give-up window of consecutive network-isolation failures. Absent = the existing retries
+   * only (every unarmed dispatch, byte-identical to before). Set by index.ts only for a remote active profile.
+   */
+  networkGiveUp?: NetworkGiveUp;
+}
+
+/**
+ * The network give-up window (TRDD-PN0N4290, increment 1b of TRDD-WSPV40Y5): a run of consecutive network-isolation failures
+ * (NETWORK_ISOLATION_CODES) lasting `windowMs` ends the retry loop with the typed network error, so a command can switch to a
+ * ready local profile (1d) instead of retrying a dead network for up to RETRY_DEADLINE_MS. WHY it rides on the RetryClock: the
+ * clock is the one object shared by every model, chain entry and rotation of a dispatch, so one window covers them all.
+ * WHY `arm` lives behind a callback: it needs the settings, the local readiness checks and a probe, and this module is
+ * dependency-free (free-failure-cause.ts and config.ts import it).
+ */
+export interface NetworkGiveUp {
+  /** The window in ms: settings key, flag or the 30 s default (network-give-up.ts). */
+  readonly windowMs: number;
+  /**
+   * Whether the window is armed for this dispatch: trigger (c), the strict probe gives no genuine provider answer, and a
+   * local fallback target is ready now (network-give-up.ts). Called at most ONCE per dispatch, at its first isolation failure.
+   */
+  readonly arm: (err: unknown, url: string) => Promise<boolean>;
+  /** The memoized arm result of this dispatch (shared by every concurrent slot, so the probe runs once). */
+  armed?: Promise<boolean>;
+  /** Epoch ms of the first failure of the CURRENT run of consecutive isolation failures; cleared when any response arrives. */
+  failingSince?: number;
+}
+
+/** What classifyFailure needs to apply the armed window: when the run of failures began, the window, and the time now. */
+export interface GiveUpWindow {
+  sinceMs: number;
+  windowMs: number;
+  nowMs: number;
 }
 
 export function startRetryClock(clock: RetryClock | undefined): void {
@@ -282,6 +316,24 @@ export function failureText(err: unknown): string {
 /** Runs one attempt (`fetchOnce`) under whatever it guards, reporting the time it waited before the attempt through `waited`. */
 export type AttemptGate = (fetchOnce: () => Promise<Response>, waited: (ms: number) => void) => Promise<Response>;
 
+/**
+ * TRDD-PN0N4290: the give-up window of this failure, or undefined while the window is not armed or not relevant. A failure whose
+ * code is not a network-isolation code ends the current run (trigger c no longer holds: a slow model or a refusal is not a dead
+ * network). The first isolation failure starts the run and decides the arming ONCE for the dispatch; concurrent slots share the
+ * memoized promise, so the probe runs once. `since` is read before the await: another slot may clear failingSince meanwhile.
+ */
+async function giveUpWindowOf(giveUp: NetworkGiveUp, networkCode: string | undefined, err: unknown, url: string): Promise<GiveUpWindow | undefined> {
+  if (networkCode === undefined || !NETWORK_ISOLATION_CODES.has(networkCode)) {
+    giveUp.failingSince = undefined;
+    return undefined;
+  }
+  giveUp.failingSince ??= Date.now();
+  const sinceMs = giveUp.failingSince;
+  giveUp.armed ??= giveUp.arm(err, url);
+  if (!(await giveUp.armed)) return undefined;
+  return { sinceMs, windowMs: giveUp.windowMs, nowMs: Date.now() };
+}
+
 export async function fetchWithRetry429(
   url: string,
   fetchOpts: RequestInit,
@@ -360,6 +412,8 @@ export async function fetchWithRetry429(
           })
         : await fetchOnce();
       newestNetworkError = undefined;
+      // TRDD-PN0N4290: any response, whatever its status, proves the network path works: the run of consecutive isolation failures ends.
+      if (clock?.networkGiveUp) clock.networkGiveUp.failingSince = undefined;
       if (clock) {
         // Status and provider describe the NEWEST attempt only; the provider is
         // set below, once a retryable response body has been read.
@@ -384,7 +438,10 @@ export async function fetchWithRetry429(
       if (err instanceof Error) attachFailure(err, fields);
       newestNetworkError = err;
       // The verdict is taken at the FIRST failure, before the clock starts and before any sleep.
-      const verdict = classifyFailure(fields, host);
+      // TRDD-PN0N4290: the armed give-up window, decided at the FIRST isolation failure of the dispatch and applied here with the
+      // same first-failure verdict (a window passed only when armed, so an unarmed call gets exactly the verdict it always got).
+      const giveUpWindow = clock?.networkGiveUp === undefined ? undefined : await giveUpWindowOf(clock.networkGiveUp, fields.networkCode, err, url);
+      const verdict = classifyFailure(fields, host, giveUpWindow);
       if (settleVerdict(verdict, fields, tally)) {
         if (clock) clock.lastError = err;
         throw err;
@@ -401,7 +458,10 @@ export async function fetchWithRetry429(
       }
 
       startRetryClock(clock);
-      const backoff = computeBackoffMs(attempt + freeSteps, 0);
+      // TRDD-PN0N4290: an armed window ends at sinceMs + windowMs, so the wait never crosses it: the next attempt lands ON the end and
+      // gives up there, instead of sleeping a whole doubled backoff past the window (a 30 s window would end near 31 s or 61 s).
+      const backoffMs = computeBackoffMs(attempt + freeSteps, 0);
+      const backoff = giveUpWindow === undefined ? backoffMs : Math.max(0, Math.min(backoffMs, giveUpWindow.sinceMs + giveUpWindow.windowMs - Date.now()));
       // Never wait past the retry clock (marks it expired; caller stops).
       if (!waitFitsClock(clock, backoff)) {
         if (clock) clock.lastError = err;
@@ -819,12 +879,20 @@ export const REFUSED_TRIES = 2;
 const NAME_LOOKUP_TRIES = 2;
 
 /**
+ * TRDD-PN0N4290: the budget key of the give-up verdict, the one place the key is spelled (tests read it).
+ */
+export const NETWORK_GIVE_UP_KEY = "network-give-up";
+
+/**
  * The first-failure verdict (TRDD-YG72CYY7 inc 3), pure and synchronous: it reads the
  * fields only. No verdict stamp for 401, 402, 403, 404 or 410 (their own handlers decide;
  * the same-model stop for them lives in the 4xx gate of completion.ts, owner ruling
  * 2026-10-23); everything not listed here retries as before.
+ *
+ * `window` is passed ONLY when the network give-up window is armed for this dispatch (see NetworkGiveUp); omitted, the verdicts
+ * are exactly the ones above, so an unarmed command is unchanged.
  */
-export function classifyFailure(f: FailureFields, host: string): FailureVerdict {
+export function classifyFailure(f: FailureFields, host: string, window?: GiveUpWindow): FailureVerdict {
   if (f.status === 504) {
     return {
       budget: { key: "504", tries: GATEWAY_TIMEOUT_TRIES },
@@ -833,6 +901,17 @@ export function classifyFailure(f: FailureFields, host: string): FailureVerdict 
   }
   const code = f.networkCode;
   if (code === undefined) return {};
+  // TRDD-PN0N4290: an armed window that has run its course ends the call, for every isolation code, BEFORE the per-code budgets
+  // below: the OpenRouter-host name-lookup case has no budget at all (neverSent, the attempt is given back, so it retried until
+  // the 300 s window), and ECONNRESET and the like only stop after about 31 s. tries 1 makes the verdict final at once; it is a
+  // budget (not a stop) so the failure still counts for the circuit breaker like a spent ECONNREFUSED budget does.
+  if (window !== undefined && NETWORK_ISOLATION_CODES.has(code) && window.nowMs - window.sinceMs >= window.windowMs) {
+    const where = host === "" ? "the configured endpoint" : host;
+    return {
+      budget: { key: NETWORK_GIVE_UP_KEY, tries: 1 },
+      hint: `no network path to ${where} for ${Math.round(window.windowMs / 1000)} s (${code}); gave up retrying the remote service`,
+    };
+  }
   if (code === "ECONNREFUSED") {
     const where = host === "" ? "the configured endpoint" : host;
     return {

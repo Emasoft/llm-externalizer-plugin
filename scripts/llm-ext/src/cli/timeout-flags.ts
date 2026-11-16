@@ -6,6 +6,9 @@
  *     waits before the broker forces its model onto the server; never an error.
  *   --command_timeout / --command-timeout / --timeout <s>
  *     limits the WHOLE command; on expiry it stops and exits non-zero.
+ *   --network_give_up / --network-give-up <s>   (TRDD-PN0N4290)
+ *     how long consecutive network-level failures of the remote service are retried before the
+ *     command gives up on it; armed only when a local fallback target is ready. Default 30.
  *
  * Stripped from argv centrally, before the command word is looked at, like
  * --profile: as a per-tool schema field some command would miss it, and the
@@ -19,12 +22,17 @@ export const COMMAND_TIMEOUT_FLAGS: readonly string[] = ["--command_timeout", "-
 /** --stop_on_errors (TRDD-SWNIIFTF): the one place its spellings are listed; launcher.ts (GLOBAL_BOOLEAN_FLAGS) and the help read this. */
 export const STOP_ON_ERRORS_FLAGS: readonly string[] = ["--stop_on_errors", "--stop-on-errors"];
 
+/** --network_give_up <s> (TRDD-PN0N4290): how long consecutive network-level failures of the remote service are retried before the command gives up on it, when a local fallback target is ready. Overrides settings.yaml network_give_up_seconds (default 30). */
+export const NETWORK_GIVE_UP_FLAGS: readonly string[] = ["--network_give_up", "--network-give-up"];
+
 /** The largest value a Node timer accepts, in whole seconds: floor((2^31 - 1) / 1000). */
 export const MAX_TIMEOUT_S = 2_147_483;
 
 export interface TimeoutFlags {
   argv: string[];
   queueTimeoutS?: number;
+  /** --network_give_up, whole seconds. */
+  networkGiveUpS?: number;
   commandTimeoutS?: number;
   /** --stop_on_errors was given. */
   stopOnErrors?: true;
@@ -55,12 +63,14 @@ export function extractTimeoutFlags(argv: readonly string[]): TimeoutFlags {
     const name = eq > 0 ? token.slice(0, eq) : token;
     const isQueue = QUEUE_TIMEOUT_FLAGS.includes(name);
     const isCommand = COMMAND_TIMEOUT_FLAGS.includes(name);
-    if (!isQueue && !isCommand) {
+    const isGiveUp = NETWORK_GIVE_UP_FLAGS.includes(name);
+    if (!isQueue && !isCommand && !isGiveUp) {
       out.push(token);
       continue;
     }
     const value = seconds(name, eq > 0 ? token.slice(eq + 1) : argv[++i]);
     if (isQueue) res.queueTimeoutS = value;
+    else if (isGiveUp) res.networkGiveUpS = value;
     else res.commandTimeoutS = value;
   }
   return res;
