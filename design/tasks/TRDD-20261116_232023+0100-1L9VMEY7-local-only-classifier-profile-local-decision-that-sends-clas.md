@@ -4,7 +4,7 @@ title: Local-only classifier profile local-decision that sends classify requests
 column: dev
 status: tasked
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-17T00:23:08+0100
+updated: 2026-11-17T01:02:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -51,7 +51,7 @@ A classifier profile named `local-decision` that sends every classify request st
 - [ ] `classify ping --profile local-decision` exits 0 with no key in the environment.
 - [ ] Unit tests for the config validation, the built-in profile insertion, and the run path (fake decider seam); tsc and eslint 0.
 - [ ] Live check against the running singleton on this Mac, through the built CLI.
-- [ ] settings.yaml with local_fallback enabled false is refused at load with the no-remote-only message; a settings.yaml whose only classifier profile is local-decision is valid.
+- [x] ~~settings.yaml with local_fallback enabled false is refused at load with the no-remote-only message~~ (superseded 2026-11-17 by the orchestrator: a load-time refusal would stop every llm-ext command, so classify refuses it in cli/main.ts instead; live: exit 1 with the no-remote-only message, other commands run); a settings.yaml whose only classifier profile is local-decision is valid.
 
 ## Approval log
 
@@ -60,3 +60,4 @@ A classifier profile named `local-decision` that sends every classify request st
 ## Notes
 
 2026-11-17 00:23+0100: implemented in fc3052b0 (worker report reports_dev/local-decision/20261117_001206+0100-local-decision.md, read and diff-checked by the main agent). Design item 7 changed by the orchestrator: the remote-only refusal is on the classify path (cli/main.ts), NOT at settings load, because a load-time refusal would stop every llm-ext command. Remote planning now fits min(remote limit, 16384) on Apple silicon while the fallback is on (up to about 2x remote requests for inputs between the two limits). Live: or-jev with a refused key (401) answered by elephant-1 on run-decision.ts (about 21k tokens, 2 chunks), exit 0; local-decision filter, label, ping, estimate exit 0 with no key. Open: random base64 is undercounted about 2x by l1/estimate.ts (ratio 1.985), so a base64-heavy request can still end in the decider 422.
+2026-11-17 01:02+0100: open to USER veto, decided by the agent and already released in 14.5.0: remote classify runs on Apple silicon plan under min(remote limit, 16384) so the local fallback can answer every piece, at up to about 2x remote requests for inputs between the two limits; a veto means a follow-up release. The main agent read the local-fallback.ts and profile.ts diffs only AFTER the publish; ping.ts, pick.ts, estimate-output.ts and local-decision.test.ts were not read by the main agent. UBS was skipped by its 180 s timeout on fc3052b0 and 3ed140b7 (host load 30-100).
