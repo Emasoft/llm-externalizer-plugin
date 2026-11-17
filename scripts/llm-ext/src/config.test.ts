@@ -387,7 +387,7 @@ describe("fix-queue 52/54: chainModelIds widened + Remote-auth route exemption (
   // of the three isolation legs it runs under).
   const bAiRoute = {
     api: "chat-b-ai-remote",
-    api_key: "bai-literal-not-a-real-key",
+    api_key: "bai-literal-not-a-real-key", // ubs:ignore (test fixture, not a key)
     models: ["glm-5.3-flash"],
   };
   let savedOr: string | undefined;
@@ -483,13 +483,13 @@ describe("fix-queue 52/54: chainModelIds widened + Remote-auth route exemption (
     expect(res.errors.some((e) => e.includes("requires 'api_key'"))).toBe(true);
   });
 
-  it("(54-iii) a route whose own credential does not resolve -> invalid", () => {
+  it("(54-iii) a route whose own credential does not resolve -> invalid", () => { // ubs:ignore (test title, no secret)
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
       model: "glm-5.3-flash",
       providers: [
-        { api: "chat-b-ai-remote", api_key: "$LLM_EXT_TEST_UNSET_BAI_KEY_ITEM54", models: ["glm-5.3-flash"] },
+        { api: "chat-b-ai-remote", api_key: "$LLM_EXT_TEST_UNSET_BAI_KEY_ITEM54", models: ["glm-5.3-flash"] }, // ubs:ignore (env-var reference, not a key)
       ],
     } as unknown as Profile;
     delete process.env.LLM_EXT_TEST_UNSET_BAI_KEY_ITEM54;
@@ -689,7 +689,7 @@ describe("resolveProfile populates toolModels", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "google/gemini-2.5-flash",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       tool_models: { security_scan: "qwen/qwen-2.5-7b-instruct" },
     };
     const r = resolveProfile("p", p);
@@ -706,7 +706,7 @@ describe("resolveProfile populates toolModels", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "google/gemini-2.5-flash",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
     };
     const r = resolveProfile("p", p);
     expect(r.toolModels).toEqual({});
@@ -717,7 +717,7 @@ describe("resolveProfile populates toolModels", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "google/gemini-2.5-flash",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       tool_models: null as unknown as Record<string, string>,
     };
     expect(resolveProfile("p", p).toolModels).toEqual({});
@@ -728,7 +728,7 @@ describe("resolveProfile populates toolModels", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "google/gemini-2.5-flash",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       tool_models: "oops" as unknown as Record<string, string>,
     };
     // Must NOT spread the string into {0:'o',1:'o',2:'p',3:'s'}.
@@ -741,7 +741,7 @@ describe("validateProfile tool_models validation", () => {
     mode: "remote",
     api: "openrouter-remote",
     model: "google/gemini-2.5-flash",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
   };
 
   it("accepts a valid tool_models map of known tools", () => {
@@ -885,7 +885,7 @@ describe("resolveProfile + validateProfile high_quality_model (TRDD-DBUSM55E)", 
     mode: "remote",
     api: "openrouter-remote",
     model: "google/gemini-2.5-flash",
-    api_key: "sk-or-test-direct",
+    api_key: "sk-or-test-direct", // ubs:ignore (test fixture, not a key)
   };
 
   it("resolveProfile fills highQualityModel with defaults when absent", () => {
@@ -1325,7 +1325,7 @@ describe("D1 — a redirected free preset must not look free", () => {
     mode: "remote",
     api: "chat-b-ai-remote",
     url: "https://api.openai.com",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
     model: "gpt-4o",
   };
 
@@ -1349,7 +1349,7 @@ describe("D1 — a redirected free preset must not look free", () => {
     const honest = resolveProfile("bai", {
       mode: "remote",
       api: "chat-b-ai-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "glm-5.3-flash",
     });
     expect(honest.isFreeProvider).toBe(true);
@@ -1364,7 +1364,7 @@ describe("D1 — a redirected free preset must not look free", () => {
     const paid = resolveProfile("paid", {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "openai/gpt-4o",
     });
     const billable = !paid.isLocal && !paid.isFreeProvider;
@@ -1452,8 +1452,8 @@ describe("D6a provider groups", () => {
       api: "openrouter-remote",
       model: "x",
       providers: [
-        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] },
-        { name: "bai-2", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY_2", models: ["glm-5.3-flash"] },
+        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] }, // ubs:ignore (env-var reference, not a key)
+        { name: "bai-2", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY_2", models: ["glm-5.3-flash"] }, // ubs:ignore (env-var reference, not a key)
       ],
     };
     const { routesFor } = resolveGroups(p);
@@ -1468,7 +1468,7 @@ describe("D6a provider groups", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "x",
-      providers: [{ name: "or-backup", api: "openrouter-remote", api_key: "$BAI_API_KEY" }],
+      providers: [{ name: "or-backup", api: "openrouter-remote", api_key: "$BAI_API_KEY" }], // ubs:ignore (env-var reference, not a key)
     };
     const { routesFor, routeForModel } = resolveGroups(p);
     const serving = routesFor("z-ai/glm-5.2");
@@ -1483,9 +1483,9 @@ describe("D6a provider groups", () => {
       api: "openrouter-remote",
       model: "x",
       providers: [
-        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] },
-        { name: "custom", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] },
-        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["c"] },
+        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] }, // ubs:ignore (env-var reference, not a key)
+        { name: "custom", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] }, // ubs:ignore (env-var reference, not a key)
+        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["c"] }, // ubs:ignore (env-var reference, not a key)
       ],
     };
     const { routes } = resolveGroups(p);
@@ -1503,8 +1503,8 @@ describe("D6a provider groups", () => {
       api: "openrouter-remote",
       model: "x",
       providers: [
-        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] },
-        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] },
+        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] }, // ubs:ignore (env-var reference, not a key)
+        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] }, // ubs:ignore (env-var reference, not a key)
       ],
     });
     expect(errors.valid).toBe(false);
@@ -1517,8 +1517,8 @@ describe("D6a provider groups", () => {
       api: "openrouter-remote",
       model: "x",
       providers: [
-        { name: "one", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] },
-        { name: "two", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] },
+        { name: "one", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["a"] }, // ubs:ignore (env-var reference, not a key)
+        { name: "two", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["b"] }, // ubs:ignore (env-var reference, not a key)
       ],
     });
     expect(errors.valid).toBe(false);
@@ -1530,7 +1530,7 @@ describe("D6a provider groups", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "x",
-      providers: [{ api_key: "$BAI_API_KEY", models: ["a"] }],
+      providers: [{ api_key: "$BAI_API_KEY", models: ["a"] }], // ubs:ignore (env-var reference, not a key)
     });
     expect(errors.valid).toBe(false);
     expect(errors.errors.join("\n")).toMatch(/a group without 'api' needs 'name' and 'url'/);
@@ -1543,11 +1543,11 @@ describe("D6a provider groups", () => {
       // Literal key, not $OPENROUTER_API_KEY: leg-1 of the suite runs with the
       // real env vars unset, and group #0's key-existence check fires on an
       // unset primary key — a verdict about the ENV, not about groups.
-      api_key: "literal-primary-key",
+      api_key: "literal-primary-key", // ubs:ignore (test fixture, not a key)
       model: "x",
       providers: [
-        { name: "one", api: "chat-b-ai-remote", api_key: "literal-key-one", models: ["glm-5.3-flash"] },
-        { name: "two", api: "chat-b-ai-remote", api_key: "literal-key-two", models: ["glm-5.3-flash"] },
+        { name: "one", api: "chat-b-ai-remote", api_key: "literal-key-one", models: ["glm-5.3-flash"] }, // ubs:ignore (test fixture, not a key)
+        { name: "two", api: "chat-b-ai-remote", api_key: "literal-key-two", models: ["glm-5.3-flash"] }, // ubs:ignore (test fixture, not a key)
       ],
     });
     // Literal keys, not $BAI_API_KEY: with the env var unset both groups'
@@ -1566,7 +1566,7 @@ describe("D6a provider groups", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "x",
-      providers: [{ name: "or-2", api: "openrouter-remote", api_key: "$BAI_API_KEY" }],
+      providers: [{ name: "or-2", api: "openrouter-remote", api_key: "$BAI_API_KEY" }], // ubs:ignore (env-var reference, not a key)
     };
     const { routesFor } = resolveGroups(p);
     const serving = routesFor("some/paid-model");
@@ -1666,7 +1666,7 @@ describe("validateProfile providers validation", () => {
     mode: "remote",
     api: "openrouter-remote",
     model: "google/gemini-2.5-flash",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
   };
   const withProviders = (providers: unknown): Profile =>
     ({ ...base, providers }) as unknown as Profile;
@@ -1746,7 +1746,7 @@ describe("validateProfile providers validation", () => {
     const res = validateProfile("p", withProviders([
       {
         api: "chat-b-ai-remote",
-        api_key: "$LLM_EXT_TEST_ABSENT_KEY",
+        api_key: "$LLM_EXT_TEST_ABSENT_KEY", // ubs:ignore (env-var reference, not a key)
         models: ["glm-5.3-flash"],
       },
     ]));
@@ -1792,14 +1792,14 @@ describe("configuration-guide providers example validates", () => {
     const res = validateProfile("bai-and-openrouter", {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "$LLM_EXT_DOC_OR_KEY",
+      api_key: "$LLM_EXT_DOC_OR_KEY", // ubs:ignore (env-var reference, not a key)
       model: "deepseek/deepseek-v4-flash:free",
       free_only: true,
       free_models: ["deepseek/deepseek-v4-flash:free"],
       providers: [
         {
           api: "chat-b-ai-remote",
-          api_key: "$LLM_EXT_DOC_BAI_KEY",
+          api_key: "$LLM_EXT_DOC_BAI_KEY", // ubs:ignore (env-var reference, not a key)
           models: ["glm-5.3-flash"],
         },
       ],
@@ -1814,7 +1814,7 @@ describe("configuration-guide providers example validates", () => {
     const res = validateProfile("bad", {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "$LLM_EXT_DOC_OR_KEY",
+      api_key: "$LLM_EXT_DOC_OR_KEY", // ubs:ignore (env-var reference, not a key)
       model: "deepseek/deepseek-v4-flash:free",
       second_model: "x:free",
       free_only: true,
@@ -1836,7 +1836,7 @@ describe("isInvalidOnlyBecauseUnpopulated", () => {
   const freePlaceholder = {
     mode: "remote",
     api: "openrouter-remote",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
     free_only: true,
     free_models: [],
     model: "PLACEHOLDER",
@@ -1859,7 +1859,7 @@ describe("isInvalidOnlyBecauseUnpopulated", () => {
     const paid = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "PLACEHOLDER",
       providers: [{ api: "not-a-preset", models: ["m"] }],
     } as unknown as Profile;
@@ -1877,7 +1877,7 @@ describe("validateProfile providers — wrong-typed optional fields", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "m",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       providers: [b],
     } as unknown as Profile);
 
@@ -1912,7 +1912,7 @@ describe("isInvalidOnlyBecauseUnpopulated — both self-healing conditions at on
       const p = {
         mode: "remote",
         api: "openrouter-remote",
-        api_key: "$OPENROUTER_API_KEY",
+        api_key: "$OPENROUTER_API_KEY", // ubs:ignore (env-var reference, not a key)
         free_only: true,
         free_models: [],
         model: "PLACEHOLDER",
@@ -1932,7 +1932,7 @@ describe("isInvalidOnlyBecauseUnpopulated — both self-healing conditions at on
       const p = {
         mode: "remote",
         api: "openrouter-remote",
-        api_key: "$OPENROUTER_API_KEY",
+        api_key: "$OPENROUTER_API_KEY", // ubs:ignore (env-var reference, not a key)
         free_only: true,
         free_models: [],
         model: "PLACEHOLDER",
@@ -2111,7 +2111,7 @@ describe("T-P1-3 / T-P1-4 free_only route exemption (addendum items 5 and B)", (
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "deepseek/deepseek-v4-flash:free",
       free_only: true,
       free_models: ["deepseek/deepseek-v4-flash:free", "glm-5.3-flash"],
@@ -2126,7 +2126,7 @@ describe("T-P1-3 / T-P1-4 free_only route exemption (addendum items 5 and B)", (
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "deepseek/deepseek-v4-flash:free",
       free_only: true,
       free_models: ["deepseek/deepseek-v4-flash:free", "glm-5.3-flash"],
@@ -2148,7 +2148,7 @@ describe("T-P1-3 / T-P1-4 free_only route exemption (addendum items 5 and B)", (
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "deepseek/deepseek-v4-flash:free",
       free_only: true,
       free_models: ["deepseek/deepseek-v4-flash:free", "unrouted-model"],
@@ -2164,7 +2164,7 @@ describe("T-P1-6 paid_benchmark_daily_cap_usd", () => {
   const validProfile: Profile = {
     mode: "remote",
     api: "openrouter-remote",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
     model: "x/y",
   };
   const mkSettings = (cap: unknown): Settings =>
@@ -2221,7 +2221,7 @@ describe("E-D2 ensemble_pins refusal (D5)", () => {
     const p: Profile = {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/model",
       second_model: "b/model",
       ensemble_pins: { "0": "a/model" },
@@ -2236,7 +2236,7 @@ describe("E-D2 ensemble_pins refusal (D5)", () => {
     const p: Profile = {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/model",
       second_model: "b/model",
       ensemble_pins: { "3": "a/model" },
@@ -2252,7 +2252,7 @@ describe("E-E1..E-E6 ensemble.reserved validation (D5)", () => {
   const base: Profile = {
     mode: "remote-ensemble",
     api: "openrouter-remote",
-    api_key: "direct-key",
+    api_key: "direct-key", // ubs:ignore (test fixture, not a key)
     model: "a/model",
     second_model: "b/model",
   };
@@ -2260,7 +2260,7 @@ describe("E-E1..E-E6 ensemble.reserved validation (D5)", () => {
   it("accepts a reserved slot naming a providers[] group that serves the model", () => {
     const res = validateProfile("paid", {
       ...base,
-      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }],
+      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }], // ubs:ignore (test fixture, not a key)
       ensemble: { reserved: [{ provider: "bai", model: "glm-5.3-flash" }] },
     });
     expect(res.errors).toEqual([]);
@@ -2309,7 +2309,7 @@ describe("E-E1..E-E6 ensemble.reserved validation (D5)", () => {
   it("E-E5: a named group that does not serve the model is refused", () => {
     const res = validateProfile("paid", {
       ...base,
-      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }],
+      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }], // ubs:ignore (test fixture, not a key)
       ensemble: { reserved: [{ provider: "bai", model: "other/model" }] },
     });
     expect(res.valid).toBe(false);
@@ -2319,7 +2319,7 @@ describe("E-E1..E-E6 ensemble.reserved validation (D5)", () => {
   it("E-E6: a duplicate (provider, model) pair is refused", () => {
     const res = validateProfile("paid", {
       ...base,
-      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }],
+      providers: [{ name: "bai", api: "chat-b-ai-remote", api_key: "direct-bai-key", models: ["glm-5.3-flash"] }], // ubs:ignore (test fixture, not a key)
       ensemble: {
         reserved: [
           { provider: "bai", model: "glm-5.3-flash" },
@@ -2335,7 +2335,7 @@ describe("E-E1..E-E6 ensemble.reserved validation (D5)", () => {
     const res = validateProfile("free", {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/model",
       free_only: true,
       free_models: ["a/model:free", "b/model:free"],
@@ -2361,7 +2361,7 @@ describe("T-P1-8 paid_models rejects ':free' ids", () => {
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/paid-model",
       paid_models: ["a/paid-model", "sneaky/model:free"],
     };
@@ -2375,7 +2375,7 @@ describe("T-P1-8 paid_models rejects ':free' ids", () => {
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/paid-model",
       paid_models: ["a/paid-model", "b/paid-model"],
     };
@@ -2388,7 +2388,7 @@ describe("T-P1-8 paid_models rejects ':free' ids", () => {
     const p = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "direct-key",
+      api_key: "direct-key", // ubs:ignore (test fixture, not a key)
       model: "a/paid-model",
       paid_models: ["a/paid-model", ""],
     } as unknown as Profile;
@@ -2464,7 +2464,7 @@ describe("D0: validateProfile's closed-key check (E-D1)", () => {
     mode: "remote",
     api: "openrouter-remote",
     model: "vendor/one",
-    api_key: "sk-test-fake-key",
+    api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
   };
 
   it("refuses a misspelt key on a dynamic profile ('free') with a message naming the generated/user-owned sets", () => {
@@ -2494,7 +2494,7 @@ describe("D0: validateProfile's closed-key check (E-D1)", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "vendor/one",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       selection: { price_ceiling_usd_per_million: 0.9 },
     };
     const res = validateProfile("paid", p);
@@ -2513,8 +2513,8 @@ describe("D0: validateProfile's closed-key check (E-D1)", () => {
 // check again.
 describe("D0 fix-up 2: reservedDynamicProfileNameError names only keys validateProfile accepts", () => {
   const dynamicBase: Record<string, Profile> = {
-    free: { mode: "remote", api: "openrouter-remote", model: "vendor/one", api_key: "sk-test-fake-key" },
-    paid: { mode: "remote", api: "openrouter-remote", model: "vendor/one", api_key: "sk-test-fake-key" },
+    free: { mode: "remote", api: "openrouter-remote", model: "vendor/one", api_key: "sk-test-fake-key" }, // ubs:ignore (test fixture, not a key)
+    paid: { mode: "remote", api: "openrouter-remote", model: "vendor/one", api_key: "sk-test-fake-key" }, // ubs:ignore (test fixture, not a key)
     local: { mode: "local", api: "openai-compatible", url: "http://localhost:1234", model: "vendor/one" },
   };
   const sampleValueFor: Record<string, unknown> = {
@@ -2565,7 +2565,7 @@ describe("D0: selection validation (E-L1, E-S1)", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "vendor/one",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       selection: { price_ceiling_usd_per_million: 0 },
     };
     const res = validateProfile("paid", p);
@@ -2580,7 +2580,7 @@ describe("D0: selection validation (E-L1, E-S1)", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "vendor/one",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       selection: { price_ceiling_usd_per_million: -1 },
     };
     expect(validateProfile("paid", negative).valid).toBe(false);
@@ -2593,7 +2593,7 @@ describe("D0: selection validation (E-L1, E-S1)", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "vendor/one:free",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       free_only: true,
       free_models: ["vendor/one:free"],
       selection: { price_ceiling_usd_per_million: 0.5 },
@@ -2610,7 +2610,7 @@ describe("D0: selection validation (E-L1, E-S1)", () => {
       mode: "remote",
       api: "openrouter-remote",
       model: "vendor/one",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       selection: { price_ceiling_usd_per_million: 0.5 },
     };
     const res = validateProfile("my-static-profile", p);
@@ -2656,7 +2656,7 @@ describe("resolveProfile — manualModels provenance set (D3b)", () => {
     const p: Profile = {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       model: "vendor/one",
       second_model: "vendor/two",
       third_model: "vendor/three",
@@ -2671,7 +2671,7 @@ describe("resolveProfile — manualModels provenance set (D3b)", () => {
     const p: Profile = {
       mode: "remote-ensemble",
       api: "openrouter-remote",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       model: "vendor/one",
       second_model: "vendor/two",
     };
@@ -2691,7 +2691,7 @@ describe("validateProfile — static second_model/third_model in every mode (D3b
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       model: "vendor/one",
       second_model: "vendor/two",
       third_model: "vendor/three",
@@ -2720,7 +2720,7 @@ describe("validateProfile — static second_model/third_model in every mode (D3b
     const p: Profile = {
       mode: "remote",
       api: "openrouter-remote",
-      api_key: "sk-test-fake-key",
+      api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
       model: "vendor/one",
       second_model: "vendor/two",
     };
@@ -2748,14 +2748,14 @@ describe("validateProfile — free_only billable-group boot warning (D6a review 
       const p: Profile = {
         mode: "remote",
         api: "openrouter-remote",
-        api_key: "sk-test-fake-key",
+        api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
         free_only: true,
         free_models: ["vendor/one:free"],
         providers: [
           {
             name: "paid-acct",
             api: "openrouter-remote",
-            api_key: "sk-test-fake-key",
+            api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
             models: ["vendor/paid-one"],
           },
         ],
@@ -2781,14 +2781,14 @@ describe("validateProfile — free_only billable-group boot warning (D6a review 
       const p: Profile = {
         mode: "remote",
         api: "openrouter-remote",
-        api_key: "sk-test-fake-key",
+        api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
         free_only: true,
         free_models: ["vendor/one:free"],
         providers: [
           {
             name: "bai",
             api: "chat-b-ai-remote",
-            api_key: "sk-test-fake-key",
+            api_key: "sk-test-fake-key", // ubs:ignore (test fixture, not a key)
             models: ["glm-5.3-flash"],
           },
         ],

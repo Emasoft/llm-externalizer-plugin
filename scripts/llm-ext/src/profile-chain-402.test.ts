@@ -350,7 +350,7 @@ profiles:
     model: vendor/paid-head
     paid_models: [vendor/paid-a, vendor/paid-b]
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
 // A DYNAMIC `free` profile, mode: remote (NOT remote-ensemble) -- getEnsembleModels()
 // returns [] whenever mode !== "remote-ensemble" (index.ts:3319), so
@@ -369,7 +369,7 @@ profiles:
     free_models: [vendor/free-a:free, vendor/free-b:free]
     model: vendor/free-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
 // Same DYNAMIC `free` profile, mode: remote-ensemble -- getEnsembleModels()
 // now returns the free pool's top 3 (index.ts:3339, selectFreeEnsembleModels
@@ -388,7 +388,7 @@ profiles:
     free_models: [vendor/free-a:free, vendor/free-b:free, vendor/free-c:free]
     model: vendor/free-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
 describe("Row 102 (1) — caller-pinned modelOverride bypass, DYNAMIC `paid` profile", () => {
   it(
@@ -753,6 +753,7 @@ async function scanFolderOnPaid(
 describe("D2 item 11 — scan_folder's per-file path on a DYNAMIC `paid` profile", () => {
   it(
     "402 + 404 across the chain (not every cause a credit error): the retry-later message, ONE background update, ONE walk",
+    // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
     async () => {
       // D4: the chain needs a SECOND credential or the first 402 marks the
       // one shared url+keyRef dead and the 404 arm is unreachable. The
@@ -1049,7 +1050,7 @@ profiles:
         api: chat-b-ai-remote
         api_key: "sk-test-fake-bai-key-2"
         models: [vendor/entry-b]
-`;
+`; // ubs:ignore (test fixture, not a key)
 
 async function scanFolderOnStaticChain(files: Record<string, string>) {
   const { idx, cleanup } = await loadFreshIndex(STATIC_CHAIN_YAML);

@@ -354,7 +354,7 @@ describe('scan_secrets', () => {
   beforeAll(() => {
     mkdirSync(tmpDir, { recursive: true });
     // Write a file containing a fake API key pattern
-    writeFileSync(secretFile, `const API_KEY = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890ab";\nconsole.log(API_KEY);\n`, 'utf-8');
+    writeFileSync(secretFile, `const API_KEY = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890ab";\nconsole.log(API_KEY);\n`, 'utf-8'); // ubs:ignore (fake key fixture for secret-file test)
   });
 
   afterAll(() => {
@@ -642,7 +642,7 @@ profiles:
     third_model: vendor/model-c
     paid_models: [vendor/model-a, vendor/model-b, vendor/model-c, vendor/model-d]
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   it('dynamic paid ensemble with an unusable slot-1 model gets it replaced from the pool', async () => {
     const { idx, fr } = await loadFresh(DYNAMIC_PAID_YAML);
@@ -659,6 +659,7 @@ profiles:
     expect(ids).not.toContain('vendor/model-a');
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a static ensemble keeps its unusable model (fails fast -- no substitution, Rule 5)', async () => {
     const STATIC_ENSEMBLE_YAML = `active: my-static
 allow_paid_models: true
@@ -678,6 +679,7 @@ profiles:
     expect(ids).toEqual(['vendor/static-a', 'vendor/static-b']);
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it("a b.ai route-served slot does not trip the free_only ':free'-suffix cost check", async () => {
     const BAI_FREE_YAML = `active: bai-free
 allow_paid_models: false
@@ -704,6 +706,7 @@ profiles:
     expect(ids).toContain('glm-5.3-flash');
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('static forced-free profile with no pool refuses with the D-A message', async () => {
     const FORCED_FREE_NO_POOL_YAML = `active: bare
 allow_paid_models: false
@@ -720,6 +723,7 @@ profiles:
     );
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it("a static profile never draws a model outside its own free_models (TRDD-OE27RD7I addendum 4: engageAutoFree deleted outright, no auto-engagement to log)", async () => {
     const { idx } = await loadFresh(`active: bare2
 allow_paid_models: false
@@ -791,7 +795,7 @@ profiles:
     free_models: [vendor/manual-free-a:free, vendor/manual-free-b:free]
     model: vendor/manual-free-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   // A DYNAMIC 'free' profile has an EMPTY manualModels (D3b) -- every one of
   // its free_models is auto-picked from this gate's point of view, same as a
@@ -807,7 +811,7 @@ profiles:
     free_models: [vendor/auto-free-a:free, vendor/auto-free-b:free]
     model: vendor/auto-free-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   it('buildFreeRotationPool serves manual (STATIC profile) free ids with no recorded benchmark pass', async () => {
     const { idx } = await loadFresh(STATIC_MANUAL_FREE_YAML);
@@ -884,7 +888,7 @@ profiles:
     ensemble:
       reserved:
         - model: vendor/reserved-x
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   it('reserved slot comes FIRST, in written order; the ranking fills the rest excluding reserved ids', async () => {
     const { idx } = await loadFresh(PAID_WITH_RESERVED);
@@ -939,6 +943,7 @@ profiles:
     expect(idx.__getEnsembleModelsForTests()).toEqual([]);
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('spend guard: allow_paid_models false + a reserved slot on a BILLABLE route in a local profile is refused', async () => {
     const LOCAL_BILLABLE_RESERVED_YAML = `active: local
 allow_paid_models: false
@@ -984,6 +989,7 @@ profiles:
     expect(() => idx.__getEnsembleModelsForTests()).not.toThrow();
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('free-mode cost check still applies to reserved members: a paid reserved id under a master-switch-free profile is refused', async () => {
     // A free_only profile with a billable reserved route is refused EARLIER, at
     // validation (E-E6 free_only arm — pinned in config.test.ts). This fixture
@@ -1011,6 +1017,7 @@ profiles:
     );
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a paid reserved id EXEMPT via its own route (manualModels + a b.ai-style free provider) passes the free-mode cost check (the kept b.ai benchmark exemption, automatic)', async () => {
     const FREE_BAI_RESERVED_YAML = `active: free
 allow_paid_models: false
@@ -1086,7 +1093,7 @@ profiles:
     ensemble:
       reserved:
         - model: vendor/reserved-x
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   it('(a) booting with a b.ai reserved slot seeds the slot but the candidate queue stays EMPTY and no benchmark covers the reserved id', async () => {
     cfgDir = mkdtempSync(join('/tmp', 'llm-ext-f6a-'));
@@ -1129,6 +1136,7 @@ profiles:
     expect(spawned.join('\n')).not.toMatch(/vendor\/reserved-x/);
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('(b) a reserved id arriving through the NORMAL catalog path stays benchmarkable/evictable — no reserved-name special case blocks the sweep', async () => {
     cfgDir = mkdtempSync(join('/tmp', 'llm-ext-f6b-'));
     // The user DELETED the reserved slot (their to delete — the seed never
@@ -1216,6 +1224,7 @@ describe('writeBootBanner placeholder-id redaction (fix-queue 83)', () => {
     return import('./index.js');
   }
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('an unpopulated paid profile prints "paid: not benchmarked yet", never the placeholder id', async () => {
     // The `paid:` section is written out exactly as unpopulatedPaidProfile()
     // (config.ts) shapes it -- same state a fresh install's dynamic 'paid'
@@ -1246,6 +1255,7 @@ profiles:
     expect(banner).not.toContain('placeholder/unpopulated-default-profile');
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a populated profile still prints the real model id unchanged', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1299,7 +1309,7 @@ profiles:
   // `discover` (the `settings status` CLI command's dispatch target,
   // cli/active-precedence.test.ts) has its OWN separate "Model:" line
   // (index.ts) that also printed the raw sentinel for an unpopulated
-  // dynamic profile.
+  // dynamic profile. // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('`discover` ("settings status") prints "paid: not benchmarked yet" on the Model: line, never the placeholder id', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1320,7 +1330,7 @@ profiles:
   // fix-queue 89: the `profile --show <name>` tool (formatResolvedProfileLines,
   // config.ts) is the THIRD print site that read the resolved profile's raw
   // `model` field -- separate from both writeBootBanner and discover's
-  // Model: line above, and not audited by row 83.
+  // Model: line above, and not audited by row 83. // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('`profile --show paid` prints "paid: not benchmarked yet" on the Model: line, never the placeholder id', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1367,7 +1377,7 @@ profiles:
     free_models: [vendor/free-a:free, vendor/free-b:free]
     model: vendor/free-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   async function statusText(seed?: (cfg: string) => Promise<void> | void): Promise<string> {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-free-pool-label-'));
@@ -1430,7 +1440,7 @@ profiles:
     free_models: [vendor/hand-a:free, vendor/hand-b:free]
     model: vendor/hand-a:free
     api_key: "sk-test-fake-openrouter-key"
-`;
+`; // ubs:ignore (test fixture, not a key)
 
   async function staticStatusText(allowPaid: boolean): Promise<string> {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-static-pool-label-'));
@@ -2160,6 +2170,7 @@ describe('D0 fix-up: boot-order migration of the top-level price ceiling (TRDD-A
     cfgDir = undefined;
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a fresh boot migrates the top-level ceiling into profiles.paid.selection, deletes the top-level key, and settingsLevelErrors reports no E-D3', async () => {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-boot-order-141-'));
     const settingsPath = join(cfgDir, 'settings.yaml');
@@ -2224,6 +2235,7 @@ describe('unbenchmarked free profile notice is printed at first use, not at engi
     cfgDir = undefined;
   });
 
+  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   function isolate(): void {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-first-use-notice-'));
     writeFileSync(join(cfgDir, 'settings.yaml'), `active: free

@@ -1081,7 +1081,7 @@ function credentialUsable(profile: Profile | undefined, routesFrom: Profile | un
   if (profile === undefined) return false;
   if (missingProviderKeyVar(profile) === null) return true;
   return coerceProviderBindings(routesFrom?.providers).some(
-    (p) => (p.api ? resolveEnvValue(p.api_key ?? API_PRESETS[p.api]?.defaultAuthEnv) : resolveEnvValue(p.api_key)) !== "",
+    (p) => (p.api ? resolveEnvValue(p.api_key ?? API_PRESETS[p.api]?.defaultAuthEnv) : resolveEnvValue(p.api_key)) !== "", // ubs:ignore emptiness check of a local env value, no untrusted input
   );
 }
 

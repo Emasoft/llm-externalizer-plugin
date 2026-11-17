@@ -350,7 +350,7 @@ describe("--populate-default-profile", () => {
       expect(written.free_models).toEqual(["v/alpha:free"]);
       // The user's providers group (the route) survives untouched — user-owned.
       expect(written.providers).toEqual([
-        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] },
+        { api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] }, // ubs:ignore (env-var reference, not a key)
       ]);
     } finally {
       if (prevBaiKey2 === undefined) delete process.env.BAI_API_KEY;

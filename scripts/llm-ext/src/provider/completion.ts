@@ -1698,7 +1698,7 @@ export async function chatCompletionWithRetry(
           currentModelId,
         ),
       });
-      if (unavailableKind === "gone" || unavailableKind === "daily-quota") {
+      if (unavailableKind === "gone" || unavailableKind === "daily-quota") { // ubs:ignore availability enum, not a secret
         // Pass the REAL verdict, not a hardcoded "gone" (TRDD-W9XLU1HD
         // review) — a caller reading it back via runUnusableKind() must see
         // "daily-quota" as daily-quota, or applyUnavailable's registry
@@ -1722,8 +1722,8 @@ export async function chatCompletionWithRetry(
         deterministic4xx ||
         isPriceCeilingRefusal ||
         isIronRuleRefusal || // TRDD-VAORGKVF: keeps its own error (the "Validate it" remedy)
-        unavailableKind === "gone" ||
-        unavailableKind === "daily-quota";
+        unavailableKind === "gone" || // ubs:ignore availability enum, not a secret
+        unavailableKind === "daily-quota"; // ubs:ignore availability enum, not a secret
       const closedWindowError = (): unknown =>
         keepsOwnError
           ? err
@@ -1746,8 +1746,8 @@ export async function chatCompletionWithRetry(
         payment === "uncertain" &&
         !paymentRetried &&
         !stopped() &&
-        unavailableKind !== "gone" &&
-        unavailableKind !== "daily-quota"
+        unavailableKind !== "gone" && // ubs:ignore availability enum, not a secret
+        unavailableKind !== "daily-quota" // ubs:ignore availability enum, not a secret
       ) {
         paymentRetried = true;
         process.stderr.write(
@@ -1765,7 +1765,7 @@ export async function chatCompletionWithRetry(
         callStatus !== 401 &&
         !isPriceCeilingRefusal &&
         !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
-        unavailableKind !== "daily-quota"
+        unavailableKind !== "daily-quota" // ubs:ignore availability enum, not a secret
       ) {
         // Issue 2: tag the model/truncation retry layer + include the model id.
         const retryModel = options.model || backend.model;

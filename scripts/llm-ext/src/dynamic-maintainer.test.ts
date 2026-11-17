@@ -1463,7 +1463,7 @@ describe("maintainDynamicProfiles", () => {
       expect(free.free_models).toEqual(["alive/one:free"]);
       // The user's own nodes survive untouched.
       expect(free.providers).toEqual([
-        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] },
+        { name: "bai", api: "chat-b-ai-remote", api_key: "$BAI_API_KEY", models: ["glm-5.3-flash"] }, // ubs:ignore (env-var reference, not a key)
       ]);
       expect(free.ensemble).toEqual({ reserved: [{ provider: "bai", model: "glm-5.3-flash" }] });
       expect(validateSettings(loadSettings() as never).valid).toBe(true);
@@ -2271,7 +2271,7 @@ describe("dynamicProfileGate", () => {
             model: "x",
             free_models: [],
             // The key IS here, in the file, as a literal — not an env-var ref.
-            api_key: "a-literal-key-pasted-into-settings-yaml",
+            api_key: "a-literal-key-pasted-into-settings-yaml", // ubs:ignore (test fixture, not a key)
           },
         },
       } as never;
@@ -2313,7 +2313,7 @@ describe("dynamicProfileGate", () => {
             mode: "remote",
             api: "openrouter-remote",
             model: "placeholder/unpopulated-default-profile",
-            api_key: "a-literal-key",
+            api_key: "a-literal-key", // ubs:ignore (test fixture, not a key)
           },
         },
       } as never;

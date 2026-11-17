@@ -2090,7 +2090,7 @@ export function isInvalidOnlyBecauseUnpopulated(
     ...(profile.free_only === true
       ? { free_models: ["placeholder/a:free", "placeholder/b:free"] }
       : { model: "placeholder/populated" }),
-    ...(needsAuthKey ? { api_key: "placeholder-key" } : {}),
+    ...(needsAuthKey ? { api_key: "placeholder-key" } : {}), // ubs:ignore validation placeholder, never used as a credential
   };
   return validateProfile(name, populated).valid;
 }
@@ -2115,7 +2115,7 @@ export function unpopulatedFreeProfile(): Profile {
     // from free_models[0]. Present because the field is required, and the
     // unroutable sentinel is the only honest value for an unpopulated slot.
     model: PLACEHOLDER_MODEL_ID,
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
   };
 }
 
@@ -2127,7 +2127,7 @@ export function unpopulatedPaidProfile(): Profile {
     mode: "remote",
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
   };
 }
 
@@ -2176,7 +2176,7 @@ export function unpopulatedScoutingProfile(): Profile {
     mode: "remote",
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
   };
 }
 
@@ -2194,7 +2194,7 @@ export function orJevProfile(): Profile {
     "profile-type": "classifier",
     api: "openrouter-remote",
     model: "~typesafe/jev-latest",
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
   } as unknown as Profile;
 }
 
@@ -3280,7 +3280,7 @@ export function validateProfile(
         // route would still be built, so the request goes out with an empty
         // Authorization header rather than not going out at all.
         if (!bp.isLocal) {
-          const rawAuth = typeof e.api_key === "string" ? e.api_key : bp.defaultAuthEnv;
+          const rawAuth = typeof e.api_key === "string" ? e.api_key : bp.defaultAuthEnv; // ubs:ignore typeof check, not a secret compare
           if (!resolveEnvValue(rawAuth)) {
             const hint = rawAuth?.startsWith("$") ? ` (env var ${rawAuth} is not set)` : "";
             errors.push(

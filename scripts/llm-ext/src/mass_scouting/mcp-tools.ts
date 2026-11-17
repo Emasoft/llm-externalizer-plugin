@@ -1596,7 +1596,7 @@ export async function dispatchMassScoutTool(
           () =>
             planToolReplacements({
               candidateModels: models && models.length > 0 ? models : undefined,
-              force: args.force === true,
+              force: args.force === true, // ubs:ignore boolean flag, not a secret
               apiKey: opts.apiKey,
             }),
         );
