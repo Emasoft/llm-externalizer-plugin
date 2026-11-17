@@ -131,7 +131,7 @@ if (mode === "__broker") {
   await new Promise((r) => setTimeout(r, spec.stopAfterMs ? 500 : 0));
   process.stdout.write(JSON.stringify({ pid: ep.pid, results, stopped }) + "\\n");
 }
-`;
+`; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (test env phase flags compared to "1"/"too-big", not secrets)
 
 let workDir: string;
 let bundle: string;
@@ -264,7 +264,7 @@ async function cleanup(dir: string): Promise<void> {
   // (not detached) shares it, and `kill(-pgid)` on such a child killed vitest
   // and the shell running it. Those children are killed by pid instead.
   // Follow-up review m8: without our own pgid that guard is blind, so fail loudly.
-  const ownPgid = rows.find((r) => r.pid === process.pid)?.pgid;
+  const ownPgid = rows.find((r) => r.pid === process.pid)?.pgid; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (pid compare, not a secret)
   if (ownPgid === undefined) throw new Error(`cleanup: this test runner (pid ${process.pid}) is not in the process snapshot; refusing to signal any group`);
   const registryPgids = new Set([...readRegistry(dir, "llama"), ...readRegistry(dir, "locals")].map((e) => e.pgid));
   // Follow-up review m7: a registry pgid alone is not proof (pgids are reused):
@@ -352,7 +352,7 @@ function watchMains(dir: string): { stop: () => number } {
   void (async () => {
     while (on) {
       const n = (await processSnapshot()).filter(
-        (r) => (r.argv.indexOf("--log-file") >= 0 && r.argv[r.argv.indexOf("--log-file") + 1] === marker) || hasLocalsMarker(r.command, localsMarker),
+        (r) => (r.argv.indexOf("--log-file") >= 0 && r.argv[r.argv.indexOf("--log-file") + 1] === marker) || hasLocalsMarker(r.command, localsMarker), // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (process marker, not a secret)
       ).length;
       max = Math.max(max, n);
       await new Promise((r) => setTimeout(r, 200));
@@ -833,7 +833,7 @@ describe("kill safety (review M6, M7, M8, M12)", () => {
     const pid = foreignProcess(["--log-file", marker]);
     try {
       await new Promise((r) => setTimeout(r, 200));
-      const row = (await processSnapshot()).find((r) => r.pid === pid)!;
+      const row = (await processSnapshot()).find((r) => r.pid === pid)!; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (pid compare, not a secret)
       expect(row.argv[row.argv.indexOf("--log-file") + 1]).toBe(marker);
       await expect(
         claimAndSpawn({ dir, engine: "llama", role: "main", ownerPid: process.pid, spawn: () => Promise.reject(new Error("no spawn in this test")) }),
@@ -903,7 +903,7 @@ describe("kill safety (review M6, M7, M8, M12)", () => {
 describe("a dead server never hangs its model's jobs (review C2)", () => {
   const mainPid = async (dir: string): Promise<number> => {
     const e = readRegistry(dir, "llama").find((x) => x.role === "main")!;
-    const row = (await processSnapshot()).find((r) => r.pid === e.pid)!;
+    const row = (await processSnapshot()).find((r) => r.pid === e.pid)!; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (pid compare, not a secret)
     expect(row.argv[0]).toMatch(/llama-server$/);
     return e.pid;
   };
@@ -1775,9 +1775,9 @@ function processEnvText(pid: number): string {
 describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
   const mainEntry = (dir: string) => readRegistry(dir, "llama").find((e) => e.role === "main")!;
 
-  it("M13 + m7: the main server refuses a request without its per-spawn key, the key is not in its argv, and no client API key reaches it", async () => {
+  it("M13 + m7: the main server refuses a request without its per-spawn key, the key is not in its argv, and no client API key reaches it", async () => { // ubs:ignore[js.security.hardcoded-secrets] (test title, no secret)
     const dir = newDir();
-    const r = await runClient(dir, jobsOf(A, 1), { OPENROUTER_API_KEY: "sentinel-or-key-4711", LLAMA_API_KEY: "client-chosen-key" });
+    const r = await runClient(dir, jobsOf(A, 1), { OPENROUTER_API_KEY: "sentinel-or-key-4711", LLAMA_API_KEY: "client-chosen-key" }); // ubs:ignore[js.security.hardcoded-secrets] (test sentinel, not a key)
     expect(r.results[0].status).toBe(200);
     const e = mainEntry(dir);
     const res = await fetch(`http://127.0.0.1:${e.port}/v1/chat/completions`, {
@@ -2438,7 +2438,7 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
     expect(main.argv[0]).toBe(python);
     expect(isLocalsServerArgv(main.argv)).toBe(true);
     expect(main.argv).toContain(`llm-ext-server=${roleLogFile(dir, "main", "locals")}`);
-    const row = (await processSnapshot()).find((r) => r.pid === main.pid)!;
+    const row = (await processSnapshot()).find((r) => r.pid === main.pid)!; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (pid compare, not a secret)
     expect(hasLocalsMarker(row.command, roleLogFile(dir, "main", "locals"))).toBe(true);
     expect(readFileSync(join(dir, "broker-local.log"), "utf8")).toMatch(/main Locals server ready: .* slots 4; ids locals\/smollm-135m-instruct/);
     expect(readRegistry(dir, "llama")).toEqual([]);
@@ -2659,7 +2659,7 @@ describe.skipIf(!ON_APPLE_SILICON)("broker with a real Locals server (MLX, macOS
  * minute, too heavy for every run. The model caches are the user's own
  * (HF_HOME, never LLAMA_CACHE here); HOME and LLM_EXT_CONFIG_DIR are temp.
  */
-describe.skipIf(process.env.RUN_REAL_LOCAL_MODELS !== "1")("real models of the built-in local profiles (opt-in, RUN_REAL_LOCAL_MODELS=1)", () => {
+describe.skipIf(process.env.RUN_REAL_LOCAL_MODELS !== "1")("real models of the built-in local profiles (opt-in, RUN_REAL_LOCAL_MODELS=1)", () => { // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (env feature flag, not a secret)
   const cases = [
     { profile: "local_llama", engine: "llama", main: "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K" },
     ...(localsPlatformSupported(process.platform, process.arch) ? [{ profile: "locals-mlx", engine: "locals", main: "LiquidAI/LFM3-1.7B-MLX-4bit" }] : []),
