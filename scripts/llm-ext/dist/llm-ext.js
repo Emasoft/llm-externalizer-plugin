@@ -269542,6 +269542,8 @@ var init_errors3 = __esm({
       reason;
       provider_code;
       remedy_hint;
+      needed_tokens;
+      limit_tokens;
       retryable;
       constructor(f) {
         super(f.message);
@@ -269552,6 +269554,8 @@ var init_errors3 = __esm({
         this.reason = f.reason;
         this.provider_code = f.provider_code;
         this.remedy_hint = f.remedy_hint;
+        this.needed_tokens = f.needed_tokens;
+        this.limit_tokens = f.limit_tokens;
         this.retryable = f.retryable;
       }
     };
@@ -271282,6 +271286,36 @@ function planRequests(job, limits) {
   const expanded = expandTextUnits(job, limits);
   return "job" in expanded ? planExpanded(expanded.job, limits) : expanded;
 }
+function replanRequest(job, request, limits, overflow) {
+  if (!(overflow.neededTokens > 0) || !(overflow.limitTokens > 0)) throw new Error(`the overflow counts must be positive, got needed ${overflow.neededTokens} and limit ${overflow.limitTokens}`);
+  if (Object.keys(job.unsplittable).length > 0) return { ok: false, kind: "request-unsplittable", message: "the request carries unsplittable questions that travel with every unit, so it cannot be split" };
+  if (request.units.length < 2) return { ok: false, kind: "request-unsplittable", message: "the request holds 1 unit, which cannot be split" };
+  const expanded = expandTextUnits(job, limits);
+  if (!("job" in expanded)) return expanded;
+  const slice = expanded.job.units.slice(request.offset, request.offset + request.units.length);
+  if (slice.length !== request.units.length) throw new Error(`request.offset ${request.offset} with ${request.units.length} units is outside the ${expanded.job.units.length} expanded units; limits must be the ones the job was planned with`);
+  const contextTokens = Math.min(limits.contextTokens, Math.floor(overflow.limitTokens * (request.tokens / overflow.neededTokens) * REPLAN_MARGIN));
+  if (contextTokens <= limits.envelopeTokens) return { ok: false, kind: "request-unsplittable", message: `the scaled budget of ${contextTokens} tokens leaves no room after the ${limits.envelopeTokens} token envelope` };
+  const scaled = { ...limits, contextTokens, maxRequests: slice.length };
+  const planSlice = (units, base) => {
+    if (units.length === 0) return [];
+    const sub = planExpanded({ ...expanded.job, units }, scaled, base);
+    if (sub.ok) return sub.requests;
+    if (sub.kind !== "unit-too-large") return sub;
+    const i = sub.unitIndex;
+    const before = planSlice(units.slice(0, i), base);
+    if ("ok" in before) return before;
+    const own2 = planExpanded({ ...expanded.job, units: [units[i]] }, { ...limits, maxRequests: 1 }, base + i);
+    if (!own2.ok) return own2;
+    const after = planSlice(units.slice(i + 1), base + i + 1);
+    if ("ok" in after) return after;
+    return [...before, ...own2.requests, ...after];
+  };
+  const requests = planSlice(slice, request.offset);
+  if ("ok" in requests) return requests;
+  if (requests.length < 2) return { ok: false, kind: "request-unsplittable", message: "the re-plan did not split the request into smaller ones" };
+  return { ok: true, requests };
+}
 function modelLimits(input8) {
   const { resolved, profile } = input8;
   for (const field of ["max_requests_per_call", "concurrency"]) {
@@ -271295,7 +271329,7 @@ function modelLimits(input8) {
   const contextTokens = input8.endpointPromptLimit === void 0 ? source : Math.min(source, input8.endpointPromptLimit);
   return { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: profile.max_requests_per_call, concurrency: profile.concurrency, ...input8.maxQuestionsPerRequest === void 0 ? {} : { maxQuestionsPerRequest: input8.maxQuestionsPerRequest } };
 }
-function planExpanded(job, limits) {
+function planExpanded(job, limits, baseOffset = 0) {
   for (const [name, v] of [["contextTokens", limits.contextTokens], ["maxRequests", limits.maxRequests]]) {
     if (!Number.isInteger(v) || v < 1) throw new Error(`${name} must be a positive integer, got ${String(v)}`);
   }
@@ -271316,14 +271350,14 @@ function planExpanded(job, limits) {
   const maxQ = limits.maxQuestionsPerRequest ?? Infinity;
   const base = tok({ state: { shared: job.sharedState, units: [] }, questions: {} });
   const build10 = (units, offset, extra) => {
-    const finalUnits = renumbered(job, units, offset);
+    const finalUnits = renumbered(job, units, baseOffset + offset);
     const questions = {};
     for (const u of finalUnits) Object.assign(questions, u.questions);
     Object.assign(questions, extra);
     const state = { shared: job.sharedState, units: finalUnits.map((u) => u.state) };
     const tokens = tok({ state, questions }) + limits.envelopeTokens;
-    if (tokens > limits.contextTokens) return { ok: false, kind: "request-too-large", offset, message: `the request for units from ${offset} is ${tokens} tokens after renumbering, over the limit of ${limits.contextTokens}` };
-    return { state, questions, units: finalUnits, offset, tokens };
+    if (tokens > limits.contextTokens) return { ok: false, kind: "request-too-large", offset: baseOffset + offset, message: `the request for units from ${baseOffset + offset} is ${tokens} tokens after renumbering, over the limit of ${limits.contextTokens}` };
+    return { state, questions, units: finalUnits, offset: baseOffset + offset, tokens };
   };
   if (unsplittableCount > 0) {
     const qCount = unsplittableCount + job.units.reduce((n, u) => n + Object.keys(u.questions).length, 0);
@@ -271375,7 +271409,7 @@ function planExpanded(job, limits) {
   }
   return { ok: true, requests };
 }
-var ENVELOPE_TOKENS, tok, unitTokens, CHUNK_INFO, chunkOf, RESERVED_KEY;
+var ENVELOPE_TOKENS, tok, unitTokens, CHUNK_INFO, chunkOf, RESERVED_KEY, REPLAN_MARGIN;
 var init_planner = __esm({
   "src/classifiers/l2/planner.ts"() {
     "use strict";
@@ -271388,6 +271422,7 @@ var init_planner = __esm({
     CHUNK_INFO = /* @__PURE__ */ Symbol("chunk");
     chunkOf = (u) => u[CHUNK_INFO];
     RESERVED_KEY = /#c\d+/;
+    REPLAN_MARGIN = 0.95;
   }
 });
 
@@ -274641,6 +274676,39 @@ var init_envelope = __esm({
   }
 });
 
+// src/classifiers/l2/split-on-overflow.ts
+async function answerWithSplit(opts) {
+  const first = await opts.ask(opts.request);
+  if (first.ok || first.disabled) return first;
+  const e = first.error;
+  if (e === void 0 || e.status !== 422 || e.needed_tokens === void 0 || e.limit_tokens === void 0) return first;
+  const plan = replanRequest(opts.job, opts.request, opts.limits, { neededTokens: e.needed_tokens, limitTokens: e.limit_tokens });
+  if (!plan.ok) return first;
+  const pieces = [];
+  for (const piece of plan.requests) {
+    if (opts.stop.aborted) break;
+    pieces.push({ request: piece, result: await answerWithSplit({ ...opts, request: piece }) });
+  }
+  const answered = pieces.map((p) => p.result).filter((p) => p.ok);
+  if (answered.length === 0) return pieces.find((p) => !p.result.ok)?.result ?? first;
+  const answers = {};
+  const usage = { input_tokens: 0, output_tokens: 0 };
+  for (const p of answered) {
+    Object.assign(answers, p.reply.answers);
+    usage.input_tokens += p.reply.usage.input_tokens;
+    usage.output_tokens += p.reply.usage.output_tokens;
+  }
+  const failedPieces = pieces.flatMap((p) => p.result.ok ? p.result.failedPieces ?? [] : [{ reason: p.result.reason, questions: Object.keys(p.request.questions).length }]);
+  const head = answered[0];
+  return { ok: true, reply: { model: head.reply.model, usage, cost: { costUsd: 0, cost_estimated: false }, answers }, notice: head.notice, ...failedPieces.length === 0 ? {} : { failedPieces } };
+}
+var init_split_on_overflow = __esm({
+  "src/classifiers/l2/split-on-overflow.ts"() {
+    "use strict";
+    init_planner();
+  }
+});
+
 // src/classifiers/l2/local-discovery.ts
 import { execFile as execFile5 } from "node:child_process";
 function isSplitPath(parts) {
@@ -275696,6 +275764,13 @@ function serverMessage(bodyText) {
   }
   return bodyText.trim() === "" ? "(no response body)" : bodyText.trim();
 }
+function parseOverLimit(message) {
+  const m = /needs (\d+) tokens\b[\s\S]*?\bthe limit is (\d+)/.exec(message);
+  if (m === null) return void 0;
+  const needed = Number(m[1]);
+  const limit = Number(m[2]);
+  return needed > 0 && limit > 0 ? { needed_tokens: needed, limit_tokens: limit } : void 0;
+}
 async function callLocalDecisions(call, opts) {
   const url2 = `${opts.baseUrl.replace(/\/+$/, "")}/v1/systemone`;
   const body = JSON.stringify({
@@ -275735,7 +275810,7 @@ async function callLocalDecisions(call, opts) {
   if (!res.ok) {
     if (res.status === 422) {
       const message = serverMessage(text2);
-      throw new ClassifierError({ class: "bad-request", status: 422, message, reason: message, retryable: false });
+      throw new ClassifierError({ class: "bad-request", status: 422, message, reason: message, retryable: false, ...parseOverLimit(message) });
     }
     throw classifyHttpError(res.status, res.headers, text2);
   }
@@ -275814,11 +275889,14 @@ async function answerWithLocalDecider(opts) {
     let lastError;
     let lastRefusal;
     let postAttempts = 0;
+    let timeoutRetried = false;
+    const timedOutAfterMs = [];
     for (; ; ) {
       if (outerDeadline.reason !== void 0) break;
       if (opts.signal?.aborted) break;
       let attemptDeadline;
       let ensureRefusal = false;
+      let attemptStartedAt = 0;
       try {
         const ready = await ensureLocalDecider(lookupCfg, deps);
         if (!ready.ok) {
@@ -275847,6 +275925,7 @@ async function answerWithLocalDecider(opts) {
         let decided;
         try {
           attemptDeadline = createDeadline({ timeoutMs: cfg.attemptTimeoutMs, signal: outerDeadline.signal });
+          attemptStartedAt = Date.now();
           decided = await callLocalDecisions(
             { model: SERVED_MODEL, ...opts.call },
             { baseUrl: ready.baseUrl, deadline: attemptDeadline, fetchImpl: opts.fetchImpl }
@@ -275867,9 +275946,17 @@ async function answerWithLocalDecider(opts) {
       } catch (e) {
         attemptDeadline?.dispose();
         lastError = e;
+        const attemptTimedOut = !ensureRefusal && e instanceof ClassifierError && e.class === "timeout" && attemptDeadline?.reason === "timeout";
+        let timeoutRetry = false;
+        if (attemptTimedOut) {
+          timedOutAfterMs.push(Date.now() - attemptStartedAt);
+          lastError = new ClassifierError({ class: "timeout", message: `${e.message} after ${timedOutAfterMs.map((ms) => `${ms} ms`).join(" and ")}`, reason: e.reason, retryable: false });
+          timeoutRetry = !timeoutRetried && outerDeadline.reason === void 0 && opts.signal?.aborted !== true;
+          timeoutRetried = true;
+        }
         const budgetEnded = outerDeadline.reason === "timeout";
         if (!ensureRefusal || !(budgetEnded || e instanceof ClassifierError && e.retryable)) onlyEnsureRefusals = false;
-        if (e instanceof ClassifierError && !e.retryable) break;
+        if (e instanceof ClassifierError && !e.retryable && !timeoutRetry) break;
         if (fastFail && ensureRefusal) break;
         if (!ensureRefusal && postAttempts >= cfg.maxAttempts) break;
         const wait = ensureRefusal ? RESCAN_INTERVAL_MS : computeBackoffMs(postAttempts - 1, 0);
@@ -276053,23 +276140,34 @@ async function run(spec16, req, deps, redactor, safe) {
   const runLocalOnly = async (local) => {
     const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
     const limits2 = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
-    const plan2 = planRequests(built, { ...limits2, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } });
+    const localPlanLimits = { ...limits2, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } };
+    const plan2 = planRequests(built, localPlanLimits);
     if (!plan2.ok) throw new Refusal(plan2.message);
     if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan2.requests.map((r) => r.tokens), { id: local.model, promptUsdPerM: 0 }, true));
     usedOtherModel = true;
     const ctrlCLocal = installCtrlC(deps.sigint);
     const execLocal = async (request) => {
-      const answered = await answerWithLocalDecider({
-        settings: localOnlySettings(deps.localFallback),
-        fetchImpl: deps.fetch,
-        signal: AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]),
-        call: { state: request.state, questions: request.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
-        decider: deps.localFallbackDeps
+      const stop = AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]);
+      const answered = await answerWithSplit({
+        job: built,
+        limits: localPlanLimits,
+        request,
+        stop,
+        ask: (r) => answerWithLocalDecider({
+          settings: localOnlySettings(deps.localFallback),
+          fetchImpl: deps.fetch,
+          signal: stop,
+          call: { state: r.state, questions: r.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
+          decider: deps.localFallbackDeps
+        })
       });
-      if (answered.ok) return answered.reply;
+      if (answered.ok) {
+        reportFailedPieces(answered.failedPieces);
+        return answered.reply;
+      }
       throwIfStopped();
       const cause = answered.disabled ? void 0 : answered.error;
-      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...cause?.status === void 0 ? {} : { status: cause.status } });
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...cause?.status === void 0 ? {} : { status: cause.status }, ...cause?.needed_tokens === void 0 ? {} : { needed_tokens: cause.needed_tokens }, ...cause?.limit_tokens === void 0 ? {} : { limit_tokens: cause.limit_tokens } });
     };
     let mergedLocal;
     try {
@@ -276088,6 +276186,13 @@ async function run(spec16, req, deps, redactor, safe) {
     if (deps.stderr === void 0) process.stderr.write(`${line}
 `);
     else deps.stderr(line);
+  };
+  const reportFailedPieces = (pieces) => {
+    for (const p of pieces ?? []) {
+      const text2 = safe(`a split piece of ${p.questions} question${p.questions === 1 ? "" : "s"} was not answered by the local decider, so ${p.questions === 1 ? "that question is" : "those questions are"} reported as "answer missing from reply": ${p.reason}`);
+      warnings.push(warning("split_piece_failed", text2, p.questions));
+      say(`llm-ext: ${text2}`);
+    }
   };
   if (selection.ok) profile = selection.profile;
   else {
@@ -276128,7 +276233,8 @@ async function run(spec16, req, deps, redactor, safe) {
   if ("ok" in limits) throw new Refusal(limits.message);
   const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
   const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
-  const plan = planRequests(built, { ...planLimits, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } });
+  const remotePlanLimits = { ...planLimits, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } };
+  const plan = planRequests(built, remotePlanLimits);
   if (!plan.ok) throw new Refusal(plan.message);
   refusing(1, () => checkEstimate({ maxBudgetUsd: req.maxBudgetUsd, estimatedInputTokens: plan.requests.reduce((n, r) => n + r.tokens, 0), model: resolved }));
   if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan.requests.map((r) => r.tokens), { id: resolved.effective.id, promptUsdPerM: resolved.effective.promptUsdPerM }));
@@ -276228,16 +276334,23 @@ async function run(spec16, req, deps, redactor, safe) {
       throwIfStopped();
       if (deadline.reason === "aborted" || ctrlC.signal.aborted) throw e;
       if (NO_LOCAL_RESCUE.has(e.class)) throw e;
-      const local = await answerWithLocalDecider({
-        settings: { ...deps.localFallback === void 0 ? {} : { local_fallback: deps.localFallback } },
-        fetchImpl: deps.fetch,
-        signal: AbortSignal.any([ctrlC.signal, commandStopSignal()]),
-        // WHY the decider gets its own budget instead of the remainder the remote attempts left: the fallback
-        // exists for the request whose remote attempts SPENT the budget (a timeout is the common case), so reusing
-        // the remainder would disable it exactly there. The budget and the retries are local_fallback settings
-        // (requestTimeoutMs, attemptTimeoutMs, maxAttempts), read inside answerWithLocalDecider.
-        call: { state: request.state, questions: request.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
-        decider: deps.localFallbackDeps
+      const stop = AbortSignal.any([ctrlC.signal, commandStopSignal()]);
+      const local = await answerWithSplit({
+        job: built,
+        limits: remotePlanLimits,
+        request,
+        stop,
+        ask: (r) => answerWithLocalDecider({
+          settings: { ...deps.localFallback === void 0 ? {} : { local_fallback: deps.localFallback } },
+          fetchImpl: deps.fetch,
+          signal: stop,
+          // WHY the decider gets its own budget instead of the remainder the remote attempts left: the fallback
+          // exists for the request whose remote attempts SPENT the budget (a timeout is the common case), so reusing
+          // the remainder would disable it exactly there. The budget and the retries are local_fallback settings
+          // (requestTimeoutMs, attemptTimeoutMs, maxAttempts), read inside answerWithLocalDecider.
+          call: { state: r.state, questions: r.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
+          decider: deps.localFallbackDeps
+        })
       });
       if (!local.ok && local.disabled) {
         throwIfStopped();
@@ -276255,6 +276368,7 @@ async function run(spec16, req, deps, redactor, safe) {
         warnings.push(warning("local_decider", notice));
         say(`llm-ext: ${notice}`);
       }
+      reportFailedPieces(local.failedPieces);
       return local.reply;
     }
   };
@@ -276432,6 +276546,7 @@ var init_run_decision = __esm({
     init_input_error();
     init_chunker();
     init_planner();
+    init_split_on_overflow();
     init_config();
     init_policy_kit();
     init_profile();
