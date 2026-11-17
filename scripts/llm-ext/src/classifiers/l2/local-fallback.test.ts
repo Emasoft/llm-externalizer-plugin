@@ -313,6 +313,73 @@ describe("answerWithLocalDecider — a refusal time cannot heal", () => {
   });
 });
 
+describe("answerWithLocalDecider — a per-attempt timeout is retried once (TRDD-1L9VMEY7)", () => {
+  // WHY: a real run (find under local-decision, host load ~140) lost 28 questions to "1 POST attempt, not retryable: deadline exceeded": a slow, not broken, server ended the loop at its first timeout.
+  const TIMEOUT_SETTINGS = { requestTimeoutMs: 20_000, attemptTimeoutMs: 1000, startTimeoutMs: 1000, maxAttempts: 5 };
+  const timeoutDeps = { discover: async () => [{ pid: 23342, urls: [SINGLETON] }], singletonInstalled: () => true };
+
+  /** A live singleton whose first `hang` decision POSTs never answer (they end only when the attempt deadline aborts them) and whose later ones answer. */
+  function slowThenFastFetch(hang: number): { fetchImpl: GlobalFetch; posts: () => number } {
+    let posts = 0;
+    const fetchImpl: GlobalFetch = (url, init) => {
+      if (url === `${SINGLETON}/health`) return Promise.resolve(new Response(JSON.stringify({ status: "ok", loaded: ["elephant-1"] }), { status: 200 }));
+      if (url !== `${SINGLETON}/v1/systemone`) return Promise.reject(new Error(`unexpected url ${url}`));
+      posts++;
+      if (posts > hang) return Promise.resolve(new Response(JSON.stringify(REPLY), { status: 200 }));
+      return new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener("abort", () => reject(new Error("the POST was aborted")), { once: true });
+      });
+    };
+    return { fetchImpl, posts: () => posts };
+  }
+
+  it("a timed-out attempt is retried once and the second answer is returned", async () => {
+    const srv = slowThenFastFetch(1);
+    const p = run(TIMEOUT_SETTINGS, srv.fetchImpl, timeoutDeps);
+    await vi.advanceTimersByTimeAsync(5000);
+    const r = await p;
+    expect(r.ok).toBe(true);
+    expect(srv.posts()).toBe(2);
+  });
+
+  it("two timeouts end the request: the reason names the elapsed time of both attempts and 2 POST attempts, and there is no third POST", async () => {
+    const srv = slowThenFastFetch(10);
+    const p = run(TIMEOUT_SETTINGS, srv.fetchImpl, timeoutDeps);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    const reason = (r as { reason: string }).reason;
+    expect(reason).toContain("2 POST attempts, not retryable");
+    expect(reason).toContain("deadline exceeded after 1000 ms and 1000 ms");
+    expect(srv.posts()).toBe(2);
+  });
+
+  it("an expired request budget is not a per-attempt timeout: the attempt deadline reads aborted, so there is no retry and the reason has no elapsed time", async () => {
+    // WHY requestTimeoutMs equal to attemptTimeoutMs (config.ts refuses a smaller one): the rebuilt outer deadline lasts 1000 ms, the same instant as the attempt timer, and it was created first, so it fires first and the attempt deadline reads "aborted" (its caller signal fired), not "timeout".
+    const srv = slowThenFastFetch(10);
+    const p = run({ ...TIMEOUT_SETTINGS, requestTimeoutMs: 1000 }, srv.fetchImpl, timeoutDeps);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).not.toContain("deadline exceeded after");
+    expect(srv.posts()).toBe(1);
+  });
+
+  it("Ctrl-C during the first attempt is not retried", async () => {
+    const srv = slowThenFastFetch(10);
+    const ctl = new AbortController();
+    const p = run(TIMEOUT_SETTINGS, srv.fetchImpl, timeoutDeps, { signal: ctl.signal });
+    await vi.advanceTimersByTimeAsync(300);
+    expect(srv.posts()).toBe(1);
+    ctl.abort();
+    await vi.advanceTimersByTimeAsync(10_000);
+    const r = await p;
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).not.toContain("deadline exceeded after");
+    expect(srv.posts()).toBe(1);
+  });
+});
+
 describe("answerWithLocalDecider — the machine-wide governor lease", () => {
   // Real timers and the real governor in a temp dir: the lease wait is file-lock and CPU-sampling work that a fake clock
   // cannot advance. max_inferences 1 makes a lease held by the test block the escalation exactly as another process would.

@@ -153,6 +153,12 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
     // WHY counted apart from the lookups: maxAttempts bounds POSTs. A lookup for a not-ready singleton is bounded
     // by the outer deadline alone, otherwise a few rescans would use up the attempts before the singleton came up.
     let postAttempts = 0;
+    // WHY one retry of a per-attempt timeout and not the maxAttempts of a plain failure (TRDD-1L9VMEY7): a real run (find under local-decision, host load ~140) lost 28 questions to "could not answer (1 POST attempt, not retryable): deadline exceeded", because the
+    // timeout of one slow attempt ended the loop at the first POST and the 50 attempts the USER configured for a very slow, not broken, server never applied. Once and not more: each lease grant rebuilds the outer
+    // deadline to at least attemptTimeoutMs, so an uncapped retry could hold one request for maxAttempts x attemptTimeoutMs (50 x 200 s) on a stuck decider; once bounds it to about two attempts.
+    let timeoutRetried = false;
+    // The measured duration of every per-attempt timeout, so the final reason shows slow (answers when given longer) versus stuck.
+    const timedOutAfterMs: number[] = [];
     for (;;) {
       // WHY the deadline/abort checks precede the ensure: an expired budget or a Ctrl-C must not probe for a
       // server the run has already given up on. Every pass below either returns, breaks or sleeps at least
@@ -171,6 +177,8 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
       let attemptDeadline: Deadline | undefined;
       // WHY per attempt: tells the catch below whether the failure came from the decider lookup or from the POST.
       let ensureRefusal = false;
+      // WHEN the POST of this attempt started (0 until then): the elapsed time of a per-attempt timeout is read from it.
+      let attemptStartedAt = 0;
       try {
         // WHY the ensure is INSIDE the loop and inside this try: a not-ready singleton (restarting, still loading)
         // heals with time, so re-checking each pass turns a transient absence into a wait instead of a hard
@@ -248,6 +256,7 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
         let decided: Awaited<ReturnType<typeof callLocalDecisions>>;
         try {
           attemptDeadline = createDeadline({ timeoutMs: cfg.attemptTimeoutMs, signal: outerDeadline.signal });
+          attemptStartedAt = Date.now();
           decided = await callLocalDecisions(
             { model: SERVED_MODEL, ...opts.call },
             { baseUrl: ready.baseUrl, deadline: attemptDeadline, fetchImpl: opts.fetchImpl },
@@ -271,6 +280,18 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
       } catch (e) {
         attemptDeadline?.dispose();
         lastError = e;
+        // WHY attemptDeadline.reason and not the error class alone: this deadline is created with outerDeadline.signal as its caller signal, so it reads "timeout" only when ITS OWN timer fired; the request budget or Ctrl-C
+        // read "aborted". The same timeoutError() also comes out of the remote transport, so the class says nothing about which clock ran out.
+        const attemptTimedOut = !ensureRefusal && e instanceof ClassifierError && e.class === "timeout" && attemptDeadline?.reason === "timeout";
+        let timeoutRetry = false;
+        if (attemptTimedOut) {
+          timedOutAfterMs.push(Date.now() - attemptStartedAt);
+          // WHY the elapsed time is in the message: errors.ts timeoutError() says only "deadline exceeded" (a remote billing rationale, shared with the remote path), which cannot tell a slow server from a stuck one.
+          lastError = new ClassifierError({ class: "timeout", message: `${e.message} after ${timedOutAfterMs.map((ms) => `${ms} ms`).join(" and ")}`, reason: e.reason, retryable: false });
+          // A spent request budget, Ctrl-C and the command stop stay final; so does the second timeout.
+          timeoutRetry = !timeoutRetried && outerDeadline.reason === undefined && opts.signal?.aborted !== true;
+          timeoutRetried = true;
+        }
         // WHY a budget that ended mid-wait still counts as a retryable refusal: the wait for a loading singleton
         // is cut by the outer deadline, which the decider reports as an abort (not retryable), but the cause was
         // our budget, not a verdict about the singleton. outerDeadline.reason is set to "timeout" by the deadline
@@ -278,7 +299,7 @@ export async function answerWithLocalDecider(opts: LocalEscalationOptions): Prom
         const budgetEnded = outerDeadline.reason === "timeout";
         if (!ensureRefusal || !(budgetEnded || (e instanceof ClassifierError && e.retryable))) onlyEnsureRefusals = false;
         // Only retry retryable errors; bad-request/bad-response are final.
-        if (e instanceof ClassifierError && !e.retryable) break;
+        if (e instanceof ClassifierError && !e.retryable && !timeoutRetry) break;
         // WHY no retry while the memo is live: the previous escalation already searched for the whole budget and
         // found nothing, so this one looks exactly once and fails at once.
         if (fastFail && ensureRefusal) break;
