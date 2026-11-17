@@ -1,6 +1,32 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.4] - 2026-11-17
+
+### Documentation
+
+- Docs(trdd): KZA573Q7 decisions, evidence and known gaps; constraints for TYSKX72I, caveats for 25KZDVYF (TRDD-KZA573Q7)
+
+- Docs(readme): describe the fail-closed ubs pre-commit gate; fix the hooksPath sentence (TRDD-KZA573Q7)
+
+- Docs(trdd): add KZA573Q7, ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
+
+- Docs(trdd): Z20KCBZY records the mypy fix 716805e5 and the release.yml gate commands (TRDD-Z20KCBZY)
+
+- Docs(trdd): Z20KCBZY records the failed v14.6.3 Release run and its mypy cause (TRDD-Z20KCBZY)
+
+- Docs(trdd): Z20KCBZY records the v14.6.3 publish; WPH1158N records the exit-time release test gap (TRDD-Z20KCBZY)
+
+
+### Fixed
+
+- Fix(hooks): ubs pre-commit gate fails closed, partial runs included (TRDD-KZA573Q7)
+
+- Fix(publish): run mypy in the local gate, the same command release.yml runs (TRDD-Z20KCBZY)
+
+- Fix(publish): step 10 uses push_remote so mypy passes in release.yml (TRDD-Z20KCBZY)
+
+
 ## [14.6.3] - 2026-11-17
 
 ### Documentation
