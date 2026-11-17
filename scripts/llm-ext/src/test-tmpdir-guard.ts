@@ -32,6 +32,14 @@ import { join } from "node:path";
 const ROOTS = ["/tmp", tmpdir()].filter((r, i, a) => existsSync(r) && a.indexOf(r) === i);
 const PROJECT_MARKER = /llm[-_]?ext/i;
 
+// WHY PERSISTENT_CACHES exists (TRDD-36L97JC9): the broker and governor tests keep this llama model cache on
+// purpose, across runs (broker.test.ts, broker-governor.test.ts, governor/governor-load.test.ts,
+// governor/governor-threads.test.ts, local-fallback-e2e.test.ts). CI caches it with actions/cache in
+// .github/workflows/ci.yml, keyed by a hash of broker.test.ts. On a cache miss (Linux CI run 43983678292) the
+// tests create it during the run, so this check reported it as a leak. Only the exact full path is exempt:
+// a prefix or pattern would also hide real leaks.
+const PERSISTENT_CACHES = ["/tmp/llm-ext-llama-cache"];
+
 function snapshot(): Map<string, Set<string>> {
   return new Map(ROOTS.map((r) => [r, new Set(readdirSync(r))]));
 }
@@ -207,7 +215,8 @@ export default function setup(): () => void {
       const leaked: string[] = [];
       for (const [root, names] of snapshot()) {
         for (const name of names) {
-          if (!before.get(root)?.has(name) && PROJECT_MARKER.test(name)) leaked.push(join(root, name));
+          const entry = join(root, name);
+          if (!before.get(root)?.has(name) && PROJECT_MARKER.test(name) && !PERSISTENT_CACHES.includes(entry)) leaked.push(entry);
         }
       }
       if (leaked.length > 0) {

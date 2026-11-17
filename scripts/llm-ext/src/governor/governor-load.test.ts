@@ -768,10 +768,21 @@ async function outcome(ep: BrokerEndpoint, id: string, ms = DEADLINE_MS): Promis
   }
 }
 
-async function until(what: string, condition: () => boolean | Promise<boolean>, ms = DEADLINE_MS): Promise<void> {
+// WHY the optional diagnostics (TRDD-36L97JC9): Linux CI run 43983678292 gave up waiting on RAM with the cause
+// unknown, because the broker log is not in the CI output. A caller now passes the log tails it needs, so the next
+// timeout names the cause in the error itself. The condition and the deadline are unchanged.
+async function until(
+  what: string,
+  condition: () => boolean | Promise<boolean>,
+  ms = DEADLINE_MS,
+  diagnostics?: () => string,
+): Promise<void> {
   const deadline = Date.now() + ms;
   while (!(await condition())) {
-    if (Date.now() > deadline) throw new Error(`gave up after ${ms} ms waiting for ${what}`);
+    if (Date.now() > deadline) {
+      const extra = diagnostics ? `\n${diagnostics()}` : "";
+      throw new Error(`gave up after ${ms} ms waiting for ${what}${extra}`);
+    }
     await new Promise((r) => setTimeout(r, 25));
   }
 }
@@ -781,6 +792,10 @@ const brokerLog = (dir: string): string => {
   return existsSync(log) ? readFileSync(log, "utf8") : "";
 };
 const spawnCount = (dir: string): number => brokerLog(dir).split("\n").filter((l) => l.includes(SPAWN_MARKER)).length;
+
+/** The last 40 lines of a dir's broker log, appended to a timeout message. */
+const logTail = (dir: string): string => brokerLog(dir).split("\n").slice(-40).join("\n");
+
 /** The time of the first broker log line matching `re`, from its ISO prefix. */
 const loggedAt = (dir: string, re: RegExp): number | null => {
   const line = brokerLog(dir).split("\n").find((l) => re.test(l));
@@ -979,9 +994,9 @@ describe("model loads through the governor, real brokers (two tiny GGUF models)"
     writeRecord(waiting, okRecord(B, { load_estimate: { weight_bytes: L - U + a / 2 - GIB, kv_bytes_per_token: 0 } }));
     const epWaiting = await startBroker(waiting);
     const b = submit(epWaiting, B);
-    await until("the load to wait on RAM", () => /waits for a load grant \(RAM: about \d+ MiB would not fit under ram_limit_pct now\)/.test(brokerLog(waiting)), 60_000);
+    await until("the load to wait on RAM", () => /waits for a load grant \(RAM: about \d+ MiB would not fit under ram_limit_pct now\)/.test(brokerLog(waiting)), 60_000, () => `waiting broker log tail:\n${logTail(waiting)}`);
     const unloaded = /stopped main llama-server .* \(the governor asked for its RAM back\)/;
-    await until("both idle servers to give their RAM back", () => unloaded.test(brokerLog(old)) && unloaded.test(brokerLog(recent)), 60_000);
+    await until("both idle servers to give their RAM back", () => unloaded.test(brokerLog(old)) && unloaded.test(brokerLog(recent)), 60_000, () => `old broker log tail:\n${logTail(old)}\nrecent broker log tail:\n${logTail(recent)}`);
     // Least recently used first (D11).
     expect(loggedAt(old, unloaded)!).toBeLessThanOrEqual(loggedAt(recent, unloaded)!);
     expect(spawnCount(waiting)).toBe(0);
