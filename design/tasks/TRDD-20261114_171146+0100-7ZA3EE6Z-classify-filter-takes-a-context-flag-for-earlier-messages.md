@@ -4,7 +4,7 @@ title: classify filter takes a context flag for earlier messages
 column: todo
 status: tasked
 created: 2026-11-14T17:11:46+0100
-updated: 2026-11-14T17:11:46+0100
+updated: 2026-11-17T15:14:06+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -33,3 +33,7 @@ Tests go through the recorded-reply GlobalFetch seam, the same as the label test
 ## Approval log
 
 - 2026-11-14T17:11:46+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17T15:14:05+0100: parent skills card TRDD-Q2VTMG4P is archived (complete). When this card ships, update skills/llm-externalizer-cli-reference/references/requirements-pipeline.md (and classify.md where the command is documented) yourself; no live card tracks the C1 to C5 map any more.

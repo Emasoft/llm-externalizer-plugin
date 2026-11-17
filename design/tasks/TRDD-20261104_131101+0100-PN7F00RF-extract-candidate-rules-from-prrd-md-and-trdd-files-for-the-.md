@@ -4,7 +4,7 @@ title: Extract candidate rules from PRRD.md and TRDD files for the duplicate and
 column: backburner
 status: tasked
 created: 2026-11-04T13:11:01+0100
-updated: 2026-11-04T13:11:01+0100
+updated: 2026-11-17T15:14:06+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -24,3 +24,7 @@ Gap of capability C5 of TRDD-Q2VTMG4P, found by the review of 49dfb148. The requ
 ## Approval log
 
 - 2026-11-04T13:11:01+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17T15:14:05+0100: parent skills card TRDD-Q2VTMG4P is archived (complete). When this card ships, update skills/llm-externalizer-cli-reference/references/requirements-pipeline.md (and classify.md where the command is documented) yourself; no live card tracks the C1 to C5 map any more.
