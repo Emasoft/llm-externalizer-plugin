@@ -107,6 +107,8 @@ llm-ext classify find --input ./find-req.json --json
 
 Result (exit 0, `decision` only): `status` answered, `exists` 0.71, `ranked` r1 0.97, r2 0.02, u2 0.01, u1 0, `tie` false, `hits` and `invalid` empty. Reading: `status` answered means a rule says the same thing, and `ranked[0]` (r1) is that rule. The same query against only r2, u1 and u2 gave `status` absent, `exists` 0.17 (r2 still ranked first at 0.96, because `ranked` is relative): in these runs find did not report the earlier version (r2) as present. Use `exists` and `status`, never the rank alone.
 
+A rerun of the same request on llm-ext 14.6.1 (2026-11-17, n=1, remote typesafe/jev-1.14) gave `status` partial, `exists` 0.36, `ranked` r1 0.92, r2 0.06, u1 0.01, u2 0.01: `exists` for the same request varied between runs (0.71 and 0.36), so `status` partial is not proof that no rule says the same thing. r1 stayed ranked first, and the top 3 go on to 2b either way (next paragraph), so 2b decides.
+
 Which rules go on to 2b (rule of this document, not measured): the top 3 of `ranked` (all of them, if fewer), in rank order, also when `status` is absent, because an earlier version of a rule can come back absent (r2 did in every run here) and stopping at absent would lose case 2 of step 3. The reading rules of 2b then combine their verdicts. When the combined verdict is updated_version, step 3 merges with the candidate that got updated_version at confidence >= 0.6; if two or more did, ask the user which rule to update.
 
 Repeated in sequence (n=1, 2026-11-04), 2b on the top-ranked candidate of 2a: find on r2, u1 and u2 gave `status` absent, `exists` 0.14, `ranked[0]` r2 0.97; label on r2 gave updated_version, confidence 0.89 (probabilities 0.01 / 0.93 / 0.06).
