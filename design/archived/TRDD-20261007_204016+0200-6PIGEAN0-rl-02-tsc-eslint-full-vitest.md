@@ -1,10 +1,10 @@
 ---
 trdd-id: 6PIGEAN0
 title: RL-02 tsc + eslint + full vitest
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T20:40:16+0200
-updated: 2026-11-17T13:58:04+0100
+updated: 2026-11-17T14:05:50+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -26,6 +26,7 @@ Typecheck, lint and the full test suite pass on the bumped tree.
 
 - 2026-10-07T20:40:16+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-31T17:16:34+0100 — column → todo by main-agent@llm-externalizer-plugin. release checklist for 14.3.0
+- 2026-11-17T14:05:50+0100 — COMPLETE by main-agent@llm-externalizer-plugin. every box met for 14.6.1; evidence and the delegated publish decision in Notes.
 
 ## Plan refs
 
@@ -49,9 +50,9 @@ read the code at card start
 
 ## Acceptance
 
-- [ ] (derived from title) typecheck, lint, `npx eslint . --quiet` and full `npm test` all pass
-- [ ] definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
-- [ ] the full vitest includes src/cli/classify-stdin-cli.test.ts and it passes (local macOS run; the Linux run is owed on RL-08, TRDD-YHGYWPHQ)
+- [x] (derived from title) typecheck, lint, `npx eslint . --quiet` and full `npm test` all pass
+- [x] definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
+- [x] the full vitest includes src/cli/classify-stdin-cli.test.ts and it passes (local macOS run; the Linux run is owed on RL-08, TRDD-YHGYWPHQ)
 
 ## Out of scope
 
@@ -66,3 +67,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 2026-11-14T15:40+0100 owed for the full vitest: src/cli/classify-stdin-cli.test.ts (TRDD-XM2OSVC0, 1c41b721) has not run inside a full suite as of 2026-11-14 (sqlite binding missing, TRDD-G0MS9B63) and not on Linux as of this date (local macOS runs only, not pushed).
 2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
 2026-11-17T13:58:01+0100 14.6.1 release output (04d412ea), recorded for the output clause. publish log reports_dev/release-next/publish-20261117_122713+0100.log line 14 'OK: typecheck', line 16 'OK: lint', line 20 'OK: test'. Linux CI 44079104801: 'tsc --noEmit' and 'eslint src --max-warnings 0' ran; 'Test Files 345 passed | 5 skipped (350)'; '✓ src/cli/classify-stdin-cli.test.ts (5 tests)'. Still open: no run of npx eslint . --quiet is on record, and whether the USER goals cover the publish. Evidence: reports_dev/release-next/20261117-release-cards-evidence.md.
+2026-11-17T14:05:41+0100 Publish authority decided by the main agent under the USER delegation of 2026-11-15 (verbatim: "on the other things, do as you think is better. but base your decisions on verified facts."): the USER goal of 2026-11-16 (verbatim: "complete all TRDDs. fix all issues. publish and update.") is the USER's word to publish and install; the 14.6.1 publish and install are covered. The ZB41KG62 ruling of 2026-10-09 is older than that goal. Remaining evidence: npx eslint . --quiet from scripts/llm-ext exit 0 at HEAD 3d81775b (scripts/ identical to 04d412ea); src/cli/classify-stdin-cli.test.ts ran on Linux CI 44079104801 as 5 tests, none skipped. Every box met.
