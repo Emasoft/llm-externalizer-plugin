@@ -39,9 +39,9 @@ Earlier the same day: "prefer the followings" (GGUF over MLX for LiquidAI models
 - Calibration: managed local models are calibrated on first use (hours); adding many models must not trigger calibration of all of them at once.
 - Model ids and files pinned from the repo trees, not typed by hand.
 - Tests for the new list entries and fallback routing; CLI-reference skill and CHANGELOG.
-- Downloads: the 8 repos total well over 10 GB; nothing is fetched without the user seeing the size first, and only into ~/.cache/huggingface/hub.
-- Absent models: a fallback entry whose model is not cached, or an MLX entry on a non-Mac host, is skipped with a visible note, never a silent download or a hard failure.
-- Remote profiles (free, paid): a local fallback entry never triggers an implicit download; it is used only when the model is already cached and its server can start.
+- Downloads (proposed by the main agent, not a user requirement): the 8 whole repos total 71.2 GiB with every quant (measured 2026-11-17 from the HF tree API; elephant-1 alone 17.55 GiB); one quant per repo is far less; nothing is fetched without the user seeing the size first, and only into ~/.cache/huggingface/hub.
+- Absent models (proposed; OPEN: conflicts with the user fail-fast rule, user to decide skip-with-note vs exit with an error): a fallback entry whose model is not cached, or an MLX entry on a non-Mac host, is skipped with a visible note, never a silent download or a hard failure.
+- Remote profiles (proposed, user may veto): a local fallback entry never triggers an implicit download; it is used only when the model is already cached and its server can start.
 - Classifier vs chat chains: each list entry carries its role; the decider chain reads only classifier entries, the completion chain only chat entries.
 
 ## Approval log
