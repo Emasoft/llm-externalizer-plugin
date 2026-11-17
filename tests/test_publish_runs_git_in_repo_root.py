@@ -119,7 +119,9 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     _init_repo(caller)
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
     _git(release, "remote", "add", "origin", str(remote))
-    _git(release, "config", "push.default", "current")
+    # publish.py step 10 pushes to the branch's configured upstream and fails fast without one (TRDD-Z20KCBZY).
+    _git(release, "config", "branch.main.remote", "origin")
+    _git(release, "config", "branch.main.merge", "refs/heads/main")
     hooks = tmp_path / "no-hooks"
     hooks.mkdir()
     _git(release, "config", "core.hooksPath", str(hooks))
