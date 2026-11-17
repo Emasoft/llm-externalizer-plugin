@@ -4,7 +4,7 @@ title: Local-only classifier profile local-decision that sends classify requests
 column: dev
 status: tasked
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-17T05:20:59+0100
+updated: 2026-11-17T05:30:45+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T23:20:23+0100
-implementation-commits: [fc3052b0, a473a6b0, 628142c0]
+implementation-commits: [fc3052b0, a473a6b0, 628142c0, ea77d4d5, 8ca6e53a]
 ---
 
 # Local-only classifier profile local-decision that sends classify requests straight to mlx-decision
@@ -66,3 +66,4 @@ A classifier profile named `local-decision` that sends every classify request st
 2026-11-17T02:58:44+0100 a473a6b0 (dev/after-14.3.0, not pushed, not released): a decider 422 that names its counts splits that request (replanRequest + answerWithSplit) on the local-only path and the remote profile's local escalation. Checks: tsc 0, eslint 0, split-on-overflow 6/6, planner 50/50, local-transport 12/12, local-decision 31/31 (fake decider). OPEN: (1) a single unit that alone exceeds the decider limit still fails its own questions (needs a conservative count or smaller cuts); (2) remote-escalation split has no dedicated test; (3) the deadline-exceeded failures (likely the 200 s attempt timer, not measured) are not addressed; (4) UBS skipped at 180 s. Real re-run of find/test-output (local-decision) and rank/test-output (or-jev) started on the worktree build, results in reports_dev/classify-local/a473a6b0.
 2026-11-17T03:19:31+0100 628142c0: a partly failed split names each failed piece (split_piece_failed warning + stderr line, its reason and question count) on the local-only path and the remote escalation; per-key rows still read answer missing from reply. Tested with one failed piece only (no nested partial split test); local-fallback.test.ts not re-run. vitest.config.ts include line for split-on-overflow.test.ts came with a473a6b0. The real re-run in reports_dev/classify-local/a473a6b0 uses a dist built from a473a6b0 (uncommitted bundle); dist to be rebuilt from HEAD and committed after it.
 2026-11-17T05:20:57+0100 Re-run on the a473a6b0 build (reports_dev/classify-local/a473a6b0): find local-decision exit 5, 28 questions (14 units) deadline exceeded, 0 over-limit (no split evidence: that build cannot report one); test-output local-decision exit 0, 0 failures (14.4.1: 8), 3828 s; rank broker or-jev exit 0 via local fallback (remote 402), same ranking as local-decision; test-output or-jev REFUSED: plan needs 19 requests, over the limit of 16, caused by the fc3052b0 remote clamp to 16384. Decisions (orchestrator under USER 2026-11-15 delegation): remove the remote clamp (the local escalation now splits on a decider 422); retry a timed-out local attempt once per escalation with the elapsed time in the reason (bounded about 400 s; uncapped retries could hold a request about 50 x 200 s since each grant rebuilds the deadline). Both dispatched to workers.
+2026-11-17T05:30:45+0100 ea77d4d5: a timed-out local attempt (its own timer) is retried once, reason names elapsed ms; tests local-fallback 26/26, local-decision 32/32, ping 11/11, ping-stop 10/10, ping-history 5/5; tsc 0, eslint 0. 8ca6e53a: dist rebuilt from ea77d4d5. Clamp removal REJECTED and reverted (never committed): without the clamp a remote text chunk at the remote window travels alone (planner.ts:311) and replanRequest refuses 1 unit (planner.ts:172), so with OpenRouter at 402 every or-jev fallback of such a chunk would fail whole. OPEN: or-jev test-output refused 19 requests over max_requests_per_call 16 (the user's settings value; options: raise it, or cut a 1-unit text chunk on fallback); re-run of find local-decision on 8ca6e53a in reports_dev/classify-local/8ca6e53a.
