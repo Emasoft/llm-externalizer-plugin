@@ -25,6 +25,7 @@ import { chatCompletionJSON, chatCompletionSimple } from "../provider/completion
 import type { BackendConfig, CompletionDeps } from "../provider/types.js";
 import { acquire, release, snapshot, withdraw, type Lease } from "./client.js";
 import { leasedResponse, takeDirectLease } from "./direct.js";
+import { governorDir, ownerPids, readStarts, readState, reap } from "./state.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DEADLINE_MS = 180_000;
@@ -501,7 +502,12 @@ describe("real processes", () => {
     process.stdout.write(`governor-direct: ${count} processes, peak ${srv.peak()} concurrent at the server, max_inferences ${maxInferences}\n`);
     expect(srv.peak()).toBeLessThanOrEqual(maxInferences);
     expect(srv.peak()).toBeGreaterThanOrEqual(1);
-    expect(snapshot().leases).toEqual([]);
+    // WHY: a child may exit with its release still deferred behind a busy lock (client.ts commit/flush, unref'd retry timer).
+    // Such a lease belongs to a dead holder. The next critical section reaps dead holders (client.ts:258-262) with a start-time check,
+    // so this applies that same reap and asserts no lease survives it. A leak from a dead holder is therefore not detected here.
+    const state = readState(governorDir());
+    reap(state, Date.now(), await readStarts(ownerPids(state)));
+    expect(state.leases).toEqual([]);
   }, 60_000);
 
   // WHY: the user's ruling (TRDD-SWNIIFTF, 2026-10-28): "not having enough memory is not a failure, it only put the requests in a
