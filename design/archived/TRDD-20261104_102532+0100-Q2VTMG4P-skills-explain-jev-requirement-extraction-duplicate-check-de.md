@@ -1,10 +1,10 @@
 ---
 trdd-id: Q2VTMG4P
 title: Skills explain Jev requirement extraction, duplicate check, dedup and update detection
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T10:25:32+0100
-updated: 2026-11-14T17:14:53+0100
+updated: 2026-11-17T15:12:18+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:25:32+0100
-implementation-commits: [49dfb148, bd670870, 23f40c1e, a7d71a9d, 5abf973a, 95f33824, b18f0d81, 7adfcc67]
+implementation-commits: [49dfb148, bd670870, 23f40c1e, a7d71a9d, 5abf973a, 95f33824, b18f0d81, 7adfcc67, 133e2395, 43dc7189]
 ---
 
 # Skills explain Jev requirement extraction, duplicate check, dedup and update detection
@@ -65,6 +65,7 @@ Audit which llm-ext commands (classify extract, compare, check, findings, llm se
 - 2026-11-04T10:25:32+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-04T10:25:32+0100 — mandate: USER /goal of 2026-11-04, directive quoted verbatim below; card minted by main-agent@llm-externalizer-plugin to record it.
 - 2026-11-04T10:27:09+0100 — column → dev by main-agent@llm-externalizer-plugin. audit of C1 to C5 started
+- 2026-11-17T15:12:18+0100 — COMPLETE by main-agent@llm-externalizer-plugin. every box ticked; clean-build docs re-check done on 14.6.1; S5KOOT2S complete.
 
 ## Scope
 
@@ -85,3 +86,4 @@ Out of scope here: the directive's 'complete the TRDDs' covers the whole board a
 2026-11-04T22:15+0100 classify.md now marks ping as absent from 14.2.0, matching requirements (b18f0d81).
 2026-11-13T22:25+0100 the 13:32:46 NEXT ACTION is done: commit 7adfcc67 adds '(needs a release that includes it)' to the classify requirements routing row of SKILL.md (line 124); SKILL.md no longer held another session's hunks (working tree clean). The card stays in dev: it cannot move to complete while TRDD-S5KOOT2S is not complete (13:32:46 line). Remaining owed items are the gap cards S5KOOT2S, WYY3SPDX, LFTQCFUX, PN7F00RF and a re-check of the docs on a clean build before publish.
 - 2026-11-14: gap G1 (context input for classify) is covered by two cards. TRDD-WYY3SPDX covers classify label --context, shipped in 3d089c03. TRDD-7ZA3EE6Z covers classify filter and the decision on find and compare. G1 is closed only when both are.
+- 2026-11-17T15:12:17+0100: the owed clean-build re-check is done on the installed 14.6.1 (built by the 14.6.1 publish from a clean tree). requirements-pipeline.md, 7 commands: c1 classify requirements returned exactly s3; c2 llm ask grouping [{"sentences":["s3","s4"]}], same as the doc; c4 label updated_version 0.86, same; c5 label --context same label, confidence 0.92 against 0.86; c6 sem-deduplicate the same 4 survivors and 2 removed; c7 llm ask the same merged sentence; c3 classify find DIFFERS (status partial, exists 0.36 against answered, 0.71; r1 still first), which 43dc7189 records in the doc. c2 and c6 failed in a fresh temp config (free profile not yet benchmarked, exit 1) and were rerun with the real config, where particle-ai/particle-1:free answered. Reports: reports_dev/q2vtmg4p/20261117-docs-recheck-14.6.1.md and run-20261117/realcfg/ (worktree, gitignored). S5KOOT2S is complete, so the 13:32:46 hold is lifted. The open gap cards (WYY3SPDX in dev, 7ZA3EE6Z, LFTQCFUX in todo, PN7F00RF backburner) are not npt or eht of this card (2026-11-04 review line); each updates the reference when it ships. Card closed; 133e2395 and 43dc7189 ship in the next release.
