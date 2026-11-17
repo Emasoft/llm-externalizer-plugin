@@ -20,7 +20,8 @@ approval-datetime: 2026-11-17T11:53:12+0100
 # Local image classifier, LFM3-VL GGUF on managed llama-server
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-17
-- NEXT ACTION: step 1 spike on the CACHED LiquidAI pair (no download). Report: reports_dev/vision-spike/20261117-spike.md.
+- SPIKE RESULT 2026-11-17 (supersedes step 1 as written): the running mlx-decision server (127.0.0.1:8123, elephant-1) answered 6/6 image questions right through POST /v1/systemone with a top-level "images" list of PNG data URIs: red/blue square noul 0.9998, 0.0001, 0.9995, 0.0001; two-image same colour 0.9999, different colour 0.0003; input tokens 371 for one image, 636 for two. Script and output: reports_dev/vision-spike/spike.py, out.txt. USER 2026-11-17: "maybe i was wrong about elephant-1 ... not accepting images".
+- NEXT ACTION: the image classifier sends images to the decider (classifiers/l2/local-fallback.ts request body, local-decider.ts SERVED_MODEL elephant-1) instead of a llama-server vision path; steps 3-4 (mmproj in buildServerArgv, image_url parts) move to TRDD-4AKLHLB4 as chat-model work. Superseded plan: step 1 spike on the CACHED LiquidAI pair (no download). Report: reports_dev/vision-spike/20261117-spike.md.
 - OPEN USER DECISION: the user listed two abliterated repos among the preferred GGUFs (abliter8-ai/lfm3-2b-vl-abliter8-gguf, mizahnyx/lfm3-omni-2b-abliterated-heretic-v2-GGUF). The main agent proposes not to use them (a classifier gains nothing from removed refusals; no image-accuracy data for the altered weights). Not decided until the user answers.
 
 ## Why
