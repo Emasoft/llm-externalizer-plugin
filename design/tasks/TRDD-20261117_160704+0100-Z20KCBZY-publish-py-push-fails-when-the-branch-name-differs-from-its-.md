@@ -4,7 +4,7 @@ title: publish.py push fails when the branch name differs from its upstream
 column: todo
 status: tasked
 created: 2026-11-17T16:07:04+0100
-updated: 2026-11-17T20:49:20+0100
+updated: 2026-11-17T22:05:17+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -33,3 +33,4 @@ STATE 2026-11-17: the 14.6.2 publish (reports_dev/release-next/publish-20261117_
 
 2026-11-17 upstream fix committed 9b80ec7e (step 10 pushes <remote> HEAD:<merge ref>; 3 tests passed, ruff clean, UBS 0 critical). Local unpushed v14.6.2 tags (09d514e6, 620eee62, on 0aaad3a7) are KEPT: git_safety_guard gates git tag -d behind a user-supplied password. Backup of both tag objects at reports_dev/z20kcbzy/tag-backup-v14.6.2.txt. Follow-up in flight: step 10 pushes only this release's two tags by refspec, because --follow-tags would also push the stale pair (4 tags in one push; GitHub docs say no tag events past 3, not measured) and release.yml would not run; step 11 gh release create would still make the release, so the loss would be release.yml assets and attestation. Consequence: release commit 0aaad3a7 chore(release) v14.6.2 lands on main with no tag and no release; 14.6.2 is a skipped version, next release 14.6.3.
 2026-11-17 20:48 v14.6.3 published by publish.py (sixth attempt; attempts 1-5 stopped in the test gate, see WPH1158N and dbb6c8b1). Step 10 ran: git push origin HEAD:refs/heads/main refs/tags/v14.6.3 refs/tags/llm-externalizer--v14.6.3. Remote main = 9984eeb8 = local HEAD; remote has v14.6.3 + llm-externalizer--v14.6.3 and no 14.6.2 tags; Release workflow started from the tag push; Notify Marketplace success. 14.6.2 is a skipped version (its release commit 0aaad3a7 is in main history, untagged on the remote).
+2026-11-17 22:05 (after a host reboot): v14.6.3 Release workflow run 44162479702 FAILED at its mypy step: publish.py:1272 and :1288, step 10 rebinds remote (step 3 binds it to the ls-remote CompletedProcess) to a str. The release v14.6.3 exists (created by publish.py step 11) with assets: [] and no attestation (the attest step never ran). CI and Notify Marketplace passed; 14.6.3 is installed. The local publish gate runs ruff, not mypy, so it passed. Fix in flight: rename to push_remote, then release 14.6.4 (rerunning 14.6.3 checks out the same tag code). release.yml after mypy (SBOM, changelog, SHA256SUMS, idempotent release edit/upload, attestation) is unchanged since v14.6.1, whose Release run passed.
