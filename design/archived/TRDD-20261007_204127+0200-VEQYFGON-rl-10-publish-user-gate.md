@@ -1,10 +1,10 @@
 ---
 trdd-id: VEQYFGON
 title: RL-10 Publish (USER gate)
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T20:41:27+0200
-updated: 2026-11-16T10:28:01+0100
+updated: 2026-11-17T14:08:44+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -26,6 +26,7 @@ Publish 14.3.0, only on the USER's word.
 
 - 2026-10-07T20:41:27+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-31T17:16:48+0100 — column → todo by main-agent@llm-externalizer-plugin. release checklist for 14.3.0
+- 2026-11-17T14:08:44+0100 — COMPLETE by main-agent@llm-externalizer-plugin. 14.6.1 published under the USER goal of 2026-11-16; output recorded.
 
 ## Plan refs
 
@@ -50,8 +51,8 @@ read the code at card start
 
 ## Acceptance
 
-- [ ] (derived from title) published only after the USER's word, with the command output recorded
-- [ ] definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
+- [x] (derived from title) published only after the USER's word, with the command output recorded
+- [x] definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
 
 ## Out of scope
 
@@ -64,3 +65,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 ## Notes
 
 2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
+2026-11-17T14:08:38+0100 Published 14.6.1. USER word: the goal of 2026-11-16 (verbatim: "complete all TRDDs. fix all issues. publish and update."); whether it covers this publish was decided by the main agent under the USER delegation of 2026-11-15 (verbatim: "on the other things, do as you think is better. but base your decisions on verified facts."). Command: env -u CLAUDE_PID uv run scripts/publish.py --patch. Output (reports_dev/release-next/publish-20261117_122713+0100.log): line 339 'All checks passed', line 346 'Planned: 14.6.0 -> 14.6.1 (tags: v14.6.1, llm-externalizer--v14.6.1)', line 427 'Published v14.6.1'. Result: origin main fast-forwarded to 04d412ea; tags v14.6.1 and llm-externalizer--v14.6.1 at 04d412ea (git ls-remote); CI 44079104801, Release 44079103262 and Notify Marketplace 44079105098 success; installed llm-ext --version prints 14.6.1 after /reload-plugins --force.
