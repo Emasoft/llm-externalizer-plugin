@@ -155,6 +155,28 @@ describe("TRDD-1L9VMEY7: every classify action answers through the local decider
     expect(d.others).toEqual([]);
   });
 
+  it("a split request whose piece the decider refuses names that piece reason and question count on stderr and in the warnings, not only \"answer missing from reply\"", async () => {
+    // TRDD-1L9VMEY7: the decider refuses every multi-question request, then the second single-question piece, each with the measured 422 text.
+    const refusal = (needed: number): Response => new Response(JSON.stringify({ error: { message: `the question with its state needs ${needed} tokens; the limit is 16384 and input is not cut`, type: "invalid_request_error" } }), { status: 422 });
+    let singles = 0;
+    const d = deciderFetch((q) => {
+      if (Object.keys(q).length > 1) return refusal(20001);
+      singles++;
+      return singles === 2 ? refusal(16460) : reply(Object.fromEntries(Object.keys(q).map((k) => [k, { type: "noul", noul: 0.9 }])));
+    });
+    const lines: string[] = [];
+    const { spec } = await import("./catalog/filter.js");
+    // WHY propositions: atomic units are packed into one request (a text item travels alone), so the first POST holds several questions.
+    const input = { propositions: Array.from({ length: 4 }, (_v, i) => ({ text: `claim ${i}` })) };
+    const out = await runDecision(spec, { input, profileFlag: "local-decision" }, { settings: settingsWith({ "local-decision": LOCAL }), ...seams(d.fetch), stderr: (l) => lines.push(l) });
+    const w = out.envelope!.warnings.filter((x) => x.code === "split_piece_failed");
+    expect(w).toHaveLength(1);
+    expect(w[0]!.message).toContain("needs 16460 tokens; the limit is 16384");
+    expect(w[0]!.message).toContain("a split piece of 1 question was not answered");
+    expect(lines.filter((l) => l.includes("needs 16460 tokens; the limit is 16384"))).toHaveLength(1);
+    // the keys of the failed piece still read as an omission in the envelope; the warning and the stderr line above are where the reason lives
+    expect(JSON.stringify(out.envelope!.decision)).toContain("answer missing from reply");
+  });
   it("a decider that is not running fails the run with its reason, exit 5, and no remote fallback", async () => {
     const d = deciderFetch(() => reply({}));
     const { spec } = await import("./catalog/filter.js");

@@ -41,7 +41,7 @@ import { buildEstimate, renderEstimateJson, renderEstimateText } from "./estimat
 import { buildReceipt, lifetimeOrReason, renderReceipt, type Receipt } from "./receipt.js";
 import { ctxStore, withUsageContext } from "../usage-history.js";
 
-import { answerWithLocalDecider, localFallbackConfig, localOnlySettings } from "./l2/local-fallback.js";
+import { answerWithLocalDecider, localFallbackConfig, localOnlySettings, type SplitPieceFailure } from "./l2/local-fallback.js";
 import type { LocalDeciderDeps } from "./l2/local-decider.js";
 
 /** llm-ext's 0/1 (cli/main.ts), quicksilver's 3 key/credits, 4 request rejected, 5 failed after retries (attention.ts), Ctrl-C, and 124 when --command_timeout stopped the run. */
@@ -305,7 +305,10 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
           decider: deps.localFallbackDeps,
         }),
       });
-      if (answered.ok) return answered.reply;
+      if (answered.ok) {
+        reportFailedPieces(answered.failedPieces);
+        return answered.reply;
+      }
       // WHY throwIfStopped first: a command stop during the wait must end the run as the stop, as on the remote path.
       throwIfStopped();
       // WHY the decider's reason is the failure (fail fast, no remote fallback): a local-only profile has nothing else to ask.
@@ -332,6 +335,14 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   let profile: ResolvedClassifierProfile;
   let removedRule: RemovedModelCeiling | undefined;
   const say = (line: string): void => { if (deps.stderr === undefined) process.stderr.write(`${line}\n`); else deps.stderr(line); };
+  // TRDD-1L9VMEY7: a split request (answerWithSplit) whose pieces partly failed returns the answered keys as a success, so runPlan can only mark the keys of a failed piece "answer missing from reply". WHY one stderr line and one warning per failed piece: the user must see the piece real reason (the decider 422 with its counts, a deadline) to tell a split failure from a model omission. Used by the local-only run and by the remote profile local escalation.
+  const reportFailedPieces = (pieces: SplitPieceFailure[] | undefined): void => {
+    for (const p of pieces ?? []) {
+      const text = safe(`a split piece of ${p.questions} question${p.questions === 1 ? "" : "s"} was not answered by the local decider, so ${p.questions === 1 ? "that question is" : "those questions are"} reported as "answer missing from reply": ${p.reason}`);
+      warnings.push(warning("split_piece_failed", text, p.questions));
+      say(`llm-ext: ${text}`);
+    }
+  };
   if (selection.ok) profile = selection.profile;
   else {
     const plain = resolveClassifierProfile({ settings: deps.settings, profileFlag: req.profileFlag, command });
@@ -573,6 +584,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
         warnings.push(warning("local_decider", notice));
         say(`llm-ext: ${notice}`);
       }
+      reportFailedPieces(local.failedPieces);
       return local.reply;
     }
   };

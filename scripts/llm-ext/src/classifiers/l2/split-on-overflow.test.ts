@@ -95,6 +95,31 @@ describe("answerWithSplit", () => {
     expect(keys.sort()).toEqual(["q0", "q1", "q2", "q3", "q4", "q5", "q7"]);
   });
 
+  it("a partial split carries the failed piece real reason (the decider 422 with its counts) and its question count to the caller", async () => {
+    // TRDD-1L9VMEY7: runPlan can only say "answer missing from reply" for the keys of a failed piece, so the reason must ride on the success value.
+    const job = jobOf([...[0, 1, 2, 3, 4, 5].map((i) => unit(i, 600)), unit(6, 3600), unit(7, 600)]);
+    const plan = planRequests(job, LIMITS);
+    if (!plan.ok) throw new Error(plan.message);
+    const posted: Posted[] = [];
+    const r = await send(job, plan.requests[0]!, fakeDecider(posted));
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.failedPieces).toHaveLength(1);
+    const failed = r.failedPieces![0]!;
+    expect(failed.questions).toBe(1);
+    // the reason names the decider own counts for the 1-unit piece (the tokens the fake decider counted when that piece was posted), not a generic "no answer"
+const pieceTokens = posted.find((p) => p.keys.length === 1 && p.keys[0] === "q6")!.deciderTokens;
+    expect(failed.reason).toContain(`needs ${pieceTokens} tokens; the limit is ${DECIDER_LIMIT}`);
+    expect(failed.reason).toContain("not retryable");
+  });
+
+  it("a split whose pieces all answer carries no failedPieces", async () => {
+    const job = jobOf(Array.from({ length: 8 }, (_v, i) => unit(i, 600)));
+    const plan = planRequests(job, LIMITS);
+    if (!plan.ok) throw new Error(plan.message);
+    const r = await send(job, plan.requests[0]!, fakeDecider([]));
+    if (!r.ok) throw new Error(r.reason);
+    expect(r.failedPieces).toBeUndefined();
+  });
   it("when no piece answers, the first failure is the failure: the decider 422 with its counts", async () => {
     const job = jobOf([unit(0, 3600), unit(1, 3600)]);
     const plan = planRequests(job, LIMITS);

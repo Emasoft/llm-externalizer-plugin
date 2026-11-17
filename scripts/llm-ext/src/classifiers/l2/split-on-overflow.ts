@@ -4,7 +4,7 @@
 // "no answer"). A 422 is deterministic, so it is never retried as is; instead the request is split by the decider own counts (replanRequest)
 // and the pieces are sent, recursively, until each is answered or holds 1 unit.
 import type { BuiltUnit } from "../catalog/spec.js";
-import type { LocalEscalation } from "./local-fallback.js";
+import type { LocalEscalation, SplitPieceFailure } from "./local-fallback.js";
 import { replanRequest, type ModelLimits, type PlannedRequest, type SplitJob } from "./planner.js";
 
 export interface SplitSendOptions<U extends BuiltUnit> {
@@ -24,7 +24,7 @@ export interface SplitSendOptions<U extends BuiltUnit> {
  * unchanged when the request cannot be split (1 unit, unsplittable questions) or the 422 has no counts. WHY partial answers are
  * returned as a success: runPlan validates the merged answers against the ORIGINAL request, so a key whose piece failed is reported as
  * "answer missing from reply" for that key only, and the answers that did arrive are kept; only when no piece answered is the first
- * piece failure the failure of the whole request. Cost is 0 (local), usage is the sum of the pieces.
+ * piece failure the failure of the whole request. Cost is 0 (local), usage is the sum of the pieces. `failedPieces` names each piece that did not answer (its reason and question count) so the caller can say why.
  */
 export async function answerWithSplit<U extends BuiltUnit>(opts: SplitSendOptions<U>): Promise<LocalEscalation> {
   const first = await opts.ask(opts.request);
@@ -33,14 +33,14 @@ export async function answerWithSplit<U extends BuiltUnit>(opts: SplitSendOption
   if (e === undefined || e.status !== 422 || e.needed_tokens === undefined || e.limit_tokens === undefined) return first;
   const plan = replanRequest(opts.job, opts.request, opts.limits, { neededTokens: e.needed_tokens, limitTokens: e.limit_tokens });
   if (!plan.ok) return first;
-  const pieces: LocalEscalation[] = [];
+  const pieces: { request: PlannedRequest<U>; result: LocalEscalation }[] = [];
   for (const piece of plan.requests) {
     // WHY the stop check before each piece: a Ctrl-C or command stop must not keep feeding the decider the rest of the pieces.
     if (opts.stop.aborted) break;
-    pieces.push(await answerWithSplit({ ...opts, request: piece }));
+    pieces.push({ request: piece, result: await answerWithSplit({ ...opts, request: piece }) });
   }
-  const answered = pieces.filter((p): p is Extract<LocalEscalation, { ok: true }> => p.ok);
-  if (answered.length === 0) return pieces.find((p) => !p.ok) ?? first;
+  const answered = pieces.map((p) => p.result).filter((p): p is Extract<LocalEscalation, { ok: true }> => p.ok);
+  if (answered.length === 0) return pieces.find((p) => !p.result.ok)?.result ?? first;
   const answers: Record<string, unknown> = {};
   const usage = { input_tokens: 0, output_tokens: 0 };
   for (const p of answered) {
@@ -49,6 +49,8 @@ export async function answerWithSplit<U extends BuiltUnit>(opts: SplitSendOption
     usage.input_tokens += p.reply.usage.input_tokens;
     usage.output_tokens += p.reply.usage.output_tokens;
   }
+  // WHY the failed pieces ride on the success (TRDD-1L9VMEY7): runPlan validates the merged answers against the original request and can only say "answer missing from reply" for a key of a failed piece, so the real reason (the decider 422 with its counts, a deadline) would be lost; the callers print it. A nested split that was itself partial contributes its own failed pieces.
+  const failedPieces: SplitPieceFailure[] = pieces.flatMap((p) => (p.result.ok ? (p.result.failedPieces ?? []) : [{ reason: p.result.reason, questions: Object.keys(p.request.questions).length }]));
   const head = answered[0]!;
-  return { ok: true, reply: { model: head.reply.model, usage, cost: { costUsd: 0, cost_estimated: false }, answers }, notice: head.notice };
+  return { ok: true, reply: { model: head.reply.model, usage, cost: { costUsd: 0, cost_estimated: false }, answers }, notice: head.notice, ...(failedPieces.length === 0 ? {} : { failedPieces }) };
 }

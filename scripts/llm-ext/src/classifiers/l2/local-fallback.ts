@@ -342,11 +342,22 @@ export interface LocalEscalationOptions {
 }
 
 /**
+ * TRDD-1L9VMEY7: one piece of a split request that the decider did not answer. WHY it exists: answerWithSplit returns the pieces that answered as a success, and runPlan
+ * then reports each key of a failed piece as "answer missing from reply", which hides WHY (the decider 422 with its counts, a deadline); the caller prints these.
+ */
+export interface SplitPieceFailure {
+  /** The failure of the piece, as answerWithLocalDecider reported it. */
+  reason: string;
+  /** How many questions the piece held. */
+  questions: number;
+}
+
+/**
  * The reply of a local escalation, or why there is none. `notice` is the one line the caller records as a
  * warning and prints, so a local answer is never silent (the D1 rule for every fallback).
  */
 export type LocalEscalation =
-  | { ok: true; reply: ExecReply; notice: string }
+  | { ok: true; reply: ExecReply; notice: string; failedPieces?: SplitPieceFailure[] }
   /** WHY a distinct shape: a caller prints every refusal as a line, and "the fallback is off" is the one
    * refusal the caller itself configured, so it needs to be told apart and said zero times, not once per
    * failed request. */
