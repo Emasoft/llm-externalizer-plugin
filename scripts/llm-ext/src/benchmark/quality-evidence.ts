@@ -65,7 +65,7 @@ export function isUnansweredFilesNonEvidence(score: unknown): boolean {
 /**
  * code-task (CodeAuditScore): `failedCases` counts cases the pipeline produced no
  * report for, out of `cases.length`. NOT macro-F1: a fully failed run still scores
- * the clean cases vacuous F1 = 1 (macro-F1 0.375 on the current corpus), so F1
+ * the clean cases' vacuous F1 = 1 (macro-F1 0.375 on the current corpus), so F1
  * cannot see the outage. An empty accused list WITHOUT the failed flag is a real
  * answer (a clean file) and counts as answered.
  */

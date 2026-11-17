@@ -176,6 +176,7 @@ export async function runCheckImportsBenchmarkOnModel(
     modelId,
     caseScores,
     aggregate,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not a stored verdict. No production code calls this run function (update-all.ts imports only describeWorkload); the field is read by tests only.
     pass: passesThresholds(aggregate, DEFAULT_CHECK_IMPORTS_THRESHOLDS).pass,
     failures,
     extraPaths,

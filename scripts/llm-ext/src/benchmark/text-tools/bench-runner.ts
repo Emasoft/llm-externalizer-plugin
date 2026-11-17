@@ -421,6 +421,7 @@ export async function runTextToolBenchmarkOnModel(
     tool,
     perCase,
     aggregate,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesTextToolThresholds(aggregate).pass,
     costUsd: ctx.acc.costUsd,
     meanLatencyMs: ctx.acc.callCount === 0 ? 0 : ctx.acc.latencyMs / ctx.acc.callCount,
