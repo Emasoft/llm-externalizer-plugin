@@ -55,10 +55,10 @@ def publish_repo(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
-    # `git push --follow-tags` (the publisher's fixed command, no refspec)
-    # must actually attempt a push; push.default=current works without an
-    # upstream branch.
-    _git(repo, "config", "push.default", "current")
+    # publish.py pushes to the branch's configured upstream (TRDD-Z20KCBZY)
+    # and refuses to run without one, so the fixture configures it.
+    _git(repo, "config", "branch.main.remote", "origin")
+    _git(repo, "config", "branch.main.merge", "refs/heads/main")
 
     # Remote: bare repo whose pre-receive hook rejects EVERY push.
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)

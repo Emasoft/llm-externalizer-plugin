@@ -1262,7 +1262,26 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ancestor of `git push`, which is what authorises the push. There is no
     # lock file and no env var — both are spoofable, ancestry is not.
     print("── 10. Push ──")
-    push_result = run(["git", "push", "--follow-tags"], capture=True, check=False, cwd=str(repo_root))
+    # WHY (TRDD-Z20KCBZY): the 14.6.2 publish failed at this step because a bare
+    # `git push --follow-tags` obeys push.default=simple, which refuses to push
+    # when the local branch name (dev/after-14.3.0) differs from its upstream
+    # (origin/main). The destination is now explicit (<remote> HEAD:<merge ref>),
+    # so the result no longer depends on push.default or on the branch name
+    # matching its upstream. No upstream = fail fast, never guess a destination.
+    branch = run(["git", "symbolic-ref", "--short", "HEAD"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
+    remote = ""
+    merge_ref = ""
+    if branch:
+        remote = run(["git", "config", "--get", f"branch.{branch}.remote"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
+        merge_ref = run(["git", "config", "--get", f"branch.{branch}.merge"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
+    if not (branch and remote and merge_ref):
+        print(
+            f"ERROR: branch {branch or '(detached HEAD)'} has no upstream; "
+            f"set one with git branch --set-upstream-to=<remote>/<branch>",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    push_result = run(["git", "push", "--follow-tags", remote, f"HEAD:{merge_ref}"], capture=True, check=False, cwd=str(repo_root))
     if push_result.returncode != 0:
         # WHY: a failed push must preserve local work and recovery evidence.
         # The previous branch ran `git reset --hard HEAD~1` and deleted both
