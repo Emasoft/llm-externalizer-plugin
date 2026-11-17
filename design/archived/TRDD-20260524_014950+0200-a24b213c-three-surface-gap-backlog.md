@@ -4,7 +4,6 @@ title: Three-surface compliance backlog — close the remaining MCP/CLI/slash ga
 column: superseded
 created: 2026-05-24T01:49:50+0200
 updated: 2026-08-06T17:35:00+0200
-superseded-by: d557c68
 ---
 
 # TRDD-a24b213c — Three-surface compliance backlog
@@ -113,3 +112,5 @@ a synthetic MCP/CLI surface:
 | 2026-05-27T20:30:00+0200 | in-progress (no status change) | **Phase 2 closed by TRDD-f1510055.** GAP-2/3 design decision: **no MCP tool** for benchmark or ensemble-autoselect. Rationale: a benchmark sweep takes 10-30 minutes (15 models × ~60s each); exposing it as an MCP tool would let any orchestrator agent trigger a half-hour blocking operation. Auto-trigger on `free_only` settings flip is the MCP-equivalent fourth surface (delivers "available without leaving the MCP layer" without the agent-trigger hazard). Exemption documented in `commands/llm-externalizer-benchmark.md` §"Three-surface compliance" + `commands/llm-externalizer-bench-free-pool.md` (just shipped). |
 | 2026-05-27T21:30:00+0200 | in-progress (no status change) | **Phase 3 shipped.** Spark agent added "Three-surface compliance: by-design slash-only (GAP-N)" sections to 7 command files: `codex-scan` (GAP-8 — external Codex CLI), `fix-report` (GAP-9), `fix-found-bugs` (GAP-10 — MCP write tools disabled by design), `scan-and-fix` (GAP-11), `scan-and-fix-serially` (GAP-12 — multi-agent orchestration), `setup` (GAP-13 — interactive wizard), `install-statusline` (GAP-14 — one-shot installer; CLI verb could be added but trivial). Report: `reports/three-surface-phase3/20260527_212755+0200-phase3-exemptions.md`. |
 | 2026-05-27T21:32:00+0200 | in-progress (no status change) | **Phase 4 shipped.** `bin/llm-ext` `TOOL_CATALOG` expanded from 11 → 37 entries (+26): `search_existing_implementations`, `cluster_synonyms`, `or_model_info{,_table,_json}`, 16 mass_scout family, `security_scan`, `security_triage_benchmark`, `assess_model`, `check_model_health`, `discover_new_models`. Catalog parameter descriptions extracted from each tool's Zod schema in `mcp-server/src/index.ts` / `src/mass_scouting/mcp-tools.ts`. `node bin/llm-ext --help` now lists 37 tools; per-tool help works for every new entry. Report: `reports/three-surface-phase4/20260527_213156+0200-llm-ext-catalog-expansion.md`. **Remaining: Phase 5 (user-global rule file fix — requires user confirmation, deferred).** |
+
+Correction 2026-10-17 (owner-authorized hand edit, TRDD-6GY43GR7): superseded-by cited d557c68, the v11.0.0 commit that retired the MCP server, not a TRDD; the field was removed. The work was superseded by that migration.
