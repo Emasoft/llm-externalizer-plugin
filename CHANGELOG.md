@@ -1,6 +1,56 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.1] - 2026-11-17
+
+### Documentation
+
+- Docs(trdd): 7CFPEDUK UI spike 9 of 9 and its limits; 4AKLHLB4 receives the moved GGUF image steps
+
+- Docs(trdd): 7CFPEDUK records the elephant-1 image spike, 6 of 6 right on the local decider
+
+- Docs(trdd): add 2CR6UC5N, should the network give-up window exclude governor lease-wait time
+
+- Docs(trdd): A24B213C drops the dangling superseded-by, the owner-authorized fix of 2026-10-17 (TRDD-FC2TX9VU)
+
+- Docs(trdd): 4AKLHLB4 measured repo sizes, agent rules marked as proposals
+
+- Docs(trdd): add 4AKLHLB4, the LFM3 GGUF and elephant-1 local models in the supported list and every profile fallback chain
+
+- Docs(trdd): add 7CFPEDUK, local image classifier on LFM3-VL GGUF with managed llama-server
+
+- Docs(changelog): list the 14.1.0 profile-type breaking changes (TRDD-AUEJGI4T)
+
+- Docs(trdd): close RL-04 (sizes recorded), RL-06 (fresh-HOME defaults, E112 met) and RL-07 (profile-type migration) at v14.6.0 (TRDD-SJPY3M8K, TRDD-KMCU5JMY, TRDD-OMVQCY68)
+
+- Docs(trdd): close RL-11 (14.6.0 installed, bare llm-ext --version 14.6.0) and RL-03 (include lists verified) (TRDD-4UC8ULR1, TRDD-ZD73TB7V)
+
+- Docs(reports): triage of the RL-01..RL-13 and DOC-11 release cards against the 14.3.0-14.6.0 releases (TRDD-FC2TX9VU)
+
+- Docs(trdd): record 7d0c0d13 and the next-release trigger (TRDD-36L97JC9)
+
+
+### Fixed
+
+- Fix(test): leak guard ignores the janitor's jev-score-llm-ext- temp dirs (TRDD-FC2TX9VU)
+
+
+### Miscellaneous
+
+- Chore(reports): move the two RL triage reports out of the tracked reports/ folder (TRDD-FC2TX9VU)
+
+
+### Testing
+
+- Test(give-up): the 2 s window tests run with the local governor off (TRDD-FC2TX9VU)
+
+- Test(provider): compare the give-up messages with the elapsed seconds masked (TRDD-FC2TX9VU)
+
+- Test(runner): the recorder child writes a temp name and renames it, so records() never reads an empty file (TRDD-FC2TX9VU)
+
+- Test(linux): narrow the RAM-wait test's drift margin to the runner's measured used RAM (TRDD-36L97JC9)
+
+
 ## [14.6.0] - 2026-11-17
 
 ### Changed
