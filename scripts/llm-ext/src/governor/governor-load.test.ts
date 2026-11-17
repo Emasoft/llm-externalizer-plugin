@@ -978,20 +978,28 @@ describe("model loads through the governor, real brokers (two tiny GGUF models)"
     governorLimits({ LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "99", LLM_EXT_GOVERNOR_RELOAD_AFTER_UNLOAD_MS: String(reloadMs), LLM_EXT_GOVERNOR_LOAD_YIELD_MS: "600000" });
     const [old, recent, waiting] = [newDir(), newDir(), newDir()];
     // Round 2 #9: an idle server is asked back only when that makes room, so the books must say it does. With L what 99 %
-    // allows and U the reading now, each A server is booked at a = L - U - 2 GiB (it fits, 2 GiB to spare for other
-    // programs), and B at L - U + a / 2: over the room now, under it once one A server is back. Real RAM of the tiny
-    // models is far less: the reading barely moves, so it is the books that decide, as they do for any real model.
+    // allows and U the reading now, each A server's upper bound is a = L - U - 2 GiB (it fits, 2 GiB to spare for other
+    // programs), and B's is L - U + delta: over the room now, and inside it once both idle A servers give back their weights
+    // (pickUnload frees residentBytes, a llama server's weight bytes a - 1 GiB, load.ts loadFigures; a llama server books 0).
+    // Real RAM of the tiny models is far less: the reading barely moves, so it is the books that decide, as for a real model.
     const L = 0.99 * totalmem();
     const U = ((await readMemory()).usedPct / 100) * totalmem();
     const a = L - U - 2 * GIB;
     if (a < 2 * GIB) throw new Error(`the machine has too little room under 99 % for this test: ${Math.round((L - U) / GIB)} GiB`);
+    // CI run 43983678292 (2026-11-17, Linux runner): delta was a / 2, which puts B over L itself when U < a / 2 (a lightly
+    // used machine). A load over the whole limit never fits (neverFits, controller.ts): it takes the "alone" branch and the
+    // broker logs "may not fit beside anything else", so the RAM wait below never came. delta <= U - 0.5 GiB keeps B under L;
+    // on a busy machine (this Mac, U at 78 to 85 %) a / 2 is the smaller, as before. delta >= 1 GiB keeps B over the room
+    // when the reading drifts down while the brokers start.
+    const delta = Math.min(a / 2, U - GIB / 2);
+    if (delta < GIB) throw new Error(`the machine uses too little RAM for this test: B could not stay over the room and under the 99 % limit (${Math.round(U / GIB)} GiB used)`);
     for (const d of [old, recent]) writeRecord(d, okRecord(A, { load_estimate: { weight_bytes: a - GIB, kv_bytes_per_token: 0 } }));
     const epOld = await startBroker(old);
     expect(await outcome(epOld, await submit(epOld, A))).toMatchObject({ state: "done" });
     const epRecent = await startBroker(recent);
     expect(await outcome(epRecent, await submit(epRecent, A))).toMatchObject({ state: "done" });
 
-    writeRecord(waiting, okRecord(B, { load_estimate: { weight_bytes: L - U + a / 2 - GIB, kv_bytes_per_token: 0 } }));
+    writeRecord(waiting, okRecord(B, { load_estimate: { weight_bytes: L - U + delta - GIB, kv_bytes_per_token: 0 } }));
     const epWaiting = await startBroker(waiting);
     const b = submit(epWaiting, B);
     await until("the load to wait on RAM", () => /waits for a load grant \(RAM: about \d+ MiB would not fit under ram_limit_pct now\)/.test(brokerLog(waiting)), 60_000, () => `waiting broker log tail:\n${logTail(waiting)}`);

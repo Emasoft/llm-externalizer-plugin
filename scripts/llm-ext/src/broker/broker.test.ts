@@ -867,7 +867,10 @@ describe("kill safety (review M6, M7, M8, M12)", () => {
     try {
       await expect(processSnapshot()).rejects.toThrow(/ps .* failed/);
       // This process is alive: an unreadable argv must throw, not read as "gone".
-      await expect(readCommandLine(process.pid)).rejects.toThrow(/failed/);
+      // Linux reads /proc/<pid>/cmdline and runs no ps (local-llama-server.ts readCommandLine), so an empty PATH cannot make
+      // that read fail there: CI run 43983678292 (2026-11-17) failed on this line. There a live pid must still never read as gone.
+      if (process.platform === "linux") expect((await readCommandLine(process.pid))?.length ?? 0).toBeGreaterThan(0);
+      else await expect(readCommandLine(process.pid)).rejects.toThrow(/failed/);
     } finally {
       process.env.PATH = saved;
     }
