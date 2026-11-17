@@ -29,7 +29,7 @@ USER 2026-11-17 (verbatim): "what? no screenshots? the elephant-1 model accepts 
 
 ## Model
 - Spike model (cached): LiquidAI/LFM3-VL-2B-GGUF, LFM3-VL-2B-Q4_K_M.gguf + mmproj-LFM3-VL-2B-Q8_0.gguf.
-- Target model (preferred by the user's list): AtomicChat/LFM3-VL-2B-GGUF, LFM3-VL-2B-AD-Q4_K_M.gguf (1079.8 MB) + mmproj-LFM3-VL-2B-F16.gguf (361.4 MB), via `hf download` into ~/.cache/huggingface/hub (symlink to /Volumes/EmaUITEK4TBSSD/AIModels/huggingface/hub). Download only after the spike passes.
+- Target model (preferred by the user's list): AtomicChat/LFM3-VL-2B-GGUF, LFM3-VL-2B-AD-Q4_K_M.gguf (1079.8 MB) + mmproj-LFM3-VL-2B-F16.gguf (361.4 MB), via `hf download` into ~/.cache/huggingface/hub (a symlink to the user's model SSD). Download only after the spike passes.
 - Not chosen: Omni (mmproj 905.8 MB, audio unused); IQ3 rungs (VL card: "research-grade", model "fairly quantization-sensitive"); elephant-1 via mlx-decision (user prefers LiquidAI GGUF). Research: reports_dev/cheap-worker/20261117_121500+0100-atomicchat-lfm3-gguf.md, 20261117_113500+0100-mlx-decision-image-support.md.
 
 ## Steps
