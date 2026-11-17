@@ -1562,7 +1562,7 @@ llm-externalizer-plugin/
 >
 > The setup below disables all three on your fork so you can push PRs cleanly.
 >
-> The fourth hook, `.githooks/pre-commit`, is **not** owner-only: it scans the staged files with the Ultimate Bug Scanner and is safe for contributors to keep. Step 2a silences it along with `pre-push`; see the note there to keep it.
+> The fourth hook, `.githooks/pre-commit`, is **not** owner-only: it scans the staged files with the Ultimate Bug Scanner and is safe for contributors to keep. Step 2a silences it along with `pre-push`; see the note there to keep it. It needs ubs 5.5.26 or later at `/opt/homebrew/bin/ubs`, or at the path in the `UBS_BIN` environment variable; a missing or older ubs, a scan ubs cannot run, a critical finding, or a scan longer than 600 s (`UBS_PRECOMMIT_TIMEOUT`) blocks the commit. A partial scan, where an analysis stopped at its work limit, timed out or crashed, blocks too, because the staged code was not fully checked; ubs 5.5.26 cannot finish its taint analysis on `scripts/llm-ext/src/index.ts`, so a commit that stages that file is blocked until the file is split. `git commit --no-verify` skips the hook.
 
 ### Developer requirements
 
@@ -1591,7 +1591,7 @@ Do this ONCE, right after cloning, BEFORE your first push. Skipping this step wi
 
 #### 2a · Disable the pre-push hook locally
 
-The repo ships with `core.hooksPath = .githooks` in its committed config. On a fork you need to undo that.
+The owner's setup (`PUBLISH_NOTES.md`) sets `core.hooksPath = .githooks` as local git config; git config is never committed, so a fresh clone has it only if you set it. If you set it, undo it on a fork.
 
 <details open>
 <summary><b>macOS / Linux</b> (bash / zsh)</summary>

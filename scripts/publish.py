@@ -408,7 +408,7 @@ def run_checks(repo_root: Path) -> bool:
 
     # 6b. mypy on all Python scripts, the same command as release.yml's "Type check" step.
     # WHY: the local gate ran ruff but not mypy, so v14.6.3 was tagged and pushed with a
-    # type error that only the Release workflow caught (CPV issue #280); --extra dev is the
+    # type error that only the Release workflow caught (Emasoft/claude-plugins-validation#280); --extra dev is the
     # same extra release.yml installs with `uv sync --extra dev`.
     if not _run_check(
         "mypy",
