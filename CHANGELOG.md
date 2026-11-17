@@ -1,6 +1,41 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.3] - 2026-11-17
+
+### Documentation
+
+- Docs(trdd): WPH1158N records the governor lease-race test fix (TRDD-WPH1158N)
+
+- Docs(trdd): WPH1158N records the third publish attempt, a ps timeout at load 134 (TRDD-WPH1158N)
+
+- Docs(trdd): WPH1158N notes the unrerun governor test and the unverified load cause (TRDD-WPH1158N)
+
+- Docs(trdd): add WPH1158N, timing tests fail the publish gate when the host is overloaded (TRDD-WPH1158N)
+
+- Docs(trdd): Z20KCBZY records fix 9b80ec7e, the kept v14.6.2 tags and the skipped 14.6.2 (TRDD-Z20KCBZY)
+
+- Docs(trdd): Z20KCBZY records the refused manual push, the tag preflight and the next step (TRDD-Z20KCBZY)
+
+- Docs(trdd): add Z20KCBZY, publish.py push fails when the branch name differs from its upstream (TRDD-Z20KCBZY)
+
+
+### Fixed
+
+- Fix(publish): push only this release's two tags by refspec, not --follow-tags (TRDD-Z20KCBZY)
+
+- Fix(publish): push to the branch's configured upstream explicitly (TRDD-Z20KCBZY)
+
+
+### Testing
+
+- Test(governor): 100-process test applies the dead-holder reap before asserting no lease (TRDD-WPH1158N)
+
+- Test(publish): give the full-release repo-root fixture an upstream (TRDD-Z20KCBZY)
+
+- Test(publish): stale-tag test uses two stale tags like the real 14.6.2 leftovers (TRDD-Z20KCBZY)
+
+
 ## [14.6.2] - 2026-11-17
 
 ### Changed
