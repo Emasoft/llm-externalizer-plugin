@@ -4,7 +4,7 @@ title: classify label takes a context flag for earlier messages
 column: dev
 status: tasked
 created: 2026-11-04T10:29:25+0100
-updated: 2026-11-17T14:38:44+0100
+updated: 2026-11-17T14:48:30+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,7 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:29:25+0100
 eht: []
-implementation-commits: [3d089c03]
+implementation-commits: [3d089c03, 133e2395]
 blocked-by: []
 unblock-when: [trdd:DX4YLNI6]
 pre-block-column: 
@@ -53,6 +53,7 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 2026-11-14T17:15:33+0100: live check run (reports_dev/wyy3spdx/20261114_171407+0100-live-label-context.md, 9 runs, exit 0). It does NOT test the shipped path: every run printed 'no remote System One model answered; the local decider elephant-1 ... did' with no reason, so all verdicts are the local fallback, not typesafe/jev-1.14 the estimate named; no spend. Scored with the pre-registered thresholds and the void rule: I1 shift VOID (control p(bug) 0.9618), I2 shift PASS (+0.38), I3 shift FAIL (-0.095); irrelevant context: I1 PASS, I2 FAIL (top flipped feature to bug), I3 FAIL (-0.22). Box 2 stays open. NEXT: find why the remote model did not answer, then rerun the same pre-registered cases on the remote model.
 2026-11-14T17:17:02+0100: review notes on the live check. (a) The void rule changes only I1's shift arm; the overall result is still a FAIL on the irrelevant-context arm (I2, I3), so the rule rescues nothing. It was added on the earlier review's ceiling prediction, before the report was read. (b) Case-design caveat, recorded but deliberately not acted on, since changing cases after seeing results would be fitting: C-rel3 ('always slow, wants a streaming mode') can fairly be read as a performance bug, so the I3 shift FAIL may reflect an ambiguous case rather than an ignored context. The remote rerun keeps the same cases. (c) Release hold: the docs (SKILL.md, classify.md, requirements-pipeline.md) recommend --context since 3d089c03. Before any release that includes the flag, either the remote rerun passes, or the docs gain a caveat that the context's effect on verdicts is unverified. (d) Column: dev while the diagnosis runs. If the cause is the environment, back to testing and rerun. If it is code, a new card.
 2026-11-17T14:38:43+0100: remote rerun of Acceptance box 2 (DX4YLNI6 closed, key funded). Same 9 cases, thresholds and void rule; CLI installed 14.6.1. All 9 runs answered from typesafe/jev-1.14-20261014 (warnings [], 0.000171276 USD). Verdict FAIL: I1 shift VOID, irrelevant PASS; I2 shift PASS (+0.47, top flipped to bug), irrelevant FAIL (p(feature) 0.52 to 0.73 on a near-tie control); I3 shift FAIL (p(feature) 0.85 to 0.65), irrelevant weak PASS (0.09). Box 2 stays open; per the pre-registered rule the card goes to dev. Report: reports_dev/wyy3spdx/20261117_143832+0100-live-label-context-remote.md (main checkout). Release-hold (c) was NOT met: 14.3.0 to 14.6.1 shipped the docs recommending --context with no caveat (SKILL.md:160, classify.md:130,152,526, requirements-pipeline.md:130 checked today).
+2026-11-17T14:48:30+0100: release hold (c) met from the next release on: 133e2395 adds the measured-effect caveat to classify.md (after the label --context paragraph, plus a pointer on the example line), SKILL.md:160 and requirements-pipeline.md:130. Versions 14.3.0 to 14.6.1 shipped without it. Box 2 stays open: closing it as measured-mixed, or reworking how label sends the context (new card), is open.
 
 ## Acceptance
 
