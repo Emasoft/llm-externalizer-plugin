@@ -988,11 +988,13 @@ describe("model loads through the governor, real brokers (two tiny GGUF models)"
     if (a < 2 * GIB) throw new Error(`the machine has too little room under 99 % for this test: ${Math.round((L - U) / GIB)} GiB`);
     // CI run 43983678292 (2026-11-17, Linux runner): delta was a / 2, which puts B over L itself when U < a / 2 (a lightly
     // used machine). A load over the whole limit never fits (neverFits, controller.ts): it takes the "alone" branch and the
-    // broker logs "may not fit beside anything else", so the RAM wait below never came. delta <= U - 0.5 GiB keeps B under L;
-    // on a busy machine (this Mac, U at 78 to 85 %) a / 2 is the smaller, as before. delta >= 1 GiB keeps B over the room
-    // when the reading drifts down while the brokers start.
-    const delta = Math.min(a / 2, U - GIB / 2);
-    if (delta < GIB) throw new Error(`the machine uses too little RAM for this test: B could not stay over the room and under the 99 % limit (${Math.round(U / GIB)} GiB used)`);
+    // broker logs "may not fit beside anything else", so the RAM wait below never came. B must lie in (L - U, L]: over the
+    // room now (a llama server books 0, so the room is the reading's), not over the limit. That window is U wide whatever L
+    // is, and CI run 44037104295 measured U at about 1 GiB on the runner, so delta < U by 1/8 GiB (neverFits compares two
+    // fixed figures and needs no more), and delta >= 1/4 GiB keeps B over the room if the reading drifts down. On a busy
+    // machine (this Mac, U at 78 to 85 %) a / 2 is the smaller, as before.
+    const delta = Math.min(a / 2, U - GIB / 8);
+    if (delta < GIB / 4) throw new Error(`the machine uses too little RAM for this test: B could not stay over the room and under the 99 % limit (${Math.round(U / 2 ** 20)} MiB used)`);
     for (const d of [old, recent]) writeRecord(d, okRecord(A, { load_estimate: { weight_bytes: a - GIB, kv_bytes_per_token: 0 } }));
     const epOld = await startBroker(old);
     expect(await outcome(epOld, await submit(epOld, A))).toMatchObject({ state: "done" });
