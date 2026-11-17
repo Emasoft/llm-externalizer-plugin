@@ -4,7 +4,7 @@ title: SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
 column: testing
 status: tasked
 created: 2026-10-07T19:49:33+0200
-updated: 2026-11-15T17:29:03+0100
+updated: 2026-11-17T14:14:09+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -95,3 +95,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10: cddd9d43 added the partial-run cases through the real planner and fan-out (testkit option failAt and limits.maxQuestionsPerRequest): one failed request, fatal first, --max-budget stop, abort. Abort contract: a request in flight at Ctrl-C that rejects is recorded 'aborted', requests not started are skipped and reported as aborted, a reply that arrives is kept. The card has no partial-run box, so none was ticked (the obligation was in its RESULT note). cddd9d43 was verified only as a pair with 6cc2a9ad and carries no rebuilt dist. Report: docs_dev/20261010-partial-run-cases-report.md. rank: a lost request invalidates only the candidate(s) it carried, with the fan-out reason; attention raised (rank.test.ts). BLOCKED on the capture card TRDD-O4MSZIG5 (pre-block-column dev). Remaining: box 'project on this card's captured live reply' (no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only) and the definition-of-done box. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
 2026-11-04: definition of done not met: WHY comments thin (rank.ts has one WHY comment, line 86; the per-file best-chunk merge and SCORE_POLICY sites carry none). The other clauses were verified met that day.
 2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.
+2026-11-17T14:14:09+0100 REOPENED by git revert f3b6cde4 of the 59f1730a closure (harness review). Its own test files (catalog filter, find, index, label, rank, screen, verify) hold no vi.mock, vi.spyOn, vi.doMock or vi.stubGlobal call, but non-vi doubles in them were not judged and rank.ts was judged on a WHY count (13) plus the named sites :116 and :160, not a full read. Stays in testing until both are judged.

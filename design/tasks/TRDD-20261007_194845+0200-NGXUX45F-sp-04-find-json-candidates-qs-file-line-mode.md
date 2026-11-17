@@ -4,7 +4,7 @@ title: SP-04 find (JSON candidates + qs file-line mode)
 column: testing
 status: tasked
 created: 2026-10-07T19:48:45+0200
-updated: 2026-11-15T17:29:00+0100
+updated: 2026-11-17T14:14:09+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -95,3 +95,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10: cddd9d43 added the partial-run cases through the real planner and fan-out (testkit option failAt and limits.maxQuestionsPerRequest): one failed request, fatal first, --max-budget stop, abort. Abort contract: a request in flight at Ctrl-C that rejects is recorded 'aborted', requests not started are skipped and reported as aborted, a reply that arrives is kept. The card has no partial-run box, so none was ticked (the obligation was in its RESULT note). cddd9d43 was verified only as a pair with 6cc2a9ad and carries no rebuilt dist. Report: docs_dev/20261010-partial-run-cases-report.md. find: JSON mode is one request, a loss gives status invalid with no ranking; files mode is per chunk (other files keep their hits); budget and abort cannot cut the one in-flight JSON request (find.test.ts). BLOCKED on the capture card TRDD-O4MSZIG5 (pre-block-column dev). Remaining: box 'project on this card's captured live reply' (no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only) and the definition-of-done box. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
 2026-11-04: definition of done not met: WHY comments thin (find.ts has one WHY comment, line 114, for its non-obvious rules). Its own tests and commit link were verified met that day.
 2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.
+2026-11-17T14:14:09+0100 REOPENED by git revert f3b6cde4 of the 59f1730a closure (harness review): the three call-through counting wrappers in files this card's commits touch (l0/catalog.test.ts:10, l2/evidence.test.ts:89, findings.test.ts:233) wait on the owner decision TRDD-052F3ZC9 (min-approval user, open); the charge to CASL940C and JDMY8LPJ was inferred from module ownership and blame now points at the squashed 4bdd9b1b, so R2 ownership cannot be confirmed. Also the WHY clause was judged on a comment count (12 in find.ts) and on the sites the 2026-11-04 note named, not on a full read of find.ts. Stays in testing until 052F3ZC9 is answered and find.ts is read for uncommented rules.
