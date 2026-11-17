@@ -1,6 +1,62 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.0] - 2026-11-17
+
+### Changed
+
+- Build: rebuild dist from ea77d4d5 (TRDD-1L9VMEY7)
+
+
+### Documentation
+
+- Docs(trdd): record 0476ca55 and the UBS scanner ballooning on three files (TRDD-36L97JC9)
+
+- Docs(trdd): record that the UBS scan since 14.5.0 timed out, nothing scanned (TRDD-1L9VMEY7)
+
+- Docs(trdd): find under local-decision passes on 8ca6e53a (TRDD-1L9VMEY7)
+
+- Docs(trdd): record ea77d4d5, 8ca6e53a and the rejected clamp removal (TRDD-1L9VMEY7)
+
+- Docs(trdd): record the a473a6b0 re-run and the clamp and timeout decisions (TRDD-1L9VMEY7)
+
+- Docs(trdd): record 628142c0 and what it does not cover (TRDD-1L9VMEY7)
+
+- Docs(trdd): record a473a6b0 and its open items (TRDD-1L9VMEY7)
+
+- Docs(trdd): record decc23b9 and the owed UBS and CI runs (TRDD-36L97JC9)
+
+- Docs(trdd): split the find failure causes into measured and inferred (TRDD-1L9VMEY7)
+
+- Docs(trdd): record that find under local-decision still fails on 14.5.0 (TRDD-1L9VMEY7)
+
+- Docs(trdd): record the verified cause of the Linux CI temp-dir leak (TRDD-36L97JC9)
+
+- Docs(trdd): verified cause of the Linux ps-test failure, RAM-test cause still open (TRDD-36L97JC9)
+
+- Docs(trdd): first Linux stage-2 run of v14.5.0, two Linux-only failures and the measured durations (TRDD-36L97JC9)
+
+- Docs(trdd): strike the superseded load-time refusal box and record the open cost veto (TRDD-1L9VMEY7)
+
+- Docs(trdd): FC2TX9VU state after the 14.5.0 publish (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(classifiers): retry a timed-out local decider attempt once and name its elapsed time (TRDD-1L9VMEY7)
+
+- Fix(classifiers): say why a split piece failed instead of only "answer missing" (TRDD-1L9VMEY7)
+
+- Fix(classifiers): split a request the local decider refuses as over its limit (TRDD-1L9VMEY7)
+
+- Fix(test): leak guard exempts the persistent llama cache; RAM-wait timeout prints broker logs (TRDD-36L97JC9)
+
+
+### Testing
+
+- Test(linux): fix the two Linux-only test failures of CI run 43983678292 (TRDD-36L97JC9)
+
+
 ## [14.5.0] - 2026-11-16
 
 ### Added
