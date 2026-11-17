@@ -22,7 +22,7 @@ Push policy:
 Steps (in order — validate is FIRST, no skipping):
     1. Pre-flight: working tree clean + required tools present
     2. Validate (MANDATORY — all checks 0 errors): npm ci, typecheck,
-       lint, build, test, ruff, shellcheck, plugin.json, CPV
+       lint, build, test, ruff, mypy, shellcheck, plugin.json, CPV
     3. Determine next version (git-cliff --bumped-version or flag override)
     4. Generate CHANGELOG.md (git-cliff)
     5. Sync version to plugin.json, package.json, cli/main.ts, pyproject.toml
@@ -343,6 +343,7 @@ def run_checks(repo_root: Path) -> bool:
       4. npm run build    — full esbuild bundle (catches issues tsc misses)
       5. npm test         — vitest run (all tests must pass)
       6. ruff check       — lint all Python scripts
+      6b. mypy            — type-check all Python scripts (same command as release.yml)
       7. shellcheck       — lint all .sh files in the main tree
       8. plugin.json parse — manifest must be valid JSON
       9. claude plugin validate — authoritative Claude Code plugin validator
@@ -403,6 +404,18 @@ def run_checks(repo_root: Path) -> bool:
 
     # 6. Ruff on all Python scripts (mandatory — require_tools verified it).
     if not _run_check("ruff", ["ruff", "check", "scripts/"], str(repo_root), repo_root):
+        return False
+
+    # 6b. mypy on all Python scripts, the same command as release.yml's "Type check" step.
+    # WHY: the local gate ran ruff but not mypy, so v14.6.3 was tagged and pushed with a
+    # type error that only the Release workflow caught (CPV issue #280); --extra dev is the
+    # same extra release.yml installs with `uv sync --extra dev`.
+    if not _run_check(
+        "mypy",
+        ["uv", "run", "--extra", "dev", "mypy", "scripts/", "--ignore-missing-imports"],
+        str(repo_root),
+        repo_root,
+    ):
         return False
 
     # 7. Shellcheck on every git-tracked .sh file (mandatory).
