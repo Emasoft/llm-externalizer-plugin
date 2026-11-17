@@ -4,7 +4,7 @@ title: Add the LFM3 GGUF and elephant-1 local models to the supported list and t
 column: todo
 status: tasked
 created: 2026-11-17T12:02:14+0100
-updated: 2026-11-17T12:04:03+0100
+updated: 2026-11-17T12:24:02+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -43,6 +43,8 @@ Earlier the same day: "prefer the followings" (GGUF over MLX for LiquidAI models
 - Absent models (proposed; OPEN: conflicts with the user fail-fast rule, user to decide skip-with-note vs exit with an error): a fallback entry whose model is not cached, or an MLX entry on a non-Mac host, is skipped with a visible note, never a silent download or a hard failure.
 - Remote profiles (proposed, user may veto): a local fallback entry never triggers an implicit download; it is used only when the model is already cached and its server can start.
 - Classifier vs chat chains: each list entry carries its role; the decider chain reads only classifier entries, the completion chain only chat entries.
+- Moved from TRDD-7CFPEDUK (2026-11-17): image input for the GGUF chat models (LFM3-VL, LFM3-Omni, abliter8 VL, mizahnyx Omni) needs --mmproj in buildServerArgv (local-llama-server.ts:111-136, 0 hits for mmproj today) and image_url parts in the local completion body (0 hits for image_url in src).
+- Abliterated repos: AtomicChat/LFM3-1.7B-Uncensored-GGUF, abliter8-ai/lfm3-2b-vl-abliter8-gguf and mizahnyx/lfm3-omni-2b-abliterated-heretic-v2-GGUF have refusals removed; the mizahnyx card says it will comply with harmful requests. Mark them in the list; whether any becomes a DEFAULT fallback in a profile is an open user decision.
 
 ## Approval log
 

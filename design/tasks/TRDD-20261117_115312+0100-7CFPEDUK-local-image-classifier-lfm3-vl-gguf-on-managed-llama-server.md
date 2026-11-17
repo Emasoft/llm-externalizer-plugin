@@ -4,7 +4,7 @@ title: Local image classifier, LFM3-VL GGUF on managed llama-server
 column: backburner
 status: tasked
 created: 2026-11-17T11:53:12+0100
-updated: 2026-11-17T11:53:12+0100
+updated: 2026-11-17T12:23:55+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -43,6 +43,10 @@ USER 2026-11-17 (verbatim): "what? no screenshots? the elephant-1 model accepts 
 - Calibration gating: managed local profiles hold a model's requests until calibrated, which can take hours. Trace whether a VL model on local_llama triggers calibration and whether it blocks the first image request; the calibration Sender is text-only (scripts/llm-ext/src/calibration/phase-a.ts:265-267).
 - Image tokens enter the local input budget.
 - One focused test file per step; the CLI-reference skill and the CHANGELOG updated.
+- UI spike 2026-11-17 (reports_dev/vision-spike/spike-ui.py, out-ui.txt): 9 of 9 drawn UI mockup-vs-screenshot questions right at a 0.5 cut: same layout 0.95, button moved 0.022 and 0.004, label changed 0.001, field missing 0.001, title one-letter typo 0.29 (right but least sure), label read 0.9999 and 0.0001. Synthetic drawn UIs only; a real app screenshot pair is still owed.
+- Image size: a 6000x6000 PNG was refused 422 (needs 16495 tokens, limit 16384, input is not cut). llm-ext must downscale images before sending and count image tokens in the decider budget (16384, config.ts:1610). A corrupt PNG gives a clean 422 (param images.0), which llm-ext must surface as a per-item error.
+- Dependency: the image classifier works only where the external mlx-decision server runs with elephant-1 (llm-ext never starts it, local-decider.ts:9-12, refusal text :301). With it down, image questions fail with that refusal; no other image model is wired as a classifier.
+- Quote note: the USER quote on the SPIKE RESULT line is shortened with an ellipsis; the full sentence is in TRDD-4AKLHLB4.
 
 ## Approval log
 
