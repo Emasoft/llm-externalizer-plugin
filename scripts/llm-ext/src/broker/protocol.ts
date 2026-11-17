@@ -5,6 +5,7 @@
  * broker/client.ts.
  */
 
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { readCommandLine } from "../local-llama-server.js";
@@ -20,7 +21,17 @@ export type BrokerEngine = "llama" | "locals";
 export const BROKER_ENGINES: readonly BrokerEngine[] = ["llama", "locals"];
 
 /** The random per-broker token every request must carry (spec 2): a loopback port is reachable by any local process, the token keeps other processes from submitting or cancelling jobs. */
-export const TOKEN_HEADER = "x-llm-ext-broker-token";
+export const TOKEN_HEADER = "x-llm-ext-broker-token"; // ubs:ignore header name constant, not a secret
+/**
+ * Constant-time check of the token header against the per-spawn token. WHY: the header is
+ * attacker-controlled, and `!==` on strings returns at the first differing byte, a timing
+ * leak on the secret. The length check keeps timingSafeEqual from throwing (it needs equal
+ * lengths) and leaks only the fixed 48-char token length; a missing or array-valued header is
+ * rejected first.
+ */
+export function brokerTokenMatches(sent: string | string[] | undefined, expected: Buffer): boolean {
+  return typeof sent === "string" && Buffer.byteLength(sent) === expected.length && timingSafeEqual(Buffer.from(sent), expected);
+}
 /** Which command a job belongs to: the unit of round-robin (spec 3). */
 export const COMMAND_HEADER = "x-llm-ext-command";
 /** The server context the job needs (a different -c is a different server). */

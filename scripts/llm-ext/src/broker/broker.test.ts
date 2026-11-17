@@ -1833,6 +1833,24 @@ describe("hardening and minors (review M13, m2, m5, m6, m7)", () => {
     expect(again.status).toBe(404);
   }, 300_000);
 
+  it("the broker refuses a missing or wrong per-spawn token with 401 (constant-time check)", async () => {
+    const dir = newDir();
+    await runClient(dir, jobsOf(A, 1));
+    const st = readBrokerState(dir)!;
+    const url = `http://127.0.0.1:${st.port}/v1/health`;
+    // Same length as the real token, first hex char flipped: only a value comparison can reject it.
+    const wrong = (st.token[0] === "0" ? "1" : "0") + st.token.slice(1);
+    const good = await fetch(url, { headers: { [TOKEN_HEADER]: st.token } });
+    await good.text();
+    expect(good.status).toBe(200);
+    const bad: Array<Record<string, string>> = [{}, { [TOKEN_HEADER]: wrong }];
+    for (const headers of bad) {
+      const res = await fetch(url, { headers });
+      expect(res.status).toBe(401);
+      expect(await res.json()).toEqual({ error: "bad or missing broker token" });
+    }
+  }, 300_000);
+
   it("m6: with a space in the config dir, the sweep still finds and stops an unrecorded main server", async () => {
     const parent = newDir();
     const dir = join(parent, "with space");

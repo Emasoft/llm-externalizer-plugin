@@ -54,6 +54,7 @@ import { enqueueUnlocked, withStateLock } from "../calibration/state.js";
 import { defaultBrokerEntry } from "./client.js";
 import {
   BROKER_ENGINES,
+  brokerTokenMatches,
   COMMAND_HEADER,
   CTX_HEADER,
   DISPATCHED_HEADER,
@@ -257,7 +258,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       if (req.kind === "load" && denial !== null && denial !== "stale") {
         const why = `${key.split("\u0000")[0]}: ${denial}`;
         // Round 4: a load marked alone was judged on its lower bound, so the RAM text names that figure.
-        if (why !== loadDenial) o.log(`model '${key.split("\u0000")[0]}' waits for a load grant (${denialText(denial, req.alone === true ? (req.minBytes ?? 0) : (req.bytes ?? 0))}); the loaded server keeps serving its queue`);
+        if (why !== loadDenial) o.log(`model '${key.split("\u0000")[0]}' waits for a load grant (${denialText(denial, req.alone === true ? (req.minBytes ?? 0) : (req.bytes ?? 0))}); the loaded server keeps serving its queue`); // ubs:ignore log dedupe of denial text, not a secret
         loadDenial = why;
       }
       govWaiting.add(req.kind);
@@ -411,6 +412,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
   };
   const token = randomBytes(24).toString("hex");
+  const tokenBuf = Buffer.from(token); // fixed Buffer for the constant-time header compare (brokerTokenMatches)
   mkdirSync(o.dir, { recursive: true });
 
   const notify = (job: Job): void => {
@@ -829,7 +831,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         for (let attempt = 1; ; attempt++) {
           try {
             const why = staleness(rec, await loadedIdentity(engine, `http://127.0.0.1:${port}`, apiKey, first.model, o.dir));
-            if (why !== null) stale = why === "weights" ? "its weights, the machine's RAM or the calibration method changed" : "the engine build changed";
+            if (why !== null) stale = why === "weights" ? "its weights, the machine's RAM or the calibration method changed" : "the engine build changed"; // ubs:ignore staleness enum, not a secret
             break;
           } catch (e) {
             if (attempt >= IDENTITY_TRIES) {
@@ -975,7 +977,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       // server serves: llama-server's --alias; for Locals the id it lists, its
       // -thinking variant when the request asks for thinking (TRDD-ZGSGGHQG).
       const parsed = JSON.parse(job.body) as Record<string, unknown>;
-      const model = s.engine === "locals" ? (localsOutgoingModel(s.modelIds, parsed) ?? s.model) : s.model;
+      const model = s.engine === "locals" ? (localsOutgoingModel(s.modelIds, parsed) ?? s.model) : s.model; // ubs:ignore engine enum, not a secret
       body = JSON.stringify({ ...parsed, model });
     } catch {
       body = job.body;
@@ -998,7 +1000,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         // (review C2: with current still naming the dead model, its queued
         // jobs were skipped by every rotation rule and hung for ever), so the
         // next pump starts it again for the remaining work.
-        if (server === s && pidState(s.pid) !== "alive") {
+        if (server === s && pidState(s.pid) !== "alive") { // ubs:ignore pid state enum, not a secret
           server = null;
           sched.current = null;
           void releaseEntry(o.dir, s.engine, s.pid).catch(() => undefined);
@@ -1077,7 +1079,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     // Review C2: a server that died while idle (no request in flight saw it)
     // is forgotten HERE, before a job goes to its dead port; current is
     // cleared with it, so its queued work makes wantRotation start it again.
-    if (server && pidState(server.pid) === "dead") {
+    if (server && pidState(server.pid) === "dead") { // ubs:ignore pid state enum, not a secret
       const dead = server;
       server = null;
       sched.current = null;
@@ -1090,7 +1092,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       sched.noteDenied(now - deniedSince);
       deniedSince = now;
     }
-    if (server && server.key !== sched.current) sched.current = server.key;
+    if (server && server.key !== sched.current) sched.current = server.key; // ubs:ignore scheduler queue key, not a secret
     const next = sched.wantRotation(now, running.size, t);
     /** The places this pump still wants in the governor queue; a place nobody polls would block every process behind it. */
     const keep = new Set<gov.LeaseKind>();
@@ -1099,7 +1101,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
      * zero for it. Yes while the load is denied (the unit 2 review: a pending swap that cannot load served nothing).
      */
     let serveCurrent = next === null;
-    if (next !== null && (server === null || next !== server.key)) {
+    if (next !== null && (server === null || next !== server.key)) { // ubs:ignore scheduler queue key, not a secret
       const plan = loadPlan(next);
       const bytes = plan?.bytes ?? 0;
       const minBytes = plan?.minBytes ?? 0;
@@ -1136,7 +1138,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
     }
     // The queue check is here and not inside the loop: an idle broker with a loaded server must touch the governor not at
     // all (D7), while a loop that drains the queue may still get a lease for nothing, which the !job branch gives back.
-    if (serveCurrent && server && sched.current === server.key && sched.queuedCount(server.key) > 0) {
+    if (serveCurrent && server && sched.current === server.key && sched.queuedCount(server.key) > 0) { // ubs:ignore scheduler queue key, not a secret
       const limits = leaseLimits(server.key);
       // Locals' old memory gate (one request always, more only above the floor) is gone: with --cache-gb bounded its
       // prompt cache is part of the load projection, and every request takes a governor lease, RAM included (D11).
@@ -1201,7 +1203,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   };
 
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
-    if (req.headers[TOKEN_HEADER] !== token) return reply(res, 401, { error: "bad or missing broker token" });
+    // WHY: constant-time compare; `!==` on the attacker-controlled header leaks the token byte by byte through timing.
+    if (!brokerTokenMatches(req.headers[TOKEN_HEADER], tokenBuf)) return reply(res, 401, { error: "bad or missing broker token" });
     const url = new URL(req.url ?? "/", "http://127.0.0.1");
     const m = /^\/v1\/jobs\/([A-Za-z0-9-]+)$/.exec(url.pathname);
     // queued/running: what this broker still holds (tests and --command_timeout checks read "no job left queued" here).
@@ -1239,8 +1242,8 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         commandId: String(req.headers[COMMAND_HEADER] ?? "anonymous"),
         body,
         timeoutMs: intHeader(req, TIMEOUT_HEADER, DEFAULT_EXEC_TIMEOUT_MS),
-        queueTimeoutMs: intHeader(req, QUEUE_TIMEOUT_HEADER, t.starveMs),
-        noHold: req.headers[NO_HOLD_HEADER] === "1",
+        queueTimeoutMs: intHeader(req, QUEUE_TIMEOUT_HEADER, t.starveMs), // ubs:ignore fixed property name in object literal
+        noHold: req.headers[NO_HOLD_HEADER] === "1", // ubs:ignore constant header-name read, boolean result
         submittedAt: now,
         lastPolledAt: now,
         pollers: 0,
@@ -1313,10 +1316,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         job.pollers--;
         job.lastPolledAt = Date.now();
       }
-      if (job.state === "queued" || job.state === "held" || job.state === "running") {
+      if (job.state === "queued" || job.state === "held" || job.state === "running") { // ubs:ignore constant header-name keys, no request-derived key
         const h: Record<string, string> = { [STATE_HEADER]: job.state };
-        if (job.dispatchedAt !== undefined) h[DISPATCHED_HEADER] = String(job.dispatchedAt);
-        if (job.state === "held") h[HELD_HEADER] = "1"; // review F2: a fixed ASCII marker; the client names the model it already knows (a raw id can hold non-Latin-1 text, which a header cannot)
+        if (job.dispatchedAt !== undefined) h[DISPATCHED_HEADER] = String(job.dispatchedAt); // ubs:ignore constant header-name key
+        if (job.state === "held") h[HELD_HEADER] = "1"; // ubs:ignore constant header-name key; review F2: a fixed ASCII marker; the client names the model it already knows (a raw id can hold non-Latin-1 text, which a header cannot)
         return reply(res, 204, undefined, h);
       }
       // Review m5: once the result reached its caller, forget the job and its bodies

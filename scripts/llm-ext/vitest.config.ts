@@ -310,6 +310,8 @@ export default defineConfig({
       'src/governor/governor-burn.test.ts',
       'src/classifiers/receipt.test.ts',
       'src/broker/server-commands.test.ts',
+      // brokerTokenMatches: the constant-time broker token check (the include list is explicit, so a new test file runs only once listed here).
+      'src/broker/protocol-token.test.ts',
       // --until-done backoff policy. The loop it drives is unbounded, so a zero
       // wait busy-loops a rate-limited endpoint and a wrong UTC-midnight
       // calculation either stalls a day or never waits.
