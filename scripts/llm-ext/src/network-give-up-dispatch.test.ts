@@ -17,6 +17,8 @@ import { makeNetworkGiveUp, setNetworkGiveUpOverrideS } from "./network-give-up.
 import { chatCompletionWithRetry, resetServiceHealthForTests } from "./provider/completion.js";
 import { failureOf, type RetryClock } from "./provider/http.js";
 import type { BackendConfig, ChatMessage, CompletionDeps } from "./provider/types.js";
+// TRDD-FC2TX9VU: the governor switch as this file found it; the afterEach of the governor-off describe restores it.
+const GOVERNOR_ENABLED_BEFORE = process.env.LLM_EXT_GOVERNOR_ENABLED;
 
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const MESSAGES: ChatMessage[] = [{ role: "user", content: "hi" }];
@@ -108,6 +110,18 @@ const caught = (p: Promise<unknown>) => p.then(() => undefined, (e: unknown) => 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 describe("Required test 3: time-bound at the completion layer with a ready local profile, window armed small (2 s)", () => {
+  // WHY (TRDD-FC2TX9VU): these tests assert the network give-up bound from t0. Every send to 127.0.0.1 first takes a local-governor
+  // lease (completion.ts:619, directAttemptGate), and a lease wait before attempt 0 is not part of the network window and can last any
+  // time ("requests queue, nothing fails"). Measured 2026-11-17: with a forced governor denial the 5_000 ms bound failed 3 of 3 runs
+  // (7073, 7418, 7346 ms), and the release gate failed with 9442 ms. These tests are about the network window, not queueing, so the
+  // governor is off for them; the afterEach below restores the variable.
+  beforeEach(() => {
+    process.env.LLM_EXT_GOVERNOR_ENABLED = "false";
+  });
+  afterEach(() => {
+    if (GOVERNOR_ENABLED_BEFORE === undefined) delete process.env.LLM_EXT_GOVERNOR_ENABLED;
+    else process.env.LLM_EXT_GOVERNOR_ENABLED = GOVERNOR_ENABLED_BEFORE;
+  });
   it("a real closed port: the typed network error is thrown in under 5 s", async () => {
     const f = readyFixture();
     setNetworkGiveUpOverrideS(2);
