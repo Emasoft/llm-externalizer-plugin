@@ -1,10 +1,10 @@
 ---
 trdd-id: Z20KCBZY
 title: publish.py push fails when the branch name differs from its upstream
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T16:07:04+0100
-updated: 2026-11-17T23:49:06+0100
+updated: 2026-11-18T00:39:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -25,6 +25,7 @@ STATE 2026-11-17: the 14.6.2 publish (reports_dev/release-next/publish-20261117_
 ## Approval log
 
 - 2026-11-17T16:07:04+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T00:39:26+0100 — COMPLETE by main-agent@llm-externalizer-plugin. push fix, mypy fix and mypy gate released in 14.6.4; acceptance A1-A4 ticked with evidence.
 
 ## Notes
 
@@ -37,3 +38,10 @@ STATE 2026-11-17: the 14.6.2 publish (reports_dev/release-next/publish-20261117_
 2026-11-17 22:05 (after a host reboot): v14.6.3 Release workflow run 44162479702 FAILED at its mypy step: publish.py:1272 and :1288, step 10 rebinds remote (step 3 binds it to the ls-remote CompletedProcess) to a str. The release v14.6.3 exists (created by publish.py step 11) with assets: [] and no attestation (the attest step never ran). CI and Notify Marketplace passed; 14.6.3 is installed. The local publish gate runs ruff, not mypy, so it passed. Fix in flight: rename to push_remote, then release 14.6.4 (rerunning 14.6.3 checks out the same tag code). release.yml after mypy (SBOM, changelog, SHA256SUMS, idempotent release edit/upload, attestation) is unchanged since v14.6.1, whose Release run passed.
 2026-11-17 mypy fix committed 716805e5 (step 10 variable renamed to push_remote). Checks with release.yml's own commands: uv run mypy scripts/ --ignore-missing-imports exit 0 (no issues in 21 files); uv run ruff check scripts/ exit 0; uv run --extra dev pytest tests/ --ignore=tests/dogfood -m 'not integration and not slow' exit 0 (251 passed). release.yml checkout has no ref: override, so a rerun of the v14.6.3 run builds the v14.6.3 tag code again; next release is 14.6.4.
 2026-11-17 23:49 v14.6.4 published by publish.py (log reports_dev/release-next/publish-20261117_225148+0100.log): every gate passed, including the new local mypy step (uv run --extra dev mypy scripts/ --ignore-missing-imports, commit 3c44ef2a); release commit fc82929e; tags v14.6.4 and llm-externalizer--v14.6.4 pushed with main. GitHub runs on fc82929e all success: Release 44189004173 (its Type check step passed on Ubuntu), CI 44189004742, Notify Marketplace 44189004499. Release v14.6.4 assets: sbom.spdx.json, SHA256SUMS, validation-report.txt. Installed: claude plugin list shows llm-externalizer 14.6.4 (user scope); bare llm-ext --version prints 14.6.4 outside a Claude Code session. Done: the push fix (9b80ec7e), the mypy fix (716805e5) and the mypy gate (3c44ef2a) are released. 14.6.2 stays a skipped version; v14.6.3 keeps its release without assets.
+
+## Acceptance
+
+- [x] A1: publish.py step 10 pushes HEAD:refs/heads/main plus both tags when the local branch name differs from its upstream (fix 9b80ec7e); proven by the v14.6.3 and v14.6.4 publishes from branch dev/after-14.3.0.
+- [x] A2: the mypy rebinding error at publish.py step 10 is fixed (716805e5) and the local publish gate now runs mypy (3c44ef2a).
+- [x] A3: v14.6.4 GitHub runs on fc82929e all success: Release 44189004173 (Type check passed), CI 44189004742, Notify Marketplace 44189004499; release assets sbom.spdx.json, SHA256SUMS, validation-report.txt.
+- [x] A4: installed: claude plugin list shows llm-externalizer 14.6.4 and llm-ext --version prints 14.6.4.
