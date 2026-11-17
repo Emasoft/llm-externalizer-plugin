@@ -1,6 +1,6 @@
 """Regression tests for publish.py's failed-push recovery (non-destructive).
 
-Guards the v13.6.1 fix: on a failed `git push --follow-tags`, the publisher
+Guards the v13.6.1 fix: on a failed release push (`git push --follow-tags` at the time), the publisher
 used to run `git reset --hard HEAD~1` and delete BOTH tags. That destroyed
 the release commit and the exact refs needed to diagnose the failure — a
 transient push failure (network blip, rate limit, branch protection) became

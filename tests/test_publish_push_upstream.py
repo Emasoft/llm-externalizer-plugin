@@ -3,7 +3,8 @@
 The 14.6.2 publish failed because `git push --follow-tags` obeys
 push.default=simple, which refuses a branch whose name differs from its
 upstream (dev/after-14.3.0 tracking origin/main). The publisher now pushes
-to the branch's configured upstream explicitly, and fails fast without one.
+to the branch's configured upstream explicitly, the two release tags by explicit
+refspec (not --follow-tags), and fails fast without one.
 
 Real git, a real local bare remote, the real `_run_publish` (loaded via
 importlib like test_publish_failed_push.py); only the two heavy gates, the
@@ -110,10 +111,11 @@ def _publish(repo: Path) -> None:
 
 
 def test_push_goes_to_upstream_when_branch_name_differs(publish_repo):
-    """Branch dev/x tracking origin/main: remote main equals local HEAD and both tags arrive."""
+    """Branch dev/x tracking origin/main: remote main equals local HEAD, both tags arrive, stale tag does not."""
     repo, remote = publish_repo
     _git(repo, "config", "branch.dev/x.remote", "origin")
     _git(repo, "config", "branch.dev/x.merge", "refs/heads/main")
+    _git(repo, "tag", "-a", "v0.0.0-stale", "-m", "stale", "HEAD")
 
     _publish(repo)
 
@@ -121,6 +123,7 @@ def test_push_goes_to_upstream_when_branch_name_differs(publish_repo):
     assert _git(remote, "rev-parse", "refs/heads/main").stdout.strip() == head
     for t in (TAG, RESOLVER_TAG):
         assert _git(remote, "rev-parse", f"refs/tags/{t}^{{commit}}").stdout.strip() == head
+    assert _git(repo, "ls-remote", "--tags", str(remote), "v0.0.0-stale").stdout.strip() == ""
 
 
 def test_no_upstream_fails_fast_and_pushes_nothing(publish_repo, capsys):

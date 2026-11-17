@@ -31,7 +31,7 @@ Steps (in order — validate is FIRST, no skipping):
     8. Commit as `chore(release): vX.Y.Z`
     9. Create annotated git tags vX.Y.Z AND {plugin-name}--vX.Y.Z
        (the second is the plugin-dependency resolver tag, CC >= 2.1.110)
-   10. Push --follow-tags (pre-push hook walks ancestry, finds publish.py)
+   10. Push the branch and this release's two tags (pre-push hook walks ancestry, finds publish.py)
    11. gh release create
 """
 
@@ -1251,7 +1251,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ── 9. Tag ──
     # Two annotated tags on the release commit: the human-facing release
     # tag and the resolver tag the plugin-dependency system requires. Both
-    # are annotated so `git push --follow-tags` carries them.
+    # are annotated; both are pushed by explicit refspec in step 10.
     print("── 9. Tag ──")
     run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False, cwd=str(repo_root))
     run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False, cwd=str(repo_root))
@@ -1281,7 +1281,11 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             file=sys.stderr,
         )
         sys.exit(1)
-    push_result = run(["git", "push", "--follow-tags", remote, f"HEAD:{merge_ref}"], capture=True, check=False, cwd=str(repo_root))
+    # WHY (TRDD-Z20KCBZY): push exactly the two tags of this release by explicit refspec,
+    # never --follow-tags. --follow-tags also pushes any stale unpushed annotated tag
+    # reachable from HEAD (the failed 14.6.2 left two), and GitHub creates no tag push
+    # events when more than three tags arrive in one push, so release.yml would not run.
+    push_result = run(["git", "push", remote, f"HEAD:{merge_ref}", f"refs/tags/{tag}", f"refs/tags/{resolver_tag}"], capture=True, check=False, cwd=str(repo_root))
     if push_result.returncode != 0:
         # WHY: a failed push must preserve local work and recovery evidence.
         # The previous branch ran `git reset --hard HEAD~1` and deleted both
