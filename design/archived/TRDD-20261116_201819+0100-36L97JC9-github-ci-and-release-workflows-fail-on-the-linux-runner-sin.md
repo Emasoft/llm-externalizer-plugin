@@ -1,10 +1,10 @@
 ---
 trdd-id: 36L97JC9
 title: GitHub CI and Release workflows fail on the Linux runner since 2026-10-31
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-16T20:18:19+0100
-updated: 2026-11-17T09:12:35+0100
+updated: 2026-11-17T13:57:06+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-16T20:18:19+0100
-implementation-commits: [ffdc019b, decc23b9]
+implementation-commits: [ffdc019b, decc23b9, 0476ca55, 7d0c0d13]
 ---
 
 # GitHub CI and Release workflows fail on the Linux runner since 2026-10-31
@@ -25,6 +25,7 @@ Measured 2026-11-16 from gh run logs. CI and Release have failed on every main p
 ## Approval log
 
 - 2026-11-16T20:18:19+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T13:57:06+0100 — COMPLETE by main-agent@llm-externalizer-plugin. CI and Release green on 04d412ea, the first main push carrying every fix commit.
 
 ## Notes
 
@@ -38,3 +39,10 @@ Measured 2026-11-16 from gh run logs. CI and Release have failed on every main p
 - 2026-11-17T07:26:38+0100 main agent: 0476ca55 fixes both Linux-only failures of CI 43983678292 in the tests (product unchanged). ps test: Linux readCommandLine reads /proc, so Linux now asserts a live pid never reads as gone (throw path tested on macOS only). RAM test: B was booked over the whole limit L when used RAM U < a/2, so neverFits sent it to the alone branch; B margin is now min(a/2, U - 0.5 GiB). Both pass alone on macOS (ps 1/1, RAM 1/1 25 s). Linux U not measured: next CI run decides. UBS: 11 of 14 changed files scanned per file, 0 critical, warnings pre-existing; split-on-overflow.ts, local-fallback.test.ts and governor-load.test.ts push the UBS js scanner past 3 GB even with --skip-type-narrowing (watchdog kill), so they are unscanned. NEXT: publish 14.6.0 with the gate when host load is low, then read CI.
 - 2026-11-17T09:03:16+0100 main agent: CI 44037104295 (v14.6.0, 0cb2f70d): stage 1 green (345 files); stage 2 only governor-load RAM test red, at the new precondition 'too little RAM (1 GiB used)'. ps test passed on Linux; no TEMP-DIR LEAK line. B must lie in (L - U, L], a window U wide whatever the limit, so the drift margin is narrowed (delta = min(a/2, U - 1/8 GiB), floor 1/4 GiB); worker editing.
 - 2026-11-17T09:12:34+0100 main agent: 7d0c0d13 landed the narrowed margin (delta = min(a/2, U - 1/8 GiB), floor 1/4 GiB); RAM test passes alone on macOS (1/1, 23 s); pre-commit UBS timed out (180 s), nothing scanned. Linux unconfirmed. RELEASE TRIGGER: the next release (patch) goes out as soon as the stale-card triage is done or by 2026-11-17 14:00, whichever is first, so main's red CI 44037104295 is not left open; then read its CI.
+2026-11-17T13:56:01+0100 closing evidence. First main push carrying the last fix commit 7d0c0d13 is 04d412ea (v14.6.1): CI 44079104801 success, Release 44079103262 success, Notify Marketplace 44079105098 success (gh run view, headSha 04d412ea). Linux RAM-wait test passed (CI log line 3426). Earlier main pushes 65a0f055 and 0cb2f70d were red because the fix chain was not yet complete (0476ca55, 7d0c0d13 landed after). Reading of the criterion: the next main push after the fixes, i.e. 04d412ea. Legacy-broker test removed with its retired code path in 3ed140b7 (TRDD-ZGSGGHQG), not skipped. UBS gap on decc23b9 and 7d0c0d13 noted, not an acceptance criterion. Evidence: reports_dev/release-next/20261117-release-cards-evidence.md.
+
+## Acceptance criteria
+
+- [x] Each cause fixed at its root: git-cliff installed with sha256 check (ffdc019b); lsof tests gated to darwin with a WHY comment, because local-decider.ts refuses every other platform; phase-c reads an injectable free-memory value (ffdc019b); temp-dir guard, ps test and RAM-wait fixture fixed (decc23b9, 0476ca55, 7d0c0d13).
+- [x] No test skipped to hide a failure: the four fix commits add no .skip, skipIf or todo; the only new gate is the darwin gate above, with its WHY comment. The legacy-broker test went with its retired code path (3ed140b7, TRDD-ZGSGGHQG).
+- [x] CI and Release runs of the next main push after the fixes are green: 04d412ea, CI 44079104801 success, Release 44079103262 success.
