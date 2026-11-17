@@ -4,7 +4,7 @@ title: Partly answered benchmark runs score empty and API-error cases as quality
 column: blocked
 status: tasked
 created: 2026-11-15T02:16:37+0100
-updated: 2026-11-17T14:32:43+0100
+updated: 2026-11-17T14:42:45+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -38,6 +38,7 @@ Found by the 2026-11-15 free-pool sweep (worker report in reports_dev/sonnet-wor
 2026-11-15T17:35:05+0100 AGENT DECISIONS (orchestrator, not USER words; the USER may override at the publish gate): (a) a run abstains (no qualityPass) when more than 25% of its cases went unanswered; 0.25 is an agent choice; (b) the tool's own ledger backfill removes a stored qualityPass:false from rows the widened rule classifies as non-evidence, logging one stderr line per removal; (c) select.ts and the benchmark progress PASS/FAIL lines use the same answered-only judgement, so selection and the stored verdict cannot disagree (scope widened by the orchestrator); (d) before any benchmark or backfill runs, the ~/.llm-externalizer/*-results.json ledgers were copied to ~/.llm-externalizer/backups/<name>.bak-pre-90bxj2ko-<timestamp> (9 files, 2026-11-15). Rows with 25% or fewer unanswered keep a stored false until a fresh run re-scores them.
 2026-11-15T17:49:38+0100 OPEN after f4e5e20e: rows with 25% or fewer unanswered keep a stored false until re-run; hq-scan-quality.ts (S5 path) still fails empty replies and timeouts on the raw score; bench-runner pass fields still use the raw score; comment typo 'clean cases vacuous F1' in quality-evidence.ts. Worker report: reports_dev/sonnet-worker/20261115_174500+0100-90bxj2ko-final.md
 2026-11-17T14:32:13+0100 Open choice, not decided by the agent: hq-scan-quality.ts:230 counts an empty 200 reply, a timeout and any 4xx other than 408 and 429 as model facts (FAIL); 408, 429, 5xx and malformed bodies abstain (INCONCLUSIVE). FUHTNE04 made that choice (mandated-by none) and hq-scan-quality.test.ts:132-139 pins it. Answered-only would make an empty 200 transient, but couldPassIfAnswered is optimistic, so a model that always replies empty would stay INCONCLUSIVE on every run. No measurement of how often an empty 200 recurs on retry was found in the reports read (the free-pool sweep folder reports_dev/sonnet-worker/free-bench-20261115/ was not opened). Out of scope: check-imports, check-references and compare-files score an empty reply as an unparseable wrong answer; their run functions have no production caller, so nothing reaches a ledger. Evidence: reports_dev/90bxj2ko/20261117-raw-score-sites.md and 20261117-comment-edits.md.
+2026-11-17T14:42:45+0100: main-agent checks of 76de6f16 (review finding): npx tsc --noEmit exit 0 and npx eslint src/benchmark --quiet exit 0, run in the worktree by the main agent. The comment's judge* half holds: in scan-folder, code-task, check-specs and text-tools index.ts the judge* calls take score or a.score, and score is run.aggregate or the cached copy stored from it (code-task index.ts:447-509; scan-folder :477-538; check-specs :482-548; text-tools :500-561). The phrase 'no production code reads it' in the 76de6f16 body is a reading of a 43-line search classified by type, not a line-by-line trace: read it as 'no production reader found'.
 
 ## Acceptance criteria
 
