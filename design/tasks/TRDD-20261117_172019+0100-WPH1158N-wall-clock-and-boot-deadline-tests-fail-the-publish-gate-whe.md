@@ -4,7 +4,7 @@ title: Wall-clock and boot-deadline tests fail the publish gate when the host is
 column: backburner
 status: tasked
 created: 2026-11-17T17:20:19+0100
-updated: 2026-11-17T17:20:19+0100
+updated: 2026-11-17T17:22:27+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -24,3 +24,7 @@ Two 14.6.3 publish attempts (2026-11-17) failed only on timing tests while the 5
 ## Approval log
 
 - 2026-11-17T17:20:19+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-17 review: governor-direct.test.ts was not yet rerun alone, so its two failures are load-caused only by analogy; run it alone (vitest --no-file-parallelism) once the 5-minute load is near the core count. The 100-process case (:482) measures concurrency with real processes; an event wait may not apply there, so decide it separately (raise its timeout with a stated WHY, or keep it and accept it needs an idle host). Load cause on 2026-11-17 is unverified: the publish was not the top consumer; no process was above 75 percent CPU at load 194, so disk wait on the 98 percent full system disk is possible.
