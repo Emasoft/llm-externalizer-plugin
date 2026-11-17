@@ -4,7 +4,7 @@ title: RL-01 Version bump
 column: todo
 status: tasked
 created: 2026-10-07T20:39:50+0200
-updated: 2026-11-16T10:27:59+0100
+updated: 2026-11-17T13:58:02+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -65,3 +65,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 ## Notes
 
 2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
+2026-11-17T13:58:01+0100 14.6.1 release output (04d412ea), recorded for the output clause. publish log reports_dev/release-next/publish-20261117_122713+0100.log line 346 'Planned: 14.6.0 -> 14.6.1 (tags: v14.6.1, llm-externalizer--v14.6.1)', line 427 'Published v14.6.1'. Version 14.6.1 in .claude-plugin/plugin.json:3, pyproject.toml:3, scripts/llm-ext/package.json:3, package-lock.json:3 and :9, uv.lock:386, src/cli/main.ts:61, README.md:9. Installed llm-ext --version prints 14.6.1. Still open: L54 (RL-02, RL-05, RL-09, RL-10 are todo) and whether the USER goals cover this publish and install. Evidence: reports_dev/release-next/20261117-release-cards-evidence.md.
