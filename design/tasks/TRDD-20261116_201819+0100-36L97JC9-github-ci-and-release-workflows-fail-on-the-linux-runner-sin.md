@@ -4,7 +4,7 @@ title: GitHub CI and Release workflows fail on the Linux runner since 2026-10-31
 column: dev
 status: tasked
 created: 2026-11-16T20:18:19+0100
-updated: 2026-11-17T09:03:17+0100
+updated: 2026-11-17T09:12:35+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -37,3 +37,4 @@ Measured 2026-11-16 from gh run logs. CI and Release have failed on every main p
 2026-11-17T02:42:34+0100 decc23b9 (branch dev/after-14.3.0, not pushed, not released): guard exempts /tmp/llm-ext-llama-cache exactly; RAM-wait until() prints broker log tails on timeout (diagnostic only, the RAM failure is not fixed). Exemption checked by ONE direct node call of setup()/teardown() with the cache moved aside (the move happened before setup() took the run lock), not by a vitest run. OWED: UBS on decc23b9 (pre-commit scan skipped at 180 s under load) and a Linux CI run.
 - 2026-11-17T07:26:38+0100 main agent: 0476ca55 fixes both Linux-only failures of CI 43983678292 in the tests (product unchanged). ps test: Linux readCommandLine reads /proc, so Linux now asserts a live pid never reads as gone (throw path tested on macOS only). RAM test: B was booked over the whole limit L when used RAM U < a/2, so neverFits sent it to the alone branch; B margin is now min(a/2, U - 0.5 GiB). Both pass alone on macOS (ps 1/1, RAM 1/1 25 s). Linux U not measured: next CI run decides. UBS: 11 of 14 changed files scanned per file, 0 critical, warnings pre-existing; split-on-overflow.ts, local-fallback.test.ts and governor-load.test.ts push the UBS js scanner past 3 GB even with --skip-type-narrowing (watchdog kill), so they are unscanned. NEXT: publish 14.6.0 with the gate when host load is low, then read CI.
 - 2026-11-17T09:03:16+0100 main agent: CI 44037104295 (v14.6.0, 0cb2f70d): stage 1 green (345 files); stage 2 only governor-load RAM test red, at the new precondition 'too little RAM (1 GiB used)'. ps test passed on Linux; no TEMP-DIR LEAK line. B must lie in (L - U, L], a window U wide whatever the limit, so the drift margin is narrowed (delta = min(a/2, U - 1/8 GiB), floor 1/4 GiB); worker editing.
+- 2026-11-17T09:12:34+0100 main agent: 7d0c0d13 landed the narrowed margin (delta = min(a/2, U - 1/8 GiB), floor 1/4 GiB); RAM test passes alone on macOS (1/1, 23 s); pre-commit UBS timed out (180 s), nothing scanned. Linux unconfirmed. RELEASE TRIGGER: the next release (patch) goes out as soon as the stale-card triage is done or by 2026-11-17 14:00, whichever is first, so main's red CI 44037104295 is not left open; then read its CI.
