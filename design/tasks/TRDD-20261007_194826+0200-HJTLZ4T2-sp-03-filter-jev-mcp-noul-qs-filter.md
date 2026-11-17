@@ -4,7 +4,7 @@ title: SP-03 filter (jev-mcp noul + qs filter)
 column: blocked
 status: tasked
 created: 2026-10-07T19:48:26+0200
-updated: 2026-11-04T10:15:37+0100
+updated: 2026-11-17T14:07:58+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,8 +16,8 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:48:26+0200
 implementation-commits: [189a6b44, f651b119, da2da099]
-blocked-by: [XHHH0N1E, LWDKZO2A]
-unblock-when: [trdd:XHHH0N1E, trdd:LWDKZO2A]
+blocked-by: [LWDKZO2A]
+unblock-when: [trdd:LWDKZO2A]
 pre-block-column: dev
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082128+0200-XHHH0N1E-in-01-shared-input-modes-through-collectinputs-filter-rank-f.md -o -f design/tasks/TRDD-20261010_082309+0200-LWDKZO2A-in-07-text-output-json-and-the-filter-flags-no-collapse-save.md
 blocker-holds-if: exit-0

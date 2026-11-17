@@ -4,7 +4,7 @@ title: SP-05 label (jev-mcp classify + qs classify)
 column: blocked
 status: tasked
 created: 2026-10-07T19:49:00+0200
-updated: 2026-11-04T10:15:39+0100
+updated: 2026-11-17T14:08:00+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,8 +16,8 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:49:00+0200
 implementation-commits: [189a6b44, f651b119, da2da099, 643d7887]
-blocked-by: [LMSYDGVB, M8GT4AYB]
-unblock-when: [trdd:LMSYDGVB, trdd:M8GT4AYB]
+blocked-by: [M8GT4AYB]
+unblock-when: [trdd:M8GT4AYB]
 pre-block-column: dev
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082136+0200-LMSYDGVB-in-02-label-labels-labels-json-question-file-inputs.md -o -f design/tasks/TRDD-20261010_082342+0200-M8GT4AYB-in-08-label-text-output-only-verbose-and-save-for-label.md
 blocker-holds-if: exit-0
