@@ -1,10 +1,10 @@
 ---
 trdd-id: S5KOOT2S
 title: classify requirements spec that extracts explicit requirements from a prompt
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T10:29:27+0100
-updated: 2026-11-16T09:24:51+0100
+updated: 2026-11-17T14:36:33+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,11 +16,11 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:29:27+0100
 implementation-commits: [d362b340]
-blocked-by: [DX4YLNI6]
+blocked-by: []
 unblock-when: [trdd:G0MS9B63, trdd:DX4YLNI6]
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*G0MS9B63\*'
 blocker-holds-if: exit-nonzero
-pre-block-column: testing
+pre-block-column: 
 ---
 
 # classify requirements spec that extracts explicit requirements from a prompt
@@ -41,6 +41,7 @@ Gap G3 of TRDD-Q2VTMG4P (capability C1). classify extract (extract.ts:3-4,39-60)
 2026-11-04T14:12:19+0100 broker/governor run at 23f40c1e on the fresh build: 2 failed, 213 passed, 3 skipped; both failures in broker.test.ts (config-dir-deleted exit at :697; M3 sweep timeout), outside classify scope, under host memory pressure. Full suite is owned by TRDD-YGF9YXF2.
 2026-11-04T14:14:40+0100 correction to the broker/governor line above: both broker.test.ts failures were possibly under host memory pressure (cause not isolated).
 2026-11-04T14:27:17+0100 the box built dist matches the committed dist is owned by TRDD-6XMCY4ZE (parked: another session holds an uncommitted dist rebuild in the main tree); this card is blocked on it only when that box is the last one open.
+- 2026-11-17 CLOSED: every Definition-of-done box is met (evidence in Notes, line dated 2026-11-17). The NEXT ACTION above is done: limitation docs committed (49dfb148), full npm test green in the 14.6.1 publish, live goal check repeated on 14.6.1.
 
 ## Approval log
 
@@ -49,6 +50,8 @@ Gap G3 of TRDD-Q2VTMG4P (capability C1). classify extract (extract.ts:3-4,39-60)
 - 2026-11-04T12:12:16+0100 — column → plan by main-agent@llm-externalizer-plugin. round 3 decided the scope: Jev scoring spec (Phase 2)
 - 2026-11-04T12:30:24+0100 — column → testing by main-agent@llm-externalizer-plugin. Phase 2 committed (d362b340); pre-declared checks pending
 - 2026-11-14T18:51:01+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
+- 2026-11-17T14:36:09+0100 — column → testing by main-agent@llm-externalizer-plugin. blockers G0MS9B63 and DX4YLNI6 closed Cleared blocked-by (--clear-blocker override).
+- 2026-11-17T14:36:33+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all Definition-of-done boxes met; shipped in 14.6.1.
 
 ## Notes
 
@@ -61,6 +64,7 @@ Superseded 2026-11-04: the planned classify requirements spec carries its own --
 2026-11-14T12:26+0100 Correction to the 12:24 line: its clause "Source under scripts/llm-ext/src at e02c93ea equals HEAD of the d362b340 line plus later commits" is garbled; read instead: e02c93ea descends from d362b340, and the commits after e02c93ea up to 29e9bf15 (3330f16f, 29e9bf15) change only design/ cards (git log e02c93ea..29e9bf15 -- scripts is empty), so the fresh-worktree check at e02c93ea holds for the source at 29e9bf15. The build in that worktree did write dist (dist files dated 12:23:06, after the 12:22:51 checkout), so the clean git status is not vacuous. Any later commit touching scripts/llm-ext/src, dist, package.json or the lock invalidates box 3; re-run it at the publish commit.
 2026-11-14T12:47+0100 Definition-of-done box 2 (full npm test at HEAD) cannot run in the main checkout until TRDD-G0MS9B63 is resolved: the better-sqlite3 binding is missing there since 2026-11-14.
 2026-11-14T18:51:16+0100: blocked on two user actions. The full npm test needs the better-sqlite3 binding rebuilt (TRDD-G0MS9B63). The live checks owed on a clean build call the remote decisions model, which answers HTTP 402 until the provider key is funded (TRDD-DX4YLNI6). The blocker probe checks G0MS9B63 only; check DX4YLNI6 by hand.
+2026-11-17T14:36:06+0100: boxes 1 and 2 met by the 14.6.1 release (commit 04d412ea, tag v14.6.1). Box 1: package.json version 14.6.1, above 14.2.0. Box 2: publish.py validate in a clean tree ran npm ci --ignore-scripts, npm rebuild better-sqlite3, typecheck, lint, build and the full npm test, all OK (reports_dev/release-next/publish-20261117_122713+0100.log lines 4-20); the dist the publish rebuilt is the dist it committed, so box 3 holds at the publish commit. TRDD-G0MS9B63 is complete and TRDD-DX4YLNI6 closed today (the key is funded). Live check repeated on installed 14.6.1: classify requirements on the goal example with --context returned exactly s3 (requirement 0.97, confidence 0.96); s2 argmax requirement 0.33 but confidence 0.11, kept out by the 0.6 gate; remote snapshot typesafe/jev-1.14-20261014, 0.00004347 USD (reports_dev/s5koot2s/live-14.6.1.out.json). Not repeated: the held-out set and the vague check (the known limitation stays documented).
 
 
 ## User directive 2026-11-04 (verbatim)
@@ -109,6 +113,6 @@ Correction 2 (review of c9a9f543): raw run-1 outputs already existed in the scra
 
 ## Definition of done
 
-- [ ] package version above the highest published version (14.2.0) before publish
-- [ ] full npm test green at HEAD (the headcheck run of 2026-11-04 used HEAD source with node_modules symlinked from the main tree)
+- [x] package version above the highest published version (14.2.0) before publish
+- [x] full npm test green at HEAD (the headcheck run of 2026-11-04 used HEAD source with node_modules symlinked from the main tree)
 - [x] clean-build re-check with a fresh install (npm ci) in a fresh worktree; built dist matches the committed dist
