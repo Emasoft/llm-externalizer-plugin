@@ -4,7 +4,7 @@ title: Split scripts/llm-ext/src/index.ts so the ubs taint analysis finishes on 
 column: backburner
 status: tasked
 created: 2026-11-17T22:41:08+0100
-updated: 2026-11-17T22:41:08+0100
+updated: 2026-11-17T22:48:06+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -24,3 +24,8 @@ USER 2026-11-17 verbatim: 'why partial runs? we cannot risk to commit bugged cod
 ## Approval log
 
 - 2026-11-17T22:41:08+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Constraints
+
+Each split step must pass ubs --staged with no partial run and no critical finding before its commit; --no-verify is not allowed for this work.
+Scope: only the 22 src .ts files over 60 KB were scanned, each alone; a staged combination of smaller files can still run partial (seen 2026-11-17 with ubs 5.4.17 elsewhere: two files timed out together while each passed alone).

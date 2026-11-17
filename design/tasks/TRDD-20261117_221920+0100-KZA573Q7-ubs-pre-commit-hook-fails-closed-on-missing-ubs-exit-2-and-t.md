@@ -1,10 +1,10 @@
 ---
 trdd-id: KZA573Q7
 title: ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
-column: backburner
+column: human_review
 status: tasked
 created: 2026-11-17T22:19:20+0100
-updated: 2026-11-17T22:19:20+0100
+updated: 2026-11-17T22:48:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-17T22:19:20+0100
+implementation-commits: [0ff28ba9, 6d76419b, f58897e8]
 ---
 
 # ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
@@ -24,3 +25,21 @@ USER 2026-11-17 verbatim: 'fix. and ubs hook must be stricter. update homebrew v
 ## Approval log
 
 - 2026-11-17T22:19:20+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Decisions
+
+USER 2026-11-17, Q1 (hook strictness): Block on all (Recommended).
+USER 2026-11-17, partial runs: first Let finished checks decide (Recommended), then reversed, verbatim: why partial runs? we cannot risk to commit bugged code. Final: partial runs block.
+Unanswered 2026-11-17 (defaults kept): warnings do not block (critical only); docs-only commits pass; tap romankurnovskii/homebrew-awesome-brew not reset.
+
+## Evidence
+
+Commits: 0ff28ba9 hook (dev/after-14.3.0), 6d76419b same hook cherry-picked onto release/13.6.1 in the main checkout (the copy core.hooksPath runs), f58897e8 README.
+Throwaway-repo cases on the final hook: index.ts copy (partial) exit 1; same with UBS_ALLOW_PARTIAL=1 exported exit 1; clean py exit 0; UBS_BIN=/nonexistent exit 1; eval(input()) exit 1. Earlier draft cases: fake 5.5.25 exit 1, fake 5.10.0 and 6.0.0 exit 0, timeout exit 1 with no scanner left. Reports: reports_dev/kza573q7/.
+Measured 2026-11-17, one run: ubs 5.5.26 on index.ts 26 s, 0 critical, exit 2 (taint_js work limit, fixed in ubs code taint_js.py max(500_000, 128 * len(code))).
+
+## Known gaps
+
+The active hook is the main checkout working-tree copy (core.hooksPath is an absolute path to it). If the main checkout switches to a branch without commit 6d76419b, every worktree silently runs the old fail-open hook or none.
+ubs refreshes helper modules over the network at run time (checksum mismatch, fetch); behaviour offline is not verified.
+Commits staging index.ts are blocked until TRDD-TYSKX72I; files with ubs criticals are tracked in TRDD-25KZDVYF.
