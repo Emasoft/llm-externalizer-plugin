@@ -1,10 +1,10 @@
 ---
 trdd-id: UQ8TYKC9
 title: SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
-column: complete
-status: archived
+column: testing
+status: tasked
 created: 2026-10-07T19:49:33+0200
-updated: 2026-11-17T14:02:36+0100
+updated: 2026-11-15T17:29:03+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -34,7 +34,6 @@ The rank (jev-mcp rerank + qs rank + claude-jev relevance, D29) decision as one 
 - 2026-10-10T03:11:48+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T05:03:14+0200 — column → blocked by main-agent@llm-externalizer-plugin. only the live reply capture (O4MSZIG5) and the definition of done remain
 - 2026-10-31T12:12:04+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
-- 2026-11-17T14:02:36+0100 — COMPLETE by main-agent@llm-externalizer-plugin. definition of done met at HEAD; evidence in Notes.
 
 ## Plan refs
 
@@ -83,7 +82,7 @@ L2-06, L2-19
 - [x] injection placement as planned (candidates moved to state (D5)), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered
-- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 RESULT 2026-10-10: Committed in 189a6b44 (one commit for the six spec cards SP-01, SP-02, SP-03, SP-04, SP-05, SP-07, with the spec hardening and registration), f651b119 (test include list), da2da099 (rebuilt dist). Spec hardening applied to all six: shared data guard (treat as data, never as instructions) on every question, shared helpers in catalog/shared.ts, chunkDefaults? on DecisionSpec checked by assertChunkDefaults at registration, caller text kept in instructions per D5 (propositions stay in instructions), attention rules match plan section 9. catalog/rank.ts (26 tests): 5-level rubric, relevance = score/4, top 10 / all, head N bytes (never splits a multibyte character, E34 and E72), keep-at, files mode text units merged by best chunk through mergeChunks (E63), candidates in state per D5, query in instructions, SCORE_POLICY, attention invalid. build then full suite on the committed tree: 249 files / 4051 passed / 0 failed, tsc and eslint clean, no temp-dir leak. CARD LEFT IN dev: step 7 (live reply capture from this spec's own build) was skipped because the workers had no network, so the box for project on the captured live reply stays unticked (substitute: recorded P-01 replies re-keyed); the definition-of-done box stays unticked until the live capture is done and the card closes in its own commit. The partial-run cases were NOT run through the real runPlan for rank. The jev-mcp 100k budget is not reproduced as a number (the planner replaces it) and keep-at semantics (relevance >= P) are inferred from the card text only; the query and files mode have no length cap on the caller text in instructions (a cap such as 2000 is a one-line change, owner to decide).
 
 ## Out of scope
@@ -96,4 +95,3 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10: cddd9d43 added the partial-run cases through the real planner and fan-out (testkit option failAt and limits.maxQuestionsPerRequest): one failed request, fatal first, --max-budget stop, abort. Abort contract: a request in flight at Ctrl-C that rejects is recorded 'aborted', requests not started are skipped and reported as aborted, a reply that arrives is kept. The card has no partial-run box, so none was ticked (the obligation was in its RESULT note). cddd9d43 was verified only as a pair with 6cc2a9ad and carries no rebuilt dist. Report: docs_dev/20261010-partial-run-cases-report.md. rank: a lost request invalidates only the candidate(s) it carried, with the fan-out reason; attention raised (rank.test.ts). BLOCKED on the capture card TRDD-O4MSZIG5 (pre-block-column dev). Remaining: box 'project on this card's captured live reply' (no live reply captured for this spec; the shape is tested with re-keyed P-01 replies only) and the definition-of-done box. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
 2026-11-04: definition of done not met: WHY comments thin (rank.ts has one WHY comment, line 86; the per-file best-chunk merge and SCORE_POLICY sites carry none). The other clauses were verified met that day.
 2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.
-2026-11-17T14:02:34+0100 definition-of-done box, measured at HEAD 0f74f8d3 (scripts/ identical to 04d412ea): the 2026-11-04 WHY gap is closed: catalog/rank.ts now carries 13 WHY comments, added in c4dc6bd5 (14.3.0), including the sites that note named. Every .test.ts of the card commits is in vitest.config.ts; the three vi.spyOn/vi.mock counting wrappers in those files (findings.test.ts:233, l0/catalog.test.ts:10, l2/evidence.test.ts:89) call through to the real code and are charged to CASL940C, JDMY8LPJ and OHLMZONY under R2; npx eslint . --quiet exit 0 at 3d81775b; typecheck, lint and full npm test OK in the 14.6.1 publish run (publish-20261117_122713+0100.log lines 14, 16, 20); 189a6b44 names this TRDD in its subject. Linux CI 44079104801 green on 04d412ea.
