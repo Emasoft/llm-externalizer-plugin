@@ -149,7 +149,7 @@ Classify decision "label" (catalog spec; flags, defaults and ranges are generate
 Example:
 ```bash
 llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl
-llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --context ./context.txt   # ships in llm-ext 14.3.0 and later
+llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --context ./context.txt   # ships in llm-ext 14.3.0 and later; measured effect on verdicts: see "Measured effect of --context" below
 ```
 
 ### `llm-ext classify rank`
@@ -524,6 +524,8 @@ Propositions mode: `propositions` 1 to 64 entries, each `text` not blank and at 
 `items` at least 1 (`text` required, `id` optional); `classes` 2 to 255, `id` non-empty and unique, never `__proto__`, `description` a string, null or absent; `mode` `json` (default) or `files`; `default`, when given, must be one of the class ids; `purpose` and `context` optional strings (run live with `context` and `default` "new" added, `label-ctx.json`: exit 0, same label as without them); the JSON of `classes` must be at most 8000 characters (`label.ts`). Output rows: `{id, label, confidence, probabilities, accepted, auto, review, tie, runnerUp, margin, invalid}`.
 
 `--context FILE` fills `context` (a file of earlier messages, `-` reads stdin; ships in llm-ext 14.3.0 and later). Giving it together with a JSON `context` is refused with `llm-ext: --context sets context, which the JSON input already holds; give it in one place`. The context travels in every request, so the cost grows with the number of requests (`--estimate` counts it), and a context too large for the model window is refused before anything is sent.
+
+Measured effect of `--context` on `classify label` (TRDD-WYY3SPDX, 2026-11-17, llm-ext 14.6.1, remote typesafe/jev-1.14): the pre-registered check failed. Each case ran once and no noise floor was measured, so these numbers may not repeat. A relevant context moved one item from a near-tie control to the label it implied ("Exporting should keep the column order.": feature 0.52 to bug 0.95). On another item it moved the probability away from the implied label (feature 0.85 to 0.65), on a case that can fairly be read either way. An unrelated context changed no top label, but it shifted the near-tie item by 0.21. Treat the context as background the model may use, not as a guarantee: review any verdict that changes when you add it.
 
 `classify find` (`catalog/find.ts`, not strict):
 

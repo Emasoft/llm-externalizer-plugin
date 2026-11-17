@@ -127,7 +127,7 @@ Repeated in sequence (n=1, 2026-11-04), 2b on the top-ranked candidate of 2a: fi
 
 ```bash
 llm-ext classify label --input ./label-r2.json --json
-llm-ext classify label --input ./label-r2.json --json --context ./context.txt   # earlier messages as background; ships in llm-ext 14.3.0 and later (label-r2.json must not hold a `context` key)
+llm-ext classify label --input ./label-r2.json --json --context ./context.txt   # earlier messages as background; ships in llm-ext 14.3.0 and later (label-r2.json must not hold a `context` key); measured effect mixed, see classify.md
 ```
 
 Results (exit 0 each, first row of `decision.rows`):

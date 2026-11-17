@@ -157,7 +157,7 @@ Flags are written `--name value`. Boolean flags (measured for `--json` and `--es
 |---|---|
 | Per-item verdicts with probabilities (verify, screen, filter, label, rank, find, decide, compare, extract, audit, review, check, findings, test-output) | `classify <decision>` |
 | Pick the explicit requirements out of a prompt, using earlier messages as context | `classify requirements` (ships in llm-ext 14.3.0 and later) (recipe: the requirements-pipeline reference below) |
-| Label items with the earlier messages of the conversation as background | `classify label --context FILE` (ships in llm-ext 14.3.0 and later) (recipe: the requirements-pipeline reference below) |
+| Label items with the earlier messages of the conversation as background | `classify label --context FILE` (ships in llm-ext 14.3.0 and later) (its effect on verdicts is measured as mixed: references/classify.md) (recipe: the requirements-pipeline reference below) |
 | Check the classifier key and the decisions service (a free key check, then one paid question to the profile model; `--no_call` sends no question and checks the key, not the credit balance (ships in llm-ext 14.3.0 and later)) | `classify ping` (ships in llm-ext 14.3.0 and later; `--max_budget` does not apply; if the remote call fails or times out, ping may ask the local mlx-decision decider instead (see the classify reference above)) |
 
 When a task fits several rows, prefer the narrowest one (`scan impl` over `scan folder` for "does this already exist", `check imports` over `llm ask` for imports, `settings status` before debugging an auth problem).
