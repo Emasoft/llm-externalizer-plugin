@@ -1269,12 +1269,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # so the result no longer depends on push.default or on the branch name
     # matching its upstream. No upstream = fail fast, never guess a destination.
     branch = run(["git", "symbolic-ref", "--short", "HEAD"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
-    remote = ""
+    # push_remote, not remote: step 3 already binds remote to the ls-remote CompletedProcess (mypy, v14.6.3 Release run).
+    push_remote = ""
     merge_ref = ""
     if branch:
-        remote = run(["git", "config", "--get", f"branch.{branch}.remote"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
+        push_remote = run(["git", "config", "--get", f"branch.{branch}.remote"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
         merge_ref = run(["git", "config", "--get", f"branch.{branch}.merge"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
-    if not (branch and remote and merge_ref):
+    if not (branch and push_remote and merge_ref):
         print(
             f"ERROR: branch {branch or '(detached HEAD)'} has no upstream; "
             f"set one with git branch --set-upstream-to=<remote>/<branch>",
@@ -1285,7 +1286,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # never --follow-tags. --follow-tags also pushes any stale unpushed annotated tag
     # reachable from HEAD (the failed 14.6.2 left two), and GitHub creates no tag push
     # events when more than three tags arrive in one push, so release.yml would not run.
-    push_result = run(["git", "push", remote, f"HEAD:{merge_ref}", f"refs/tags/{tag}", f"refs/tags/{resolver_tag}"], capture=True, check=False, cwd=str(repo_root))
+    push_result = run(["git", "push", push_remote, f"HEAD:{merge_ref}", f"refs/tags/{tag}", f"refs/tags/{resolver_tag}"], capture=True, check=False, cwd=str(repo_root))
     if push_result.returncode != 0:
         # WHY: a failed push must preserve local work and recovery evidence.
         # The previous branch ran `git reset --hard HEAD~1` and deleted both
