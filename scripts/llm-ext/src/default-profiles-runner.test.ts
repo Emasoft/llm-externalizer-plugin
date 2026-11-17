@@ -357,12 +357,18 @@ describe("spawnDetachedDetector / detectProfileChangesArgs (C2b, TRDD-OE27RD7I Â
 function recorder(holdMs: number): { script: string; records: () => Array<{ argv: string[]; requested: string | null }> } {
   const dir = mkdtempSync(join(cfg, "rec-"));
   const script = join(dir, "rec.js");
+  // The child writes a TEMP name and renames it into place (same pattern as recordedArgv above): rename is atomic on
+  // POSIX, so records() never reads a half-written file. The direct write let a poll read the empty file under load:
+  // the 2026-11-17 publish gate failed here with "Unexpected end of JSON input". The temp name must NOT end in ".json",
+  // or records() would read it too.
   writeFileSync(
     script,
     `const fs = require("node:fs");
 const path = require("node:path");
-fs.writeFileSync(path.join(${JSON.stringify(dir)}, process.pid + ".json"),
+const out = path.join(${JSON.stringify(dir)}, process.pid + ".json");
+fs.writeFileSync(out + ".tmp",
   JSON.stringify({ argv: process.argv.slice(2), requested: process.env.${PROFILE_UPDATE_REQUESTED_ENV} ?? null }));
+fs.renameSync(out + ".tmp", out);
 setTimeout(() => process.exit(0), ${holdMs});
 `,
   );
