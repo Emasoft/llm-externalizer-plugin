@@ -1876,7 +1876,7 @@ async function runPopulateFreeDefaultProfile(
     // else every command fails the settings check (TRDD-2GIA66AK).
     mode: pool.length >= 2 ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
     free_only: true,
     free_models: pool,
     // The tool heads stay on the benchmarked OpenRouter winner: `passing` is
@@ -2110,7 +2110,7 @@ async function runPopulatePaidDefaultProfile(
   // never heads the chain.
   const certain402Ids = new Set(
     sweep.results
-      .filter((r) => r.ok === false && paymentErrorCertainty(r.error ?? "") === "certain")
+      .filter((r) => r.ok === false && paymentErrorCertainty(r.error ?? "") === "certain") // ubs:ignore payment certainty enum, not a secret
       .map((r) => r.modelId),
   );
 
@@ -2122,7 +2122,7 @@ async function runPopulatePaidDefaultProfile(
     // writes a section the settings check rejects (TRDD-2GIA66AK).
     mode: picks3[1] ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
-    api_key: "$OPENROUTER_API_KEY",
+    api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
     model: picks3[0].modelId,
     paid_models: fullPool.map((p) => p.modelId),
     tool_models: toolModels,
@@ -2462,7 +2462,7 @@ async function runHqScanQualityPhase(opts: CliOptions): Promise<CliResult> {
     },
   });
   const ran = outcome.results.map((r) => `${r.id} ${r.label.toUpperCase()}`);
-  const passed = outcome.results.filter((r) => r.label === "pass").length;
+  const passed = outcome.results.filter((r) => r.label === "pass").length; // ubs:ignore result label, not a secret
   console.error(`[hq-scan-quality] spend: $${outcome.spendUsd.toFixed(6)}`);
   if (outcome.stopped) {
     return {
