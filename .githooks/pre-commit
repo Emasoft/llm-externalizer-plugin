@@ -9,27 +9,80 @@
 # prefers the default .git/hooks location can copy this script there instead
 # (README, "Contributing" → step 2a).
 
-# WHY fail-open on a missing scanner and on a timeout: a gate that blocks every
-# commit on a machine where ubs is not installed, or that hangs for minutes on
-# one large file, gets switched off with --no-verify and then guards nothing.
-# A real finding still blocks; an absent or stalled scanner only warns.
-# Measured 2026-11-09: ubs on a 4737-line TypeScript file did not finish in
-# 5m34s (killed), so the timeout is load-bearing, not paranoia.
+# WHY fail-closed (USER decision 2026-11-17, TRDD-KZA573Q7: "ubs hook must be
+# stricter", answered "Block on all"): a missing or too-old ubs, a ubs that
+# cannot run (exit 2, which includes a module timeout or crash), and a scan
+# that exceeds the timeout all BLOCK the commit with the reason printed. The
+# earlier fail-open design let each of those commits through unscanned, so the
+# gate guarded nothing exactly when the scanner was broken. `git commit
+# --no-verify` is the one explicit bypass.
+# Partial runs block too (USER, 2026-11-17: "why partial runs? we cannot risk
+# to commit bugged code."): a partial run means an analysis, such as the
+# JavaScript taint analysis that traces input into commands, did not finish, so
+# the staged code was not fully checked. Measured 2026-11-17 (one run): ubs
+# 5.5.26 stops its taint analysis on scripts/llm-ext/src/index.ts (8572 lines)
+# at a work limit fixed in its code (taint_js.py: max(500_000, 128 * len(code));
+# no setting raises it), so a commit that stages that file is blocked until the
+# file is split (TRDD-TYSKX72I).
+# The timeout is still load-bearing: measured 2026-11-09, ubs on a 4737-line
+# TypeScript file did not finish in 5m34s (killed). Hence 600 s by default.
 
 set -uo pipefail
 
-if ! command -v ubs >/dev/null 2>&1; then
-  echo "pre-commit: ubs not installed — bug scan skipped (install per /ultimate-bug-scanner)" >&2
-  exit 0
+block() {
+  printf 'pre-commit: %s\nTo commit anyway: git commit --no-verify\n' "$1" >&2
+  exit 1
+}
+
+# WHY an absolute path and a minimum version: a GUI git client, or a shell with
+# a different PATH, can resolve an older ubs copy elsewhere on PATH whose checks
+# and exit codes differ from the release this gate was written against. UBS_BIN
+# lets a contributor whose ubs is not at the Homebrew (Apple silicon) path
+# point at their own install; the minimum version applies to it too.
+ubs_bin="${UBS_BIN:-/opt/homebrew/bin/ubs}"
+ubs_min_version="5.5.26"
+# WHY put ubs's own directory first on PATH: ubs is a script that finds
+# ast-grep and its other helpers on PATH. A GUI git client often runs hooks with
+# a minimal PATH (/usr/bin:/bin), where ubs would exit 2 and block every commit.
+PATH="$(dirname "$ubs_bin"):$PATH"
+export PATH
+
+if [[ ! -x "$ubs_bin" ]]; then
+  block "ubs not found or not executable at $ubs_bin (install ubs $ubs_min_version or later, or set UBS_BIN) — commit blocked"
+fi
+
+version_line="$("$ubs_bin" --version 2>&1)"
+if [[ "$version_line" =~ v([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+  have=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+else
+  block "cannot read a version from '$ubs_bin --version' (printed: $version_line) — commit blocked"
+fi
+IFS=. read -r -a want <<< "$ubs_min_version"
+version_ok=1
+for i in 0 1 2; do
+  if (( 10#${have[i]} > 10#${want[i]} )); then break; fi
+  if (( 10#${have[i]} < 10#${want[i]} )); then version_ok=0; break; fi
+done
+if (( ! version_ok )); then
+  block "ubs ${have[0]}.${have[1]}.${have[2]} at $ubs_bin is older than the required $ubs_min_version — commit blocked"
 fi
 
 # A commit that stages no scannable language (docs, JSON, images) is not a scan
 # failure; without this ubs exits 3 and the commit would be blocked.
 export UBS_ALLOW_NO_SCAN=1
+# WHY unset: UBS_ALLOW_PARTIAL=1 exported in the caller's shell would make a
+# partial run exit on its findings instead of 2, and pass code that was not
+# fully checked.
+unset UBS_ALLOW_PARTIAL
 
-timeout_s="${UBS_PRECOMMIT_TIMEOUT:-180}"
+timeout_s="${UBS_PRECOMMIT_TIMEOUT:-600}"
+# WHY validate it: a non-numeric value makes the watcher's `sleep` fail at once,
+# which kills the scan immediately and would be reported as a timeout.
+if [[ ! "$timeout_s" =~ ^[1-9][0-9]*$ ]]; then
+  block "UBS_PRECOMMIT_TIMEOUT must be a positive whole number of seconds, got '$timeout_s' — commit blocked"
+fi
 
-echo "pre-commit: scanning staged files with ubs (timeout ${timeout_s}s)..." >&2
+echo "pre-commit: scanning staged files with ubs ${have[0]}.${have[1]}.${have[2]} (timeout ${timeout_s}s)..." >&2
 
 # WHY job control and a process-group kill: `timeout ubs` kills only the ubs
 # wrapper script; the language module it spawns (ubs-js.sh, itself under its own
@@ -37,7 +90,7 @@ echo "pre-commit: scanning staged files with ubs (timeout ${timeout_s}s)..." >&2
 # up to 15 minutes after the hook already gave up. `set -m` puts the job in its
 # own process group so a negative-pid kill reaches the whole tree.
 set -m
-ubs --staged &
+"$ubs_bin" --staged &
 scan_pid=$!
 ( sleep "$timeout_s"; kill -TERM -- -"$scan_pid" 2>/dev/null ) &
 watcher_pid=$!
@@ -58,25 +111,21 @@ case "$status" in
   # SIGTERM from the watcher: 143 is bash's exit status for a job killed by
   # SIGTERM; 124 is what `timeout` reports, kept for the same meaning.
   143|124)
-    echo "pre-commit: ubs exceeded ${timeout_s}s — scan skipped, commit allowed (set UBS_PRECOMMIT_TIMEOUT to change)" >&2
-    exit 0
+    block "ubs exceeded ${timeout_s}s, so the staged files were not scanned — commit blocked (set UBS_PRECOMMIT_TIMEOUT to change the limit)"
     ;;
-  # 2 is ubs own environment/usage failure (missing ast-grep, unverified
-  # module, timeout inside a module): the scan could not run, which is not a
-  # finding. Fail open with the reason printed, same rule as a missing binary.
+  # 2 is ubs's own failure to scan (ubs robot-docs exit-codes): invalid
+  # arguments, an environment error such as missing ast-grep or a module that
+  # failed verification, a refused scan, or a partial run where an analysis hit
+  # its work limit, timed out or crashed. Nothing was proven clean, so it blocks
+  # (TRDD-KZA573Q7).
   2)
-    echo "pre-commit: ubs could not run (exit 2, see its message above) — commit allowed" >&2
-    exit 0
+    block "ubs could not complete the scan (exit 2: environment error, refused scan, or partial run where an analysis did not finish; see its message above) — commit blocked"
     ;;
   # 3 is ubs's "nothing was scanned" code; UBS_ALLOW_NO_SCAN makes it 0, so
-  # this only fires if a future ubs version ignores the variable.
+  # this only fires if a future ubs version ignores the variable. A commit with
+  # no scannable language has nothing to scan, so it is allowed.
   3) exit 0 ;;
   *)
-    cat >&2 <<'MSG'
-pre-commit: ubs reported findings above.
-Fix them, or mark a verified false positive with a trailing `ubs:ignore` comment on the flagged line.
-To commit anyway: git commit --no-verify
-MSG
-    exit 1
+    block "ubs reported findings above (exit $status). Fix them, or mark a verified false positive with a trailing ubs:ignore comment on the flagged line"
     ;;
 esac
