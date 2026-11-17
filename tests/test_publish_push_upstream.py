@@ -111,11 +111,12 @@ def _publish(repo: Path) -> None:
 
 
 def test_push_goes_to_upstream_when_branch_name_differs(publish_repo):
-    """Branch dev/x tracking origin/main: remote main equals local HEAD, both tags arrive, stale tag does not."""
+    """Branch dev/x tracking origin/main: remote main equals local HEAD, both tags arrive, stale tags do not."""
     repo, remote = publish_repo
     _git(repo, "config", "branch.dev/x.remote", "origin")
     _git(repo, "config", "branch.dev/x.merge", "refs/heads/main")
     _git(repo, "tag", "-a", "v0.0.0-stale", "-m", "stale", "HEAD")
+    _git(repo, "tag", "-a", "test-plugin--v0.0.0-stale", "-m", "stale", "HEAD")
 
     _publish(repo)
 
@@ -123,7 +124,7 @@ def test_push_goes_to_upstream_when_branch_name_differs(publish_repo):
     assert _git(remote, "rev-parse", "refs/heads/main").stdout.strip() == head
     for t in (TAG, RESOLVER_TAG):
         assert _git(remote, "rev-parse", f"refs/tags/{t}^{{commit}}").stdout.strip() == head
-    assert _git(repo, "ls-remote", "--tags", str(remote), "v0.0.0-stale").stdout.strip() == ""
+    assert _git(repo, "ls-remote", "--tags", str(remote), "v0.0.0-stale", "test-plugin--v0.0.0-stale").stdout.strip() == ""
 
 
 def test_no_upstream_fails_fast_and_pushes_nothing(publish_repo, capsys):

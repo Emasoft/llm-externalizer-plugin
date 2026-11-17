@@ -1263,7 +1263,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # lock file and no env var — both are spoofable, ancestry is not.
     print("── 10. Push ──")
     # WHY (TRDD-Z20KCBZY): the 14.6.2 publish failed at this step because a bare
-    # `git push --follow-tags` obeys push.default=simple, which refuses to push
+    # `git push --follow-tags` (the push used before TRDD-Z20KCBZY) obeys push.default=simple, which refuses to push
     # when the local branch name (dev/after-14.3.0) differs from its upstream
     # (origin/main). The destination is now explicit (<remote> HEAD:<merge ref>),
     # so the result no longer depends on push.default or on the branch name
