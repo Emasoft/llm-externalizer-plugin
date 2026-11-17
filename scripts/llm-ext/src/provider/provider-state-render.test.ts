@@ -139,8 +139,11 @@ describe("provider-state line in the per-file reason (end to end)", () => {
     const b = await serve(HEALTHY);
     const ea = await giveUp("vendor/render-b1", depsFor(a.url));
     const eb = await giveUp("vendor/render-b2", depsFor(b.url));
-    expect(ea.message).toBe(eb.message);
-    const strip = (e: RetryDeadlineError) => JSON.stringify(e, (k, v) => (k === "elapsedMs" ? 0 : v));
+    // The message carries the elapsed seconds ("over 1s" / "over 2s"), which depend on host load, not on the degraded entry:
+    // the 2026-11-17 publish gate failed on that alone. Mask them, as strip() masks elapsedMs, and compare the rest byte for byte.
+    const noClock = (s: string) => s.replace(/ over \d+s,/g, " over <t>s,");
+    expect(noClock(ea.message)).toBe(noClock(eb.message));
+    const strip = (e: RetryDeadlineError) => noClock(JSON.stringify(e, (k, v) => (k === "elapsedMs" ? 0 : v)));
     expect(strip(ea)).toBe(strip(eb));
     expect(Object.keys(ea)).toEqual(Object.keys(eb));
     expect(Object.keys(ea.cause as object)).toEqual(Object.keys(eb.cause as object));
