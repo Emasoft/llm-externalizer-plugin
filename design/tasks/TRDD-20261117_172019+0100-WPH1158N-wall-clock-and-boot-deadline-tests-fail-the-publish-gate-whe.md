@@ -1,0 +1,26 @@
+---
+trdd-id: WPH1158N
+title: Wall-clock and boot-deadline tests fail the publish gate when the host is overloaded
+column: backburner
+status: tasked
+created: 2026-11-17T17:20:19+0100
+updated: 2026-11-17T17:20:19+0100
+current-owner: main-agent@llm-externalizer-plugin
+created-by: main-agent@llm-externalizer-plugin
+task-type: bugfix
+min-approval-requirement: none
+assignee: main-agent@llm-externalizer-plugin
+mandate: true
+mandated-by: none
+approved: true
+approval-judge: main-agent@llm-externalizer-plugin
+approval-datetime: 2026-11-17T17:20:19+0100
+---
+
+# Wall-clock and boot-deadline tests fail the publish gate when the host is overloaded
+
+Two 14.6.3 publish attempts (2026-11-17) failed only on timing tests while the 5-minute load average was 84 to 172 on 14 cores. Run 1 (stage 1): empty-pool-wait.test.ts:261 (stopCommand on a fixed 1500 ms timer; if the gate is reached after the stop, index.ts:2460-2461 correctly starts no update, so the expected one update record is missing), pick-lock.test.ts:176 (2 s busy-wait for a spawned node child to create the lock dir), completion.test.ts:791 (5475 and 5157 ms against a 5000 ms cap, HTTP 400 and 401 cases). Run 2 (stage 2): governor-direct.test.ts:482 (100 processes, 60 s test timeout) and :574 (37370 ms against 30000 ms). The three stage-1 files passed alone at 1-minute load 23 (52 of 52). Fix direction: make each test wait on the observable event (the recorded update request, the lock dir, the server's request count) instead of a fixed timer, and keep wall-clock caps only where the cap is the behaviour under test, with headroom stated in a WHY comment. Single test files may run during the work; the full suite only at publish.
+
+## Approval log
+
+- 2026-11-17T17:20:19+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
