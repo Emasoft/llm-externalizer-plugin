@@ -225633,6 +225633,7 @@ ${codeBlock}`
     modelId,
     caseScores,
     aggregate,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds(aggregate).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -227216,6 +227217,7 @@ ${codeBlock}`
     modelId,
     caseScores,
     aggregate,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds3(aggregate).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -228519,6 +228521,7 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
     caseScores,
     aggregate,
     accuracy: accuracyOf(aggregate),
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds4(aggregate).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -235206,6 +235209,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
     tool,
     perCase,
     aggregate,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesTextToolThresholds(aggregate).pass,
     costUsd: ctx.acc.costUsd,
     meanLatencyMs: ctx.acc.callCount === 0 ? 0 : ctx.acc.latencyMs / ctx.acc.callCount,

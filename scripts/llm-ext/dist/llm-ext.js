@@ -230875,6 +230875,7 @@ ${codeBlock}`
     modelId,
     caseScores,
     aggregate: aggregate2,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds(aggregate2).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -232443,6 +232444,7 @@ ${codeBlock}`
     modelId,
     caseScores,
     aggregate: aggregate2,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds3(aggregate2).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -233719,6 +233721,7 @@ The prompt's file-tag format or the fixture path form has drifted. Fix the runne
     caseScores,
     aggregate: aggregate2,
     accuracy: accuracyOf(aggregate2),
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesThresholds4(aggregate2).pass,
     costUsd,
     meanLatencyMs: callCount === 0 ? 0 : latencyTotalMs / callCount,
@@ -245872,6 +245875,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
     tool,
     perCase,
     aggregate: aggregate2,
+    // RAW gate on the whole run (TRDD-90BXJ2KO): not the stored verdict. Callers judge run.aggregate through the answered-only judge* functions; this field is read by tests only.
     pass: passesTextToolThresholds(aggregate2).pass,
     costUsd: ctx.acc.costUsd,
     meanLatencyMs: ctx.acc.callCount === 0 ? 0 : ctx.acc.latencyMs / ctx.acc.callCount,
@@ -293037,7 +293041,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.6.1";
+var VERSION = "14.6.2";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

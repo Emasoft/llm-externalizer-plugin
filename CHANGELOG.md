@@ -1,6 +1,62 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.2] - 2026-11-17
+
+### Changed
+
+- Revert "docs(trdd): close SP-04 find and SP-07 rank, definition of done met (TRDD-NGXUX45F, TRDD-UQ8TYKC9)"
+
+
+### Documentation
+
+- Docs(trdd): back-link the open gap cards to the archived Q2VTMG4P; corrections to its close (TRDD-Q2VTMG4P)
+
+- Docs(trdd): close Q2VTMG4P after the clean-build docs re-check on 14.6.1 (TRDD-Q2VTMG4P)
+
+- Docs(skill): note that classify find status varies between runs (TRDD-Q2VTMG4P)
+
+- Docs(trdd): close RPLLP8CF, scan totals verified live on 14.6.1 (TRDD-RPLLP8CF)
+
+- Docs(trdd): WYY3SPDX records the caveat commit 133e2395 (TRDD-WYY3SPDX)
+
+- Docs(skill): caveat on the measured effect of classify label --context (TRDD-WYY3SPDX)
+
+- Docs(trdd): record main-agent tsc/eslint and the judge* trace for 76de6f16 (TRDD-90BXJ2KO)
+
+- Docs(trdd): WYY3SPDX remote rerun FAIL, card back to dev (TRDD-WYY3SPDX)
+
+- Docs(trdd): close S5KOOT2S and DX4YLNI6 on the 14.6.1 evidence (TRDD-S5KOOT2S, TRDD-DX4YLNI6)
+
+- Docs(trdd): 90BXJ2KO checklist and block on the hq empty-reply decision TH00STOO (TRDD-90BXJ2KO, TRDD-TH00STOO)
+
+- Docs(benchmark): mark the raw bench-runner pass field as not the stored verdict; fix a typo (TRDD-90BXJ2KO)
+
+- Docs(trdd): close RL-12, live smoke of the 15 classify commands (TRDD-BJ8T8MKE)
+
+- Docs(trdd): record why NGXUX45F and UQ8TYKC9 reopened; note the RL-12 USER gate reading (TRDD-NGXUX45F, TRDD-UQ8TYKC9, TRDD-BJ8T8MKE)
+
+- Docs(trdd): close RL-05, CPV pass accepted with its documented integrity disable (TRDD-7KQ7OMPS)
+
+- Docs(trdd): close RL-10, 14.6.1 published with its output recorded (TRDD-VEQYFGON)
+
+- Docs(trdd): add 61EINA10 Windows CI card, block RL-08 on it, drop stale blockers (TRDD-61EINA10, TRDD-YHGYWPHQ)
+
+- Docs(trdd): close RL-02 and RL-09 for 14.6.1 (TRDD-6PIGEAN0, TRDD-5Q62G07R)
+
+- Docs(trdd): close 2GC5DHR7, the TTY refusal test ran on Linux CI (TRDD-2GC5DHR7)
+
+- Docs(trdd): close SP-04 find and SP-07 rank, definition of done met (TRDD-NGXUX45F, TRDD-UQ8TYKC9)
+
+- Docs(trdd): close IN-01 to IN-04, definition of done met at HEAD (TRDD-XHHH0N1E, TRDD-LMSYDGVB, TRDD-DCI7C2Y7, TRDD-AQ82IO1T)
+
+- Docs(trdd): record the 14.6.1 release output on RL-01, RL-02, RL-05, RL-09 (TRDD-E9AQOQ5X, TRDD-6PIGEAN0, TRDD-7KQ7OMPS, TRDD-5Q62G07R)
+
+- Docs(trdd): close 36L97JC9, CI and Release green on 04d412ea (TRDD-36L97JC9)
+
+- Docs(trdd): 7CFPEDUK names the model SSD generically, not by its mount path
+
+
 ## [14.6.1] - 2026-11-17
 
 ### Documentation
