@@ -1,10 +1,10 @@
 ---
 trdd-id: XHHH0N1E
 title: IN-01 Shared input modes through collectInputs (filter, rank, find)
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-10T08:21:28+0200
-updated: 2026-11-16T09:24:50+0100
+updated: 2026-11-17T14:00:52+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -49,7 +49,7 @@ None. First card of the set; dispatchable as is.
 - [x] rank and find run with `mode: "files"`; rank `--top`/`--keep-at`, find `--chunk`/`--min-score`/`--top` still parse as thresholds
 - [x] plain JSON mode (`--input`, stdin) behaves exactly as before (existing tests green after the Buffer change)
 - [x] `classifyArgv` does not treat the token after `--lines` / `--follow-symlinks` as a value; `definitions.ts` advertises the input flags for filter/rank/find only
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 
 ## Approval log
 
@@ -63,6 +63,7 @@ None. First card of the set; dispatchable as is.
 - 2026-11-05T01:43:55+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b passed npm test; no blocker left Cleared blocked-by (all blockers terminal).
 - 2026-11-14T18:50:58+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
 - 2026-11-16T09:24:50+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
+- 2026-11-17T14:00:52+0100 — COMPLETE by main-agent@llm-externalizer-plugin. definition of done met at HEAD 3d81775b; evidence in Notes.
 
 ## Notes
 
@@ -87,3 +88,4 @@ None. First card of the set; dispatchable as is.
 2026-11-05T03:15+0100 Checked: the comments around qs.mjs:891 and :916 give no reason for 400. Whether a port from a named source counts as a WHY is an owner question on TRDD-AFX6CR8K; until it is answered, "the clause met for it" in the 03:06 line is the main agent's judgement only.
 2026-11-05T03:26+0100 implementation-commits now also lists 61efae4e and 948870d4, which added and corrected the WHY of the -o exemption in the single-dash refusal.
 2026-11-05T04:12+0100 blocker-probe re-pointed to design/archived/: TRDD-S3QEQBYV is complete and was moved there, so the old design/tasks path failed grep and reported a blocker that no longer held.
+2026-11-17T14:00:51+0100 definition-of-done box, measured at HEAD 3d81775b (scripts/ identical to 04d412ea, git diff --stat empty): every .test.ts touched by the card commits is in scripts/llm-ext/vitest.config.ts and has no vi.mock, vi.spyOn, vi.doMock or vi.stubGlobal call (R4 seams converted by TRDD-S3QEQBYV, complete); npx eslint . --quiet from scripts/llm-ext exit 0; typecheck, lint and full npm test OK in the 14.6.1 publish run (publish-20261117_122713+0100.log lines 14, 16, 20), whose tree is 04d412ea; at least one implementation commit names this TRDD in its subject, so the R1 reading (body only) is not needed here; WHY verdict recorded 2026-11-05T02:58. Linux CI 44079104801 green on 04d412ea.

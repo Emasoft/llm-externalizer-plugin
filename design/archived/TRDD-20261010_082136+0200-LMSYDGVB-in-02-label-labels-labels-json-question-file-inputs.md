@@ -1,10 +1,10 @@
 ---
 trdd-id: LMSYDGVB
 title: IN-02 label (--labels, --labels-json, --question, file inputs)
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-10T08:21:36+0200
-updated: 2026-11-16T09:24:51+0100
+updated: 2026-11-17T14:00:53+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -45,7 +45,7 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 - [x] `@dir` refused (E41)
 - [x] chunked file item takes the default-label no-vote rule (E117)
 - [x] `classify label --labels a,b <files>` runs end to end through runDecisionArgv, items from collectInputs
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 
 ## Approval log
 
@@ -58,6 +58,7 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 - 2026-11-05T01:43:55+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b passed npm test; no blocker left Cleared blocked-by (all blockers terminal).
 - 2026-11-14T18:51:00+0100 — column → blocked by main-agent@llm-externalizer-plugin. only the full npm test remains, and it cannot pass until the better-sqlite3 binding is rebuilt (TRDD-G0MS9B63, user action)
 - 2026-11-16T09:24:51+0100 — column → testing by main-agent@llm-externalizer-plugin. blocker G0MS9B63 complete Cleared blocked-by (--clear-blocker override).
+- 2026-11-17T14:00:53+0100 — COMPLETE by main-agent@llm-externalizer-plugin. definition of done met at HEAD 3d81775b; evidence in Notes.
 
 ## Notes
 
@@ -77,3 +78,4 @@ Plan 281; E41 (`@dir` refused); qs:986-996, 998-1010.
 2026-11-05T02:58+0100 WHY-comment pass (definition-of-done clause: WHY comments at non-obvious rules): a worker read the src diffs of the card commits and reported per-card verdicts with a spot-check (reports_dev/ygf9yxf2/20261105_021126+0100-why-review-findings.md, gitignored); the main agent re-read every gap it reported. Evidence limit: src diffs only, not tests, dist or the rest of each file. Commits 61efae4e and 948870d4 changed only comments in scripts/llm-ext/src/classifiers/run-decision.ts, so the 01:55 note's "scripts/ unchanged since c668389e" no longer holds literally. Checks at 948870d4 in a scratch worktree (node_modules symlinked from the main tree, lockfile not rechecked): tsc --noEmit -p scripts/llm-ext/tsconfig.json exit 0; eslint . from scripts/llm-ext 611 files including run-decision.ts, 0 errors, 0 warnings; run-decision.test.ts 65/65; the full suite was not rerun after c668389e (only comments changed since). No box ticked while rule R1 (TRDD-M2H4RJVQ) is unratified.
 2026-11-05T02:58+0100 Verdict for this card (a77c0f96, 04e9b517): no non-obvious rule without a WHY found.
 2026-11-05T03:06+0100 vitest include list (scripts/llm-ext/vitest.config.ts as committed at 73f863a3): every .test.ts file touched by a77c0f96 and 04e9b517 is listed: src/classifiers/input-args.test.ts (line 768), src/tools/definitions-classify.test.ts (756).
+2026-11-17T14:00:51+0100 definition-of-done box, measured at HEAD 3d81775b (scripts/ identical to 04d412ea, git diff --stat empty): every .test.ts touched by the card commits is in scripts/llm-ext/vitest.config.ts and has no vi.mock, vi.spyOn, vi.doMock or vi.stubGlobal call (R4 seams converted by TRDD-S3QEQBYV, complete); npx eslint . --quiet from scripts/llm-ext exit 0; typecheck, lint and full npm test OK in the 14.6.1 publish run (publish-20261117_122713+0100.log lines 14, 16, 20), whose tree is 04d412ea; at least one implementation commit names this TRDD in its subject, so the R1 reading (body only) is not needed here; WHY verdict recorded 2026-11-05T02:58. Linux CI 44079104801 green on 04d412ea.
