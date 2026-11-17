@@ -1368,7 +1368,7 @@ export const SHIPPED_PLACEHOLDER_SHAPES: Readonly<Record<string, readonly Profil
       free_only: true,
       free_models: [],
       model: PLACEHOLDER_MODEL_ID,
-      api_key: "$OPENROUTER_API_KEY",
+      api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
     },
   ],
   "paid-ensemble": [
@@ -1378,7 +1378,7 @@ export const SHIPPED_PLACEHOLDER_SHAPES: Readonly<Record<string, readonly Profil
       model: PLACEHOLDER_MODEL_ID,
       second_model: PLACEHOLDER_MODEL_ID,
       third_model: PLACEHOLDER_MODEL_ID,
-      api_key: "$OPENROUTER_API_KEY",
+      api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
     },
   ],
   "paid-mass-scout": [
@@ -1386,7 +1386,7 @@ export const SHIPPED_PLACEHOLDER_SHAPES: Readonly<Record<string, readonly Profil
       mode: "remote",
       api: "openrouter-remote",
       model: PLACEHOLDER_MODEL_ID,
-      api_key: "$OPENROUTER_API_KEY",
+      api_key: "$OPENROUTER_API_KEY", // ubs:ignore env-var reference, not a secret
     },
   ],
 };
@@ -1870,7 +1870,7 @@ export function migrateSettingsTo141(
         // own env-var auth, ONE model, no name/url overrides. Anything else is
         // a user edit — not ours to move.
         if (g.api !== "chat-b-ai-remote") return null;
-        if (g.api_key !== API_PRESETS["chat-b-ai-remote"]?.defaultAuthEnv) return null;
+        if (g.api_key !== API_PRESETS["chat-b-ai-remote"]?.defaultAuthEnv) return null; // ubs:ignore compares env-var names, not secret values
         if (g.name !== undefined || g.url !== undefined) return null;
         const models = g.models;
         if (
