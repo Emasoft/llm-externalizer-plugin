@@ -46,6 +46,7 @@ export type Refusal =
   | { ok: false; kind: "unsplittable-too-large"; message: string }
   | { ok: false; kind: "unsplittable-too-many-questions"; message: string }
   | { ok: false; kind: "request-too-large"; offset: number; message: string }
+  | { ok: false; kind: "request-unsplittable"; message: string }
   | { ok: false; kind: "too-many-requests"; needed: number; maxRequests: number; message: string };
 
 function unitName(index: number, unit: BuiltUnit): string {
@@ -149,6 +150,56 @@ export function planRequests<U extends BuiltUnit>(job: SplitJob<U>, limits: Mode
   return "job" in expanded ? planExpanded(expanded.job, limits) : expanded;
 }
 
+// TRDD-1L9VMEY7: a little under the measured ratio, so the pieces of a refused request land under the decider limit and not exactly on it.
+const REPLAN_MARGIN = 0.95;
+
+/**
+ * TRDD-1L9VMEY7: re-plan the units of ONE planned request into smaller requests, after the local decider refused it with a 422
+ * ("needs 16460 tokens; the limit is 16384", measured 2026-11-17). WHY it exists: the planner sizes by the l1 estimate, which is
+ * not the decider tokenizer (on code it overcounts about 40 percent, on base64-like text it undercounts up to 2x), so no fixed margin
+ * is safe and a request planned under the limit can still be over it by the decider own count.
+ * WHY the budget is limit x (estimated / needed): that ratio is the decider own measure of how many of OUR estimated tokens fit its
+ * window for THIS content; REPLAN_MARGIN keeps the pieces off the edge, and it is never above the original context.
+ * WHY the units are sliced from the re-expanded job, not taken from request.units: those are already renumbered, and a renumber is
+ * given the job-wide index, so it must see the original units at their job-wide offset (planExpanded baseOffset). `limits` must be the
+ * limits the job was first planned with (chunkChars included) so the expanded list is the same one request.offset indexes.
+ * A request that cannot be split (an unsplittable question travels with every unit, or it holds 1 unit) or whose re-plan does not
+ * yield at least 2 requests is a refusal: the caller keeps the original 422 as the failure.
+ */
+export function replanRequest<U extends BuiltUnit>(job: SplitJob<U>, request: PlannedRequest<U>, limits: ModelLimits, overflow: { neededTokens: number; limitTokens: number }): Plan<U> | Refusal {
+  if (!(overflow.neededTokens > 0) || !(overflow.limitTokens > 0)) throw new Error(`the overflow counts must be positive, got needed ${overflow.neededTokens} and limit ${overflow.limitTokens}`);
+  if (Object.keys(job.unsplittable).length > 0) return { ok: false, kind: "request-unsplittable", message: "the request carries unsplittable questions that travel with every unit, so it cannot be split" };
+  if (request.units.length < 2) return { ok: false, kind: "request-unsplittable", message: "the request holds 1 unit, which cannot be split" };
+  const expanded = expandTextUnits(job, limits);
+  if (!("job" in expanded)) return expanded;
+  const slice = expanded.job.units.slice(request.offset, request.offset + request.units.length);
+  if (slice.length !== request.units.length) throw new Error(`request.offset ${request.offset} with ${request.units.length} units is outside the ${expanded.job.units.length} expanded units; limits must be the ones the job was planned with`);
+  const contextTokens = Math.min(limits.contextTokens, Math.floor(overflow.limitTokens * (request.tokens / overflow.neededTokens) * REPLAN_MARGIN));
+  if (contextTokens <= limits.envelopeTokens) return { ok: false, kind: "request-unsplittable", message: `the scaled budget of ${contextTokens} tokens leaves no room after the ${limits.envelopeTokens} token envelope` };
+  const scaled: ModelLimits = { ...limits, contextTokens, maxRequests: slice.length };
+  // WHY recursive: under the scaled budget a unit may not fit even alone (the decider counted it far above our estimate). That unit must not
+  // sink the re-plan of its neighbours, so it goes alone in its own request, planned under the ORIGINAL limits where it already fitted (the
+  // decider then refuses it alone and only its own questions end as no answer), and the units before and after it are re-planned the same way.
+  const planSlice = (units: U[], base: number): PlannedRequest<U>[] | Refusal => {
+    if (units.length === 0) return [];
+    const sub = planExpanded({ ...expanded.job, units }, scaled, base);
+    if (sub.ok) return sub.requests;
+    if (sub.kind !== "unit-too-large") return sub;
+    const i = sub.unitIndex;
+    const before = planSlice(units.slice(0, i), base);
+    if ("ok" in before) return before;
+    const own = planExpanded({ ...expanded.job, units: [units[i]!] }, { ...limits, maxRequests: 1 }, base + i);
+    if (!own.ok) return own;
+    const after = planSlice(units.slice(i + 1), base + i + 1);
+    if ("ok" in after) return after;
+    return [...before, ...own.requests, ...after];
+  };
+  const requests = planSlice(slice, request.offset);
+  if ("ok" in requests) return requests;
+  if (requests.length < 2) return { ok: false, kind: "request-unsplittable", message: "the re-plan did not split the request into smaller ones" };
+  return { ok: true, requests };
+}
+
 
 // L2-03, plan §5 Limits: the profile fields the planner limits read (the classifier profile of config.ts, structurally; l2 must not import config).
 export interface LimitsProfile { context_tokens?: number; max_requests_per_call: number; concurrency: number }
@@ -178,7 +229,8 @@ export function modelLimits(input: LimitsInput): ModelLimits | LimitsRefusal {
   return { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: profile.max_requests_per_call, concurrency: profile.concurrency, ...(input.maxQuestionsPerRequest === undefined ? {} : { maxQuestionsPerRequest: input.maxQuestionsPerRequest }) };
 }
 
-function planExpanded<U extends BuiltUnit>(job: SplitJob<U>, limits: ModelLimits): Plan<U> | Refusal {
+// TRDD-1L9VMEY7: `baseOffset` is the index of job.units[0] in the EXPANDED list of the whole job (0 for a whole-job plan). WHY: renumber and PlannedRequest.offset are job-wide indices; a re-plan of the units of ONE request (replanRequest) plans a slice, and without the base its renumber would restart at 0 and point at the wrong units.
+function planExpanded<U extends BuiltUnit>(job: SplitJob<U>, limits: ModelLimits, baseOffset = 0): Plan<U> | Refusal {
   for (const [name, v] of [["contextTokens", limits.contextTokens], ["maxRequests", limits.maxRequests]] as const) {
     if (!Number.isInteger(v) || v < 1) throw new Error(`${name} must be a positive integer, got ${String(v)}`);
   }
@@ -206,15 +258,15 @@ function planExpanded<U extends BuiltUnit>(job: SplitJob<U>, limits: ModelLimits
   const base = tok({ state: { shared: job.sharedState, units: [] }, questions: {} });
 
   const build = (units: U[], offset: number, extra: Record<string, Question>): PlannedRequest<U> | Refusal => {
-    const finalUnits = renumbered(job, units, offset);
+    const finalUnits = renumbered(job, units, baseOffset + offset);
     const questions: Record<string, Question> = {};
     for (const u of finalUnits) Object.assign(questions, u.questions);
     Object.assign(questions, extra);
     const state = { shared: job.sharedState, units: finalUnits.map((u) => u.state) };
     // Why the real body is measured again: renumber may change text length, and a request over the limit is HTTP 400 max_tokens_exceeded, never retried. Without renumber it cannot fire: the estimate is per-char over the JSON text and every piece sum (ceil per piece, a whole token per comma, braces counted per question) is at least the estimate of the whole body.
     const tokens = tok({ state, questions }) + limits.envelopeTokens;
-    if (tokens > limits.contextTokens) return { ok: false, kind: "request-too-large", offset, message: `the request for units from ${offset} is ${tokens} tokens after renumbering, over the limit of ${limits.contextTokens}` };
-    return { state, questions, units: finalUnits, offset, tokens };
+    if (tokens > limits.contextTokens) return { ok: false, kind: "request-too-large", offset: baseOffset + offset, message: `the request for units from ${baseOffset + offset} is ${tokens} tokens after renumbering, over the limit of ${limits.contextTokens}` };
+    return { state, questions, units: finalUnits, offset: baseOffset + offset, tokens };
   };
 
   // L2-02, E44: an unsplittable question travels with every unit (SplitJob does not say which units it references, so all of them), hence one request or a refusal. This replaces the per-unit E42 check: the aggregate is the check.

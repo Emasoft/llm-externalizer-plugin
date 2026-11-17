@@ -24,6 +24,7 @@ import { InputError } from "./l2/input-error.js";
 import type { CollectOptions } from "./l2/inputs.js";
 import { assertChunkChars } from "./l2/chunker.js";
 import { ENVELOPE_TOKENS, modelLimits, planRequests, type PlannedRequest } from "./l2/planner.js";
+import { answerWithSplit } from "./l2/split-on-overflow.js";
 import { LOCAL_DECISION_API, LOCAL_DECISION_CONTEXT_TOKENS, localsPlatformSupported } from "../config.js";
 import { PolicyError, resolveThresholds } from "./l2/policy-kit.js";
 import { resolveClassifierApiKey, resolveClassifierProfile, selectClassifierProfile, type ClassifierProfileInput, type ResolvedClassifierProfile } from "./l2/profile.js";
@@ -279,7 +280,9 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
     // remote path plans under the same constant while the fallback is on, so the two can never disagree.
     const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
     const limits = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
-    const plan = planRequests(built, { ...limits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) });
+    // WHY kept: a decider 422 re-plans the refused request (answerWithSplit) and needs the limits the job was planned with, chunkChars included.
+    const localPlanLimits = { ...limits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) };
+    const plan = planRequests(built, localPlanLimits);
     if (!plan.ok) throw new Refusal(plan.message);
     // WHY no checkEstimate: every local request costs 0, so --max-budget can never be exceeded by this run.
     if (req.estimate === true) return estimateOutcome(buildEstimate(command, plan.requests.map((r) => r.tokens), { id: local.model, promptUsdPerM: 0 }, true));
@@ -287,20 +290,28 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
     usedOtherModel = true;
     const ctrlCLocal = installCtrlC(deps.sigint);
     const execLocal = async (request: PlannedRequest): Promise<ExecReply> => {
-      const answered = await answerWithLocalDecider({
-        settings: localOnlySettings(deps.localFallback),
-        fetchImpl: deps.fetch,
-        signal: AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]),
-        call: { state: request.state, questions: request.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
-        decider: deps.localFallbackDeps,
+      // TRDD-1L9VMEY7: a decider 422 (measured 2026-11-17: "needs 16460 tokens; the limit is 16384") splits THIS request by the decider own counts and sends the pieces (answerWithSplit), so a request the l1 estimate planned under the limit no longer turns every one of its questions into "no answer".
+      const stop = AbortSignal.any([ctrlCLocal.signal, commandStopSignal()]);
+      const answered = await answerWithSplit({
+        job: built,
+        limits: localPlanLimits,
+        request,
+        stop,
+        ask: (r) => answerWithLocalDecider({
+          settings: localOnlySettings(deps.localFallback),
+          fetchImpl: deps.fetch,
+          signal: stop,
+          call: { state: r.state, questions: r.questions, trace: local.trace, sessionId: local.sessionId, user: local.user },
+          decider: deps.localFallbackDeps,
+        }),
       });
       if (answered.ok) return answered.reply;
       // WHY throwIfStopped first: a command stop during the wait must end the run as the stop, as on the remote path.
       throwIfStopped();
       // WHY the decider's reason is the failure (fail fast, no remote fallback): a local-only profile has nothing else to ask.
-      // A 422 keeps its class (bad-request, exit 4) and the decider text verbatim; anything else is the decider not answering (unavailable, exit 5).
+      // WHY the counts are kept (TRDD-1L9VMEY7): an unsplittable request keeps the decider 422 as its failure, with the numbers it named.
       const cause = answered.disabled ? undefined : answered.error;
-      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...(cause?.status === undefined ? {} : { status: cause.status }) });
+      throw new ClassifierError({ class: cause?.class ?? "unavailable", message: answered.reason, retryable: false, ...(cause?.status === undefined ? {} : { status: cause.status }), ...(cause?.needed_tokens === undefined ? {} : { needed_tokens: cause.needed_tokens }), ...(cause?.limit_tokens === undefined ? {} : { limit_tokens: cause.limit_tokens }) });
     };
     let mergedLocal: MergedReply;
     try {
@@ -380,7 +391,9 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   // fallback can never answer, and splitting remote requests for it would only add remote requests.
   const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
   const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
-  const plan = planRequests(built, { ...planLimits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) });
+  // WHY kept: the local escalation of a refused piece re-plans it on a decider 422 (answerWithSplit) with the limits the job was planned with, chunkChars included.
+  const remotePlanLimits = { ...planLimits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) };
+  const plan = planRequests(built, remotePlanLimits);
   // WHY returned, not thrown, by the planner: a refusal is an answer about the input; nothing was sent.
   if (!plan.ok) throw new Refusal(plan.message);
   refusing(1, () => checkEstimate({ maxBudgetUsd: req.maxBudgetUsd, estimatedInputTokens: plan.requests.reduce((n, r) => n + r.tokens, 0), model: resolved }));
@@ -516,16 +529,24 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
       // (malformed, over any window, over any size cap), so the decider would refuse the
       // same request for the same reason. Everything else means the remote side could not answer at all.
       if (NO_LOCAL_RESCUE.has(e.class)) throw e;
-      const local = await answerWithLocalDecider({
-        settings: { ...(deps.localFallback === undefined ? {} : { local_fallback: deps.localFallback }) },
-        fetchImpl: deps.fetch,
-        signal: AbortSignal.any([ctrlC.signal, commandStopSignal()]),
-        // WHY the decider gets its own budget instead of the remainder the remote attempts left: the fallback
-        // exists for the request whose remote attempts SPENT the budget (a timeout is the common case), so reusing
-        // the remainder would disable it exactly there. The budget and the retries are local_fallback settings
-        // (requestTimeoutMs, attemptTimeoutMs, maxAttempts), read inside answerWithLocalDecider.
-        call: { state: request.state, questions: request.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
-        decider: deps.localFallbackDeps,
+      // TRDD-1L9VMEY7: the piece the remote side failed is planned for min(remote limit, decider limit) by the l1 estimate, which is not the decider tokenizer, so the decider can still refuse it with a 422 (measured 2026-11-17: "needs 16460 tokens; the limit is 16384"); answerWithSplit then splits it by the decider own counts instead of failing every question of it.
+      const stop = AbortSignal.any([ctrlC.signal, commandStopSignal()]);
+      const local = await answerWithSplit({
+        job: built,
+        limits: remotePlanLimits,
+        request,
+        stop,
+        ask: (r) => answerWithLocalDecider({
+          settings: { ...(deps.localFallback === undefined ? {} : { local_fallback: deps.localFallback }) },
+          fetchImpl: deps.fetch,
+          signal: stop,
+          // WHY the decider gets its own budget instead of the remainder the remote attempts left: the fallback
+          // exists for the request whose remote attempts SPENT the budget (a timeout is the common case), so reusing
+          // the remainder would disable it exactly there. The budget and the retries are local_fallback settings
+          // (requestTimeoutMs, attemptTimeoutMs, maxAttempts), read inside answerWithLocalDecider.
+          call: { state: r.state, questions: r.questions, provider: profile.provider, sessionId: profile.sessionId, user: profile.user, trace: profile.trace },
+          decider: deps.localFallbackDeps,
+        }),
       });
       // WHY a disabled fallback is silent: "off" is the configuration the caller chose, so saying it per failed
       // request is noise; every other refusal (unreachable, not installed, still loading, wrong model) is said.

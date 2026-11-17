@@ -783,6 +783,8 @@ export default defineConfig({
       'src/classifiers/l2/local-decider.test.ts',
       // Retry policy of the local decider tier (TRDD-O93LFMF3): fixed rescan pause, fast-fail memo, outer deadline on the wait; injected fetch and fake clock.
       'src/classifiers/l2/local-fallback.test.ts',
+      // TRDD-1L9VMEY7: answerWithSplit on the real planner and local sender; a 422 over the decider limit splits the request by the decider own counts.
+      'src/classifiers/l2/split-on-overflow.test.ts',
       // Review round on PT-06/PF-03: migration notice, tables vs generated sections, or-jev tuning, error duplicates, banner; real /tmp files.
       'src/profile-review-round.test.ts',
       // PF-02 (TRDD-FFPDWWGN): selection-time decisions-catalog checks (guard, model exists, E19, E16) over the real P-02 catalog; replay fetch, no network.

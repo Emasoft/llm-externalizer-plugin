@@ -26,6 +26,14 @@ export interface ClassifierErrorFields {
   reason?: string;
   provider_code?: string;
   remedy_hint?: string;
+  /**
+   * TRDD-1L9VMEY7: the tokens the local decider counted for the refused request and its prompt limit, parsed once from its 422
+   * text (l0/local-transport.ts). WHY structured numbers: the planner sizes by the l1 estimate, which is not the decider tokenizer
+   * (measured: a request planned under 16384 was refused as 16460), so the caller must re-plan with the measured ratio and cannot
+   * do that from the sentence.
+   */
+  needed_tokens?: number;
+  limit_tokens?: number;
   retryable: boolean;
 }
 
@@ -36,6 +44,8 @@ export class ClassifierError extends Error implements ClassifierErrorFields {
   readonly reason?: string;
   readonly provider_code?: string;
   readonly remedy_hint?: string;
+  readonly needed_tokens?: number;
+  readonly limit_tokens?: number;
   readonly retryable: boolean;
   constructor(f: ClassifierErrorFields) {
     super(f.message);
@@ -46,6 +56,8 @@ export class ClassifierError extends Error implements ClassifierErrorFields {
     this.reason = f.reason;
     this.provider_code = f.provider_code;
     this.remedy_hint = f.remedy_hint;
+    this.needed_tokens = f.needed_tokens;
+    this.limit_tokens = f.limit_tokens;
     this.retryable = f.retryable;
   }
 }

@@ -62,6 +62,20 @@ function serverMessage(bodyText: string): string {
 }
 
 /**
+ * TRDD-1L9VMEY7: the token counts of the decider 422 text ("the question with its state needs 16460 tokens; the limit is 16384 and
+ * input is not cut", measured 2026-11-17), or undefined when the text has another shape. WHY parsed once here: the planner sizes
+ * requests by the l1 estimate, which is not the decider tokenizer, so the caller needs the decider own numbers to re-plan a refused
+ * request (l2/planner.ts replanRequest); an unparsable text keeps the old behaviour (no fields, the 422 stays a plain failure).
+ */
+export function parseOverLimit(message: string): { needed_tokens: number; limit_tokens: number } | undefined {
+  const m = /needs (\d+) tokens\b[\s\S]*?\bthe limit is (\d+)/.exec(message);
+  if (m === null) return undefined;
+  const needed = Number(m[1]);
+  const limit = Number(m[2]);
+  return needed > 0 && limit > 0 ? { needed_tokens: needed, limit_tokens: limit } : undefined;
+}
+
+/**
  * Send one local decisions request. Returns the parsed reply, or throws a ClassifierError: `bad-response`
  * for a truncated answer, `bad-request` for the decider 422, the generic classified error for every other
  * non-2xx, and `network`/`timeout` when nothing was served. Never retried here — the caller owns that.
@@ -108,7 +122,7 @@ export async function callLocalDecisions(call: LocalDecisionsCall, opts: LocalCa
     // to "API error 422: <sanitized body>" and lose the numbers the user has to act on.
     if (res.status === 422) {
       const message = serverMessage(text);
-      throw new ClassifierError({ class: "bad-request", status: 422, message, reason: message, retryable: false });
+      throw new ClassifierError({ class: "bad-request", status: 422, message, reason: message, retryable: false, ...parseOverLimit(message) });
     }
     throw classifyHttpError(res.status, res.headers, text);
   }

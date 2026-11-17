@@ -4,7 +4,7 @@ import { noul } from "../l1/questions.js";
 import { estimateTokens } from "../l1/estimate.js";
 import type { DecisionsModel } from "../l0/catalog.js";
 import { endpointPromptLimit, resolveModel } from "../l0/model.js";
-import { ENVELOPE_TOKENS, chunkOf, modelLimits, planRequests, toGlobalIndex, type ModelLimits, type SplitJob } from "./planner.js";
+import { ENVELOPE_TOKENS, chunkOf, modelLimits, planRequests, replanRequest, toGlobalIndex, type ModelLimits, type SplitJob } from "./planner.js";
 
 const limits = (o: Partial<ModelLimits> = {}): ModelLimits => ({ contextTokens: 1000, envelopeTokens: 64, maxRequests: 100, concurrency: 4, ...o });
 const atom = (i: number, text = "x".repeat(1600)) => ({ kind: "atomic" as const, state: { text }, questions: { [`q${i}`]: noul(`Is claim ${i} true?`) } });
@@ -381,5 +381,102 @@ describe("review round 2", () => {
 
   it("throws naming sharedState when it is undefined (JSON would drop it)", () => {
     expect(() => planRequests({ sharedState: undefined, units: [atom(0, "s")], unsplittable: {} }, limits())).toThrow(/sharedState is undefined/);
+  });
+});
+
+describe("replanRequest (TRDD-1L9VMEY7: split a request the decider refused with a 422)", () => {
+  const big = limits({ contextTokens: 4000 });
+  const claimJob = (n: number): SplitJob => ({ sharedState: "ev", units: Array.from({ length: n }, (_v, i) => ({ ...claim(i), state: { claim: "x".repeat(1600) } })), unsplittable: {}, renumber: renumberClaims });
+
+  it("splits a later request into smaller ones that keep every key once, in order, with job-wide renumbering", () => {
+    const j = claimJob(12);
+    const plan = planRequests(j, big);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(plan.requests.length).toBeGreaterThan(1);
+    const refused = plan.requests[1]!;
+    expect(refused.offset).toBeGreaterThan(0);
+    // The decider counted 1.5 times our estimate and its limit equals the planning limit.
+    const needed = Math.ceil(refused.tokens * 1.5);
+    const sub = replanRequest(j, refused, big, { neededTokens: needed, limitTokens: 4000 });
+    if (!sub.ok) throw new Error(sub.message);
+    expect(sub.requests.length).toBeGreaterThan(1);
+    // every key of the refused request, once, in order
+    expect(sub.requests.flatMap((r) => Object.keys(r.questions))).toEqual(Object.keys(refused.questions));
+    // contiguous job-wide offsets starting where the refused request started
+    let at = refused.offset;
+    for (const r of sub.requests) {
+      expect(r.offset).toBe(at);
+      at += r.units.length;
+      // renumbering is relative to the piece, keys stay job-wide
+      r.units.forEach((u, local) => {
+        expect(Object.values(u.questions)[0]!.instructions).toBe(`Is claims[${local}] supported?`);
+        expect(Object.keys(u.questions)[0]).toBe(`k${toGlobalIndex(r, local)}`);
+      });
+      // each piece fits the budget scaled by the decider ratio (limit x estimated/needed x 0.95)
+      expect(r.tokens).toBeLessThanOrEqual(Math.floor(4000 * (refused.tokens / needed) * 0.95));
+    }
+    expect(at).toBe(refused.offset + refused.units.length);
+  });
+
+  it("plans the pieces under the limit the job was planned with when the decider window is larger than it", () => {
+    const j = claimJob(12);
+    const small = limits({ contextTokens: 3000 });
+    const plan = planRequests(j, small);
+    if (!plan.ok) throw new Error(plan.message);
+    const refused = plan.requests[0]!;
+    // The decider window (4000) is above the planning context (3000) and it still refused the request: needed 4500 > 4000.
+    const sub = replanRequest(j, refused, small, { neededTokens: 4500, limitTokens: 4000 });
+    if (!sub.ok) throw new Error(sub.message);
+    expect(sub.requests.length).toBeGreaterThan(1);
+    for (const r of sub.requests) expect(r.tokens).toBeLessThanOrEqual(3000);
+  });
+
+  it("a unit too big for the scaled budget goes alone in its own request and its neighbours are still re-planned", () => {
+    const states = ["x".repeat(1000), "x".repeat(1000), "x".repeat(1000), "x".repeat(5400), "x".repeat(1000), "x".repeat(1000)];
+    const j: SplitJob = { sharedState: "ev", units: states.map((s, i) => ({ ...claim(i), state: { claim: s } })), unsplittable: {}, renumber: renumberClaims };
+    const plan = planRequests(j, big);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(plan.requests).toHaveLength(1);
+    const refused = plan.requests[0]!;
+    // The decider counted 3 times our estimate, so the scaled budget (about 1270) is below the estimate of the 5400-char unit alone (about 1900).
+    const sub = replanRequest(j, refused, big, { neededTokens: refused.tokens * 3, limitTokens: 4000 });
+    if (!sub.ok) throw new Error(sub.message);
+    expect(sub.requests.flatMap((r) => Object.keys(r.questions))).toEqual(["k0", "k1", "k2", "k3", "k4", "k5"]);
+    const own = sub.requests.find((r) => r.offset === 3)!;
+    expect(own.units).toHaveLength(1);
+    expect(own.tokens).toBeGreaterThan(1300);
+    expect(sub.requests.length).toBeGreaterThan(2);
+    let at = 0;
+    for (const r of sub.requests) {
+      expect(r.offset).toBe(at);
+      at += r.units.length;
+      expect(Object.values(r.units[0]!.questions)[0]!.instructions).toBe("Is claims[0] supported?");
+    }
+  });
+
+  it("refuses a request that holds 1 unit", () => {
+    const j = claimJob(3);
+    const plan = planRequests(j, limits({ contextTokens: 700 }));
+    if (!plan.ok) throw new Error(plan.message);
+    expect(plan.requests[0]!.units).toHaveLength(1);
+    const r = replanRequest(j, plan.requests[0]!, limits({ contextTokens: 700 }), { neededTokens: 900, limitTokens: 700 });
+    if (r.ok || r.kind !== "request-unsplittable") throw new Error("expected request-unsplittable");
+    expect(r.message).toContain("1 unit");
+  });
+
+  it("refuses a job with unsplittable questions: they travel with every unit", () => {
+    const j: SplitJob = { sharedState: "ev", units: [0, 1, 2, 3].map((i) => atom(i, "s".repeat(400))), unsplittable: { overall: noul("Overall?") } };
+    const plan = planRequests(j, limits({ contextTokens: 2000 }));
+    if (!plan.ok) throw new Error(plan.message);
+    const r = replanRequest(j, plan.requests[0]!, limits({ contextTokens: 2000 }), { neededTokens: 3000, limitTokens: 2000 });
+    if (r.ok || r.kind !== "request-unsplittable") throw new Error("expected request-unsplittable");
+    expect(r.message).toContain("unsplittable");
+  });
+
+  it("rejects non-positive counts as a caller bug", () => {
+    const j = claimJob(4);
+    const plan = planRequests(j, big);
+    if (!plan.ok) throw new Error(plan.message);
+    expect(() => replanRequest(j, plan.requests[0]!, big, { neededTokens: 0, limitTokens: 4000 })).toThrow(/positive/);
   });
 });

@@ -203,3 +203,30 @@ describe('callLocalDecisions failure mapping', () => {
     expect(e.message).toBe('reply is not valid JSON');
   });
 });
+
+describe("callLocalDecisions 422 token counts (TRDD-1L9VMEY7)", () => {
+  it("the measured decider text gives needed_tokens 16460 and limit_tokens 16384, message verbatim", async () => {
+    const serverText = "the question with its state needs 16460 tokens; the limit is 16384 and input is not cut";
+    const { baseUrl } = await serve((_s, res) => {
+      res.writeHead(422, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: { message: serverText } }));
+    });
+    const e = await failure(callLocalDecisions(call, opts(baseUrl)));
+    expect(e.status).toBe(422);
+    expect(e.message).toBe(serverText);
+    expect(e.needed_tokens).toBe(16460);
+    expect(e.limit_tokens).toBe(16384);
+    expect(e.retryable).toBe(false);
+  });
+
+  it("a 422 whose text has no counts keeps the old behaviour: no fields, message verbatim", async () => {
+    const { baseUrl } = await serve((_s, res) => {
+      res.writeHead(422, { "Content-Type": "text/plain" });
+      res.end("required 9000 tokens, limit 8000");
+    });
+    const e = await failure(callLocalDecisions(call, opts(baseUrl)));
+    expect(e.message).toBe("required 9000 tokens, limit 8000");
+    expect(e.needed_tokens).toBeUndefined();
+    expect(e.limit_tokens).toBeUndefined();
+  });
+});
