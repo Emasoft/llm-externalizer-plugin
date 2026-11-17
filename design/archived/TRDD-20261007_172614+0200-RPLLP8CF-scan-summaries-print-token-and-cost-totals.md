@@ -1,10 +1,10 @@
 ---
 trdd-id: RPLLP8CF
 title: Scan summaries print token and cost totals
-column: todo
-status: tasked
+column: published
+status: archived
 created: 2026-10-07T17:26:14+0200
-updated: 2026-11-05T01:10:13+0100
+updated: 2026-11-17T15:03:46+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -31,7 +31,7 @@ Issue 16 smaller note: no token or cost totals at the end of a scan.
 OPEN. scan-folder/core.ts summaries (lines 342, 400, 421) carry counts only; no usage or cost field is aggregated.
 
 ## Acceptance
-- [ ] SCAN COMPLETE shows summed tokens in/out and cost (0.0000 on a free profile) for scan_folder and the other per-file tools
+- [x] SCAN COMPLETE shows summed tokens in/out and cost (0.0000 on a free profile) for scan_folder and the other per-file tools
 - [x] test with a recorded usage object from a real local server
 
 Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 2026-10-07; part of the 14.1.0 release (TRDD-WBZJRSQB).
@@ -39,6 +39,9 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 ## Approval log
 
 - 2026-10-07T17:26:14+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-17T15:03:33+0100 — column → complete by main-agent@llm-externalizer-plugin. both acceptance boxes met; shipped in 14.6.1; box-1 scope decided under the 2026-11-15 delegation
+- 2026-11-17T15:03:46+0100 — column → publish by main-agent@llm-externalizer-plugin. code is in the v14.6.1 release
+- 2026-11-17T15:03:46+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. v14.6.1 published 2026-11-17 (Release run 44079103262 success).
 
 ## Ordering
 
@@ -58,6 +61,7 @@ Lands after TRDD-PN84WC1L: both edit the scan-folder/core.ts summary block.
 2026-11-04T23:14+0100 update to the 22:55 untested list: batch check answer mode 0 (index.ts:6821) is now tested by ed040185; still untested are index.ts:6811 and SCAN COMPLETE answer modes 1 and 2 (scan-folder/core.ts:421, 362). The file is in the explicit vitest include list (vitest.config.ts:598 at ebeab4fd), so npm test runs it.
 Correction to commit cf14ec34 message (2026-11-05): by an earlier session account, two review rounds covered the 23:14 Notes lines; the qualifier and STATE pass was read in full by the main agent, not reviewed; "8 unrelated files" is unmeasured, the 23:14 hazard line says inferred worktree copies.
 2026-11-05T01:10+0100 The owed clean-tree run exists: run 4b at c668389e (contains d1f17e71, 34b0bf4d, ed040185; TRDD-YGF9YXF2) passed npm test end to end, exit 0; the ed040185 tests ran in stage 1 (inferred from the +2 test count, 5723 to 5725, F4: the reporter prints no per-file pass lines). Box 1 stays unticked (owner decision).
+2026-11-17T15:03:32+0100: box 1 scope decided by the main agent under the USER delegation of 2026-11-15 ("on the other things, do as you think is better. but base your decisions on verified facts."), reversible: the per-file tools are the commands that print a COMPLETE summary, scan folder, scan quality and batch check (the 22:51 reading). llm ask and llm code per-file reports stay out of scope. Verified: the totals code is in v14.6.1 (git grep formatUsageTotals v14.6.1: scan-folder/core.ts:365,424,446 and index.ts:7137,7147; the d1f17e71 line was squashed into the release history, so git tag --contains does not find those hashes). Live on installed 14.6.1, scan folder on a one-file folder with --profile free (model particle-ai/particle-1:free): 'SCAN COMPLETE — 1 processed, 0 failed, 0 skipped (1 files found) — Usage: 720 tokens in, 122 tokens out, cost $0.0000', exit 0 (reports_dev/rpllp8cf/live-14.6.1/stdout.txt). scan quality shares that core; batch check answer mode 0 is covered by ed040185. Not run live: scan quality and batch check. Still untested, accepted as residual: index.ts batch check answer modes 1 and 2, SCAN COMPLETE answer modes 1 and 2, free rotation and the ensemble path (TRDD-8Y0LXT93).
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-05
 
@@ -65,3 +69,4 @@ Correction to commit cf14ec34 message (2026-11-05): by an earlier session accoun
 - WAITING ON OWNER (only the box-1 tick waits on the owner; the release needs the owner; the answer-mode 1/2 and :6811 tests are parked; the free-rotation path test is workable; the ensemble path test waits on TRDD-8Y0LXT93): the scope of box 1 is the owner decision, see the 22:51 Notes line (only scan quality and batch check, or also llm ask, llm code and grouped batch check with their totals on stderr).
 - OWED: a release containing d1f17e71, 34b0bf4d and ed040185; tests for index.ts:6811 and SCAN COMPLETE answer modes 1 and 2; the free-rotation and ensemble request paths are untested.
 - RELATED: TRDD-8Y0LXT93 (the ensemble merge reports a partial cost sum as a known cost).
+- 2026-11-17 CLOSED: box 1 ticked on the main agent's scope reading (Notes, line dated 2026-11-17) and a live 14.6.1 free-profile scan; shipped in 14.6.1.
