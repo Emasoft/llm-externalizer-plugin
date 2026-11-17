@@ -40,6 +40,13 @@ const PROJECT_MARKER = /llm[-_]?ext/i;
 // a prefix or pattern would also hide real leaks.
 const PERSISTENT_CACHES = ["/tmp/llm-ext-llama-cache"];
 
+// WHY FOREIGN_PREFIXES exists: the ai-maestro-janitor plugin makes its own temp dirs in /tmp from other sessions
+// (scripts/lib/jev_compaction.py: tempfile.mkdtemp(prefix="jev-score-llm-ext-")), and their names carry this
+// project's marker. The 2026-11-17 publish gate failed on one such dir that appeared, and was removed again by the
+// janitor, during the run. No llm-ext code or test creates a "jev-score-" name (0 hits in scripts/), so exempting
+// this one exact foreign prefix hides no leak of ours. Add a prefix here only for a creator outside this repository.
+const FOREIGN_PREFIXES = ["jev-score-llm-ext-"];
+
 function snapshot(): Map<string, Set<string>> {
   return new Map(ROOTS.map((r) => [r, new Set(readdirSync(r))]));
 }
@@ -216,7 +223,13 @@ export default function setup(): () => void {
       for (const [root, names] of snapshot()) {
         for (const name of names) {
           const entry = join(root, name);
-          if (!before.get(root)?.has(name) && PROJECT_MARKER.test(name) && !PERSISTENT_CACHES.includes(entry)) leaked.push(entry);
+          if (
+            !before.get(root)?.has(name) &&
+            PROJECT_MARKER.test(name) &&
+            !PERSISTENT_CACHES.includes(entry) &&
+            !FOREIGN_PREFIXES.some((p) => name.startsWith(p))
+          )
+            leaked.push(entry);
         }
       }
       if (leaked.length > 0) {
