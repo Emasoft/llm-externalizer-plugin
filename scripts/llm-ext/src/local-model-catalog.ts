@@ -37,7 +37,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: true,
     sizeBytes: { weights: 1587969920 },
-    verified: null,
+    verified: { how: "llama-cli -hf on llama.cpp b11960-8642541b2 loaded it and answered at about 107 tokens/s, 2026-10-28 (TRDD-1OOAH3LD)" },
   },
   {
     id: "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf",

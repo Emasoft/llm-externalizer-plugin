@@ -260,7 +260,7 @@ Both use `server: managed`: llm-ext starts and stops the model server itself. Yo
 
 ### Local model catalog
 
-The catalog (`scripts/llm-ext/src/local-model-catalog.ts`) lists the local models llm-ext knows, and listing a model never downloads or calibrates it. No runtime code reads the catalog yet. A test checks that every entry has a row here, with the same size and refusals cells, and that the models of the two built-in profiles and the served decider are catalog entries. In the last column, yes means llm-ext knows no reason it cannot run the model, not that it was verified: only the served decider is recorded as verified, the VL and Omni GGUFs rest on their model cards, and abliter8-ai reports its own tests on llama.cpp with a server patch.
+The catalog (`scripts/llm-ext/src/local-model-catalog.ts`) lists the local models llm-ext knows, and listing a model never downloads or calibrates it. No runtime code reads the catalog yet. A test checks that every entry has a row here, with the same size and refusals cells, and that the models of the two built-in profiles and the served decider are catalog entries. In the last column, yes means llm-ext knows no reason it cannot run the model, not that it was verified: only the local_llama head (a llama-cli smoke test on 2026-10-28) and the served decider are recorded as verified, the VL and Omni GGUFs rest on their model cards, and abliter8-ai reports its own tests on llama.cpp with a server patch.
 
 | Model id | Role | Runtime | Inputs | Refusals removed | Size in bytes (weights + projector) | Runs in llm-ext |
 |---|---|---|---|---|---|---|
