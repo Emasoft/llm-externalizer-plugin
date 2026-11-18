@@ -69,7 +69,6 @@ export interface RankResult {
   invalid: { id: string; reason: string }[];
 }
 
-// Why rewrite by position: the planner packs units into requests and a state wire is {shared, units:[...]}, so `units[i]` must name the unit's place inside ITS request, whatever the job-wide index or chunk offset was.
 function assertTop(t: Thresholds): void {
   // WHY a whole number: quicksilver checks --top as an integer before any work, because unchecked numeric flags silently broke its runs (qs.mjs:91-98).
   if (!Number.isInteger(t.top)) throw new PolicyError(`--top must be a whole number, got ${t.top}`);
@@ -134,7 +133,7 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
         },
       };
     });
-    // WHY renumber by position: the planner packs units into requests, so the questions of each unit must name its place inside its own request (plan §5 SplitJob renumber).
+    // WHY renumber by position: the planner packs units into requests and a state wire is {shared, units:[...]}, so `units[i]` must name the unit's place inside ITS request, whatever the job-wide index or chunk offset was; the questions of each unit name that place (plan §5 SplitJob renumber).
     return { sharedState: null, units, unsplittable: {}, renumber: renumberByPosition };
   },
   project(answers: Answers, i, t, ctx) {
@@ -163,6 +162,7 @@ export const spec: DecisionSpec<RankInput, RankResult> = {
       ranked.push({ id, score: s.score, relevance: s.score / MAX_LEVEL, confidence: s.confidence ?? null, headCut, ...(meta !== undefined && meta.chunks > 1 ? { chunk: { chunks: meta.chunks, ...(meta.best_lines ? { bestLines: meta.best_lines } : {}) } } : {}) });
     });
     // Array.sort is stable, so equal scores keep the input order.
+    // WHY >= and not >: keep-at is the lowest relevance that stays (its help says "below this" is dropped), so a candidate exactly at the threshold is kept; the default 0 then keeps every candidate (inferred from the thresholds definition).
     const kept = ranked.sort((x, y) => y.score - x.score).filter((r) => r.relevance >= t["keep-at"]);
     return { rows: i.all ? kept : kept.slice(0, t.top), total: ranked.length, invalid };
   },

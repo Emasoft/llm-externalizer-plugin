@@ -97,7 +97,7 @@ describe("head window (E34, E72)", () => {
   it("no head means no window", () => {
     expect(stateOf({ query: "q", mode: "files", candidates: [{ id: "a", text: "x".repeat(1000) }] })[0]).toHaveLength(1000);
   });
-  it("a cut candidate is flagged headCut in the result, a whole one is not", () => {
+  it("synthetic: a cut candidate is flagged headCut in the result, a whole one is not", () => {
     const i = parse({ query: "q", head: 3, candidates: [{ id: "a", text: "abcdef" }, { id: "b", text: "ab" }] });
     const r = run(i, { rank_i0: sc(4), rank_i1: sc(3) });
     expect(r.rows.map((x) => [x.id, x.headCut])).toEqual([["a", true], ["b", false]]);
@@ -165,31 +165,31 @@ describe("project on real P-01 replies", () => {
 describe("project ordering and selection", () => {
   const i = (extra = {}) => parse({ query: "q", candidates: [{ id: "a", text: "1" }, { id: "b", text: "2" }, { id: "c", text: "3" }, { id: "d", text: "4" }], ...extra });
   const reply = { rank_i0: sc(1), rank_i1: sc(4), rank_i2: sc(2), rank_i3: sc(4) };
-  it("sorts by score, ties keep input order, and --top cuts the list", () => {
+  it("synthetic: sorts by score, ties keep input order, and --top cuts the list", () => {
     const r = run(i(), reply, { ...T, top: 2 });
     expect(r.rows.map((x) => x.id)).toEqual(["b", "d"]);
     expect(r).toMatchObject({ total: 4, invalid: [] });
   });
-  it("--all lists every candidate regardless of top", () => {
+  it("synthetic: --all lists every candidate regardless of top", () => {
     expect(run(i({ all: true }), reply, { ...T, top: 1 }).rows.map((x) => x.id)).toEqual(["b", "d", "c", "a"]);
   });
-  it("keep-at drops candidates below that relevance (>= keeps the boundary)", () => {
+  it("synthetic: keep-at drops candidates below that relevance (>= keeps the boundary)", () => {
     expect(run(i(), reply, { ...T, "keep-at": 0.5 }).rows.map((x) => x.id)).toEqual(["b", "d", "c"]);
     expect(run(i(), reply, { ...T, "keep-at": 0.51 }).rows.map((x) => x.id)).toEqual(["b", "d"]);
   });
-  it("an answer without probabilities is accepted (score policy)", () => {
+  it("synthetic: an answer without probabilities is accepted (score policy)", () => {
     expect(run(i(), reply).invalid).toEqual([]);
   });
-  it("a missing answer makes only that candidate invalid", () => {
+  it("synthetic: a missing answer makes only that candidate invalid", () => {
     const { rank_i3: _dropped, ...partial } = reply;
     const r = run(i(), partial);
     expect(r.rows.map((x) => x.id)).toEqual(["b", "c", "a"]);
     expect(r.invalid).toEqual([{ id: "d", reason: "answer missing from reply" }]);
   });
-  it("results come back under the caller's ids", () => {
+  it("synthetic: results come back under the caller's ids", () => {
     expect(run(i(), reply).rows.map((x) => x.id)).toEqual(["b", "d", "c", "a"]);
   });
-  it("an answer set that does not match the candidates is an internal error", () => {
+  it("synthetic: an answer set that does not match the candidates is an internal error", () => {
     const answers = validateAnswers(questionsOf(spec.build(i(), T)), reply, SCORE_POLICY).answers;
     const { rank_i3: _dropped, ...short } = answers;
     expect(() => spec.project(short, i(), T, { truncated: false })).toThrow(/internal error/);
@@ -212,20 +212,20 @@ describe("attention", () => {
 describe("IN-09 rank: text form", () => {
   const i = parse({ query: "q", candidates: [{ id: "a", text: "1" }, { id: "b", text: "2" }, { id: "c", text: "3" }] });
   const answers = validateAnswers(questionsOf(spec.build(i, T)), { rank_i0: sc(1), rank_i1: sc(4), rank_i2: sc(3) }, SCORE_POLICY).answers;
-  it("prints `relevance  id` lines, best first", () => {
+  it("synthetic: prints `relevance  id` lines, best first", () => {
     const r = spec.project(answers, i, T, { truncated: false }) as RankResult;
     expect(spec.renderText!(r, {}).lines).toEqual(["1.00  b", "0.75  c", "0.25  a"]);
   });
-  it("prints (no candidates) when --keep-at drops every one", () => {
+  it("synthetic: prints (no candidates) when --keep-at drops every one", () => {
     const r = spec.project(answers, i, { ...T, "keep-at": 1.01 }, { truncated: false }) as RankResult;
     expect(spec.renderText!(r, {}).lines).toEqual(["(no candidates)"]);
   });
-  it("adds the chunk note (N chunks, best lines A-B) for a candidate judged in parts", () => {
+  it("synthetic: adds the chunk note (N chunks, best lines A-B) for a candidate judged in parts", () => {
     const r = spec.project(answers, i, T, { truncated: false, chunks: { rank_i1: { chunks: 4, best_chunk: 2, best_lines: [5, 9] } } }) as RankResult;
     expect(spec.renderText!(r, {}).lines[0]).toBe("1.00  b (4 chunks, best lines 5-9)");
     expect(spec.renderText!(r, {}).lines[1]).toBe("0.75  c");
   });
-  it("names a candidate with no answer and why", () => {
+  it("synthetic: names a candidate with no answer and why", () => {
     const r = { ...(spec.project(answers, i, T, { truncated: false }) as RankResult), invalid: [{ id: "z", reason: "aborted" }] };
     expect(spec.renderText!(r, {}).lines).toContain("? no answer: z (aborted)");
   });
