@@ -1,10 +1,10 @@
 ---
 trdd-id: OK1NN5RN
 title: A repeated array flag keeps only its last value, so llm code silently reviews one file
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T01:21:53+0100
-updated: 2026-11-14T03:08:55+0100
+updated: 2026-11-18T08:12:11+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -37,6 +37,8 @@ Acceptance:
 - 2026-11-14T01:21:53+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-14T03:07:00+0100 — column → ai_review. code committed dd6f5302 ff8b730c; post-commit review pending
 - 2026-11-14T03:08:55+0100 — column → complete. ai_review: post-commit review of dd6f5302 and ff8b730c done; findings recorded in Notes; no code change required
+- 2026-11-18T08:12:10+0100 — column → publish by main-agent@llm-externalizer-plugin. shipped: implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors)
+- 2026-11-18T08:12:11+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped: implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors).
 
 ## Notes
 

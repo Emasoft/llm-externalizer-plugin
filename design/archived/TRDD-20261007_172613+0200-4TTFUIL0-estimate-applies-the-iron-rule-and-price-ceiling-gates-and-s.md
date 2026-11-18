@@ -1,10 +1,10 @@
 ---
 trdd-id: 4TTFUIL0
 title: --estimate applies the IRON RULE and price ceiling gates and says so up front
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-10-07T17:26:13+0200
-updated: 2026-10-31T05:26:46+0100
+updated: 2026-11-18T08:12:09+0100
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -40,6 +40,8 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 
 - 2026-10-07T17:26:13+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-31T05:26:46+0100 — column → complete by main-agent@llm-externalizer-plugin.
+- 2026-11-18T08:12:09+0100 — column → publish by main-agent@llm-externalizer-plugin. shipped: implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors)
+- 2026-11-18T08:12:09+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped: implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors).
 
 ## Notes
 

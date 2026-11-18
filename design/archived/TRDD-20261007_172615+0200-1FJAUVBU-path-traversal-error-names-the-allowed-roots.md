@@ -1,10 +1,10 @@
 ---
 trdd-id: 1FJAUVBU
 title: Path traversal error names the allowed roots
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-10-07T17:26:15+0200
-updated: 2026-10-31T03:59:43+0100
+updated: 2026-11-18T08:12:09+0100
 current-owner: user
 created-by: user
 task-type: bugfix
@@ -43,3 +43,5 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 - 2026-10-31T03:57:59+0100 — column → complete by main-agent@llm-externalizer-plugin. archive after closing boxes
 - 2026-10-31T03:59:43+0100 — column → testing by main-agent@llm-externalizer-plugin.
 - 2026-10-31T03:59:43+0100 — column → complete by main-agent@llm-externalizer-plugin.
+- 2026-11-18T08:12:00+0100 — column → publish by main-agent@llm-externalizer-plugin. implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors)
+- 2026-11-18T08:12:09+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped: implementation lines present in the v14.7.0 tree (content check 2026-11-18; the SHAs are pre-squash, so not tag ancestors).
