@@ -4,7 +4,7 @@ title: Triage the ubs 5.5.26 critical findings in 13 TypeScript files so commits
 column: backburner
 status: tasked
 created: 2026-11-17T22:45:00+0100
-updated: 2026-11-18T00:21:27+0100
+updated: 2026-11-18T01:46:57+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -53,6 +53,7 @@ Split cost: staged together, benchmark/index.ts and benchmark/pick.ts form one u
 
 D1: may a commit be split by ubs taint component when a staged set exceeds the work limit, and what is the path for a future CODE change to benchmark/index.ts + benchmark/pick.ts (split commits, or a structural refactor like TYSKX72I)? Until answered, no code commit is split.
 D2: keep the whole-call markers listed under Corrections item 2 (pragmatic: fake fixtures in tests), or switch to the strict form (each fixture value as a const marked on its own line, interpolated into the template, so ubs keeps checking the rest of each call)?
+2026-11-18T01:46:54+0100: D2 decided by the main agent under the USER delegation of 2026-11-15 (verbatim: 'on the other things, do as you think is better. but base your decisions on verified facts.'): strict form. The work also covers 7 inner markers with the same whole-it reach, which D2 did not list: index.test.ts 357; broker/broker.test.ts 267, 355, 836, 906, 1780, 2459. The USER may veto. Acceptance is the pre-commit hook run, not a direct-path scan. D1 stays open; no code commit is split.
 
 ## Next
 
