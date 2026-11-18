@@ -1,10 +1,10 @@
 ---
 trdd-id: 25KZDVYF
 title: Triage the ubs 5.5.26 critical findings in 13 TypeScript files so commits that stage them pass the pre-commit hook
-column: backburner
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T22:45:00+0100
-updated: 2026-11-18T04:32:35+0100
+updated: 2026-11-18T04:34:52+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -25,6 +25,7 @@ Measured 2026-11-17 (ubs 5.5.26, one direct-path run per file, every scripts/llm
 ## Approval log
 
 - 2026-11-17T22:45:00+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T04:34:52+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance A1-A4 met; D1 moved to HCNC6433.
 
 ## Caveats
 
