@@ -82,8 +82,10 @@ function build(i: FilterInput, t: Thresholds): Built {
     seen.add(id);
   });
   // WHY kind text: an item may be a long file, which the planner cuts into chunks (plan §5); the question is the caller's and stays in instructions, the item text stays in state and the guard tells the model not to obey it (D5).
-  const units: BuiltUnit[] = i.items.map((it, k) => ({ kind: "text", state: it.text, questions: { [indexKey("p", k)]: noul(`${i.question} ${dataGuard("the text in the state")}`) } }));
-  return { sharedState, units, unsplittable: {} };
+  // WHY the labelled block plus the judge-only instruction (TRDD-7ZA3EE6Z): live checks 1 and 2 failed with the bare-string wording (an unrelated context flipped a clear yes); spike 3 showed an empty context is harmless and that `{ context }` plus "Never judge or classify it. Judge only the text in `units`." fixes it; live check 3 passed. The context is the caller's earlier messages, untrusted, hence the guard. Without a context the request stays byte-identical to what it was before the flag existed (shared null, the old guard).
+  const guard = i.context === undefined ? dataGuard("the text in the state") : `\`shared.context\` is background for reading the text in \`units\`. ${dataGuard("`shared.context`", "read")} Never judge or classify it. Judge only the text in \`units\`. ${dataGuard("the text in `units`")}`;
+  const units: BuiltUnit[] = i.items.map((it, k) => ({ kind: "text", state: it.text, questions: { [indexKey("p", k)]: noul(`${i.question} ${guard}`) } }));
+  return { sharedState: i.context === undefined ? null : { context: i.context }, units, unsplittable: {} };
 }
 
 function project(answers: Answers, i: FilterInput, t: Thresholds): FilterResult {
@@ -194,6 +196,8 @@ export const spec: DecisionSpec<FilterInput, FilterResult> = {
   flags: [
     { flag: "--no-collapse", property: "no_collapse", field: "noCollapse", type: "boolean", render: true, help: "Print every row of a --lines run; by default rows whose text differs only in numbers are shown once as ×N with their line numbers.", parse: () => true },
     { flag: "--save", property: "save", field: "save", render: true, help: "Write every answered row ([{id, p}], JSON, best first) to this file.", parse: (raw) => raw },
+    // TRDD-7ZA3EE6Z: --context FILE fills `context`, the same flag as `classify label` and `classify requirements` (earlier messages as background, sent with every request).
+    { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw },
   ],
   input,
   thresholds: {

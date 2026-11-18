@@ -96,6 +96,7 @@ Classify decision "filter" (catalog spec; flags, defaults and ranges are generat
 | `--auto` | number | p at or above which (or p + auto <= 1 below which) an item counts as decided (default 0.85, range 0.5..1) |
 | `--band` | number | width around the threshold inside which an item is borderline (default 0.15, range 0..0.5) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
+| `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request (needs a release that includes TRDD-7ZA3EE6Z). |
 | `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
@@ -114,6 +115,7 @@ Classify decision "filter" (catalog spec; flags, defaults and ranges are generat
 Example:
 ```bash
 llm-ext classify filter "Does this line report a failure (not a warning)?" --items ./items.jsonl
+llm-ext classify filter "Does this line report a failure (not a warning)?" --items ./items.jsonl --context ./context.txt   # needs a release that includes TRDD-7ZA3EE6Z; the context is background, never scored
 ```
 
 ### `llm-ext classify label`
@@ -579,6 +581,8 @@ This section comes from live runs and the source, not from --help. All schemas a
 ```
 
 Text-items mode: `question` and `items` (at least 1, each `text` not blank, `id` optional and any non-empty string such as a path) required; `context` optional. Live result for 3 items (s2, s3, s4): `matched` = s3 only, p 0.67; s4 p 0.38 borderline; s2 p 0.29; `threshold` 0.5.
+
+`--context FILE` fills `context` for `classify filter` (a file of earlier messages, `-` reads stdin; needs a release that includes TRDD-7ZA3EE6Z). The context is background for reading the items and is never scored: with a context the shared state is `{"context": "<text>"}` and each item question tells the classifier that `shared.context` is background, never to judge or classify it, and to judge only the text in `units`. It is sent with every request, so the cost grows with the number of requests. A context file that is empty or blank is refused before anything is sent (`<file>: empty input`, or `stdin: empty input` for `-`; the source comments call this E40). Without a context the request is unchanged. Giving it together with a JSON `context` is refused as for `classify label`. The propositions form keeps its own wording. Effect on verdicts: live check 3 of TRDD-7ZA3EE6Z passed on this wording (card Notes of 2026-11-18); live checks 1 and 2 with an earlier wording had failed.
 
 ```json
 {"context": "We implemented the loading screen, but we need to improve the style.",
