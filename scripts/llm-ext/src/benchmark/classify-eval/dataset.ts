@@ -8,7 +8,7 @@ import { getSpec } from "../../classifiers/catalog/index.js";
 export interface EvalRecord { id: string; input: unknown; expected: unknown }
 export interface EvalDataset { specId: string; records: EvalRecord[]; fingerprint: string }
 
-// WHY hash the record lines, not the file bytes: the plan (§11) only says "dataset/fingerprint", so the fingerprint must identify the dataset content; CRLF checkouts (RL-08), a trailing newline or blank lines must not change it. Same sha1/12-hex form as security-triage's byte hash. WK-02's workload-kit does not exist yet and no shared helper is exported; the kit's step replaces this copy.
+// WHY hash the record lines, not the file bytes: the plan (§11) only says "dataset/fingerprint", so the fingerprint must identify the dataset content; CRLF checkouts (RL-08), a trailing newline or blank lines must not change it. Same sha1/12-hex form as security-triage's byte hash. WK-02 (TRDD-PCZZCDSR, backburner) has no workload kit or shared helper yet, and EV-01 (TRDD-ABPSC16L) no longer waits for it; the six workloads hash differently (inferred), so a kit step would replace this copy only if it covers a jsonl-line hash.
 export function datasetFingerprint(recordLines: readonly string[]): string {
   return createHash("sha1").update(recordLines.join("\n")).digest("hex").slice(0, 12);
 }
