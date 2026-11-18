@@ -1,10 +1,10 @@
 ---
 trdd-id: LFTQCFUX
 title: classify preset that says duplicate, updated version or new for a rule against existing rules
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T10:29:26+0100
-updated: 2026-11-18T04:49:39+0100
+updated: 2026-11-18T04:56:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -25,6 +25,7 @@ Gap G2 of TRDD-Q2VTMG4P (capabilities C3 and C5). classify find (find.ts:13-30) 
 ## Approval log
 
 - 2026-11-04T10:29:26+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T04:56:01+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance A1-A5 met; v14.7.0 Release, CI and Notify Marketplace runs green; follow-up FS5WW86J.
 
 ## Notes
 

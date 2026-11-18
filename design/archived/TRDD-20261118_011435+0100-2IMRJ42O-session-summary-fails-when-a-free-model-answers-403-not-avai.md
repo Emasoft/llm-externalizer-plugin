@@ -1,10 +1,10 @@
 ---
 trdd-id: 2IMRJ42O
 title: session-summary fails when a free model answers 403 not available in your region
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T01:14:35+0100
-updated: 2026-11-18T04:49:40+0100
+updated: 2026-11-18T04:56:01+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -32,6 +32,7 @@ Done when: the unit test passes, tsc and eslint are clean, and a rerun of the sa
 
 - 2026-11-18T01:14:35+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T01:24:07+0100 — column → testing by main-agent@llm-externalizer-plugin. fix committed 180f7a73; unit test, tsc, eslint and a live rerun pass; waits for the next release
+- 2026-11-18T04:56:01+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance A1-A4 met; released in v14.7.0 and installed; all v14.7.0 runs green.
 
 ## Progress
 
