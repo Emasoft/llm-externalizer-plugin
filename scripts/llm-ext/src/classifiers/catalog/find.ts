@@ -98,7 +98,6 @@ function assertCounts(t: Thresholds, mode: "json" | "files"): void {
   for (const name of ["top", "chunk"] as const) if (!Number.isInteger(t[name])) throw new PolicyError(`--${name} must be a whole number, got ${t[name]}`);
 }
 
-// Why rewrite by position: the planner packs units into requests and a state wire is {shared, units:[...]}, so `units[i]` must name the unit's place inside ITS request, whatever the job-wide index was.
 // Both modes ask a fixed set of keys; any other set means an answer was lost or invented, and a partial silent result would be worse than stopping.
 function assertKeys(answers: Answers, expected: string[]): void {
   const got = Object.keys(answers);
@@ -170,7 +169,7 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
         [indexKey("exists", g)]: noul(`${quoted(i.query)} Does any line in \`units[${g}].lines\` match the query? ${dataGuard("the line text")}`),
       },
     }));
-    // WHY renumber by position: the planner packs units into requests, so the questions of each unit must name its place inside its own request (plan §5 SplitJob renumber).
+    // WHY renumber by position: the planner packs units into requests and a state wire is {shared, units:[...]}, so `units[i]` must name the unit's place inside ITS request, whatever the job-wide index was; the questions of each unit name that place (plan §5 SplitJob renumber).
     return { sharedState: null, units, unsplittable: {}, renumber: renumberByPosition };
   },
   project(answers, i, t) {
