@@ -21,6 +21,8 @@ import {
   type CallModelFn,
 } from "./driver.js";
 import type { EligibleModel } from "./model-select.js";
+import { CommandStoppedError } from "../command-stop.js";
+import { attachFailure, failureOf, stoppedError } from "../provider/http.js";
 
 const FREE_MODEL = "nvidia/nemotron-3-ultra-550b-a55b:free";
 
@@ -378,6 +380,120 @@ describe("driver: summarizeSession", () => {
     }
   });
 
+  // ── Command stop and terminal failure message (issue 15 items 5 and 6) ──
+
+  it("a --command_timeout stop is rethrown at once: one call, no retry, no model-blaming wrapper", async () => {
+    const p = writeTranscript([userTurn("u0", "a request that fits one chunk")]);
+    const why = "--command_timeout 5s expired";
+    const callModel = vi.fn<CallModelFn>(async () => {
+      throw stoppedError(why);
+    });
+
+    const err = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxRetriesPerChunk: 2, // the default: a stop must still not be retried
+      callModel,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(CommandStoppedError);
+    expect(failureOf(err)?.final).toBe("stop");
+    const msg = (err as Error).message;
+    expect(msg.startsWith(why)).toBe(true);
+    expect(msg).toContain("Checkpoint saved at");
+    expect(msg).not.toContain("failed after");
+  });
+
+  it("a stop does not rotate to the fallback model either: one call across the whole chain", async () => {
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `distinct stop-rotation request ${i} `.repeat(30)));
+    const p = writeTranscript(lines);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+    const callModel = vi.fn<CallModelFn>(async () => {
+      throw stoppedError("--command_timeout 5s expired");
+    });
+
+    const err = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 100_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      chunkOverlapTurns: 0,
+      callModel,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(callModel).toHaveBeenCalledTimes(1);
+    expect(err).toBeInstanceOf(CommandStoppedError);
+  });
+  it("a final-stop failure that is not a CommandStoppedError (the TLS verdict) keeps the model-naming wrapper", async () => {
+    const p = writeTranscript([userTurn("u0", "a request that fits one chunk")]);
+    const callModel = vi.fn<CallModelFn>(async () => {
+      const tls = new Error("self-signed certificate in certificate chain");
+      attachFailure(tls, { final: "stop" });
+      throw tls;
+    });
+
+    const err = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 1_000,
+      maxRetriesPerChunk: 0,
+      callModel,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    expect(err).not.toBeInstanceOf(CommandStoppedError);
+    const msg = (err as Error).message;
+    expect(msg).toContain(`failed after 1 attempt(s) on model '${FREE_MODEL}'`);
+    expect(msg).toContain("Checkpoint saved at");
+  });
+  it("the generic failure message also names the models already tried in this run, with their reasons", async () => {
+    const lines = Array.from({ length: 6 }, (_, i) => userTurn(`u${i}`, `distinct terminal-failure request ${i} `.repeat(30)));
+    const p = writeTranscript(lines);
+    const fallback: EligibleModel = { id: FALLBACK_MODEL, contextLength: 3_000, maxCompletionTokens: 500 };
+
+    let calls = 0;
+    const callModel = vi.fn<CallModelFn>(async () => {
+      calls++;
+      if (calls === 1) throw new Error("404 No endpoints found for this model — it has been delisted");
+      throw new Error("simulated schema hiccup");
+    });
+
+    const err = await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 100_000,
+      modelMaxCompletionTokens: 1_000,
+      fallbackModels: [fallback],
+      chunkOverlapTurns: 0,
+      maxRetriesPerChunk: 0,
+      callModel,
+    }).then(
+      () => null,
+      (e: unknown) => e,
+    );
+
+    const msg = (err as Error).message;
+    expect(msg).toContain(`failed after 1 attempt(s) on model '${FALLBACK_MODEL}'`);
+    expect(msg).toContain(`Models already tried in this run: ${FREE_MODEL} (gone).`);
+    expect(msg).toContain("Checkpoint saved at");
+  });
   // ── Checkpoint / resume ──────────────────────────────────────────────
 
   it("checkpoints after every successful map chunk, so a mid-run failure preserves prior chunk summaries", async () => {

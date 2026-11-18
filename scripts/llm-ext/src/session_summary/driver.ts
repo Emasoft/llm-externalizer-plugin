@@ -74,7 +74,8 @@ import { dirname, resolve } from "node:path";
 
 import { assertFreeOnlyModel } from "../config.js";
 import { classifyUnavailable, noteGeneric403Model, recordUnavailable, getCooldownStore, earliestReset, runUnusableKind } from "../free-rotation.js";
-import { RetryDeadlineError, failureText } from "../provider/http.js";
+import { RetryDeadlineError, failureText, stoppedError } from "../provider/http.js";
+import { CommandStoppedError } from "../command-stop.js";
 import { readTranscript, type PruneLevel, type Turn, type TranscriptStats } from "./transcript.js";
 import type { EligibleModel } from "./model-select.js";
 import { isEchoResponse } from "../response-gate.js";
@@ -975,6 +976,7 @@ async function callWithRetry(
   echoCheckSource: string,
   retryTransient: boolean = false,
   sleepFn: (ms: number) => Promise<void> = sleep,
+  triedModels: readonly Pick<ModelUnavailableError, "modelId" | "reason">[] = [],
   signal?: AbortSignal,
 ): Promise<string> {
   let lastErr: unknown = null;
@@ -1035,6 +1037,15 @@ async function callWithRetry(
       // to maxRetries times, each retry another full-deadline request — and it could be misread as
       // a transient/availability verdict against a healthy model. It is no verdict at all.
       if (signal?.aborted) throw new ChunkAbortedError(label, err);
+      // WHY a command stop is rethrown here, never retried or wrapped as "failed after N attempt(s) on model X"
+      // (issue 15 item 5): --command_timeout already ended the command, so a retry can only fail the same way, and
+      // that wrapper would blame one model for a stop that is no model failure. Only a CommandStoppedError qualifies:
+      // another final "stop" verdict (the TLS one, TRDD-YG72CYY7 D4) is a real model failure and keeps its wrapper.
+      // Re-made with stoppedError so it stays a CommandStoppedError marked final "stop" (nothing retries or counts it)
+      // and carries the resume hint the wrapper gave.
+      if (err instanceof CommandStoppedError) {
+        throw stoppedError(`${err.message}. Checkpoint saved at ${checkpointPath} — re-run the same command to resume.`);
+      }
       if (err instanceof ModelUnavailableError) throw err; // no-text/echo: never retried, propagate for fallback immediately
       lastErr = err;
       // The retry clock already spent its whole window (TRDD-YG72CYY7) inside
@@ -1096,7 +1107,12 @@ async function callWithRetry(
   const lastMsg = lastErr instanceof Error ? lastErr.message : String(lastErr);
   throw new Error(
     `session-summary: ${label} failed after ${maxRetries + 1} attempt(s) on model '${modelId}': ` +
-      `${lastMsg}. Checkpoint saved at ${checkpointPath} — fix the underlying issue and re-run to resume.`,
+      `${lastMsg}. ` +
+      // WHY the earlier models (issue 15 item 6): this message named only the last model, hiding every model this run
+      // had already demoted; allModelsExhausted lists them the same way (modelId (reason)). After the error text so
+      // the real cause stays first.
+      (triedModels.length > 0 ? `Models already tried in this run: ${triedModels.map((t) => `${t.modelId} (${t.reason})`).join(", ")}. ` : "") +
+      `Checkpoint saved at ${checkpointPath} — fix the underlying issue and re-run to resume.`,
   );
 }
 
@@ -1728,6 +1744,7 @@ export async function summarizeSession(
         chunkBodyText(chunks[i]),
         retryTransient,
         sleepFn,
+        triedModelIds,
         signal,
       );
       return { kind: "ok", summary };
