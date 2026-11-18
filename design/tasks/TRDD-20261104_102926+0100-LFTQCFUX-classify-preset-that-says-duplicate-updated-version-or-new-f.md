@@ -4,7 +4,7 @@ title: classify preset that says duplicate, updated version or new for a rule ag
 column: todo
 status: tasked
 created: 2026-11-04T10:29:26+0100
-updated: 2026-11-18T02:38:40+0100
+updated: 2026-11-18T03:17:27+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:29:26+0100
+implementation-commits: [5ade58a1, 737cd18d]
 ---
 
 # classify preset that says duplicate, updated version or new for a rule against existing rules
@@ -48,3 +49,8 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 ## Progress
 
 2026-11-18T02:38:40+0100 The classify code forced five contract changes, accepted by the 3-pillars session on 2026-11-18 with four conditions. Changes: no find step (each rule is judged as a phrase-rule pair, pairs packed per request, no 250 cap); with --json the fields sit under .decision of the envelope; without --strict-exit every answered run exits 0 and the consumer branches on .decision.outcome and treats any non-zero exit as a failed check; precedence duplicate over updated_version over new at 0.6, ambiguous on two or more updated_version; ids [A-Za-z0-9_.:-]{1,64}, echoed unchanged. Conditions: A, any unanswered pair makes the outcome uncertain and lists the rule ids; B, document stopped and degraded, preferably a stopped run is always uncertain; C, each candidate carries its contradicts answer and conflict is true when any rule is contradicted, even one labelled new; D, candidates list only the pairs that are not a confident new, plus a count of the confident-new pairs. Request: a flag for the per-request question cap (one pair per request, as in the owner draft of 2026-11-03), its cost to the owner first. Design spec: design/specs/LFTQCFUX-rule-check-design.md.
+2026-11-18T03:17:27+0100 Part 1 rule-check committed as 5ade58a1 and Part 2 --max-questions-per-request as 737cd18d, both through the fail-closed ubs hook with 0 critical; docs and the classify-launch test fix pending commit; live check 1 outcome matched (duplicate r1) but r2 came back new (0.40, 0.42, n=2) where the classify label recipe of 2026-11-04 gave updated_version 0.86, an open quality item for the relation question wording; live check 2 (new phrase vs 25 janitor PRRD rules) gave new, 25 confident.
+
+## Corrections
+
+2026-11-18T03:17:27+0100 The message of 5ade58a1 says the fail-closed pre-commit gate "blocks every file this change touches"; correct is that it blocks the commit that stages them (amend needs the USER OTP).
