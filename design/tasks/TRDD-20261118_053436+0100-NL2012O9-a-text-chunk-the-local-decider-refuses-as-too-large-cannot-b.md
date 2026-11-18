@@ -4,7 +4,7 @@ title: A text chunk the local decider refuses as too large cannot be cut again a
 column: todo
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T05:34:36+0100
+updated: 2026-11-18T08:00:08+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -40,3 +40,7 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 ## Approval log
 
 - 2026-11-18T05:34:36+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-18T08:00:08+0100 From TRDD-4JLBB1YT (main agent): the planner fills a request up to the limit: budget = contextTokens - envelopeTokens (planner.ts:255) with ENVELOPE_TOKENS 64 (planner.ts:13), a request closes only when the next unit would pass the budget (planner.ts:313), and text units travel alone (planner.ts:311-312). After the estimator fix ceb16c5c, random hex and UUID text still comes out at up to 0.997 of the estimate (12 tokens of margin on one 4000-char list), so an under-count stays possible. Inferred, not measured: the decider fixed overhead is 105 input tokens for the state x and a one-line question; if that question costs 15 to 20 tokens, the decider own wrapper is about 85 to 90 tokens, above the 64 the planner reserves. Planner headroom is one more option for this card, next to re-cutting the chunk and max_requests_per_call.
