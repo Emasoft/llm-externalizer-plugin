@@ -1,10 +1,10 @@
 ---
 trdd-id: NL2012O9
 title: A text chunk the local decider refuses as too large cannot be cut again and the 16384 clamp raises the remote request count
-column: publish
+column: complete
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T14:15:50+0100
+updated: 2026-11-18T16:08:43+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T05:34:36+0100
-implementation-commits: [21699151]
+implementation-commits: [21699151, 0a682690]
 release-via: publish
 ---
 
@@ -37,19 +37,22 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 ## Acceptance
 - [x] A red test first: a single text chunk the fake decider refuses with a 422 fails today, on the local-only path and on the remote escalation.
 - [x] The chosen option, with that test green, tsc and eslint 0.
-- [ ] or-jev test-output re-run on the same input is not refused for its request count, or the refusal is the limit the USER chose.
+- [~] ~~or-jev test-output re-run on the same input is not refused for its request count, or the refusal is the limit the USER chose.~~ obsolete: the exact input of the 2026-11-17 05:18 run was never recorded, so a re-run on the same input cannot be shown; replaced by a comparable-input box below
+- [x] or-jev test-output on a comparable 535948 byte log plans 10 requests (limit 16) with 0a682690; estimate only, single run (installed 14.7.2 and a build of 9fd5dea0 refuse the same log at 20 requests)
 
 ## Approval log
 
 - 2026-11-18T05:34:36+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T13:01:43+0100 — column → complete by main-agent@llm-externalizer-plugin. code committed and verified on the exported commit (tsc and card tests); ships in 14.7.2; approved by the main agent under the USER delegation of 2026-11-18
 - 2026-11-18T14:14:05+0100 — column → publish by main-agent@llm-externalizer-plugin. shipped in v14.7.2 (8c72f83d, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.2); main agent approves under the USER delegation of 2026-11-18
+- 2026-11-18T16:08:43+0100 — column → complete by main-agent@llm-externalizer-plugin. main agent ruling (delegated by USER 2026-11-18 'solve all issues yourself'; not an owner answer): every acceptance box is ticked or struck with a stated reason; follow-ups carry their own cards
 
 ## Notes
 
 2026-11-18T08:00:08+0100 From TRDD-4JLBB1YT (main agent): the planner fills a request up to the limit: budget = contextTokens - envelopeTokens (planner.ts:255) with ENVELOPE_TOKENS 64 (planner.ts:13), a request closes only when the next unit would pass the budget (planner.ts:313), and text units travel alone (planner.ts:311-312). After the estimator fix ceb16c5c, random hex and UUID text still comes out at up to 0.997 of the estimate (12 tokens of margin on one 4000-char list), so an under-count stays possible. Inferred, not measured: the decider fixed overhead is 105 input tokens for the state x and a one-line question; if that question costs 15 to 20 tokens, the decider own wrapper is about 85 to 90 tokens, above the 64 the planner reserves. Planner headroom is one more option for this card, next to re-cutting the chunk and max_requests_per_call.
 2026-11-18T10:11:51+0100 main agent: re-read at HEAD 54236bf8 (planner.ts:100-200, split-on-overflow.ts:20-60): replanRequest refuses a request with fewer than 2 units and re-expands with the original limits; answerWithSplit returns the first 422 when the re-plan refuses; so a refused lone text chunk is never cut smaller. Option 1 (re-cut with the scaled budget, merge the sub-answers under the original key) is agent-doable after red tests in split-on-overflow.test.ts, local-decision.test.ts and local-decider-remote-error.test.ts. USER decisions: Option 2 (packing, against D31), Option 3 (max_requests_per_call), removing the 16384 clamp (run-decision.ts:409-410), planner headroom.
 2026-11-18T10:24:01+0100 main agent decision under the USER delegation of 2026-11-18 ("solve all issues yourself. i need results."): Option 1 is to be implemented (a refused lone text chunk is re-cut with the scaled budget, down to CHUNK_CHARS_MIN, and the piece answers merge under the original key; a chunk still refused at CHUNK_CHARS_MIN returns the original 422). The 16384 clamp stays: removing it reverses the USER-quoted rationale in the comment above it in run-decision.ts. Option 2 is rejected: it contradicts D31 (plan ZB41KG62 line 167, no packing of independent items). Option 3 and a planner headroom margin are not taken. This supersedes the USER-decisions list in the 2026-11-18 note above.
+2026-11-18T15:56:02+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 3 input lost: no recorded command for the 2026-11-17 05:18 run (reports_dev/nl2012o9-rerun/20261118_143051+0100-report.md). Comparable input reports_dev/publish/test.log (535948 bytes): installed 14.7.2 and a build of 9fd5dea0 refuse it (the plan needs 20 requests, over the limit of 16); a build of 0a682690 plans 10 requests, 205299 estimated input tokens, exit 0 (reports_dev/nl2012o9-measure/20261118_152728+0100-report.md and 20261118_153213+0100-parent-report.md). The only source change between the two builds is 0a682690 (git log 9fd5dea0..0a682690 lists that one commit). Limits: single run per build, node_modules shared with the working tree and not from each commit lockfile, estimate only (nothing was sent), and the 0a682690 run printed a settings notice about the or-jev profile name that the parent run did not, so the 20 to 10 drop is not isolated to the planner by this evidence. 0a682690 is added to implementation-commits. Box 3 struck and replaced below.
 
 ## Progress
 

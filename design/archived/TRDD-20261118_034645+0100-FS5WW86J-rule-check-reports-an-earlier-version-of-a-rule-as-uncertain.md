@@ -1,10 +1,10 @@
 ---
 trdd-id: FS5WW86J
 title: rule-check reports an earlier version of a rule as uncertain, not updated_version
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T03:46:45+0100
-updated: 2026-11-18T07:38:24+0100
+updated: 2026-11-18T16:08:39+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -25,11 +25,13 @@ Follow-up of TRDD-LFTQCFUX. On the build that ships rule-check, an earlier versi
 
 - 2026-11-18T03:46:45+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T07:38:24+0100 — column → human_review by main-agent@llm-externalizer-plugin. measurements and decision recorded; the packing default and the contradicting-phrase merge are USER decisions
+- 2026-11-18T16:08:39+0100 — COMPLETE by main-agent@llm-externalizer-plugin. main agent ruling (delegated by USER 2026-11-18 'solve all issues yourself'; not an owner answer): every acceptance box is ticked or struck with a stated reason; follow-ups carry their own cards.
 
 ## Notes
 
 Author and approval fields were set by the worker from the coordinator correction of 2026-11-18: --author main-agent@llm-externalizer-plugin. trddgrep then wrote approved true, mandate true, min-approval none and approval-judge main-agent@llm-externalizer-plugin from that identity. The main agent confirmed the author and the self-approval on 2026-11-18. The project runs with one agent, and every card here has the same issuer.
 2026-11-18T03:53:19+0100 3-pillars session answer (peer input, not a USER decision): uncertain routed to a person is usable meanwhile if (1) the earlier-version rule is in candidates with its rule_id, pinned by a test (rule-check.test.ts, an updated version below --min-confidence is uncertain); (2) uncertain is never reported as new, and an unanswered rule keeps the outcome uncertain; (3) the exit code and the decision fields stay stable enough to script on. An automatic merge of an earlier version waits for this card.
+2026-11-18T15:52:34+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling 1: keep the packed default (card measurements: the unpacked variant gives r2 0.44 to 0.50, below 0.6; one rule per request is refused above 8 rules by the default profile; the old label recipe is weaker on r1 and on S6.1). Ruling 2: the tool reports the outcome, the conflict flag and attention; whether a consumer merges an updated_version with conflict true is consumer policy (3-pillars), not decided in llm-ext. The loading-screen r2 miss stays a documented limitation. Evidence: triage B2 (rule-check.ts conflict default 0.6, attention predicate includes conflict, so --strict-exit exits non-zero on conflict; S5.1 contradiction pair measured conflict true 5 of 5 at 0.96 to 0.97).
 
 ## Corrections
 

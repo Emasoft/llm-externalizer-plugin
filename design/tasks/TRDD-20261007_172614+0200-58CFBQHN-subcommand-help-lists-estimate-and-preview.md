@@ -4,7 +4,7 @@ title: Subcommand help lists --estimate and --preview
 column: human_review
 status: tasked
 created: 2026-10-07T17:26:14+0200
-updated: 2026-11-16T20:21:22+0100
+updated: 2026-11-18T15:53:18+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -37,10 +37,11 @@ OPEN. llm-ext scan folder --help and llm-ext llm ask --help print no line contai
 
 ## Acceptance
 - [x] both help screens list --estimate and --preview with one sentence each
-- [ ] a test that every LLM-sending tool's help contains both
+- [~] ~~a test that every LLM-sending tool's help contains both~~ obsolete: as worded it cannot be met (classify refuses --preview, classify ping has no dry run; note 2026-11-04); reworded in the box below
 
 Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 2026-10-07; part of the 14.1.0 release (TRDD-WBZJRSQB).
 2026-11-16T20:21:21+0100 main agent, measured on the installed 14.4.0 binary (temp HOME and config dir): llm-ext scan folder --help and llm-ext llm ask --help each list --estimate and --preview with one sentence (exit 0); llm summarize lists only --estimate and scan security neither, which matches DRY_RUN_SUPPORT (gaps TRDD-51JRJ3M6, TRDD-ZVZFKNLP). Steps 1 and 2 shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0. Box 1 ticked on this evidence; box 2 wording stays the USER decision named in STATE; the OWED list in STATE is still open.
+- [ ] every model-sending command lists exactly the dry-run flags it accepts, with exemptions recorded; tests src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts (run before ticking)
 
 ## Approval log
 
@@ -103,3 +104,4 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 2026-11-14T13:35+0100 OWED (new): the flat and grouped path (main.ts:851 for --estimate, :859 for --preview) strips the flag from anywhere in argv with no -- handling and no WHY comment; no test places either flag after --. Writing the 87c34c1d test exposed TRDD-OZIIABLY (classify --profile read as a file name after --).
 2026-11-14T13:37+0100 STATE OWED: the clean-checkout byte-compare is dropped; TRDD-NQMW9AK5 (complete 2026-11-14) made npm ci work and a fresh-worktree build of dist matched the committed dist byte for byte.
 2026-11-14T13:38+0100 Correction to the 13:37 note: the byte-compare was not part of TRDD-NQMW9AK5 (which made npm ci work); it is the zod repro under TRDD-0ETFCKCU: a fresh npm ci and build of the zod 4.6.7 package files in a worktree at e02c93ea gave dist/llm-ext.js SHA-1 e5b3276e28f0, identical to the dist committed in 67f3a89f, which is still the dist at HEAD (re-measured now).
+2026-11-18T15:53:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 2 struck: as worded it cannot be met (classify refuses --preview, classify ping has no dry run; note 2026-11-04). Replacement box added UNTICKED with the reworded form the 2026-11-04 audit proposed: it is implemented (src/cli/dry-run-flags.ts DRY_RUN_SUPPORT; src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts exist in v14.7.2, byte-identical to HEAD, triage B2) but the triage did not run those two test files, so it is not ticked; run them before ticking. This card is user-owned: the rewording is a main agent ruling under the delegation and the USER may veto it. The OWED list of the STATE block is carried by the new card TRDD-FP2SAF4P (docs).

@@ -4,7 +4,7 @@ title: Session goal 2026-11-14 local fallback system working, published and inst
 column: human_review
 status: tasked
 created: 2026-11-14T19:40:02+0100
-updated: 2026-11-15T23:14:22+0100
+updated: 2026-11-18T15:53:19+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -56,3 +56,4 @@ since the janitor cleared the goal and did not restore it, here it is again: fin
 2026-11-15T19:09:10+0100 USER decision on the 14.3.0 CPV blocker (login-agent installer): verbatim answer 'Leave it out (Recommended)'; installer hook and script removed from 14.3.0; follow-up card J5HREA2G.
 2026-11-15T20:41+0100 USER 2026-11-15, verbatim: "on the other things, do as you think is better. but base your decisions on verified facts." Decisions: c4dc6bd5 message kept (its claim is scoped to the 18 non-patch-equivalent commits, matching the reconciliation report); WBZJRSQB sentence not ported (commit 33ac87cd is in origin/main history, the card is archived); volume paths in OK1NN5RN and RD-01 made generic, archived DAGBDXUB left frozen; or-jev classifier profile to be restored after 14.3.0 is installed.
 2026-11-15T23:12+0100 OUTCOME: 14.3.0 published (main 49b97722, tags v14.3.0 and llm-externalizer--v14.3.0, GitHub release v14.3.0) and installed at user scope via the emasoft-plugins marketplace (marketplace PR 7 merged 8259aeb2: deterministic README table, render-readme job, dead claude-plugins-management entry removed). or-jev classifier profile restored in the user settings with active_classifier: or-jev. Smoke test classify filter on 3 items ranked correctly; the remote model failed with OpenRouter 402 Insufficient credits and the local decider elephant-1 answered (the fallback this card targets). apple-docs-search session notified by cross-session message. Open: OpenRouter credit (user), publish.py git cwd bug TRDD-IM2NBX1S.
+2026-11-18T15:53:19+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Done for the card own scope: 14.3.0 is published (main 49b97722 is an ancestor of origin/main; GitHub release v14.3.0 published 2026-11-15T22:02:00Z) and installed at user scope, per the card own 2026-11-15T23:14 STATE (triage B2; not re-run). The OpenRouter credit top-up is a USER money action and is outside this card. Open items stay on their own cards (TRDD-TN8OUZ50, TRDD-J5HREA2G).

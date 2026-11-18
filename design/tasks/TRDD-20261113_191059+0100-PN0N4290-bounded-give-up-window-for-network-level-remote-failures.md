@@ -4,7 +4,7 @@ title: Bounded give-up window for network-level remote failures
 column: human_review
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-16T20:16:01+0100
+updated: 2026-11-18T15:52:33+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -76,3 +76,4 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 2026-11-16T10:08:22+0100 Main agent: Required test 3 (typed error in under 5 s) was written for the provisional 6 s window. With the 30 s default, test 3 must set the window through the new settings key or flag (for example 2 s) and keep the under-5 s bound; test 5 (unarmed, elapsed at least the old retry time) is unchanged.
 2026-11-16T10:51:28+0100 DONE by the main agent (worker report reports_dev/pn0n4290/20261116_102612+0100-report.md): 42c67aa3. Verified: tsc 0, eslint 0 on the changed files, 286 tests in 8 touched-area files (incl. index.test.ts, free-rotation, ensemble-all-failed, retry-clock-consumers) and 39 in provider http and retry-clock pass. On a disarmed copy the ECONNRESET, strict-probe and dispatch-reset tests fail. KNOWN LIMIT: Required test 3 closed-port case does not discriminate (the ECONNREFUSED budget of 2 tries ends the call before any window of 1 s or more), kept as a bound check. UNRESOLVED: the first dispatch-test run had no HOME stub; recent writes in ~/.llm-externalizer match a Reminzer benchmark at 10:25-10:27, but no backup exists to prove the test wrote nothing. UBS pre-commit scan timed out (900 s). Full suite owed before the push.
 2026-11-16T10:53:33+0100 Main agent, settles the UNRESOLVED line above: the ~/.llm-externalizer entries changed near the un-stubbed run all date 10:21:12-10:21:15 (catalog caches, decisions endpoint, profile-detect log and throttle), before that run started at 10:21:36; settings.yaml last changed 10:27:07 (Reminzer benchmark). No sign the test wrote there. RELEASE NOTE: 42c67aa3 must NOT ship before TRDD-WSPV40Y5 (1d) consumes the give-up error; alone it ends a command after 30 s where it used to retry up to 300 s, with no switch to local.
+2026-11-18T15:52:33+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling: accept the 30 s default give-up window and the 299 s cap. Why: 30 s covers a Wi-Fi reassociation, and the cap (NETWORK_GIVE_UP_MAX_S = RETRY_DEADLINE_MS / 1000 - 1, retry-window.ts:15) prevents a window that can never fire. The known limit (closed-port test 3 does not discriminate) stays documented on this card. Release hold met: 42c67aa3, ff08557f, 1e5ca0d7 (the 1d consumer) and 033ff771 are first in v14.4.0. Evidence: triage B3.

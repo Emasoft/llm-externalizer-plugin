@@ -4,7 +4,7 @@ title: ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
 column: human_review
 status: tasked
 created: 2026-11-17T22:19:20+0100
-updated: 2026-11-18T10:11:09+0100
+updated: 2026-11-18T15:52:36+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -44,3 +44,7 @@ Measured 2026-11-17, one run: ubs 5.5.26 on index.ts 26 s, 0 critical, exit 2 (t
 The active hook is the main checkout working-tree copy (core.hooksPath is an absolute path to it). If the main checkout switches to a branch without commit 6d76419b, every worktree silently runs the old fail-open hook or none.
 ubs refreshes helper modules over the network at run time (checksum mismatch, fetch); behaviour offline is not verified.
 Commits staging index.ts are blocked until TRDD-TYSKX72I; files with ubs criticals are tracked in TRDD-25KZDVYF.
+
+## Notes
+
+2026-11-18T15:52:35+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling: core.hooksPath stays an absolute path to the main checkout .githooks; the activation gap listed under Known gaps is accepted and recorded. Why: a relative path would run each worktree own .githooks/pre-commit, so a worktree on a branch without that file would run no hook at all (fail open); today every worktree runs the main checkout hook, and the main checkout branch carries the strict hook (6d76419b, byte-identical to 0ff28ba9, triage B3). Residual: if the main checkout switches to a branch without the hook, every worktree runs that branch hook. Checked 2026-11-18: git config core.hooksPath prints an absolute path ending in /.githooks.

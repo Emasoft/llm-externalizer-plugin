@@ -1,10 +1,10 @@
 ---
 trdd-id: 1L9VMEY7
 title: Local-only classifier profile local-decision that sends classify requests straight to mlx-decision
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-18T05:48:05+0100
+updated: 2026-11-18T16:08:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -58,6 +58,7 @@ A classifier profile named `local-decision` that sends every classify request st
 
 - 2026-11-16T23:20:23+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T05:48:05+0100 — column → human_review by main-agent@llm-externalizer-plugin. acceptance boxes 1-4 met (unit tests, live pass of v14.7.0); eht NL2012O9 and 5AV8UBL1 open; USER items: max_requests_per_call and the D31 packing option on NL2012O9
+- 2026-11-18T16:08:40+0100 — COMPLETE by main-agent@llm-externalizer-plugin. main agent ruling (delegated by USER 2026-11-18 'solve all issues yourself'; not an owner answer): every acceptance box is ticked or struck with a stated reason; follow-ups carry their own cards.
 
 ## Notes
 
@@ -75,3 +76,4 @@ A classifier profile named `local-decision` that sends every classify request st
 2026-11-18T05:34:58+0100 Live pass findings (same report). Every run, ping included, prints "Auth: $OPENROUTER_API_KEY is NOT set in the environment" with a warning sign. Traced (index.ts:617-659) and confirmed at runtime: the line comes from the ACTIVE TEXT profile (active: free in the test settings), not from the classifier profile; with active: local_llama the same ping printed no Auth line. Not a failure; recorded on TRDD-TN8OUZ50, which owns that startup line. The 1-minute host load rose to 60-70 during the file-mode runs (find 140 s, label 63 s); its source is not identified and may be the pass itself; no timeout fired (limit 900 s). Deviation: the first llm-ext --version of the worker ran outside the isolation wrapper against the real config; no classify call ran unisolated, and whether that call wrote anything to the real config was not checked.
 2026-11-18T05:34:59+0100 cd24d7cc: the two UBS js.security.hardcoded-secrets critical findings in local-decider-remote-error.test.ts (lines 61 and 97, the env reference "$XJE_TEST_KEY") are gone: the value is one named constant KEY_REF with a WHY comment; the pre-commit hook scanned the file, 0 critical; its 2 tests pass. The strict form (value in a constant, no ubs:ignore marker) was chosen because how far a trailing ubs:ignore reaches on a line was not verified (ubs_core/suppression.py not read). The statement in the commit message that a marker would also hide later findings on the same line is that unverified assumption, not a measured fact. A --files scan with ubs 5.5.26 of the 14 files of git diff --name-only 65a0f055 ea77d4d5 (14.5.0 to the last fix of this card) found no other critical finding (reports_dev/1l9vmey7-check/ubs-20261118_051351+0100.json: 14 files, critical 2, both in that test file, before cd24d7cc). For those 14 files this closes the "UBS still owed" item of 2026-11-17T06:50; the exit status of the JSON run was not read (the text run exited 1, on the two criticals). A UBS pass over files changed since 14.5.0 and committed before the fail-closed pre-commit hook (0ff28ba9, 2026-11-17 22:46) is still owed before the release; it is not owned by this card.
 2026-11-18T05:34:59+0100 Open items moved to their own cards (root analysis reports_dev/1l9vmey7-check/20261118_051637+0100-root-and-ubs.md, a hypothesis read from the code, not reproduced): TRDD-NL2012O9 (eht) owns the 19 over 16 refusal of or-jev test-output and the single chunk that the decider refuses and that cannot be cut again, with three options (re-cut on escalation, pack chunks against D31, raise max_requests_per_call). TRDD-5AV8UBL1 (eht) owns the missing test of the split on the remote escalation path. TRDD-4JLBB1YT (separate, pre-existing since 14.1.0) owns the base64 undercount of l1/estimate.ts. Still with the next release, not with this card: the full suite, Linux CI with the RAM-wait test.
+2026-11-18T15:53:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Closing on the card own evidence (triage B2), not re-run: boxes 1 to 5 are evidenced on the card (local-decision.test.ts:123-135 and :251-260; live pass 20261118_051817 of 16 actions, exit 0, answered_by elephant-1; tsc and eslint 0). The six implementation commits (fc3052b0, a473a6b0, 628142c0, ea77d4d5, 8ca6e53a, cd24d7cc) are ancestors of origin/main (merge-base --is-ancestor exit 0 each) and ship in v14.7.2. EHT cards: 5AV8UBL1 and 4JLBB1YT complete, NL2012O9 shipped in v14.7.2 (its own box 3 is tracked on that card).

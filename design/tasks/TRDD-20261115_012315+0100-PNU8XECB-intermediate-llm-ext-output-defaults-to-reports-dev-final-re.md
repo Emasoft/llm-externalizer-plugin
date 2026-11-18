@@ -4,7 +4,7 @@ title: Intermediate llm-ext output defaults to reports_dev, final reports stay i
 column: human_review
 status: tasked
 created: 2026-11-15T01:23:15+0100
-updated: 2026-11-16T20:16:02+0100
+updated: 2026-11-18T15:52:37+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -30,3 +30,7 @@ Owner correction relayed by perch-17 on 2026-11-15, verbatim: "why it should ign
 2026-11-15 02:15 routing landed in 07164c03 and 1e7811da. OPEN: owner to confirm model-pool benchmark/health/arrivals/auto-replace/update-all reports as reports_dev (agent interpretation); fix-found-bugs init-run scratch still writes to reports/ (deferred); 775 untracked files now visible under reports/ need sanitize-reports and a per-file move to reports_dev before any add; auto-replace-cli and settings_edit routing tests run in the pre-push suite after npm run build.
 2026-11-15T08:38:51+0100 FOLLOW-UP owed: the USER write-roots rule of 2026-09-18 (recorded on TRDD-DS6OM3KX, Standing USER rules) lists <project>/reports/llm-externalizer/ but not <project>/reports_dev/llm-externalizer/, which the 2026-11-15 routing now writes. The 2026-11-15 USER directive (intermediate output to reports_dev) is the newer instruction. Agent reading, NOT a USER quote: the write-roots list should gain reports_dev/llm-externalizer/; record that as a dated agent-reading note on DS6OM3KX and leave the 2026-09-18 USER text untouched, and sweep code and tests that enforce the write roots (grep scripts/llm-ext/src for write-root or allowed-root checks, benchmark/index.ts:3059-3072 history) before the pre-push suite.
 - 2026-11-16T20:16:02+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.3.0; full npm test green in v14.4.0; OPEN owner confirmation of which model-pool reports are intermediate (agent interpretation)
+
+## Notes
+
+2026-11-18T15:52:36+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling Q1: confirmed, the llm-ext own model-pool reports (benchmark, health, arrivals, auto-replace, update-all) are intermediate output and stay in reports_dev/llm-externalizer (llm-ext own tool state; the USER rule routes tool and environment configuration and intermediate artifacts to reports_dev). Issue 18: decided no sanitizing inside llm-ext (owner rule 2026-11-15: reports are sanitized from secrets before committing; llm-ext never commits, so the pre-commit step is the gate, and a Node port or a shell-out of sanitize-reports would create a second source of truth or a hard dependency). The reply was posted and the issue closed on 2026-11-18: https://github.com/Emasoft/llm-externalizer-plugin/issues/18#issuecomment-6981707539 (read back with gh api). The 864 untracked files under reports/ in the main checkout are a separate task: TRDD-09RLEY2F. Evidence: triage B3.

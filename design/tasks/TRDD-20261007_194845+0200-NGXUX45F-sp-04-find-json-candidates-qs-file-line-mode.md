@@ -4,7 +4,7 @@ title: SP-04 find (JSON candidates + qs file-line mode)
 column: testing
 status: tasked
 created: 2026-10-07T19:48:45+0200
-updated: 2026-11-17T14:14:09+0100
+updated: 2026-11-18T15:56:01+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -96,3 +96,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-11-04: definition of done not met: WHY comments thin (find.ts has one WHY comment, line 114, for its non-obvious rules). Its own tests and commit link were verified met that day.
 2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.
 2026-11-17T14:14:09+0100 REOPENED by git revert f3b6cde4 of the 59f1730a closure (harness review): the three call-through counting wrappers in files this card's commits touch (l0/catalog.test.ts:10, l2/evidence.test.ts:89, findings.test.ts:233) wait on the owner decision TRDD-052F3ZC9 (min-approval user, open); the charge to CASL940C and JDMY8LPJ was inferred from module ownership and blame now points at the squashed 4bdd9b1b, so R2 ownership cannot be confirmed. Also the WHY clause was judged on a comment count (12 in find.ts) and on the sites the 2026-11-04 note named, not on a full read of find.ts. Stays in testing until 052F3ZC9 is answered and find.ts is read for uncommented rules.
+2026-11-18T15:56:01+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): TRDD-052F3ZC9 was ruled option A on 2026-11-18: the three call-through counting observers (l0/catalog.test.ts:10, l2/evidence.test.ts:89, catalog/findings.test.ts:233) are exempt pass-through observers, so the test-double clause of the definition of done is met for this card. be23be4a (subject names TRDD-NGXUX45F) moved the find renumber WHY above the code it explains. The definition-of-done box is NOT touched: the triage of 2026-11-18 (reports_dev/triage-20261118/testing-a/20261118_091044+0100-NGXUX45F.md) found WHY candidates still without a comment at find.ts :64 (CRLF split), :150 with :192 and :194 (u-index key coupling) and :185 (invalid return sets exists from the exists answer) at HEAD 54236bf8, which be23be4a does not cover, and the 2026-11-17 note requires find.ts to be read for uncommented rules. Next: add WHY comments there (a reason marked inferred counts as traceable, ruled on TRDD-BUL4EEBP), then restate the box. full suite: 14.6.1 publish run (tree 04d412ea); re-run by the 14.7.3 publish gate.
