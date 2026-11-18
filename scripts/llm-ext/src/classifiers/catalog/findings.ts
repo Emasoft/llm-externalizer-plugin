@@ -17,6 +17,7 @@ const findingsInput = z
     // Reference (claude-jev review-findings.ts): the intent is optional.
     intent: nonBlank.optional(),
     // Lines kept on each side of the finding's line.
+    // WHY window max 100, default 10 (no recorded reason found; the window is an addition of this spec, not ported from claude-jev, per the file header): a window too large to send is not refused by this cap but skipped as window_too_large (MAX_UNIT_TOKENS, windowsOf).
     window: z.number().int().min(0).max(100).default(10),
     // The caller reads the files (C4-01); this spec stays pure. A finding whose file is absent here has an empty window (E71).
     sources: z.array(z.strictObject({ file: z.string().min(1), text: z.string() })).default([]),
@@ -174,6 +175,7 @@ export const spec: DecisionSpec<FindingsInput, FindingsResult> = {
           const sev = sevAnswer.score;
           const verdict: Verdict = real < t.real! || handled >= t["already-handled"]! ? "drop" : reachable >= t.reachable! ? "keep" : "keep_low";
           const reason: FindingReason = real < t.real! ? "not_real" : handled >= t["already-handled"]! ? "already_handled" : reachable >= t.reachable! ? "kept" : "not_reachable";
+          // WHY Math.round: SCORE_POLICY inherits score "expected-value" from DEFAULT_POLICY (l1/validate.ts), which accepts a fractional score anywhere in [0, n-1] (validateScore in l1/validate-score.ts), so the level is the nearest of the four SEVERITY names; the score is never out of range, so the index is always valid.
           row = { ...base, verdict, reason, real, reachable, already_handled: handled, severity: { score: sev, level: SEVERITY[Math.round(sev)]!, confidence: sevAnswer.confidence ?? null }, invalid: null };
         }
       }
