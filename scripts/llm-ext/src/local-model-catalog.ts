@@ -37,7 +37,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: true,
     sizeBytes: { weights: 1587969920 },
-    verified: { how: "llama-cli -hf on llama.cpp b11960-8642541b2 loaded it and answered at about 107 tokens/s, 2026-10-28 (TRDD-1OOAH3LD)" },
+    verified: { how: "llama-cli -hf on llama.cpp b11960-8642541b2 loaded it and answered at about 107 tokens/s, 2026-10-28 (TRDD-1OOAH3LD); llm-ext models calibrate Phase A PASS, 2026-10-29 (TRDD-R7NKAJ5B)" },
   },
   {
     id: "bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf",
@@ -47,7 +47,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: false,
     sizeBytes: { weights: 3595603104 },
-    verified: null,
+    verified: { how: "llama-server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29 (TRDD-R7NKAJ5B)" },
   },
   {
     id: "insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf",
@@ -57,7 +57,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: true,
     sizeBytes: { weights: 4610580640 },
-    verified: null,
+    verified: { how: "llama-server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29 (TRDD-R7NKAJ5B)" },
   },
   {
     id: "LiquidAI/LFM3-1.7B-MLX-4bit",
@@ -67,7 +67,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: false,
     sizeBytes: { weights: 973083386 },
-    verified: null,
+    verified: { how: "the Locals server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29; a full calibration finished 2026-11-15 with fill tokens 0 for every kind (TRDD-R7NKAJ5B)" },
   },
   {
     id: "mlx-community/Nanbeige4.2-3B-OptiQ-4bit",
@@ -77,7 +77,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: false,
     sizeBytes: { weights: 3303644285 },
-    verified: null,
+    verified: { how: "the Locals server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29 (TRDD-R7NKAJ5B)" },
   },
   {
     id: "mlx-community/Qwen3.5-4B-MLX-4bit",
@@ -87,7 +87,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: false,
     sizeBytes: { weights: 3034300695 },
-    verified: null,
+    verified: { how: "the Locals server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29 (TRDD-R7NKAJ5B)" },
   },
   {
     id: "AtomicChat/LFM3-VL-2B-GGUF:AD-Q4_K_M",
