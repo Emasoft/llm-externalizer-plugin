@@ -1,6 +1,113 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.3] - 2026-11-18
+
+### Added
+
+- Feat(classify): filter takes --context, with the context in a labelled block it never judges (TRDD-7ZA3EE6Z)
+
+- Feat(settings): settings-copy helper that keeps a differing settings_edit.yaml (TRDD-BYHR8EGG)
+
+
+### Documentation
+
+- Docs(trdd): reword two quoted CI lines that CPV refuses (1MT68BAJ, Z3YW19WC)
+
+- Docs(trdd): label check 1 result and 14.7.3 publish ruling (TRDD-WYY3SPDX, TRDD-FC2TX9VU)
+
+- Docs(classify): filter --context example uses file inputs, the form live check 3 ran (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): WYY3SPDX label check 1 pre-registered before any run (TRDD-WYY3SPDX)
+
+- Docs(trdd): drop the stale "HEAD has no filter --context" claim from the 7ZA3EE6Z STATE (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): 7ZA3EE6Z STATE after the re-land in 994bfbce (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): state how a pass of 7ZA3EE6Z live check 3 must be read (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): correct the 7ZA3EE6Z ruling that called V3 the only verdict-stable variant (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): 7ZA3EE6Z spike 3 result and live check 3 pre-registered (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): record corrections to the a164a1e6 closes; NGXUX45F box 11 cites the HEAD run (TRDD-FC2TX9VU)
+
+- Docs(trdd): close LWDKZO2A, M8GT4AYB, HJTLZ4T2, KKMJA9B5, FFPDWWGN (TRDD-FC2TX9VU)
+
+- Docs(trdd): batch 4 rulings and checks; 7ZA3EE6Z stays active on USER request (TRDD-FC2TX9VU)
+
+- Docs(trdd): mint 17 cards, 12 Windows failure groups and 5 local-model follow-ups (TRDD-FC2TX9VU)
+
+- Docs(trdd): 7ZA3EE6Z correction line states the in-place fix accurately (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): 7ZA3EE6Z check 2 keeps run 1 context as a gated arm; DS6OM3KX box 1 not reproduced (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): cancel J7AIC7ZW, ZBMRKOI3, TIJ6EYK3; supersede 8HDAFJ3N; close UT7UC025 (TRDD-FC2TX9VU)
+
+- Docs(trdd): set 2 rulings, SZ7TO9FW split into 9 children, 7ZA3EE6Z check 2 pre-registered (TRDD-FC2TX9VU)
+
+- Docs(trdd): close 17 cards and supersede EB1XGLMJ (TRDD-FC2TX9VU)
+
+- Docs(trdd): acceptance checklists, delegated rulings and six new cards (TRDD-FC2TX9VU)
+
+- Docs(find): WHY comments at the remaining non-obvious find.ts rules (TRDD-NGXUX45F)
+
+- Docs(trdd): close 9 cards, rule batch 1b/1c, mint 7 follow-up cards (TRDD-FC2TX9VU)
+
+- Docs: Windows marked experimental, consumer guidelines refreshed to 14.7.2 (TRDD-YHGYWPHQ, TRDD-PEZ08FM4)
+
+- Docs(classify-eval): WK-02 comment names the open card and drops the stale wait (TRDD-ABPSC16L)
+
+- Docs(classify): findings WHY comments for the window cap and the severity rounding (TRDD-OHLMZONY)
+
+- Docs(classify): extract WHY comments for the pattern cap and the whole-number cap check (TRDD-B19TVE91)
+
+- Docs(classify): rank renumber and keep-at WHY comments, synthetic test names (TRDD-UQ8TYKC9)
+
+- Docs(classify): move the find renumber WHY above the code it explains (TRDD-NGXUX45F)
+
+- Docs(classify): WHY comments for the run-decision issue cap, stop order and fatal refusal (TRDD-BUL4EEBP)
+
+- Docs(trdd): delegated rulings on M2H4RJVQ, 052F3ZC9, TH00STOO; six cards complete (TRDD-FC2TX9VU)
+
+- Docs(trdd): acceptance evidence, G49XPDNI published, H0JE5W6K and 09905HDI complete, Windows triage (TRDD-FC2TX9VU)
+
+- Docs(trdd): NL2012O9, G49XPDNI, ZTO9K8EK to publish after v14.7.2 shipped (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(hooks): run the ubs gate on clean merge commits too
+
+- Fix(diagnostics): dump-state redaction keeps the blank line before an ENV secret (TRDD-GBWVXEF6)
+
+- Fix(settings): settings show no longer overwrites a differing settings_edit.yaml (TRDD-BYHR8EGG)
+
+- Fix(governor): singular count text; drop the waiter queueTimeoutMs no rule reads (TRDD-YRRZJ5UH, TRDD-7B7TAQGD)
+
+- Fix(classify): plan text-only jobs for the remote limit; keep the decider clamp for jobs that cannot be re-cut (TRDD-NL2012O9)
+
+- Fix(llm-ext): startup and discover lines no longer print the auth token length (TRDD-TN8OUZ50)
+
+- Fix(llm-ext): profile --show no longer prints the auth token length (TRDD-TN8OUZ50)
+
+- Fix(session-summary): a command stop is rethrown, not retried; the final error lists every tried model (GitHub #15, TRDD-H0JE5W6K, TRDD-09905HDI)
+
+
+### Refactored
+
+- Refactor(secrets): one secret-patterns module for scan-pipeline and intake (TRDD-GBWVXEF6)
+
+- Refactor(llm-ext): move seven tool handlers out of index.ts (TRDD-TYSKX72I)
+
+
+### Testing
+
+- Test(llm-ext): harden five timing-dependent release-gate tests
+
+- Test(classifiers): name the TRDD-052F3ZC9 exemption at the three pass-through observers
+
+
 ## [14.7.2] - 2026-11-18
 
 ### Changed
