@@ -8919,6 +8919,7 @@ function unpopulatedFreeProfile() {
     // unroutable sentinel is the only honest value for an unpopulated slot.
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function unpopulatedPaidProfile() {
@@ -8927,6 +8928,7 @@ function unpopulatedPaidProfile() {
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function unpopulatedLocalProfile() {
@@ -8944,6 +8946,7 @@ function unpopulatedScoutingProfile() {
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function orJevProfile() {
@@ -8952,6 +8955,7 @@ function orJevProfile() {
     api: "openrouter-remote",
     model: "~typesafe/jev-latest",
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function unpopulatedDefaultProfile(name) {
@@ -231152,6 +231156,7 @@ var init_pick = __esm({
           free_models: [],
           model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ],
       "paid-ensemble": [
@@ -231162,6 +231167,7 @@ var init_pick = __esm({
           second_model: PLACEHOLDER_MODEL_ID,
           third_model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ],
       "paid-mass-scout": [
@@ -231170,6 +231176,7 @@ var init_pick = __esm({
           api: "openrouter-remote",
           model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ]
     };
@@ -232395,6 +232402,7 @@ function credentialUsable(profile, routesFrom) {
   if (missingProviderKeyVar(profile) === null) return true;
   return coerceProviderBindings(routesFrom?.providers).some(
     (p) => (p.api ? resolveEnvValue(p.api_key ?? API_PRESETS[p.api]?.defaultAuthEnv) : resolveEnvValue(p.api_key)) !== ""
+    // ubs:ignore emptiness check of a local env value, no untrusted input
   );
 }
 function dynamicCredentialUsability(name, settings) {
@@ -233908,6 +233916,7 @@ import { join as join31 } from "node:path";
 
 // src/broker/protocol.ts
 init_local_llama_server();
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync as readFileSync30, renameSync as renameSync15, rmSync as rmSync4, writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join29 } from "node:path";
 
@@ -238968,6 +238977,7 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
     mode: pool.length >= 2 ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
+    // ubs:ignore env-var reference, not a secret
     free_only: true,
     free_models: pool,
     // The tool heads stay on the benchmarked OpenRouter winner: `passing` is
@@ -239088,6 +239098,7 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
     mode: picks3[1] ? "remote-ensemble" : "remote",
     api: "openrouter-remote",
     api_key: "$OPENROUTER_API_KEY",
+    // ubs:ignore env-var reference, not a secret
     model: picks3[0].modelId,
     paid_models: fullPool.map((p) => p.modelId),
     tool_models: toolModels

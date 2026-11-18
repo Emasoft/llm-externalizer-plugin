@@ -10247,6 +10247,7 @@ function isInvalidOnlyBecauseUnpopulated(name, profile) {
     ...profile,
     ...profile.free_only === true ? { free_models: ["placeholder/a:free", "placeholder/b:free"] } : { model: "placeholder/populated" },
     ...needsAuthKey ? { api_key: "placeholder-key" } : {}
+    // ubs:ignore validation placeholder, never used as a credential
   };
   return validateProfile(name, populated).valid;
 }
@@ -10261,6 +10262,7 @@ function unpopulatedFreeProfile() {
     // unroutable sentinel is the only honest value for an unpopulated slot.
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function unpopulatedPaidProfile() {
@@ -10269,6 +10271,7 @@ function unpopulatedPaidProfile() {
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function unpopulatedLocalProfile() {
@@ -10286,6 +10289,7 @@ function unpopulatedScoutingProfile() {
     api: "openrouter-remote",
     model: PLACEHOLDER_MODEL_ID,
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function orJevProfile() {
@@ -10294,6 +10298,7 @@ function orJevProfile() {
     api: "openrouter-remote",
     model: "~typesafe/jev-latest",
     api_key: "$OPENROUTER_API_KEY"
+    // ubs:ignore env-var reference, not a secret
   };
 }
 function builtinLocalProfiles() {
@@ -240042,8 +240047,12 @@ var init_phase_b_fixtures = __esm({
 });
 
 // src/broker/protocol.ts
+import { timingSafeEqual } from "node:crypto";
 import { readFileSync as readFileSync31, renameSync as renameSync16, rmSync as rmSync3, writeFileSync as writeFileSync16 } from "node:fs";
 import { join as join31 } from "node:path";
+function brokerTokenMatches(sent, expected) {
+  return typeof sent === "string" && Buffer.byteLength(sent) === expected.length && timingSafeEqual(Buffer.from(sent), expected);
+}
 function brokerStatePath(dir) {
   return join31(dir, "broker-local.json");
 }
@@ -244785,6 +244794,7 @@ var init_pick = __esm({
           free_models: [],
           model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ],
       "paid-ensemble": [
@@ -244795,6 +244805,7 @@ var init_pick = __esm({
           second_model: PLACEHOLDER_MODEL_ID,
           third_model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ],
       "paid-mass-scout": [
@@ -244803,6 +244814,7 @@ var init_pick = __esm({
           api: "openrouter-remote",
           model: PLACEHOLDER_MODEL_ID,
           api_key: "$OPENROUTER_API_KEY"
+          // ubs:ignore env-var reference, not a secret
         }
       ]
     };
@@ -248270,6 +248282,7 @@ Report: ${reportPath}`;
           () => planToolReplacements({
             candidateModels: models && models.length > 0 ? models : void 0,
             force: args.force === true,
+            // ubs:ignore boolean flag, not a secret
             apiKey: opts.apiKey
           })
         );
@@ -283741,7 +283754,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
       }
       const isAuth4xx = /\bAPI error 401\b/.test(errMsg);
       const keepsOwnError = payment !== null || isAuth4xx || deterministic4xx || isPriceCeilingRefusal || isIronRuleRefusal || // TRDD-VAORGKVF: keeps its own error (the "Validate it" remedy)
-      unavailableKind === "gone" || unavailableKind === "daily-quota";
+      unavailableKind === "gone" || // ubs:ignore availability enum, not a secret
+      unavailableKind === "daily-quota";
       const closedWindowError = () => keepsOwnError ? err3 : retryDeadlineError(clock, err3, backend.type, {
         shared,
         refusedRetryAt: call.refusedRetryAt,
@@ -283749,7 +283763,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
         lastStatus: callStatus,
         lastProvider: callProvider
       });
-      if (payment === "uncertain" && !paymentRetried && !stopped() && unavailableKind !== "gone" && unavailableKind !== "daily-quota") {
+      if (payment === "uncertain" && !paymentRetried && !stopped() && unavailableKind !== "gone" && // ubs:ignore availability enum, not a secret
+      unavailableKind !== "daily-quota") {
         paymentRetried = true;
         process.stderr.write(
           `[model-retry] ${options.model || backend.model}: possible payment error: ${errMsg} \u2014 retrying once
@@ -285081,6 +285096,7 @@ function credentialUsable(profile, routesFrom) {
   if (missingProviderKeyVar(profile) === null) return true;
   return coerceProviderBindings(routesFrom?.providers).some(
     (p) => (p.api ? resolveEnvValue(p.api_key ?? API_PRESETS[p.api]?.defaultAuthEnv) : resolveEnvValue(p.api_key)) !== ""
+    // ubs:ignore emptiness check of a local env value, no untrusted input
   );
 }
 function noFreeProviderCredentials(profile) {
@@ -291528,6 +291544,7 @@ async function runBroker(o) {
     }
   };
   const token = randomBytes5(24).toString("hex");
+  const tokenBuf = Buffer.from(token);
   mkdirSync43(o.dir, { recursive: true });
   const notify = (job) => {
     for (const w of waiters.get(job.id) ?? []) w();
@@ -292111,7 +292128,7 @@ async function runBroker(o) {
     return typeof v === "string" && /^\d+$/.test(v) && Number(v) > 0 ? Number(v) : fallback;
   };
   const handle = async (req, res) => {
-    if (req.headers[TOKEN_HEADER] !== token) return reply(res, 401, { error: "bad or missing broker token" });
+    if (!brokerTokenMatches(req.headers[TOKEN_HEADER], tokenBuf)) return reply(res, 401, { error: "bad or missing broker token" });
     const url2 = new URL(req.url ?? "/", "http://127.0.0.1");
     const m = /^\/v1\/jobs\/([A-Za-z0-9-]+)$/.exec(url2.pathname);
     if (req.method === "GET" && url2.pathname === "/v1/health") {
@@ -292148,7 +292165,9 @@ async function runBroker(o) {
         body,
         timeoutMs: intHeader(req, TIMEOUT_HEADER, DEFAULT_EXEC_TIMEOUT_MS),
         queueTimeoutMs: intHeader(req, QUEUE_TIMEOUT_HEADER, t.starveMs),
+        // ubs:ignore fixed property name in object literal
         noHold: req.headers[NO_HOLD_HEADER] === "1",
+        // ubs:ignore constant header-name read, boolean result
         submittedAt: now4,
         lastPolledAt: now4,
         pollers: 0,
@@ -293041,7 +293060,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.6.4";
+var VERSION = "14.6.5";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

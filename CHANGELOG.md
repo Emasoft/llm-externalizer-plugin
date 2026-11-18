@@ -1,6 +1,31 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.6.5] - 2026-11-18
+
+### Documentation
+
+- Docs(trdd): close Z20KCBZY as complete with 14.6.4 acceptance; record the plan of record on FC2TX9VU (TRDD-Z20KCBZY, TRDD-FC2TX9VU)
+
+- Docs(trdd): record commit B and its message corrections; record the 14.6.4 release (TRDD-25KZDVYF, TRDD-Z20KCBZY)
+
+
+### Fixed
+
+- Fix(broker): compare the per-spawn token in constant time (TRDD-25KZDVYF)
+
+
+### Miscellaneous
+
+- Chore(ubs): mark 14 verified ubs false positives in broker/broker.test.ts (TRDD-25KZDVYF)
+
+- Chore(ubs): mark 4 verified ubs false positives in benchmark/pick.ts (TRDD-25KZDVYF)
+
+- Chore(ubs): mark 4 verified ubs false positives in benchmark/index.ts (TRDD-25KZDVYF)
+
+- Chore(ubs): mark 115 verified ubs false positives in 9 files (TRDD-25KZDVYF)
+
+
 ## [14.6.4] - 2026-11-17
 
 ### Documentation
