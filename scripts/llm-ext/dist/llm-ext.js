@@ -11140,14 +11140,14 @@ function localGovernorErrors(raw) {
       if (typeof value !== "boolean") errors.push(`local_governor.enabled must be true or false, got ${JSON.stringify(value)}`);
       continue;
     }
-    const spec16 = LOCAL_GOVERNOR_KEYS[key];
-    if (!spec16) {
+    const spec17 = LOCAL_GOVERNOR_KEYS[key];
+    if (!spec17) {
       errors.push(`local_governor.${key} is not a known key (known: ${known2})`);
       continue;
     }
-    const min = key === "ram_limit_pct" ? ramLimitMin() : spec16.min;
-    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > spec16.max) {
-      const range = spec16.max === Number.MAX_SAFE_INTEGER ? `of at least ${min}` : `from ${min} to ${spec16.max}`;
+    const min = key === "ram_limit_pct" ? ramLimitMin() : spec17.min;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < min || value > spec17.max) {
+      const range = spec17.max === Number.MAX_SAFE_INTEGER ? `of at least ${min}` : `from ${min} to ${spec17.max}`;
       errors.push(`local_governor.${key} must be an integer ${range}, got ${JSON.stringify(value)}`);
     }
   }
@@ -11175,16 +11175,16 @@ function localFallbackErrors(raw) {
   }
   const errors = [];
   for (const [key, value] of Object.entries(raw)) {
-    const spec16 = LOCAL_FALLBACK_KEYS[key];
-    if (spec16 === void 0) {
+    const spec17 = LOCAL_FALLBACK_KEYS[key];
+    if (spec17 === void 0) {
       errors.push(
         LOCAL_FALLBACK_REMOVED_KEYS.has(key) ? `local_fallback.${key} was removed: llm-ext no longer starts the mlx-decision decider, so this setting has no effect \u2014 delete it from settings.yaml (known: ${known2})` : `local_fallback.${key} is not a known key (known: ${known2})`
       );
       continue;
     }
-    if (spec16.kind === "boolean") {
+    if (spec17.kind === "boolean") {
       if (typeof value !== "boolean") errors.push(`local_fallback.${key} must be true or false, got ${JSON.stringify(value)}`);
-    } else if (spec16.kind === "string") {
+    } else if (spec17.kind === "string") {
       if (key === "url") {
         if (typeof value !== "string" || value === "") {
           errors.push(`local_fallback.url must be a non-empty string, got ${JSON.stringify(value)}`);
@@ -11196,8 +11196,8 @@ function localFallbackErrors(raw) {
       } else if (typeof value !== "string" || value === "") {
         errors.push(`local_fallback.${key} must be a non-empty string, got ${JSON.stringify(value)}`);
       }
-    } else if (typeof value !== "number" || !Number.isInteger(value) || value < spec16.min || value > spec16.max) {
-      errors.push(`local_fallback.${key} must be an integer from ${spec16.min} to ${spec16.max}, got ${JSON.stringify(value)}`);
+    } else if (typeof value !== "number" || !Number.isInteger(value) || value < spec17.min || value > spec17.max) {
+      errors.push(`local_fallback.${key} must be an integer from ${spec17.min} to ${spec17.max}, got ${JSON.stringify(value)}`);
     }
   }
   const mergedTimeouts = { requestTimeoutMs: 4e5, attemptTimeoutMs: 2e5, ...raw };
@@ -12415,12 +12415,12 @@ var init_profile_checks = __esm({
 });
 
 // src/classifiers/catalog/spec.ts
-function classifyCliUsage(spec16) {
-  const cli = spec16.cli;
+function classifyCliUsage(spec17) {
+  const cli = spec17.cli;
   if (cli === void 0) return void 0;
-  if ("document" in cli) return `llm-ext classify ${spec16.id} <file, - for stdin> [--max-bytes N]`;
+  if ("document" in cli) return `llm-ext classify ${spec17.id} <file, - for stdin> [--max-bytes N]`;
   const lead = cli.positional.map((p) => ` "<${p.name}>"`).join("");
-  return `llm-ext classify ${spec16.id}${lead} <files, directories, globs, - for stdin> [--items FILE]${cli.lines === false ? "" : " [--lines]"}`;
+  return `llm-ext classify ${spec17.id}${lead} <files, directories, globs, - for stdin> [--items FILE]${cli.lines === false ? "" : " [--lines]"}`;
 }
 var init_spec = __esm({
   "src/classifiers/catalog/spec.ts"() {
@@ -13093,13 +13093,13 @@ function snapToEnum(v, values) {
     if (cand.toLowerCase() === lc) return cand;
   }
   if (lc.length < 4) return void 0;
-  let best = null;
+  let best2 = null;
   for (const cand of values) {
     if (cand.length < 4) continue;
     const d = levenshtein(lc, cand.toLowerCase());
-    if (d <= 2 && (!best || d < best.d)) best = { val: cand, d };
+    if (d <= 2 && (!best2 || d < best2.d)) best2 = { val: cand, d };
   }
-  return best?.val;
+  return best2?.val;
 }
 function levenshtein(a, b) {
   if (a === b) return 0;
@@ -13480,15 +13480,15 @@ function parseShorthand(input8) {
     description
   };
 }
-function tokeniseTypeSpec(spec16, fieldName) {
-  const idMatch = spec16.match(/^[a-z][a-z0-9_]*/);
+function tokeniseTypeSpec(spec17, fieldName) {
+  const idMatch = spec17.match(/^[a-z][a-z0-9_]*/);
   if (!idMatch) {
     throw new ShorthandParseError(
-      `field "${fieldName}": cannot parse type spec "${spec16}"`
+      `field "${fieldName}": cannot parse type spec "${spec17}"`
     );
   }
   const kind = idMatch[0];
-  let rest = spec16.slice(kind.length).trim();
+  let rest = spec17.slice(kind.length).trim();
   const args = [];
   while (rest.length > 0) {
     if (rest[0] !== "(") {
@@ -13499,7 +13499,7 @@ function tokeniseTypeSpec(spec16, fieldName) {
     const close = rest.indexOf(")");
     if (close < 0) {
       throw new ShorthandParseError(
-        `field "${fieldName}": unbalanced "(" in "${spec16}"`
+        `field "${fieldName}": unbalanced "(" in "${spec17}"`
       );
     }
     const inner = rest.slice(1, close);
@@ -13571,8 +13571,8 @@ function parsePositiveInt(arg, fieldName, label2) {
   }
   return n;
 }
-function parseTypeSpec(spec16, fieldName) {
-  const tokens = tokeniseTypeSpec(spec16, fieldName);
+function parseTypeSpec(spec17, fieldName) {
+  const tokens = tokeniseTypeSpec(spec17, fieldName);
   switch (tokens.kind) {
     case "bool":
       if (tokens.args.length > 0) {
@@ -21335,8 +21335,8 @@ ${lanes.join("\n")}
         return compareValues2(left.length, right.length);
       }
       var VersionRange = class _VersionRange {
-        constructor(spec16) {
-          this._alternatives = spec16 ? Debug.checkDefined(parseRange2(spec16), "Invalid range spec.") : emptyArray;
+        constructor(spec17) {
+          this._alternatives = spec17 ? Debug.checkDefined(parseRange2(spec17), "Invalid range spec.") : emptyArray;
         }
         static tryParse(text2) {
           const sets = parseRange2(text2);
@@ -39364,19 +39364,19 @@ ${lanes.join("\n")}
         if (specs === void 0 || specs.length === 0) {
           return void 0;
         }
-        return flatMap(specs, (spec16) => spec16 && getSubPatternFromSpec(spec16, basePath, usage, wildcardMatchers[usage]));
+        return flatMap(specs, (spec17) => spec17 && getSubPatternFromSpec(spec17, basePath, usage, wildcardMatchers[usage]));
       }
       function isImplicitGlob(lastPathComponent) {
         return !/[.*?]/.test(lastPathComponent);
       }
-      function getPatternFromSpec(spec16, basePath, usage) {
-        const pattern = spec16 && getSubPatternFromSpec(spec16, basePath, usage, wildcardMatchers[usage]);
+      function getPatternFromSpec(spec17, basePath, usage) {
+        const pattern = spec17 && getSubPatternFromSpec(spec17, basePath, usage, wildcardMatchers[usage]);
         return pattern && `^(?:${pattern})${usage === "exclude" ? "(?:$|/)" : "$"}`;
       }
-      function getSubPatternFromSpec(spec16, basePath, usage, { singleAsteriskRegexFragment, doubleAsteriskRegexFragment, replaceWildcardCharacter: replaceWildcardCharacter2 } = wildcardMatchers[usage]) {
+      function getSubPatternFromSpec(spec17, basePath, usage, { singleAsteriskRegexFragment, doubleAsteriskRegexFragment, replaceWildcardCharacter: replaceWildcardCharacter2 } = wildcardMatchers[usage]) {
         let subpattern = "";
         let hasWrittenComponent = false;
-        const components = getNormalizedPathComponents(spec16, basePath);
+        const components = getNormalizedPathComponents(spec17, basePath);
         const lastComponent = last(components);
         if (usage !== "exclude" && lastComponent === "**") {
           return void 0;
@@ -63421,8 +63421,8 @@ ${lanes.join("\n")}
         const wildcardFiles = arrayFrom(wildcardFileMap.values());
         return literalFiles.concat(wildcardFiles, arrayFrom(wildCardJsonFileMap.values()));
       }
-      function isExcludedFile(pathToCheck, spec16, basePath, useCaseSensitiveFileNames2, currentDirectory) {
-        const { validatedFilesSpec, validatedIncludeSpecs, validatedExcludeSpecs } = spec16;
+      function isExcludedFile(pathToCheck, spec17, basePath, useCaseSensitiveFileNames2, currentDirectory) {
+        const { validatedFilesSpec, validatedIncludeSpecs, validatedExcludeSpecs } = spec17;
         if (!length(validatedIncludeSpecs) || !length(validatedExcludeSpecs)) return false;
         basePath = normalizePath(basePath);
         const keyMapper = createGetCanonicalFileName(useCaseSensitiveFileNames2);
@@ -63444,7 +63444,7 @@ ${lanes.join("\n")}
       function matchesExclude(pathToCheck, excludeSpecs, useCaseSensitiveFileNames2, currentDirectory) {
         return matchesExcludeWorker(
           pathToCheck,
-          filter(excludeSpecs, (spec16) => !invalidDotDotAfterRecursiveWildcard(spec16)),
+          filter(excludeSpecs, (spec17) => !invalidDotDotAfterRecursiveWildcard(spec17)),
           useCaseSensitiveFileNames2,
           currentDirectory
         );
@@ -63457,25 +63457,25 @@ ${lanes.join("\n")}
         return !hasExtension(pathToCheck) && excludeRegex.test(ensureTrailingDirectorySeparator(pathToCheck));
       }
       function validateSpecs(specs, errors, disallowTrailingRecursion, jsonSourceFile, specKey) {
-        return specs.filter((spec16) => {
-          if (!isString(spec16)) return false;
-          const diag2 = specToDiagnostic(spec16, disallowTrailingRecursion);
+        return specs.filter((spec17) => {
+          if (!isString(spec17)) return false;
+          const diag2 = specToDiagnostic(spec17, disallowTrailingRecursion);
           if (diag2 !== void 0) {
             errors.push(createDiagnostic(...diag2));
           }
           return diag2 === void 0;
         });
-        function createDiagnostic(message, spec16) {
-          const element = getTsConfigPropArrayElementValue(jsonSourceFile, specKey, spec16);
-          return createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(jsonSourceFile, element, message, spec16);
+        function createDiagnostic(message, spec17) {
+          const element = getTsConfigPropArrayElementValue(jsonSourceFile, specKey, spec17);
+          return createDiagnosticForNodeInSourceFileOrCompilerDiagnostic(jsonSourceFile, element, message, spec17);
         }
       }
-      function specToDiagnostic(spec16, disallowTrailingRecursion) {
-        Debug.assert(typeof spec16 === "string");
-        if (disallowTrailingRecursion && invalidTrailingRecursionPattern.test(spec16)) {
-          return [Diagnostics.File_specification_cannot_end_in_a_recursive_directory_wildcard_Asterisk_Asterisk_Colon_0, spec16];
-        } else if (invalidDotDotAfterRecursiveWildcard(spec16)) {
-          return [Diagnostics.File_specification_cannot_contain_a_parent_directory_that_appears_after_a_recursive_directory_wildcard_Asterisk_Asterisk_Colon_0, spec16];
+      function specToDiagnostic(spec17, disallowTrailingRecursion) {
+        Debug.assert(typeof spec17 === "string");
+        if (disallowTrailingRecursion && invalidTrailingRecursionPattern.test(spec17)) {
+          return [Diagnostics.File_specification_cannot_end_in_a_recursive_directory_wildcard_Asterisk_Asterisk_Colon_0, spec17];
+        } else if (invalidDotDotAfterRecursiveWildcard(spec17)) {
+          return [Diagnostics.File_specification_cannot_contain_a_parent_directory_that_appears_after_a_recursive_directory_wildcard_Asterisk_Asterisk_Colon_0, spec17];
         }
       }
       function getWildcardDirectories({ validatedIncludeSpecs: include, validatedExcludeSpecs: exclude }, basePath, useCaseSensitiveFileNames2) {
@@ -63486,11 +63486,11 @@ ${lanes.join("\n")}
         if (include !== void 0) {
           const recursiveKeys = [];
           for (const file2 of include) {
-            const spec16 = normalizePath(combinePaths(basePath, file2));
-            if (excludeRegex && excludeRegex.test(spec16)) {
+            const spec17 = normalizePath(combinePaths(basePath, file2));
+            if (excludeRegex && excludeRegex.test(spec17)) {
               continue;
             }
-            const match = getWildcardDirectoryFromSpec(spec16, useCaseSensitiveFileNames2);
+            const match = getWildcardDirectoryFromSpec(spec17, useCaseSensitiveFileNames2);
             if (match) {
               const { key, path: path2, flags } = match;
               const existingPath = wildCardKeyToPath.get(key);
@@ -63520,12 +63520,12 @@ ${lanes.join("\n")}
       function toCanonicalKey(path2, useCaseSensitiveFileNames2) {
         return useCaseSensitiveFileNames2 ? path2 : toFileNameLowerCase(path2);
       }
-      function getWildcardDirectoryFromSpec(spec16, useCaseSensitiveFileNames2) {
-        const match = wildcardDirectoryPattern.exec(spec16);
+      function getWildcardDirectoryFromSpec(spec17, useCaseSensitiveFileNames2) {
+        const match = wildcardDirectoryPattern.exec(spec17);
         if (match) {
-          const questionWildcardIndex = spec16.indexOf("?");
-          const starWildcardIndex = spec16.indexOf("*");
-          const lastDirectorySeperatorIndex = spec16.lastIndexOf(directorySeparator);
+          const questionWildcardIndex = spec17.indexOf("?");
+          const starWildcardIndex = spec17.indexOf("*");
+          const lastDirectorySeperatorIndex = spec17.lastIndexOf(directorySeparator);
           return {
             key: toCanonicalKey(match[0], useCaseSensitiveFileNames2),
             path: match[0],
@@ -63533,8 +63533,8 @@ ${lanes.join("\n")}
             /* None */
           };
         }
-        if (isImplicitGlob(spec16.substring(spec16.lastIndexOf(directorySeparator) + 1))) {
-          const path2 = removeTrailingDirectorySeparator(spec16);
+        if (isImplicitGlob(spec17.substring(spec17.lastIndexOf(directorySeparator) + 1))) {
+          const path2 = removeTrailingDirectorySeparator(spec17);
           return {
             key: toCanonicalKey(path2, useCaseSensitiveFileNames2),
             path: path2,
@@ -89914,9 +89914,9 @@ ${lanes.join("\n")}
             return idx;
           }
           if (target.flags & 1048576) {
-            const best = getBestMatchingType(source, target);
-            if (best) {
-              return getIndexedAccessTypeOrUndefined(best, nameType);
+            const best2 = getBestMatchingType(source, target);
+            if (best2) {
+              return getIndexedAccessTypeOrUndefined(best2, nameType);
             }
           }
         }
@@ -168429,8 +168429,8 @@ ${lanes.join("\n")}
         }
       }
       function getIsExcludedPatterns(preferences, useCaseSensitiveFileNames2) {
-        return mapDefined(preferences.autoImportFileExcludePatterns, (spec16) => {
-          const pattern = getSubPatternFromSpec(spec16, "", "exclude");
+        return mapDefined(preferences.autoImportFileExcludePatterns, (spec17) => {
+          const pattern = getSubPatternFromSpec(spec17, "", "exclude");
           return pattern ? getRegexFromPattern(pattern, useCaseSensitiveFileNames2) : void 0;
         });
       }
@@ -172740,13 +172740,13 @@ interface Symbol {
         if (wasDefault) {
           if (isExportAssignment(exportNode) && !exportNode.isExportEquals) {
             const exp = exportNode.expression;
-            const spec16 = makeExportSpecifier(exp.text, exp.text);
+            const spec17 = makeExportSpecifier(exp.text, exp.text);
             changes.replaceNode(exportingSourceFile, exportNode, factory.createExportDeclaration(
               /*modifiers*/
               void 0,
               /*isTypeOnly*/
               false,
-              factory.createNamedExports([spec16])
+              factory.createNamedExports([spec17])
             ));
           } else {
             changes.delete(exportingSourceFile, Debug.checkDefined(findModifier(
@@ -172809,17 +172809,17 @@ interface Symbol {
             break;
           case 277:
           case 282: {
-            const spec16 = parent2;
-            changes.replaceNode(importingSourceFile, spec16, makeImportSpecifier(exportName, spec16.name.text));
+            const spec17 = parent2;
+            changes.replaceNode(importingSourceFile, spec17, makeImportSpecifier(exportName, spec17.name.text));
             break;
           }
           case 274: {
             const clause = parent2;
             Debug.assert(clause.name === ref, "Import clause name should match provided ref");
-            const spec16 = makeImportSpecifier(exportName, ref.text);
+            const spec17 = makeImportSpecifier(exportName, ref.text);
             const { namedBindings } = clause;
             if (!namedBindings) {
-              changes.replaceNode(importingSourceFile, ref, factory.createNamedImports([spec16]));
+              changes.replaceNode(importingSourceFile, ref, factory.createNamedImports([spec17]));
             } else if (namedBindings.kind === 275) {
               changes.deleteRange(importingSourceFile, { pos: ref.getStart(importingSourceFile), end: namedBindings.getStart(importingSourceFile) });
               const quotePreference = isStringLiteral(clause.parent.moduleSpecifier) ? quotePreferenceFromString(clause.parent.moduleSpecifier, importingSourceFile) : 1;
@@ -172833,7 +172833,7 @@ interface Symbol {
               changes.insertNodeAfter(importingSourceFile, clause.parent, newImport);
             } else {
               changes.delete(importingSourceFile, ref);
-              changes.insertNodeAtEndOfList(importingSourceFile, namedBindings.elements, spec16);
+              changes.insertNodeAtEndOfList(importingSourceFile, namedBindings.elements, spec17);
             }
             break;
           }
@@ -185655,7 +185655,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         return 1;
       }
       function tryAddToExistingImport(existingImports, isValidTypeOnlyUseSite, checker, compilerOptions) {
-        let best;
+        let best2;
         for (const existingImport of existingImports) {
           const fix = getAddToExistingImportFix(existingImport);
           if (!fix) continue;
@@ -185663,9 +185663,9 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           if (fix.addAsTypeOnly !== 4 && isTypeOnly || fix.addAsTypeOnly === 4 && !isTypeOnly) {
             return fix;
           }
-          best ?? (best = fix);
+          best2 ?? (best2 = fix);
         }
-        return best;
+        return best2;
         function getAddToExistingImportFix({ declaration, importKind, symbol: symbol2, targetFlags }) {
           if (importKind === 3 || importKind === 2 || declaration.kind === 272) {
             return void 0;
@@ -185888,17 +185888,17 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           return fixes[0];
         }
         return fixes.reduce(
-          (best, fix) => (
+          (best2, fix) => (
             // Takes true branch of conditional if `fix` is better than `best`
             compareModuleSpecifiers(
               fix,
-              best,
+              best2,
               sourceFile,
               program,
               preferences,
               packageJsonImportFilter.allowsImportingSpecifier,
               (fileName) => toPath(fileName, host.getCurrentDirectory(), hostGetCanonicalFileName(host))
-            ) === -1 ? fix : best
+            ) === -1 ? fix : best2
           )
         );
       }
@@ -186353,13 +186353,13 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
                 e.name
               ))
             ).elements : existingSpecifiers;
-            for (const spec16 of newSpecifiers) {
-              const insertionIndex = ts_OrganizeImports_exports.getImportSpecifierInsertionIndex(transformedExistingSpecifiers, spec16, specifierComparer);
-              changes.insertImportSpecifierAtIndex(sourceFile, spec16, clause.namedBindings, insertionIndex);
+            for (const spec17 of newSpecifiers) {
+              const insertionIndex = ts_OrganizeImports_exports.getImportSpecifierInsertionIndex(transformedExistingSpecifiers, spec17, specifierComparer);
+              changes.insertImportSpecifierAtIndex(sourceFile, spec17, clause.namedBindings, insertionIndex);
             }
           } else if (existingSpecifiers == null ? void 0 : existingSpecifiers.length) {
-            for (const spec16 of newSpecifiers) {
-              changes.insertNodeInListAfter(sourceFile, last(existingSpecifiers), spec16, existingSpecifiers);
+            for (const spec17 of newSpecifiers) {
+              changes.insertNodeInListAfter(sourceFile, last(existingSpecifiers), spec17, existingSpecifiers);
             }
           } else {
             if (newSpecifiers.length) {
@@ -229450,7 +229450,7 @@ function classifyUnavailable(detail, opts = {}) {
   if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
-  const modelSpecific403 = /\b403\b/.test(s) && (s.includes("only available") || s.includes("agentic harnesses") || s.includes("not available for free") || s.includes("unavailable for free"));
+  const modelSpecific403 = /\b403\b/.test(s) && (s.includes("only available") || s.includes("agentic harnesses") || s.includes("not available for free") || s.includes("unavailable for free") || s.includes("model is not available in your region"));
   const generic403 = /\b403\b/.test(s) && !modelSpecific403;
   const genericThisCredentialProvenGood = generic403 && opts.credentialProvenGoodElsewhere === true;
   const genericDistinct403Quorum = generic403 && generic403DistinctModels.size >= POOL_403_QUORUM;
@@ -233262,12 +233262,12 @@ function datasetFingerprint4(root2 = resolveFixtureRoot3()) {
   return h.digest("hex").slice(0, 12);
 }
 function validateDataset3(fixtures = CHECK_SPECS_FIXTURES, root2 = resolveFixtureRoot3()) {
-  const spec16 = specPath(root2);
-  if (!existsSync19(spec16)) {
-    throw new Error(`check-specs spec file missing: ${spec16}`);
+  const spec17 = specPath(root2);
+  if (!existsSync19(spec17)) {
+    throw new Error(`check-specs spec file missing: ${spec17}`);
   }
-  if (readFileSync22(spec16, "utf-8").trim().length === 0) {
-    throw new Error(`check-specs spec file is empty: ${spec16}`);
+  if (readFileSync22(spec17, "utf-8").trim().length === 0) {
+    throw new Error(`check-specs spec file is empty: ${spec17}`);
   }
   if (fixtures.length === 0) throw new Error("check-specs corpus is empty");
   const seen = /* @__PURE__ */ new Set();
@@ -240905,8 +240905,8 @@ function scoutSlotCtx(share) {
 }
 function chooseSlots(results) {
   if (results.length === 0) throw new Error("no main-slot candidate was measured");
-  const best = Math.max(...results.map((r) => r.tps));
-  return Math.min(...results.filter((r) => r.tps >= 0.9 * best).map((r) => r.slots));
+  const best2 = Math.max(...results.map((r) => r.tps));
+  return Math.min(...results.filter((r) => r.tps >= 0.9 * best2).map((r) => r.slots));
 }
 function batchThroughput(replies, wallMs) {
   const tokens = replies.reduce((s, r) => {
@@ -241455,10 +241455,10 @@ function judgeModel(dir, engine, model, threshold, log) {
   const candidates = record2.scouting_candidates ?? [];
   const pick3 = scoutingFor(candidates, threshold);
   if (pick3 === "unfit") {
-    const best = candidates.length > 0 ? Math.max(...candidates.map((c) => c.accuracy)) : null;
+    const best2 = candidates.length > 0 ? Math.max(...candidates.map((c) => c.accuracy)) : null;
     return {
       fit: false,
-      why: `model '${model}' is unfit for mass scouting: its best measured scouting accuracy is ${best === null ? "none (no candidate measured)" : best} and the threshold (scout_accuracy_threshold) is ${threshold}`
+      why: `model '${model}' is unfit for mass scouting: its best measured scouting accuracy is ${best2 === null ? "none (no candidate measured)" : best2} and the threshold (scout_accuracy_threshold) is ${threshold}`
     };
   }
   return { fit: true, record: record2, candidate: pick3 };
@@ -245035,7 +245035,7 @@ function parseSemDedupResponse(raw, inputPhrases) {
   }
   return { survivors: unique };
 }
-async function callWithOneRetry(spec16, deps) {
+async function callWithOneRetry(spec17, deps) {
   const maxTokens = deps.resolveDefaultMaxTokens();
   const options = {
     temperature: deps.defaultTemperature,
@@ -245045,12 +245045,12 @@ async function callWithOneRetry(spec16, deps) {
   };
   let lastError = "";
   for (let attempt2 = 0; attempt2 < 2; attempt2++) {
-    const user = attempt2 === 0 ? spec16.user : `${spec16.user}
+    const user = attempt2 === 0 ? spec17.user : `${spec17.user}
 
-IMPORTANT \u2014 your previous answer was rejected: ${lastError}. ${spec16.correction}`;
+IMPORTANT \u2014 your previous answer was rejected: ${lastError}. ${spec17.correction}`;
     const resp = await deps.ensembleStreaming(
       [
-        { role: "system", content: spec16.system },
+        { role: "system", content: spec17.system },
         { role: "user", content: user }
       ],
       options,
@@ -245061,7 +245061,7 @@ IMPORTANT \u2014 your previous answer was rejected: ${lastError}. ${spec16.corre
       lastError = gateFailureMessage(verdict);
       continue;
     }
-    const invalid = spec16.validate(resp.content);
+    const invalid = spec17.validate(resp.content);
     if (invalid === void 0) return { resp };
     lastError = invalid;
   }
@@ -269933,26 +269933,26 @@ function maxGate(values, at) {
   const max = Math.max(...values);
   return { max, gated: max >= at };
 }
-function inRange(name, v, spec16) {
-  if (!Number.isFinite(v) || v < spec16.min || v > spec16.max) {
-    throw new PolicyError(`--${name} must be a number from ${spec16.min} to ${spec16.max}, got ${v}`);
+function inRange(name, v, spec17) {
+  if (!Number.isFinite(v) || v < spec17.min || v > spec17.max) {
+    throw new PolicyError(`--${name} must be a number from ${spec17.min} to ${spec17.max}, got ${v}`);
   }
   return v;
 }
-function parseThresholdFlag(name, raw, spec16) {
+function parseThresholdFlag(name, raw, spec17) {
   if (!PLAIN_DECIMAL.test(raw)) throw new PolicyError(`--${name} must be a plain decimal number, got ${JSON.stringify(raw)}`);
-  return inRange(name, Number(raw), spec16);
+  return inRange(name, Number(raw), spec17);
 }
 function resolveThresholds(specs, overrides) {
   for (const name of Object.keys(overrides)) {
     if (!Object.hasOwn(specs, name)) throw new PolicyError(`unknown threshold --${name}`);
   }
   const out = {};
-  for (const [name, spec16] of Object.entries(specs)) {
-    inRange(name, spec16.default, spec16);
+  for (const [name, spec17] of Object.entries(specs)) {
+    inRange(name, spec17.default, spec17);
     const given = overrides[name];
-    if (given === void 0) out[name] = spec16.default;
-    else out[name] = typeof given === "string" ? parseThresholdFlag(name, given, spec16) : inRange(name, given, spec16);
+    if (given === void 0) out[name] = spec17.default;
+    else out[name] = typeof given === "string" ? parseThresholdFlag(name, given, spec17) : inRange(name, given, spec17);
   }
   return out;
 }
@@ -270310,8 +270310,8 @@ function mergeChunks(parts, dflt) {
   if (isChoice && dflt === void 0) throw new Error("a choice merge needs the default label");
   const votes = parts.filter((p) => !(p.answer.type === "choice" && p.answer.choice === dflt));
   const pool = votes.length > 0 ? votes : parts;
-  const best = pool.reduce((x, y) => value(y) > value(x) ? y : x);
-  return { answer: best.answer, chunks: parts.length, best_chunk: parts.indexOf(best) + 1, ...best.from === void 0 || best.to === void 0 ? {} : { best_lines: [best.from, best.to] } };
+  const best2 = pool.reduce((x, y) => value(y) > value(x) ? y : x);
+  return { answer: best2.answer, chunks: parts.length, best_chunk: parts.indexOf(best2) + 1, ...best2.from === void 0 || best2.to === void 0 ? {} : { best_lines: [best2.from, best2.to] } };
 }
 var CHUNK_CHARS_DEFAULT, CHUNK_CHARS_MIN, CHUNK_CHARS_MAX, CHUNK_OVERLAP;
 var init_chunker = __esm({
@@ -271499,7 +271499,7 @@ function project6(answers, i, t, ctx) {
     const gate = maxGate(Object.values(checks), t["wrong-at"]);
     const base = { id, status: "ok", checks, p_wrong: gate.max, unanswered };
     if (!gate.gated) return { ...base, action: "ok", reason: "no check reached the gate" };
-    const top = names2.reduce((best, n) => checks[n] > checks[best] ? n : best);
+    const top = names2.reduce((best2, n) => checks[n] > checks[best2] ? n : best2);
     return { ...base, action: "wrong", reason: `${top} ${checks[top]} at or above ${t["wrong-at"]}${ctx.truncated ? "; the source was truncated, so the correcting text may be in the cut part" : ""}` };
   });
   const flagged = records.filter((r) => r.action === "wrong").length;
@@ -272440,7 +272440,7 @@ ${l.lines.slice(r.from - 1, r.to).join("\n")}`).join("\n");
           };
         });
         const answered = parts.filter((p) => p.invalid === null);
-        const top = answered.reduce((best, p) => best === void 0 || p.regression > best.regression ? p : best, void 0);
+        const top = answered.reduce((best2, p) => best2 === void 0 || p.regression > best2.regression ? p : best2, void 0);
         const invalid = parts.filter((p) => p.invalid !== null).map((p) => ({ part: p.part, reason: p.invalid }));
         return {
           failing_blocks: l.failing,
@@ -272662,6 +272662,146 @@ var init_requirements = __esm({
   }
 });
 
+// src/classifiers/catalog/rule-check.ts
+function buildRow(id, rel, con, conflict) {
+  const row2 = { id, label: null, confidence: null, probabilities: null, contradicts: null, unanswered: false, invalid: null };
+  if (rel.ok) {
+    const c = rel.answer;
+    row2.label = c.choice;
+    row2.confidence = c.confidence ?? null;
+    row2.probabilities = c.probabilities ? Object.assign(/* @__PURE__ */ Object.create(null), c.probabilities) : null;
+  } else {
+    row2.unanswered = true;
+    row2.invalid = rel.reason;
+  }
+  if (con.ok) {
+    const p = con.answer.noul;
+    row2.contradicts = { yes: p >= conflict, probability: p };
+  } else {
+    row2.unanswered = true;
+    row2.invalid ??= con.reason;
+  }
+  return row2;
+}
+function reasonOf(r, rows, qualifying) {
+  const matched = rows.find((x) => x.id === r.rule_id);
+  const at = matched?.confidence == null ? "" : ` (confidence ${f2(matched.confidence)})`;
+  let base;
+  if (r.outcome === "duplicate") base = `duplicate of ${r.rule_id}${at}`;
+  else if (r.outcome === "updated_version") base = `updated version of ${r.rule_id}${at}${r.ambiguous ? `; ${qualifying} rules qualify` : ""}`;
+  else if (r.outcome === "new") base = `new: all ${rows.length} rules are confidently new`;
+  else if (r.unanswered.length > 0) base = `uncertain: ${r.unanswered.length} of ${rows.length} rules have no answer`;
+  else base = `uncertain: no rule is a confident duplicate or updated version, and ${r.candidates.length} of ${rows.length} rules are not confidently new`;
+  return r.conflict ? `${base}; the phrase contradicts ${rows.filter((x) => x.contradicts?.yes === true).length} rule(s)` : base;
+}
+function renderText5(r) {
+  const lines = [`${r.outcome}${r.rule_id === null ? "" : ` ${r.rule_id}`}${r.ambiguous ? " \xB7 ambiguous" : ""}${r.conflict ? " \xB7 conflict" : ""}`];
+  for (const c of r.candidates) if (!c.unanswered) lines.push(`${c.confidence === null ? "n/a" : f2(c.confidence)}  ${c.label}  ${c.id}${c.contradicts?.yes === true ? "  contradicts" : ""}`);
+  lines.push(`${r.confident_new_count} rules are confidently new`);
+  for (const c of r.candidates) if (c.unanswered) lines.push(`? no answer: ${c.id} (${c.invalid})`);
+  return { lines };
+}
+var RULE_ID, RELATION_CRITERIA, ruleCheckInput, REL, CON, confident, isConfidentNew, best, spec16;
+var init_rule_check = __esm({
+  "src/classifiers/catalog/rule-check.ts"() {
+    "use strict";
+    init_zod();
+    init_questions();
+    init_validate();
+    init_ids();
+    init_render_text();
+    init_shared();
+    RULE_ID = /^[A-Za-z0-9_.:-]{1,64}$/;
+    RELATION_CRITERIA = {
+      duplicate: "says the same thing as the rule",
+      updated_version: "changes, extends or replaces the rule on the same subject",
+      new: "is about a subject the rule does not cover"
+    };
+    ruleCheckInput = external_exports.strictObject({
+      phrase: external_exports.string().min(1),
+      rules: external_exports.array(external_exports.strictObject({ id: external_exports.string(), text: external_exports.string().min(1) })).min(1),
+      // The earlier messages of the conversation, background for every question; never scored.
+      context: external_exports.string().optional()
+    }).superRefine((v, ctx) => {
+      const seen = /* @__PURE__ */ new Set();
+      v.rules.forEach((r, k) => {
+        const at = ["rules", k, "id"];
+        if (!RULE_ID.test(r.id)) ctx.addIssue({ code: "custom", path: at, message: `invalid rule id ${JSON.stringify(r.id.length > 40 ? `${r.id.slice(0, 40)}...` : r.id)}: ids must match [A-Za-z0-9_.:-]{1,64}` });
+        else if (r.id === "__proto__") ctx.addIssue({ code: "custom", path: at, message: 'a rule id may not be "__proto__"' });
+        else if (seen.has(r.id)) ctx.addIssue({ code: "custom", path: at, message: `duplicate rule id ${JSON.stringify(r.id)}` });
+        seen.add(r.id);
+      });
+    });
+    REL = "rel";
+    CON = "con";
+    confident = (r, min) => r.label !== null && r.confidence !== null && r.confidence >= min;
+    isConfidentNew = (r, min) => !r.unanswered && r.label === "new" && confident(r, min) && r.contradicts?.yes !== true;
+    best = (rows) => rows.reduce((a, b) => b.confidence > a.confidence ? b : a);
+    spec16 = {
+      id: "rule-check",
+      // WHY no `cli`: the input is structured (a phrase and a list of {id, text} rules), so it is JSON only.
+      flags: [
+        { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw }
+      ],
+      input: ruleCheckInput,
+      thresholds: {
+        // WHY 0.6 and never a forced label: a relation below this confidence is not a verdict, so a phrase that fits no rule confidently is "uncertain", not a guess.
+        "min-confidence": { default: 0.6, min: 0, max: 1, help: "--min-confidence: a relation counts only when its confidence is at or above this; otherwise the rule stays a candidate" },
+        conflict: { default: 0.6, min: 0, max: 1, help: "--conflict: the phrase contradicts a rule when the contradiction probability is at or above this" }
+      },
+      split: "per-item",
+      injection: "index-scoped",
+      validation: DEFAULT_POLICY,
+      build(i) {
+        const background = i.context === void 0 ? "" : " Use `shared.context` as background.";
+        const units = i.rules.map((r, k) => {
+          const subject = `\`shared.phrase\` and the rule in \`units[${k}]\``;
+          return {
+            kind: "atomic",
+            state: { id: r.id, text: r.text },
+            // D5, D14: the questions name the rule by position and the keys are built from the index; no rule text and no rule id reach the instructions.
+            questions: {
+              [indexKey(REL, k)]: choice(`How does \`shared.phrase\` relate to the existing rule in \`units[${k}]\`? Answer with the relation. ${dataGuard(subject)}${background}`, RELATION_CRITERIA),
+              [indexKey(CON, k)]: noul(`Does \`shared.phrase\` contradict the rule in \`units[${k}]\`? ${dataGuard(subject)}${background}`)
+            }
+          };
+        });
+        return { sharedState: { phrase: i.phrase, context: i.context ?? null }, units, unsplittable: {}, renumber: renumberByPosition };
+      },
+      project(answers, i, t) {
+        const keys = i.rules.flatMap((_, k) => [indexKey(REL, k), indexKey(CON, k)]);
+        const got = Object.keys(answers);
+        if (got.length !== keys.length || !keys.every((k) => Object.hasOwn(answers, k))) {
+          throw new Error(`internal error: rule-check answers name ${got.length} questions (${got.join(", ")}) but the input has ${keys.length}`);
+        }
+        const min = t["min-confidence"];
+        const rows = i.rules.map((r, k) => buildRow(r.id, answers[indexKey(REL, k)], answers[indexKey(CON, k)], t.conflict));
+        const unanswered = rows.filter((x) => x.unanswered).map((x) => x.id);
+        const conflict = rows.some((x) => x.contradicts?.yes === true);
+        const dup = rows.filter((x) => x.label === "duplicate" && confident(x, min));
+        const upd = rows.filter((x) => x.label === "updated_version" && confident(x, min));
+        let outcome;
+        let matched;
+        if (unanswered.length > 0) outcome = "uncertain";
+        else if (dup.length > 0) {
+          outcome = "duplicate";
+          matched = best(dup);
+        } else if (upd.length > 0) {
+          outcome = "updated_version";
+          matched = best(upd);
+        } else if (rows.every((x) => x.label === "new" && confident(x, min))) outcome = "new";
+        else outcome = "uncertain";
+        const candidates = rows.filter((x) => !isConfidentNew(x, min)).sort((a, b) => (a.unanswered ? 2 : a.probabilities?.new ?? 1) - (b.unanswered ? 2 : b.probabilities?.new ?? 1));
+        const partial2 = { outcome, rule_id: matched?.id ?? null, ambiguous: outcome === "updated_version" && upd.length > 1, conflict, unanswered, candidates, confident_new_count: rows.length - candidates.length };
+        return { ...partial2, reason: reasonOf(partial2, rows, upd.length) };
+      },
+      // An uncertain outcome, a choice among several updated versions, and a contradiction each need a person to look.
+      attention: (r) => r.outcome === "uncertain" || r.ambiguous || r.conflict,
+      renderText: renderText5
+    };
+  }
+});
+
 // src/classifiers/catalog/index.ts
 function assertSpecShape(s) {
   const bad = (m) => {
@@ -272718,6 +272858,7 @@ var init_catalog2 = __esm({
     init_findings();
     init_test_output();
     init_requirements();
+    init_rule_check();
     SPLITS = ["per-item", "whole-result"];
     INJECTIONS = ["index-scoped", "params-in-instructions"];
     POLICY_VALUES = {
@@ -272727,7 +272868,7 @@ var init_catalog2 = __esm({
       probabilities: ["required", "optional"],
       legend: ["ignore", "require"]
     };
-    DECISION_SPECS = defineRegistry([spec, spec2, spec3, spec4, spec5, spec6, spec7, spec8, spec10, spec9, spec11, spec12, spec13, spec14, spec15]);
+    DECISION_SPECS = defineRegistry([spec, spec2, spec3, spec4, spec5, spec6, spec7, spec8, spec10, spec9, spec11, spec12, spec13, spec14, spec15, spec16]);
   }
 });
 
@@ -272741,12 +272882,14 @@ var init_shared_flags = __esm({
       { flag: "--profile", property: "profile", type: "string", help: "Classifier profile to run on (default: the active classifier profile)." },
       { flag: "--max-budget", property: "max_budget", type: "number", help: "Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it." },
       { flag: "--chunk-chars", property: "chunk_chars", type: "number", help: "Size in characters at which a long text item is split into chunks." },
+      // TRDD-LFTQCFUX: the planner already takes maxQuestionsPerRequest (l2/planner.ts LimitsInput); this flag is the only way a command line sets it. WHY a shared flag: the cap bounds every classify command, and run-decision.ts reads it from this list like --chunk-chars. WHY two sentences: cli/main.ts firstLine prints only the first line and cuts it past 96 characters, so the first line carries the cost (more requests) and the second the refusal (planner.ts unit-too-many-questions: a cap below the questions of one unit refuses every unit).
+      { flag: "--max-questions-per-request", property: "max_questions_per_request", type: "number", help: "Most questions per request (whole number, 1 or more); a low cap multiplies the request count.\nA value below the questions of one unit is refused for the whole run (rule-check asks 2 per rule, so 1 is refused)." },
       { flag: "--default", property: "default", type: "string", help: "Default label of every choice question over text; a chunk whose top label is the default does not vote." },
       { flag: "-o", property: "output_dir", type: "string", help: "Directory for the JSON report (the JSON envelope, as --json prints it)." },
       { flag: "--strict-exit", property: "strict_exit", type: "boolean", help: "Exit non-zero when the result needs attention.", sets: "strictExit" },
       // IN-07 (Q4): text is the default stdout of a command whose spec has a text form; --json prints the envelope unchanged. WHY a shared flag: every command takes it, whatever its spec.
       { flag: "--json", property: "json", type: "boolean", help: "Print the JSON envelope instead of the text form.", sets: "json" },
-      // TRDD-58CFBQHN: the dry run of the 15 decision commands, listed here so their --help shows it: help rows come from this list (tools/definitions.ts) and the parser reads it back (run-decision.ts), so a flag the help prints is a flag the parser sets, with no second declaration to drift. `classify ping` reads PING_FLAGS, not this list, and the launcher refuses --estimate and --preview for it, so its help rightly shows neither; --preview is refused for every classify command (launcher.ts runClassifyCommand) and stays out. The sentence is checked against estimate-output.ts (it prints the estimated input cost and says it is an estimate, not a ceiling) and run-decision.ts (the run returns before the first request); it is under 96 characters because cli/main.ts firstLine cuts a longer help row with "...", which would hide "nothing is sent".
+      // TRDD-58CFBQHN: the dry run of every decision command, listed here so their --help shows it: help rows come from this list (tools/definitions.ts) and the parser reads it back (run-decision.ts), so a flag the help prints is a flag the parser sets, with no second declaration to drift. `classify ping` reads PING_FLAGS, not this list, and the launcher refuses --estimate and --preview for it, so its help rightly shows neither; --preview is refused for every classify command (launcher.ts runClassifyCommand) and stays out. The sentence is checked against estimate-output.ts (it prints the estimated input cost and says it is an estimate, not a ceiling) and run-decision.ts (the run returns before the first request); it is under 96 characters because cli/main.ts firstLine cuts a longer help row with "...", which would hide "nothing is sent".
       { flag: "--estimate", property: "estimate", type: "boolean", help: "Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev.", sets: "estimate" }
     ];
     INPUT_FLAGS = [
@@ -272775,23 +272918,23 @@ var init_ping_flags = __esm({
 
 // src/tools/definitions.ts
 function classifyTools(specs = DECISION_SPECS) {
-  return specs.map((spec16) => ({
-    name: classifyToolName(spec16.id),
-    description: `Classify decision "${spec16.id}" (catalog spec; flags, defaults and ranges are generated from it).`,
+  return specs.map((spec17) => ({
+    name: classifyToolName(spec17.id),
+    description: `Classify decision "${spec17.id}" (catalog spec; flags, defaults and ranges are generated from it).`,
     inputSchema: {
       type: "object",
       properties: {
-        ...Object.fromEntries(Object.entries(spec16.thresholds).map(([key, t]) => [
+        ...Object.fromEntries(Object.entries(spec17.thresholds).map(([key, t]) => [
           thresholdProperty(key),
           { type: "number", minimum: t.min, maximum: t.max, default: t.default, description: t.help }
         ])),
         ...Object.fromEntries(SHARED_FLAGS.map((f) => [f.property, { type: f.type, description: f.help }])),
         // IN-01: file-input flags only for specs that declare `cli`; the positional question/query has no schema property (classify is CLI-only today).
-        ...spec16.cli === void 0 ? {} : Object.fromEntries(INPUT_FLAGS.filter((f) => !("document" in spec16.cli) || f.option === "maxBytes").map((f) => [f.property, { type: f.type, description: f.help }])),
+        ...spec17.cli === void 0 ? {} : Object.fromEntries(INPUT_FLAGS.filter((f) => !("document" in spec17.cli) || f.option === "maxBytes").map((f) => [f.property, { type: f.type, description: f.help }])),
         // IN-06: a document command takes one text, so only --max-bytes of the item flags applies
         // IN-02: the spec own flags (label --labels, --labels-json), declared on the spec (flags, not cli: check has --preset and no file mode), so the schema cannot drift from the parser.
         // IN-03: type from the flag declaration (rank --all boolean, --head number); default string.
-        ...Object.fromEntries((spec16.flags ?? []).map((f) => [f.property, { type: f.type ?? "string", description: f.help }]))
+        ...Object.fromEntries((spec17.flags ?? []).map((f) => [f.property, { type: f.type ?? "string", description: f.help }]))
       }
     }
   }));
@@ -272807,7 +272950,7 @@ function classifierPingTool() {
   };
 }
 function classifierProfileRows(specs = DECISION_SPECS) {
-  return Object.fromEntries(specs.map((spec16) => [classifyToolName(spec16.id), ["classifier"]]));
+  return Object.fromEntries(specs.map((spec17) => [classifyToolName(spec17.id), ["classifier"]]));
 }
 function buildToolsWithoutProfileTypes(limitsText) {
   const allTools = [
@@ -275407,23 +275550,23 @@ function entries(f, follow) {
   }
   return st.isDirectory() ? walk(f, [], true, /* @__PURE__ */ new Set()) : st.isFile() ? [f] : [];
 }
-function checkGlobPrefix(spec16) {
-  const segs = spec16.split("/");
-  checkRoot(segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join("/") || (spec16.startsWith("/") ? "/" : "."));
+function checkGlobPrefix(spec17) {
+  const segs = spec17.split("/");
+  checkRoot(segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join("/") || (spec17.startsWith("/") ? "/" : "."));
 }
-function expand(spec16, follow, nodeMajor) {
-  if (GLOB_RE.test(spec16) && !fs.existsSync(spec16)) {
+function expand(spec17, follow, nodeMajor) {
+  if (GLOB_RE.test(spec17) && !fs.existsSync(spec17)) {
     if (nodeMajor < 22) throw new InputError("glob patterns need Node 22+; pass a directory instead");
-    checkGlobPrefix(spec16);
+    checkGlobPrefix(spec17);
     const globSync2 = fs.globSync;
-    const files = globSync2(spec16, { exclude: (p) => IGNORE_DIRS.has(path.basename(p)) });
+    const files = globSync2(spec17, { exclude: (p) => IGNORE_DIRS.has(path.basename(p)) });
     for (const f of files) if (!fs.lstatSync(f).isSymbolicLink()) checkRoot(f);
     return files.flatMap((f) => entries(f, follow));
   }
-  if (!fs.existsSync(spec16)) throw new InputError(`no such file or directory: ${spec16}`);
-  checkRoot(spec16);
-  if (!fs.lstatSync(spec16).isDirectory()) return entries(spec16, follow);
-  return (gitFiles(spec16) ?? walk(spec16, [], follow, /* @__PURE__ */ new Set())).flatMap((f) => entries(f, follow));
+  if (!fs.existsSync(spec17)) throw new InputError(`no such file or directory: ${spec17}`);
+  checkRoot(spec17);
+  if (!fs.lstatSync(spec17).isDirectory()) return entries(spec17, follow);
+  return (gitFiles(spec17) ?? walk(spec17, [], follow, /* @__PURE__ */ new Set())).flatMap((f) => entries(f, follow));
 }
 function parseItems(raw) {
   const out = [];
@@ -275484,14 +275627,14 @@ async function collectInputs(specs, opts = {}) {
     for (const it of parseItems(raw)) push(it.id, it.text);
   }
   const files = [];
-  for (const spec16 of specs) {
-    if (spec16 === "-") {
+  for (const spec17 of specs) {
+    if (spec17 === "-") {
       const t = stdinText(opts.stdin, maxBytes, warnings, opts.redactBudgetMs);
       if (opts.lines) pushLines("stdin", t);
       else push("stdin", t);
       continue;
     }
-    files.push(...expand(spec16, follow, nodeMajor));
+    files.push(...expand(spec17, follow, nodeMajor));
   }
   const cwd = process.cwd();
   const seen = /* @__PURE__ */ new Set();
@@ -275607,11 +275750,11 @@ function overlaySpecFields(input8, fields) {
   }
   return out;
 }
-async function assembleDocument(spec16, field, positionals, options, readStdin, note) {
+async function assembleDocument(spec17, field, positionals, options, readStdin, note) {
   const { maxBytes, ...others } = options;
   const unsupported = Object.entries(others).filter(([, v]) => v !== void 0).map(([k]) => INPUT_FLAGS.find((f) => f.option === k)?.flag ?? k);
-  if (unsupported.length > 0) throw new InputError(`classify ${spec16.id} takes one file or - (stdin); ${unsupported.join(", ")} not supported (only --max-bytes applies)`);
-  if (positionals.length !== 1) throw new InputError(`usage: ${classifyCliUsage(spec16)}`);
+  if (unsupported.length > 0) throw new InputError(`classify ${spec17.id} takes one file or - (stdin); ${unsupported.join(", ")} not supported (only --max-bytes applies)`);
+  if (positionals.length !== 1) throw new InputError(`usage: ${classifyCliUsage(spec17)}`);
   const named2 = positionals[0];
   if (named2 === "-") {
     const got = await collectInputs(["-"], { stdin: await readStdin(), ...maxBytes === void 0 ? {} : { maxBytes } });
@@ -275623,8 +275766,8 @@ async function assembleDocument(spec16, field, positionals, options, readStdin, 
   note?.(message);
   return { input: { [field]: snippet.text }, warnings: [...snippet.warnings, message] };
 }
-async function readFileSources(spec16, input8, allowedDirs, opts = {}) {
-  const fs2 = spec16.fileSources;
+async function readFileSources(spec17, input8, allowedDirs, opts = {}) {
+  const fs2 = spec17.fileSources;
   if (fs2 === void 0 || input8 === null || typeof input8 !== "object" || Array.isArray(input8) || Object.hasOwn(input8, fs2.into)) return { input: input8, warnings: [] };
   const list = input8[fs2.list];
   if (!Array.isArray(list)) return { input: input8, warnings: [] };
@@ -275649,13 +275792,13 @@ async function readFileSources(spec16, input8, allowedDirs, opts = {}) {
   }
   return { input: { ...input8, [fs2.into]: sources }, warnings };
 }
-async function assembleFileInput(spec16, positionals, options, readStdin, note) {
-  const cli = spec16.cli;
-  if (cli === void 0) throw new InputError(`classify ${spec16.id} does not take file inputs yet; pass --input <file.json> or JSON on stdin`);
-  if ("document" in cli) return assembleDocument(spec16, cli.document.field, positionals, options, readStdin, note);
-  if (cli.lines === false && options.lines === true) throw new InputError(`classify ${spec16.id} searches the lines of each file itself; --lines is not supported`);
+async function assembleFileInput(spec17, positionals, options, readStdin, note) {
+  const cli = spec17.cli;
+  if (cli === void 0) throw new InputError(`classify ${spec17.id} does not take file inputs yet; pass --input <file.json> or JSON on stdin`);
+  if ("document" in cli) return assembleDocument(spec17, cli.document.field, positionals, options, readStdin, note);
+  if (cli.lines === false && options.lines === true) throw new InputError(`classify ${spec17.id} searches the lines of each file itself; --lines is not supported`);
   if (positionals.length < cli.positional.length) {
-    throw new InputError(`usage: ${classifyCliUsage(spec16)}`);
+    throw new InputError(`usage: ${classifyCliUsage(spec17)}`);
   }
   const fields = Object.fromEntries(cli.positional.map((p, k) => [p.field, positionals[k]]));
   const specs = positionals.slice(cli.positional.length);
@@ -275663,7 +275806,7 @@ async function assembleFileInput(spec16, positionals, options, readStdin, note) 
   const collected = await collectInputs(specs, { ...options, ...specs.includes("-") || options.items === "-" ? { stdin: await readStdin() } : {} });
   if (collected.items.length === 0) {
     const s = collected.skipped;
-    throw new InputError(s.length > 0 ? `nothing to ${spec16.id}: ${s.length} input${s.length > 1 ? "s" : ""} skipped (${clip2(s.map((x) => `${x.path}: ${x.reason}`).join(", "), 400)})` : `nothing to ${spec16.id}: pass files, directories, globs, --items FILE, or - for stdin (words on the command line select file mode; JSON on stdin is not read in file mode)`);
+    throw new InputError(s.length > 0 ? `nothing to ${spec17.id}: ${s.length} input${s.length > 1 ? "s" : ""} skipped (${clip2(s.map((x) => `${x.path}: ${x.reason}`).join(", "), 400)})` : `nothing to ${spec17.id}: pass files, directories, globs, --items FILE, or - for stdin (words on the command line select file mode; JSON on stdin is not read in file mode)`);
   }
   return {
     input: { ...fields, [cli.itemsField]: collected.items, ...cli.fixed },
@@ -276081,11 +276224,11 @@ async function prepareInput(prepare2, input8, t, sigint) {
     ctrlC.dispose();
   }
 }
-async function runDecision(spec16, req, deps) {
+async function runDecision(spec17, req, deps) {
   const redactor = createRedactor();
   const safe = (s) => redactor.redact(s);
   try {
-    return await run(spec16, req, deps, redactor, safe);
+    return await run(spec17, req, deps, redactor, safe);
   } catch (e) {
     if (e instanceof Refusal) return { exitCode: e.code, cause: safe(e.message) };
     if (e instanceof PolicyError || e instanceof IdError || e instanceof InputError) return { exitCode: 1, cause: safe(e.message) };
@@ -276095,20 +276238,22 @@ async function runDecision(spec16, req, deps) {
     throw bug;
   }
 }
-async function run(spec16, req, deps, redactor, safe) {
+async function run(spec17, req, deps, redactor, safe) {
   const startedAt = Date.now();
-  const command = req.command ?? `classify ${spec16.id}`;
-  const parsed = spec16.input.safeParse(req.input);
+  const command = req.command ?? `classify ${spec17.id}`;
+  const parsed = spec17.input.safeParse(req.input);
   if (!parsed.success) throw new Refusal(`invalid input: ${parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
   const parsedInput = parsed.data;
   const warnings = (req.inputWarnings ?? []).map(inputWarning);
-  const t = resolveThresholds(spec16.thresholds, req.thresholdFlags ?? {});
+  const t = resolveThresholds(spec17.thresholds, req.thresholdFlags ?? {});
   if (req.chunkChars !== void 0) refusing(1, () => assertChunkChars(req.chunkChars));
+  if (req.maxQuestionsPerRequest !== void 0 && (!Number.isInteger(req.maxQuestionsPerRequest) || req.maxQuestionsPerRequest < 1)) throw new Refusal(`--max-questions-per-request must be a whole number of 1 or more, got ${req.maxQuestionsPerRequest}`);
+  const questionCap = req.maxQuestionsPerRequest === void 0 ? {} : { maxQuestionsPerRequest: req.maxQuestionsPerRequest };
   const budget = req.maxBudgetUsd === void 0 ? void 0 : refusing(1, () => new BudgetTracker(req.maxBudgetUsd));
   const reportDir = req.outputDir === void 0 ? void 0 : refusing(1, () => prepareReportDir(req.outputDir));
-  const input8 = spec16.prepare === void 0 ? parsedInput : await prepareInput(spec16.prepare.bind(spec16), parsedInput, t, deps.sigint);
-  const built = spec16.build(input8, t);
-  assertChunkDefaults(spec16, input8, t, built);
+  const input8 = spec17.prepare === void 0 ? parsedInput : await prepareInput(spec17.prepare.bind(spec17), parsedInput, t, deps.sigint);
+  const built = spec17.build(input8, t);
+  assertChunkDefaults(spec17, input8, t, built);
   let usedOtherModel = false;
   const conclude = (merged2) => {
     if (merged2.fatal !== null) {
@@ -276120,8 +276265,8 @@ async function run(spec16, req, deps, redactor, safe) {
       throw new Refusal(firstFailure?.message ?? "the run failed", failureCode(merged2));
     }
     const ctx = { truncated: built.truncated ?? false, chunks: merged2.chunks };
-    const decision = spec16.project(merged2.answers, input8, t, ctx);
-    const rendered = spec16.renderText?.(decision, req.renderOptions ?? {});
+    const decision = spec17.project(merged2.answers, input8, t, ctx);
+    const rendered = spec17.renderText?.(decision, req.renderOptions ?? {});
     const saved = [];
     let saveFailed = false;
     for (const f of rendered?.files ?? []) {
@@ -276135,15 +276280,15 @@ async function run(spec16, req, deps, redactor, safe) {
     }
     const envelope = buildEnvelope({ decision, replies: merged2.replies, warnings: [...warnings, ...merged2.warnings], degraded: [], stopped: merged2.stopped, ...usedOtherModel ? { answeredBy: merged2.answeredBy } : {} });
     const text2 = safe(renderEnvelope(envelope));
-    const reportPath = reportDir === void 0 ? void 0 : writeReport2(reportDir, spec16.id, text2);
-    const baseCode = failureCode(merged2) ?? exitCodeForRun({ attention: spec16.attention(decision), strictExit: req.strictExit ?? false });
+    const reportPath = reportDir === void 0 ? void 0 : writeReport2(reportDir, spec17.id, text2);
+    const baseCode = failureCode(merged2) ?? exitCodeForRun({ attention: spec17.attention(decision), strictExit: req.strictExit ?? false });
     const exitCode = baseCode === 0 && saveFailed ? 1 : baseCode;
     const display = rendered === void 0 ? void 0 : safe(composeText(envelope, rendered, saved));
     const receipt = buildReceipt({ elapsedMs: Date.now() - startedAt, states: built.units.map((u) => u.state), shared: built.sharedState, unsplittable: Object.keys(built.unsplittable).length, shown: req.json === true ? text2 : display ?? text2, usage: envelope.usage, cost: envelope.cost, snapshots: envelope.snapshots, inputWarnings: req.inputWarnings ?? [] });
     return { exitCode, envelope, text: text2, receipt, ...display === void 0 ? {} : { display }, ...reportPath === void 0 ? {} : { reportPath }, ...exitCode !== 0 && firstFailure !== void 0 ? { cause: safe(firstFailure.message) } : {} };
   };
   const estimateOutcome = (e) => ({ exitCode: 0, text: safe(renderEstimateJson(e)), display: safe(renderEstimateText(e)) });
-  const specDefaults = spec16.chunkDefaults?.(input8) ?? {};
+  const specDefaults = spec17.chunkDefaults?.(input8) ?? {};
   if (req.defaultLabel !== void 0 && Object.keys(specDefaults).length === 0) throw new Refusal(`--default does not apply: ${command} has no choice question over text`);
   const userDefault = req.defaultLabel === void 0 ? {} : Object.fromEntries(Object.keys(specDefaults).map((k) => [k, req.defaultLabel]));
   const defaultLabels = { ...specDefaults, ...userDefault, ...req.defaultLabels };
@@ -276156,7 +276301,7 @@ async function run(spec16, req, deps, redactor, safe) {
   if (noQuestions) return req.estimate === true ? estimateOutcome(buildEstimate(command, [], null)) : conclude(emptyMerged());
   const runLocalOnly = async (local) => {
     const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
-    const limits2 = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
+    const limits2 = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency, ...questionCap };
     const localPlanLimits = { ...limits2, ...req.chunkChars === void 0 ? {} : { chunkChars: req.chunkChars } };
     const plan2 = planRequests(built, localPlanLimits);
     if (!plan2.ok) throw new Refusal(plan2.message);
@@ -276188,7 +276333,7 @@ async function run(spec16, req, deps, redactor, safe) {
     };
     let mergedLocal;
     try {
-      mergedLocal = await runPlan(plan2, { concurrency: limits2.concurrency, timeoutMs: local.timeoutMs, signal: ctrlCLocal.signal, budget, split: spec16.split, policy: spec16.validation, defaultLabels, exec: execLocal });
+      mergedLocal = await runPlan(plan2, { concurrency: limits2.concurrency, timeoutMs: local.timeoutMs, signal: ctrlCLocal.signal, budget, split: spec17.split, policy: spec17.validation, defaultLabels, exec: execLocal });
     } finally {
       ctrlCLocal.dispose();
     }
@@ -276246,7 +276391,7 @@ async function run(spec16, req, deps, redactor, safe) {
     const malformed = malformedModelIdReason(resolved.effective.id);
     warnings.push(warning("endpoint_limit_unknown", malformed === void 0 ? `the endpoint prompt limit of ${resolved.effective.id} could not be read; planned with the catalog context length, the API may still refuse a request over its own limit` : `the model id ${JSON.stringify(resolved.effective.id)} from the catalog is malformed (${malformed}), so its endpoint prompt limit was not looked up; planned with the catalog context length, the API may still refuse a request over its own limit`));
   }
-  const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits }));
+  const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits, ...questionCap }));
   if ("ok" in limits) throw new Refusal(limits.message);
   const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
   const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
@@ -276399,8 +276544,8 @@ async function run(spec16, req, deps, redactor, safe) {
       timeoutMs: profile.timeoutMs,
       signal: ctrlC.signal,
       budget,
-      split: spec16.split,
-      policy: spec16.validation,
+      split: spec17.split,
+      policy: spec17.validation,
       defaultLabels,
       exec
     });
@@ -276409,7 +276554,7 @@ async function run(spec16, req, deps, redactor, safe) {
   }
   return conclude(merged);
 }
-async function runDecisionArgv(spec16, argv, deps) {
+async function runDecisionArgv(spec17, argv, deps) {
   const fail3 = (m) => {
     deps.stderr(`llm-ext: ${m}`);
     return 1;
@@ -276426,7 +276571,7 @@ async function runDecisionArgv(spec16, argv, deps) {
     return deps.readStdin();
   };
   const number4 = (flag, v) => v.trim() !== "" && Number.isFinite(Number(v)) ? Number(v) : (fail3(`${flag} needs a number, got ${JSON.stringify(v)}`), void 0);
-  const isKnownFlag = (f) => SHARED_FLAGS.some((x) => x.flag === f) || INPUT_FLAGS.some((x) => x.flag === f) || (spec16.flags ?? []).some((x) => x.flag === f) || f.startsWith("--") && Object.hasOwn(spec16.thresholds, f.slice(2));
+  const isKnownFlag = (f) => SHARED_FLAGS.some((x) => x.flag === f) || INPUT_FLAGS.some((x) => x.flag === f) || (spec17.flags ?? []).some((x) => x.flag === f) || f.startsWith("--") && Object.hasOwn(spec17.thresholds, f.slice(2));
   for (let k = 0; k < argv.length; k++) {
     const raw = argv[k];
     if (raw === "--") {
@@ -276453,9 +276598,9 @@ async function runDecisionArgv(spec16, argv, deps) {
     }
     const eq = raw.startsWith("--") ? raw.indexOf("=") : -1;
     const flag = eq === -1 ? raw : raw.slice(0, eq);
-    const isThreshold = flag.startsWith("--") && Object.hasOwn(spec16.thresholds, flag.slice(2));
-    const specFlag = spec16.flags?.find((f) => f.flag === flag);
-    if (!VALUE_FLAGS.has(flag) && !isThreshold && specFlag === void 0) return fail3(`unknown option ${raw} for classify ${spec16.id}`);
+    const isThreshold = flag.startsWith("--") && Object.hasOwn(spec17.thresholds, flag.slice(2));
+    const specFlag = spec17.flags?.find((f) => f.flag === flag);
+    if (!VALUE_FLAGS.has(flag) && !isThreshold && specFlag === void 0) return fail3(`unknown option ${raw} for classify ${spec17.id}`);
     if (specFlag?.type === "boolean") {
       if (eq !== -1) return fail3(`${flag} takes no value`);
       if (specRaw.has(specFlag)) return fail3(`${flag} is given twice`);
@@ -276482,7 +276627,9 @@ async function runDecisionArgv(spec16, argv, deps) {
       const n = number4(flag, value);
       if (n === void 0) return 1;
       if (flag === "--max-budget") req.maxBudgetUsd = n;
-      else req.chunkChars = n;
+      else if (flag === "--chunk-chars") req.chunkChars = n;
+      else if (flag === "--max-questions-per-request") req.maxQuestionsPerRequest = n;
+      else throw new Error(`internal error: the value flag ${flag} has no branch in runDecisionArgv`);
     }
   }
   const specFields = /* @__PURE__ */ new Map();
@@ -276501,7 +276648,7 @@ async function runDecisionArgv(spec16, argv, deps) {
   if (positionals.length > 0 || Object.keys(collectOptions).length > 0) {
     if (inputFile !== void 0) return fail3("--input cannot be combined with files, --items or the other file options; pass one or the other");
     try {
-      const assembled = await assembleFileInput(spec16, positionals, collectOptions, readStdinOnce, deps.stderr);
+      const assembled = await assembleFileInput(spec17, positionals, collectOptions, readStdinOnce, deps.stderr);
       req.input = assembled.input;
       req.inputWarnings = assembled.warnings;
     } catch (e) {
@@ -276515,7 +276662,7 @@ async function runDecisionArgv(spec16, argv, deps) {
       return fail3(`cannot read the JSON input${inputFile === void 0 ? " from stdin" : ` ${inputFile}`}: ${e.message}`);
     }
     try {
-      const withSources = await readFileSources(spec16, req.input, inputFile === void 0 ? [process.cwd()] : [process.cwd(), dirname15(resolve17(inputFile))], { note: deps.stderr });
+      const withSources = await readFileSources(spec17, req.input, inputFile === void 0 ? [process.cwd()] : [process.cwd(), dirname15(resolve17(inputFile))], { note: deps.stderr });
       req.input = withSources.input;
       if (withSources.warnings.length > 0) req.inputWarnings = withSources.warnings;
     } catch (e) {
@@ -276528,7 +276675,7 @@ async function runDecisionArgv(spec16, argv, deps) {
     if (!(e instanceof InputError)) throw e;
     return fail3(e.message);
   }
-  const out = ctxStore.getStore() === void 0 ? await withUsageContext({ tool: `cli:classify-${spec16.id}`, params: "" }, () => runDecision(spec16, req, deps)) : await runDecision(spec16, req, deps);
+  const out = ctxStore.getStore() === void 0 ? await withUsageContext({ tool: `cli:classify-${spec17.id}`, params: "" }, () => runDecision(spec17, req, deps)) : await runDecision(spec17, req, deps);
   const shown = req.json === true ? out.text : out.display ?? out.text;
   if (shown !== void 0) deps.stdout(shown);
   if (out.reportPath !== void 0) deps.stderr(`report: ${out.reportPath}`);
@@ -278060,16 +278207,16 @@ function kmeansppInit(vectors, k, rng) {
   return centroids;
 }
 function nearestCentroid(v, centroids) {
-  let best = 0;
+  let best2 = 0;
   let bestDist = sqDist(v, centroids[0]);
   for (let c = 1; c < centroids.length; c++) {
     const d = sqDist(v, centroids[c]);
     if (d < bestDist) {
-      best = c;
+      best2 = c;
       bestDist = d;
     }
   }
-  return best;
+  return best2;
 }
 function kmeans(vectors, k, opts = {}) {
   const N = vectors.length;
@@ -278656,12 +278803,12 @@ ${PHASE3_PROMPT_FOOTER}`;
 }
 function pickHeuristicCanonical(sentences) {
   if (sentences.length === 0) return "";
-  let best = sentences[0];
+  let best2 = sentences[0];
   for (let i = 1; i < sentences.length; i++) {
     const s = sentences[i];
-    if (s.length < best.length || s.length === best.length && s < best) best = s;
+    if (s.length < best2.length || s.length === best2.length && s < best2) best2 = s;
   }
-  return best;
+  return best2;
 }
 async function runPhase3Llm(inputs, rawLlmCall) {
   const { clusters, policy, budget } = inputs;
@@ -278896,12 +279043,12 @@ function chooseClusterId(items) {
 }
 function pickHeuristicCanonical2(sentences) {
   if (sentences.length === 0) return "";
-  let best = sentences[0];
+  let best2 = sentences[0];
   for (let i = 1; i < sentences.length; i++) {
     const s = sentences[i];
-    if (s.length < best.length || s.length === best.length && s < best) best = s;
+    if (s.length < best2.length || s.length === best2.length && s < best2) best2 = s;
   }
-  return best;
+  return best2;
 }
 function reductionPct(itemsIn, clustersOut) {
   if (itemsIn === 0) return 0;
@@ -284280,17 +284427,17 @@ var init_scheduler = __esm({
       }
       /** The other key whose oldest request has waited longest (spec 6 "next model"), or null. */
       longestWaiting(except) {
-        let best = null;
+        let best2 = null;
         let bestAt = Infinity;
         for (const k of this.keys()) {
           if (k === except) continue;
           const at = this.oldestSubmittedAt(k);
           if (at !== null && at < bestAt) {
-            best = k;
+            best2 = k;
             bestAt = at;
           }
         }
-        return best;
+        return best2;
       }
       /** Measured load time per key (spawn to ready), recorded by the broker after each start. */
       loadMs = /* @__PURE__ */ new Map();
@@ -284308,18 +284455,18 @@ var init_scheduler = __esm({
        * instead of starting at it. null when no other job's deadline is that near.
        */
       dueKey(now4, t) {
-        let best = null;
+        let best2 = null;
         let bestDeadline = Infinity;
         for (const j of this.allQueued()) {
           if (j.key === this.current) continue;
           const deadline = j.submittedAt + j.queueTimeoutMs;
           if (deadline > now4 + this.loadEstimate(j.key, t)) continue;
           if (deadline < bestDeadline) {
-            best = j.key;
+            best2 = j.key;
             bestDeadline = deadline;
           }
         }
-        return best;
+        return best2;
       }
       /** Note activity on the current model (submit, take, finish): the linger before an "empty queue" rotation counts from the last one. */
       touch(now4) {
@@ -292869,10 +293016,10 @@ function classifyArgv(argv) {
 var NOT_YET_USABLE_CLASSIFY_IDS = /* @__PURE__ */ new Set();
 var NOT_YET_USABLE_NOTE = "Not usable from the command line yet: the regex step is not wired.";
 function classifyHelpNote(toolName) {
-  const spec16 = classifySpecFor(toolName);
-  return spec16 !== void 0 && NOT_YET_USABLE_CLASSIFY_IDS.has(spec16.id) ? NOT_YET_USABLE_NOTE : void 0;
+  const spec17 = classifySpecFor(toolName);
+  return spec17 !== void 0 && NOT_YET_USABLE_CLASSIFY_IDS.has(spec17.id) ? NOT_YET_USABLE_NOTE : void 0;
 }
-async function runClassifyCommand(spec16, argv, profileFlag, deps) {
+async function runClassifyCommand(spec17, argv, profileFlag, deps) {
   const unavailable = argv.find((t) => t === "--preview");
   if (unavailable !== void 0) {
     deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
@@ -292880,7 +293027,7 @@ async function runClassifyCommand(spec16, argv, profileFlag, deps) {
   }
   const { runDecisionArgv: runDecisionArgv2 } = await Promise.resolve().then(() => (init_run_decision(), run_decision_exports));
   const args = [...argv.filter((t) => t === "--estimate"), ...profileFlag !== void 0 ? ["--profile", profileFlag] : [], ...classifyArgv(argv.filter((t) => t !== "--estimate"))];
-  return runDecisionArgv2(spec16, args, deps);
+  return runDecisionArgv2(spec17, args, deps);
 }
 async function runClassifyPing(argv, profileFlag, deps) {
   const unavailable = argv.find((t) => t === "--estimate" || t === "--preview");
@@ -292980,8 +293127,8 @@ function resolveInvocation(argv, tools) {
     return { kind: "group-help", group };
   }
   const actionName = rest[0];
-  const spec16 = actions[actionName];
-  if (!spec16) {
+  const spec17 = actions[actionName];
+  if (!spec17) {
     return {
       kind: "error",
       message: `unknown action '${actionName}' in group '${group}'.`,
@@ -292993,9 +293140,9 @@ function resolveInvocation(argv, tools) {
   }
   const tail = rest.slice(1);
   if (tail.includes("--help") || tail.includes("-h")) {
-    return { kind: "action-help", group, action: actionName, command: spec16.command };
+    return { kind: "action-help", group, action: actionName, command: spec17.command };
   }
-  const tool = byName.get(spec16.command);
+  const tool = byName.get(spec17.command);
   const outFlag = outputFlagOf(tool);
   const out = [];
   let consumedPositional = false;
@@ -293024,14 +293171,14 @@ function resolveInvocation(argv, tools) {
       awaitingFlagValue = false;
       continue;
     }
-    if (!consumedPositional && spec16.positional) {
-      out.push(`--${spec16.positional}`, token);
+    if (!consumedPositional && spec17.positional) {
+      out.push(`--${spec17.positional}`, token);
       consumedPositional = true;
       continue;
     }
     out.push(token);
   }
-  return { kind: "dispatch", command: spec16.command, argv: out };
+  return { kind: "dispatch", command: spec17.command, argv: out };
 }
 
 // src/cli/main.ts
@@ -293060,7 +293207,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.6.5";
+var VERSION = "14.7.0";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
@@ -293344,8 +293491,8 @@ function printGroupHelp(group, tools) {
 Actions:
 `);
   const width = Math.max(...Object.keys(actions).map((a) => a.length));
-  for (const [action, spec16] of Object.entries(actions)) {
-    const tool = resolveCommand(spec16.command, tools);
+  for (const [action, spec17] of Object.entries(actions)) {
+    const tool = resolveCommand(spec17.command, tools);
     process.stdout.write(
       // A blank cell would HIDE a group-table/catalog desync, while the
       // action-help path die()s loudly on the identical condition. Same fault,
@@ -293354,7 +293501,7 @@ Actions:
 `
     );
   }
-  const runnable = Object.entries(actions).map(([action, spec16]) => ({ action, spec: spec16, tool: resolveCommand(spec16.command, tools) })).find((e) => e.tool && exampleIsRunnable(e.tool, e.spec.positional));
+  const runnable = Object.entries(actions).map(([action, spec17]) => ({ action, spec: spec17, tool: resolveCommand(spec17.command, tools) })).find((e) => e.tool && exampleIsRunnable(e.tool, e.spec.positional));
   if (runnable) {
     const arg = exampleArgFor(runnable.spec.positional);
     process.stdout.write(

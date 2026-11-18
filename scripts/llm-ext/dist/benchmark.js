@@ -224395,7 +224395,7 @@ function classifyUnavailable(detail, opts = {}) {
   if (s.includes("free-models-per-day") || s.includes("per-day") || s.includes("per day") || s.includes("daily limit") || s.includes("daily quota") || s.includes("daily rate limit")) {
     return "daily-quota";
   }
-  const modelSpecific403 = /\b403\b/.test(s) && (s.includes("only available") || s.includes("agentic harnesses") || s.includes("not available for free") || s.includes("unavailable for free"));
+  const modelSpecific403 = /\b403\b/.test(s) && (s.includes("only available") || s.includes("agentic harnesses") || s.includes("not available for free") || s.includes("unavailable for free") || s.includes("model is not available in your region"));
   const generic403 = /\b403\b/.test(s) && !modelSpecific403;
   const genericThisCredentialProvenGood = generic403 && opts.credentialProvenGoodElsewhere === true;
   const genericDistinct403Quorum = generic403 && generic403DistinctModels.size >= POOL_403_QUORUM;

@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.0] - 2026-11-18
+
+### Added
+
+- Feat(classify): add --max-questions-per-request (TRDD-LFTQCFUX)
+
+- Feat(classify): add the rule-check decision (TRDD-LFTQCFUX)
+
+
+### Documentation
+
+- Docs(rule-check): add the 5-run r2 measurement to the reference; open FS5WW86J for earlier-version detection (TRDD-LFTQCFUX, TRDD-FS5WW86J)
+
+- Docs(trdd): record the r2 measurement on LFTQCFUX; HD6SWB56 is a spike (TRDD-LFTQCFUX, TRDD-HD6SWB56)
+
+- Docs(trdd): record the rule-check commits; open HD6SWB56 for the fallback wait (TRDD-LFTQCFUX, TRDD-HD6SWB56)
+
+- Docs(classify): document rule-check and --max-questions-per-request (TRDD-LFTQCFUX)
+
+- Docs(trdd): record the index.ts split measurement and the bridge proposal (TRDD-TYSKX72I, TRDD-G49XPDNI)
+
+- Docs(design): track the rule-check design spec (TRDD-LFTQCFUX)
+
+- Docs(trdd): record D2, the redaction bridge and the rule-check contract changes (TRDD-25KZDVYF, TRDD-G49XPDNI, TRDD-LFTQCFUX)
+
+- Docs(trdd): path-free TYSKX72I blocker probe; record the rule-check contract (TRDD-TN8OUZ50, TRDD-BYHR8EGG, TRDD-LFTQCFUX)
+
+- Docs(trdd): park the auth-length fix and the settings-show fix behind TYSKX72I; record D2; add the transcript-redaction card (TRDD-TN8OUZ50, TRDD-BYHR8EGG, TRDD-25KZDVYF, TRDD-G49XPDNI)
+
+- Docs(trdd): record the live rerun that verifies the region-403 fix; 2IMRJ42O to testing (TRDD-2IMRJ42O)
+
+
+### Fixed
+
+- Fix(free-rotation): treat "model is not available in your region" as a model-specific 403 (TRDD-2IMRJ42O)
+
+
+### Testing
+
+- Test(rule-check): pin that a low-confidence updated version stays a candidate (TRDD-FS5WW86J)
+
+- Test(classify-launch): turn the local decider fallback off in the test deps (TRDD-HD6SWB56)
+
+- Test(ubs): scope the ubs markers of three test files to one statement each (TRDD-25KZDVYF)
+
+
 ## [14.6.5] - 2026-11-18
 
 ### Documentation
