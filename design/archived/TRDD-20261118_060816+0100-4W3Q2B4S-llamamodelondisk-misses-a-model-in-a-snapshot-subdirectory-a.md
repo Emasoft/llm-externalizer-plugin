@@ -1,10 +1,10 @@
 ---
 trdd-id: 4W3Q2B4S
 title: llamaModelOnDisk misses a model in a snapshot subdirectory and trusts a cached file the online listing would not pick
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T06:08:16+0100
-updated: 2026-11-18T07:10:26+0100
+updated: 2026-11-18T07:16:00+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -35,6 +35,7 @@ Fix: for 1, walk the snapshot recursively with the same file rules; for 2, decid
 ## Approval log
 
 - 2026-11-18T06:08:16+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T07:16:00+0100 — COMPLETE by main-agent@llm-externalizer-plugin. Both acceptance boxes ticked: subfolder walk in 9f9e8c9a, unreadable-folder rule in e1f1fb47, item 2 recorded as not decidable offline; the card went from todo straight to complete because the work was done and checked by the main agent in one session without the dev, testing and review columns.
 
 ## Notes
 
