@@ -4,7 +4,7 @@ title: classify preset that says duplicate, updated version or new for a rule ag
 column: todo
 status: tasked
 created: 2026-11-04T10:29:26+0100
-updated: 2026-11-18T04:29:29+0100
+updated: 2026-11-18T04:49:39+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -58,3 +58,11 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 ## Corrections
 
 2026-11-18T03:17:27+0100 The message of 5ade58a1 says the fail-closed pre-commit gate "blocks every file this change touches"; correct is that it blocks the commit that stages them (amend needs the USER OTP).
+
+## Acceptance
+
+- [x] A1: classify rule-check and --max-questions-per-request are released in v14.7.0 (5ade58a1, 737cd18d, 1b58e098 inside the tag).
+- [x] A2: the loading-screen example request and context files ship in the plugin (skills/llm-externalizer-cli-reference/references/rule-check-example.json and rule-check-example-context.txt, present in the installed 14.7.0 copy).
+- [x] A3: the 3-pillars session ran the example once on the installed 14.7.0 (2026-11-18, its report, not re-run here): exit 0, outcome duplicate r1 (confidence 0.67), r2 new at confidence 0.30, confident_new_count 2, no warnings, not stopped.
+- [x] A4: classify.md, requirements-pipeline.md step 2b and SKILL.md document the command, its request counts and the measured r2 behaviour (3516d3d8, bd71799f inside the tag).
+- [x] A5: the open quality item, an earlier version of a rule coming out uncertain instead of updated_version, is carried by TRDD-FS5WW86J with its regression gate.

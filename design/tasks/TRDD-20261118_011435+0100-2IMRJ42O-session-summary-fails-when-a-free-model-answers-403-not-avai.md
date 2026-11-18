@@ -4,7 +4,7 @@ title: session-summary fails when a free model answers 403 not available in your
 column: testing
 status: tasked
 created: 2026-11-18T01:14:35+0100
-updated: 2026-11-18T01:24:07+0100
+updated: 2026-11-18T04:49:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -40,3 +40,10 @@ Done when: the unit test passes, tsc and eslint are clean, and a rerun of the sa
 2026-11-18 01:20: live rerun with the fixed build (a scratch copy of scripts/llm-ext at 180f7a73, built with esbuild, run as node dist/llm-ext.js, so without the launcher's migrate and native-dependency steps), on the same checkpoint: exit 0 in 119 s, 390 KB summary; only the three pending chunks (15, 19 and 21 of 21) were sent. model-events.log shows one region 403 on thinkingmachines/inkling-2-small:free at 01:20:57 (the failing 00:54 run had five); free-cooldowns.json records that model as kind gone with the region text; nvidia/nemotron-3.5-super-vl:free then appears in the run's stderr and chunk 15 of 21 finished. "chunk 14" in the old error is read as the 0-based index of chunk 15 of 21 (it started in both runs and finished only in the fixed one); that mapping is inferred from the started and done lines.
 Caveat: the cause of the three janitor composer failures (2026-11-17 16:13 classed transient deadline, 22:55 and 2026-11-18 00:02 classed permanent repeated) is inferred from the checkpoint resume, not observed: those log lines carry only the first stderr line (the Auth line). The mutation check of the negative test (fails with the bare "in your region", passes with the narrowed phrase) was run by the worker, not re-run by the coordinator.
 Next: ships in the next release; move to complete after that release is published and installed.
+
+## Acceptance
+
+- [x] A1: unit tests in src/free-rotation.test.ts pass, with a negative test that fails on the old bare phrase (recorded 2026-11-18 on this card).
+- [x] A2: tsc and eslint clean at 180f7a73 (recorded 2026-11-18 on this card).
+- [x] A3: a live rerun of the failing session-summary on its checkpoint with the fixed build exited 0 and finished the stuck chunk on another free model (recorded 2026-11-18 01:20 on this card).
+- [x] A4: released in v14.7.0 (180f7a73 inside the tag) and installed: the installed 14.7.0 dist contains the phrase model is not available in your region.
