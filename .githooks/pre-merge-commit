@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Pre-merge-commit gate: runs the same ubs scan as pre-commit.
+#
+# WHY: git runs this hook, not pre-commit, for a merge that completes without
+# conflicts (git help githooks). Without it, clean merge commits skip the ubs
+# gate (USER 2026-11-17: "we cannot risk to commit bugged code"). A conflicted
+# merge is finished with `git commit`, which runs pre-commit.
+#
+# NOT covered by a commit-time bug scan: git rebase (git help githooks lists
+# only pre-rebase and post-rewrite for it; neither is set here), git am (its
+# pre-applypatch hook is not set here) and cherry-pick (by the janitor
+# session measurement of 2026-11-18 in a scratch repo, it runs only
+# prepare-commit-msg). pre-push runs no ubs scan, so such commits reach the
+# remote unscanned.
+exec "$(dirname "$0")/pre-commit"
