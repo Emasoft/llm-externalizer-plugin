@@ -57,6 +57,7 @@ import { runBrokerMain } from "./server.ts";
 import { runCalibratorMain } from "../calibration/runner.ts";
 import { phaseA } from "../calibration/phase-a.ts";
 import { totalmem } from "node:os";
+import { existsSync } from "node:fs";
 import { freeFloorPct } from "../governor/settings.ts";
 import { memoryWaitCheck, WaitForMemory } from "../calibration/memory-wait.ts";
 import { setBrokerClientVersion, ensureBroker, brokerExchange, cancelAllBrokerJobs } from "./client.ts";
@@ -120,6 +121,17 @@ if (mode === "__broker") {
   // P6: stopAfterMs plays --command_timeout (the same cancelAllBrokerJobs the CLI runs on expiry).
   let stopped = null;
   if (spec.stopAfterMs) setTimeout(() => void cancelAllBrokerJobs("--command_timeout (test)").then((s) => (stopped = s)), spec.stopAfterMs);
+  // WHY stopFile (review M1 flake): stopAfterMs is a wall-clock timer, so under host load it could cancel the held job before the
+  // broker's 60 s re-check (server.ts RUNNER_RECHECK_MS) ever queued it. A test that must stop only AFTER an event writes this file
+  // instead; the poll is unref'd so a client whose file never appears still exits when its jobs finish.
+  if (spec.stopFile) {
+    const poll = setInterval(() => {
+      if (!existsSync(spec.stopFile)) return;
+      clearInterval(poll);
+      void cancelAllBrokerJobs("--command_timeout (test)").then((s) => (stopped = s));
+    }, 200);
+    poll.unref();
+  }
   const results = await Promise.all(spec.jobs.map(async (j, i) => {
     await new Promise((r) => setTimeout(r, j.delayMs ?? 0));
     const body = JSON.stringify({ model: j.model, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: j.maxTokens ?? 4 });
@@ -132,7 +144,7 @@ if (mode === "__broker") {
       return { i, model: j.model, error: String(e.message), at: Date.now() };
     }
   }));
-  await new Promise((r) => setTimeout(r, spec.stopAfterMs ? 500 : 0));
+  await new Promise((r) => setTimeout(r, spec.stopAfterMs || spec.stopFile ? 500 : 0));
   process.stdout.write(JSON.stringify({ pid: ep.pid, results, stopped }) + "\\n");
 }
 `; // ubs:ignore[javascript.ctcompare.unsafe_secret_compare] (test env phase flags compared to "1"/"too-big", not secrets)
@@ -317,7 +329,7 @@ interface ClientResult {
  * job held with nothing to release it) fails the test with the client's
  * output instead of blocking the whole run. The client is SIGKILLed.
  */
-function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1", extra: { stopAfterMs?: number; limitMs?: number } = {}): Promise<ClientResult> {
+function runClient(dir: string, jobs: object[], env: Record<string, string> = {}, version = "t1", extra: { stopAfterMs?: number; stopFile?: string; limitMs?: number } = {}): Promise<ClientResult> {
   const { limitMs = 240_000, ...spec } = extra;
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [bundle, "client", JSON.stringify({ dir, version, jobs, ...spec })], {
@@ -1485,11 +1497,18 @@ describe("calibration runner (P6 step 2)", () => {
     await runClient(dir, jobsOf(A, 1));
     const lock = join(dir, "calibration", "state.lock");
     mkdirSync(lock, { recursive: true });
-    const client = runClient(dir, jobsOf(B, 1), {}, "t1", { stopAfterMs: 80_000, limitMs: 150_000 });
+    // WHY stopFile and not stopAfterMs (flake seen once in a loaded full-suite run): the held job was cancelled by a timer at 80 s, but the
+    // only re-queue is the broker tick, RUNNER_RECHECK_MS = 60 s checked every HELD_CHECK_MS = 5 s (broker/server.ts), so a re-check delayed by
+    // 15 s+ lost to the cancel, which empties `held` and ends all retries. The client is now stopped only after B is queued; the 120 s wait is the
+    // real deadline for the re-check. The asserted product behaviour (B queued by the re-check, one job cancelled, no failure) is unchanged.
+    const stopFile = join(dir, "stop.flag");
+    const client = runClient(dir, jobsOf(B, 1), {}, "t1", { stopFile, limitMs: 200_000 });
+    void client.catch(() => undefined); // a failed waitFor below must not leave this promise rejecting unhandled
     await waitFor("the failed enqueue", () => brokerLogOf(dir).includes(`could not queue '${B}' for calibration`), 30_000);
     rmdirSync(lock);
     expect(readQueue(dir)).toEqual([]);
-    await waitFor("the re-check to queue B", () => readQueue(dir).some((q) => q.model === B), 90_000);
+    await waitFor("the re-check to queue B", () => readQueue(dir).some((q) => q.model === B), 120_000);
+    writeFileSync(stopFile, "");
     const r = await client;
     expect(r.stopped).toEqual({ cancelled: 1, failed: [] });
   }, 240_000);
@@ -1681,6 +1700,10 @@ describe("retry clock and walker classification (review M10, M11)", () => {
 
 describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
   const mainEntryOf = (dir: string) => readRegistry(dir, "llama").find((e) => e.role === "main")!;
+  const waitFor = async (what: string, cond: () => boolean | Promise<boolean>, ms: number): Promise<void> => {
+    for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 200))) if (await cond()) return;
+    throw new Error(`timed out waiting for ${what}`);
+  };
   const waitGone = async (pid: number, ms: number): Promise<void> => {
     for (let i = 0; i < ms / 100 && alive(pid); i++) await new Promise((r) => setTimeout(r, 100));
   };
@@ -1718,11 +1741,34 @@ describe("broker identity and lifecycle (review M9, M3, M4, M5)", () => {
   it("M3: while the old broker drains, the new one retries the busy main slot about once per second, not in a loop", async () => {
     const dir = newDir();
     await runClient(dir, jobsOf(A, 1), {}, "t1");
-    // Frozen, the old main ignores the drain's SIGTERM until the SIGKILL
-    // escalation (STOP_GRACE_MS, 10 s), so the new broker surely waits for the
-    // slot that long (a timed batch finished too fast on an idle machine).
-    process.kill(mainEntryOf(dir).pid, "SIGSTOP");
-    const next = await runClient(dir, jobsOf(B, 1), {}, "t2");
+    // WHY the old broker is kept BUSY instead of racing STOP_GRACE_MS (flake seen once in a loaded full-suite run): a frozen main only
+    // makes the new broker wait while the old broker's drain has not SIGKILLed it, i.e. for STOP_GRACE_MS = 10 s (local-llama-server.ts:36); on
+    // a slow host the new broker needed longer than that to reach claimAndSpawn, found the main dead, never waited, and the test failed
+    // with "the handover never waited". A running job on the frozen main keeps the old broker non-idle, so it cannot drain (server.ts: shutdown
+    // only when idle and draining): the wait lasts until this test sends SIGCONT, however slow the host is. Asserts are unchanged.
+    const mainPid = mainEntryOf(dir).pid;
+    process.kill(mainPid, "SIGSTOP");
+    let held: Promise<ClientResult> | undefined;
+    let nextP: Promise<ClientResult> | undefined;
+    try {
+      held = runClient(dir, jobsOf(A, 1), {}, "t1", { limitMs: 240_000 });
+      void held.catch(() => undefined);
+      await waitFor("the old broker to run the job on the frozen main", async () => {
+        const st = readBrokerState(dir);
+        if (!st) return false;
+        const h = (await (await fetch(`http://127.0.0.1:${st.port}/v1/health`, { headers: { [TOKEN_HEADER]: st.token } })).json()) as { running: number };
+        return h.running >= 1;
+      }, 120_000);
+      nextP = runClient(dir, jobsOf(B, 1), {}, "t2", { limitMs: 240_000 });
+      void nextP.catch(() => undefined);
+      await waitFor("the handover to wait for the main slot", () => readFileSync(join(dir, "broker-local.log"), "utf8").includes("waiting for the main slot"), 120_000);
+      // Let the new broker log several retries, so the retry rate is measured over a window this test controls.
+      await new Promise((r) => setTimeout(r, 5000));
+    } finally {
+      if (alive(mainPid)) process.kill(mainPid, "SIGCONT");
+    }
+    const next = await nextP!;
+    await held!;
     expect(next.results[0].status).toBe(200);
     const lines = readFileSync(join(dir, "broker-local.log"), "utf8").split("\n");
     const waitLine = lines.find((l) => l.includes("waiting for the main slot"));

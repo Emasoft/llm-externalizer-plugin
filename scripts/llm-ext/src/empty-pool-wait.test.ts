@@ -266,10 +266,22 @@ describe("empty pool gate and a command stopped by --command_timeout", () => {
       const calls = vi.spyOn(globalThis, "fetch");
       try {
         const { dynamicProfileRetryLaterMessage } = await import("./profile-fallback.js");
-        setTimeout(() => stopCommand(STOP_REASON), 1_500);
+        // WHY the stop waits for the marker record instead of a fixed 1_500 ms timer (flake seen once in a loaded full-suite run: "expected [] to
+        // have a length of 1"): the assertion below needs the update to have been requested AND its detached child to have booted and recorded
+        // itself. On a loaded host the child boots late, or the timer fires before dispatchCallTool reaches requestProfileUpdate (a stop already set
+        // requests nothing, see the next test). The record (requested === "1") proves both. The marker child (installMarker(6_000, ...) above) starts
+        // its 6 s hold when it boots, i.e. just before it writes that record, so at the stop the gate still has about 6 s minus this 50 ms poll
+        // and the gate's own 500 ms poll (FOREGROUND_REPAIR_POLL_MS, foreground-repair.ts:30) before the child exits and the gate would end by itself.
+        // 30 s caps the wait; past it the stop is sent anyway and the assertions below fail with the real state.
         const t0 = Date.now();
-        const r = await idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
-        expect(Date.now() - t0, "the stop ends the wait, not the 10 minute limit").toBeLessThan(8_000);
+        const dispatched = idx.dispatchCallTool("scan_folder", { folder_path: emptyFolder() });
+        void dispatched.catch(() => undefined);
+        while (m.records().filter((rec) => rec.requested === "1").length < 1 && Date.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 50));
+        const tStop = Date.now();
+        stopCommand(STOP_REASON);
+        const r = await dispatched;
+        // 6_500 = the old 8_000 bound minus the old 1_500 ms stop delay: the same slack, now measured from the stop.
+        expect(Date.now() - tStop, "the stop ends the wait, not the 10 minute limit").toBeLessThan(6_500);
         expect(r.isError).toBe(true);
         expect(textOf(r)).toBe(STOP_REASON);
         expect(textOf(r)).not.toContain(dynamicProfileRetryLaterMessage("free"));

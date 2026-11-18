@@ -564,7 +564,6 @@ describe("real processes", () => {
     writeFileSync(join(cfg, "settings.yaml"), ["active: prof-a", "profiles:", "  prof-a:", "    mode: local", "    api: generic-local", "    model: model-a", `    url: ${srv.url}`, "    timeout: 60", ""].join("\n"));
     const file = join(root, "a.txt");
     writeFileSync(file, "hello\n");
-    const t0 = Date.now();
     const child = spawn(process.execPath, [cli, "--command_timeout", "4", "--stop_on_errors", "llm", "ask", "--input_files_paths", file, "--instructions", "say hi", "-o", out], {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, HOME: home, TMPDIR: tmp, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0", LLM_EXT_DISABLE_AUTO_RECONCILE: "1", LLM_EXT_DISABLE_DEFAULT_PROFILE_POPULATION: "1" },
@@ -573,11 +572,17 @@ describe("real processes", () => {
     let stderr = "";
     child.stderr?.on("data", (c: Buffer) => (stderr += c.toString()));
     await until("the CLI to queue behind the held lease", () => snapshot().waiters.some((w) => w.holder.pid === child.pid) || child.exitCode !== null);
+    // WHY tq and not t0 (flake seen once in a loaded full-suite run, 37.5 s): t0 precedes the spawn, so node boot and module load, unbounded on a
+    // loaded host, counted against the bound. From the moment the child is queued, the stop at 4 s plus exit takes about 4 s. A real 30 s
+    // bounded-exit fallback (STOP_FLUSH_GRACE_MS, main.ts:180) would give about 34 s from tq. NOTE the 20 s bound alone does NOT catch that
+    // fallback when queueing happened late; the stderr check `did not end within` below is the fallback guard, the bound only catches a slow exit.
+    // stderr rides in the failure message so a failing run shows which of the two happened.
+    const tq = Date.now();
     const code = await exited(child);
     expect(code, stderr).toBe(124);
     // Ended by the stop itself, not by the 30 s bounded-exit fallback.
     expect(stderr).not.toContain("did not end within");
-    expect(Date.now() - t0).toBeLessThan(30_000);
+    expect(Date.now() - tq, stderr).toBeLessThan(20_000);
     expect(srv.posts()).toBe(0);
     expect(stderr).not.toContain("--stop_on_errors: model");
     await until("the stopped waiter to leave the queue", () => !snapshot().waiters.some((w) => w.holder.pid === child.pid));

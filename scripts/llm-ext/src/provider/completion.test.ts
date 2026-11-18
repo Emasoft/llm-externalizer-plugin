@@ -788,8 +788,13 @@ describe("payment errors — skip when certain, retry once when not, never a bre
     const started = Date.now();
     await expect(chatCompletionWithRetry(MESSAGES, { model: "chain/transient", deadlineAt: started + 5000 }, transientDeps)).rejects.toThrow(/upstream exploded|API error 500/);
     expect(transient.requestCount()).toBeGreaterThanOrEqual(1);
-    expect(Date.now() - started).toBeLessThan(5000);
-  }, 20_000);
+    // WHY 10_000 and not 5000 (flake seen once in a loaded full-suite run: 5324 and 5312 ms): 5000 was exactly this call's own retry window
+    // (deadlineAt = started + 5000), so any wake-up delay after the last wait that fitted failed the test, though the call ended by its own
+    // window. What the bound rules out is a call that outlives its window by sleeping a breaker rung that the 400/401 calls above would
+    // have wrongly armed: the shortest rung is 60_000 ms (backoffDelays[0], completion.ts:1206). 10_000 stays far below it. The test timeout is
+    // 30_000 ms (was 20_000): the 400/401 loops above take 4-6 s and this call may now take up to 10_000, so 20_000 left too little margin under load.
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 30_000);
   // GitHub-15 item 2 (issue #15): 405 and 422 are refusals, not outages: no breaker count and no same-model retry (one POST per model); six of them (past the breaker threshold of 5) leave the breaker untouched. They used to count and park the walk in 60 s sleeps. Other 4xx keep their same-model retries (see the WHY comment at the gate in completion.ts).
   it.each([[405, "method not allowed"], [422, "unprocessable entity"]])("HTTP %i is a refusal, not an outage: it never feeds the circuit breaker (GitHub-15 item 2)", async (status, body) => {
     resetServiceHealthForTests();
