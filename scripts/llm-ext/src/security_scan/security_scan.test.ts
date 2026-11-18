@@ -1000,6 +1000,127 @@ describe("F3 extended secret redaction", () => {
   });
 });
 
+// ── TRDD-G49XPDNI: PEM_BLOCK and JWT egress patterns are linear-time ──────
+
+describe("TRDD-G49XPDNI PEM and JWT redaction is linear-time and still redacts", () => {
+  const jwt =
+    "eyJ" + "hbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" + ".eyJ" + "zdWIiOiIxMjM0NTY3ODkwIn0" + ".dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+
+  it("redacts a real terminated PEM block whole, BEGIN to END", () => {
+    /** the bounded body still matches a normal-size key as one block. */
+    const body = "MIIEowIBAAKCAQEAx7Qz".repeat(160); // ~3.2 KB, RSA-4096 sized
+    const pem = "-----BEGIN RSA PRIVATE KEY-----\n" + body + "\n-----END RSA PRIVATE KEY-----";
+    const r = redactSecrets("before\n" + pem + "\nafter");
+    expect(r.redacted).toBe("before\n[REDACTED:PEM_BLOCK]\nafter");
+    expect(r.count).toBe(1);
+  });
+
+  it("redacts an unterminated BEGIN header and the key text after it", () => {
+    /** a truncated key must fail toward redaction: header and following body are gone. */
+    const r = redactSecrets("x\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEF\nmoreKeyMaterial");
+    expect(r.redacted).not.toContain("BEGIN PRIVATE KEY");
+    expect(r.redacted).not.toContain("MIIEvQIBADANBgkqhkiG9w0BAQEF");
+    expect(r.redacted).not.toContain("moreKeyMaterial");
+    expect(r.redacted).toContain("[REDACTED:PEM_BLOCK]");
+  });
+
+  it("redacts a real JWT", () => {
+    /** the run-boundary rewrite keeps catching a JWT after a normal delimiter. */
+    const r = redactSecrets("Authorization: " + jwt + "\n");
+    expect(r.redacted).not.toContain("eyJhbGci");
+    expect(r.redacted).toContain("[REDACTED:");
+  });
+
+  it("redacts a JWT glued to a preceding token char (over-redacts the prefix, never leaks)", () => {
+    /** the run-boundary form must still cover every old match: xeyJ..., token-eyJ..., access_eyJ..., a1b2eyJ.... */
+    for (const prefix of ["x", "token-", "access_", "a1b2"]) {
+      const r = redactSecrets(prefix + jwt);
+      expect(r.redacted).not.toContain("eyJ");
+      expect(r.redacted).not.toContain("dBjftJeZ4CVPmB92");
+      expect(r.redacted).toContain("[REDACTED:");
+    }
+  });
+
+  it("redacts a JWT after a dot and inside JSON quotes", () => {
+    /** a dot or a quote is a run boundary, so the match starts exactly at the JWT. */
+    expect(redactSecrets("a." + jwt).redacted).not.toContain("eyJ");
+    expect(redactSecrets('{"t":"' + jwt + '"}').redacted).toBe('{"t":"[REDACTED:JWT]"}');
+  });
+
+  it("redacts an ENV_SECRET whose value is on the line after the separator (YAML shape)", () => {
+    /** the line-local rewrite first lost `API_KEY:` newline `  value`; the optional single newline recovers it. */
+    const r = redactSecrets("API_KEY:\n  abcd1234efgh5678\n");
+    expect(r.count).toBeGreaterThanOrEqual(1);
+    expect(r.redacted).not.toContain("abcd1234efgh5678");
+  });
+
+  it("redacts an ENV_SECRET with a blank line between the separator and the value, and one with the separator on the next line", () => {
+    /** the old `\s*` covered both shapes; the bounded-newline form must still redact them (fail closed). */
+    for (const text of ["API_KEY:\n\n  abcd1234efgh5678\n", "API_KEY\n= abcd1234efgh5678\n", "\n\x0bPASSWORD=abcd1234efgh5678\n"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("redacts a terminated PEM block with a 20000-char body whole, through its END line", () => {
+    /** a body longer than the 16384-char window must not leave its tail or the END line visible. */
+    const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let body = "";
+    for (let i = 0; i < 20_000; i++) body += b64[i % 64] + (i % 64 === 63 ? "\n" : "");
+    const pem = "-----BEGIN " + "PRIVATE KEY-----\n" + body + "\n-----END " + "PRIVATE KEY-----";
+    const r = redactSecrets("before\n" + pem + "\nafter");
+    expect(r.redacted).toBe("before\n[REDACTED:PEM_BLOCK]\nafter");
+    expect(r.count).toBe(1);
+  });
+
+  it("redacts an ENV_SECRET with up to 3 newlines before the separator or after it", () => {
+    /** the old `\s*` covered these; the bounded `{0,3}` newline groups on both sides of the separator must too (fail closed). */
+    for (const text of ["API_KEY\n\n= abcd1234efgh5678\n", "API_KEY\n\n\n= abcd1234efgh5678\n", "API_KEY:\n\n\n  abcd1234efgh5678\n", "API_KEY\n\n\n=\n\n\n  abcd1234efgh5678\n"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("redacts an ENV_SECRET whose separator or value is after a bare CR line break (old Mac file)", () => {
+    /** the old `\s*` matched a lone `\r`; `\r?\n` alone did not, which leaked these values to the model. */
+    for (const text of ["API_KEY\r= abcd1234efgh5678\r", "API_KEY=\r  abcd1234efgh5678\r", "API_KEY:\r\r  abcd1234efgh5678\r"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("DOCUMENTED LIMIT: ENV_SECRET values separated from the key by 4+ newlines (before or after the separator) are NOT redacted", () => {
+    /** pins the bounded-newline trade-off (the old unbounded `\s*` matched these but backtracked > 120 s on 500 KB); widening must update this test on purpose. */
+    for (const text of ["API_KEY:\n\n\n\n\n  abcd1234efgh5678\n", "API_KEY\n\n\n\n\n= abcd1234efgh5678\n"]) {
+      expect(redactSecrets(text).redacted).toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("hostile PEM (20000 unterminated BEGIN headers) finishes under 1000 ms with ok:true", () => {
+    /** the old lazy [\s\S]*? rescanned to end of input per header: 20000 headers took 20.8 s. */
+    const hostile = "-----BEGIN PRIVATE KEY-----".repeat(20_000);
+    const started = performance.now();
+    const res = safeRedact(hostile);
+    const elapsed = performance.now() - started;
+    expect(res.ok).toBe(true);
+    expect(elapsed).toBeLessThan(1000);
+    expect(res.redacted).not.toContain("BEGIN PRIVATE KEY");
+  });
+
+  it("hostile JWT (500000 x eyJ) finishes under 1000 ms with ok:true", () => {
+    /** every eyJ start inside one run used to rescan the run: 500000 repeats did not finish in 120 s. */
+    const hostile = "eyJ".repeat(500_000);
+    const started = performance.now();
+    const res = safeRedact(hostile);
+    const elapsed = performance.now() - started;
+    expect(res.ok).toBe(true);
+    expect(elapsed).toBeLessThan(1000);
+  });
+});
+
 // ── F2: fail-safe may never fail open (not_threat rejected + floored) ──────
 
 describe("F2 fail-safe never fails open", () => {

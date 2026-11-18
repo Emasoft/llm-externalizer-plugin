@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, appendFileSync, statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { readTranscript } from "./transcript.js";
+import { readTranscript, TranscriptRedactionError } from "./transcript.js";
 
 describe("readTranscript", () => {
   let dir: string;
@@ -668,5 +668,127 @@ describe("readTranscript", () => {
       expect(stats.linesRead).toBe(LINE_COUNT);
       expect(stats.linesSkippedMalformed).toBe(0);
     });
+  });
+
+  // TRDD-G49XPDNI: the summarizer sends transcript text to a REMOTE model, so every string must be
+  // redacted with llm-ext's own redactor BEFORE any cut or truncation. The fake secret is built at
+  // runtime so no secret-shaped literal sits in this source file (secret scanners read source).
+  describe("secret redaction before any cut (TRDD-G49XPDNI)", () => {
+    const FAKE_SECRET = "sk-" + "Zq8".repeat(10);
+    const MARKER = "[REDACTED:API_KEY]";
+
+    function userLine(uuid: string, content: unknown): unknown {
+      return { type: "user", uuid, parentUuid: null, timestamp: "t", message: { role: "user", content } };
+    }
+    function assistantToolUse(uuid: string, input: unknown): unknown {
+      return {
+        type: "assistant",
+        uuid,
+        parentUuid: null,
+        timestamp: "t",
+        message: { role: "assistant", content: [{ type: "tool_use", id: "x1", name: "Bash", input }] },
+      };
+    }
+
+    it("redacts a secret in a plain-text user turn", async () => {
+      const p = write([userLine("u1", `my key is ${FAKE_SECRET} please use it`)]);
+      const { turns } = await readTranscript(p);
+      expect(turns[0].text).not.toContain(FAKE_SECRET);
+      expect(turns[0].text).toContain(MARKER);
+      expect(turns[0].text).toContain("please use it");
+    });
+
+    it("redacts a secret in a tool_use string argument longer than 80 chars, with the secret starting after char 60", async () => {
+      // The 80-char slice would keep only the first 20 chars of the secret: a fragment no pattern matches.
+      const p = write([assistantToolUse("a1", { command: "p".repeat(60) + FAKE_SECRET + " trailing text past the cut" })]);
+      const { turns } = await readTranscript(p);
+      const arg = turns[0].toolCalls[0].argSummary;
+      expect(arg).not.toContain(FAKE_SECRET);
+      expect(arg).not.toContain(FAKE_SECRET.slice(0, 20));
+      expect(arg).toContain(MARKER);
+    });
+
+    it("redacts a secret inside a non-string tool_use argument (nested object)", async () => {
+      const p = write([assistantToolUse("a2", { env: { SOME_VALUE: FAKE_SECRET } })]);
+      const { turns } = await readTranscript(p);
+      expect(turns[0].toolCalls[0].argSummary).not.toContain(FAKE_SECRET);
+      expect(turns[0].toolCalls[0].argSummary).toContain(MARKER);
+    });
+
+    it("redacts a secret placed in the tool name, which is also rendered into the prompt", async () => {
+      const p = write([{ type: "assistant", uuid: "a4", parentUuid: null, timestamp: "t", message: { role: "assistant", content: [{ type: "tool_use", id: "x4", name: `Tool_${FAKE_SECRET}`, input: {} }] } }]);
+      const { turns } = await readTranscript(p);
+      expect(turns[0].toolCalls[0].name).not.toContain(FAKE_SECRET);
+      expect(turns[0].toolCalls[0].name).toContain(MARKER);
+    });
+
+    it("redacts a secret placed in tool_use_id of an error result that has no message", async () => {
+      const p = write([userLine("r5", [{ type: "tool_result", tool_use_id: `id_${FAKE_SECRET}`, is_error: true, content: "" }])]);
+      const { turns } = await readTranscript(p, { pruneLevel: "aggressive" });
+      expect(turns[0].errors.join("\n")).not.toContain(FAKE_SECRET);
+      expect(turns[0].errors.join("\n")).toContain(MARKER);
+    });
+
+    it("redacts a short secret whose only giveaway is the argument name beside it", async () => {
+      const value = "hunter2" + "hunter2";
+      const p = write([assistantToolUse("a3", { password: value })]);
+      const { turns } = await readTranscript(p);
+      expect(turns[0].toolCalls[0].argSummary).not.toContain(value);
+    });
+
+    it("redacts a secret in a tool_result text, at prune level 'none'", async () => {
+      const p = write([userLine("r1", [{ type: "tool_result", tool_use_id: "x1", content: [{ type: "text", text: `env dump: ${FAKE_SECRET}` }] }])]);
+      const { turns } = await readTranscript(p, { pruneLevel: "none" });
+      expect(turns[0].text).not.toContain(FAKE_SECRET);
+      expect(turns[0].text).toContain(MARKER);
+    });
+
+    it("redacts a secret in a tool_result error kept under 'aggressive' (both text and errors[])", async () => {
+      const p = write([userLine("r2", [{ type: "tool_result", tool_use_id: "x2", is_error: true, content: `auth failed for ${FAKE_SECRET}` }])]);
+      const { turns } = await readTranscript(p, { pruneLevel: "aggressive" });
+      expect(turns[0].text).not.toContain(FAKE_SECRET);
+      expect(turns[0].errors.join("\n")).not.toContain(FAKE_SECRET);
+      expect(turns[0].errors.join("\n")).toContain(MARKER);
+    });
+
+    it("redacts a secret in a system api_error message and in a hook error", async () => {
+      const p = write([
+        { type: "system", subtype: "api_error", uuid: "s1", timestamp: "t", error: { message: `rejected ${FAKE_SECRET}` }, hookErrors: [`hook saw ${FAKE_SECRET}`] },
+      ]);
+      const { turns } = await readTranscript(p);
+      expect(turns[0].errors.join("\n")).not.toContain(FAKE_SECRET);
+      expect(turns[0].errors.join("\n")).toContain(MARKER);
+    });
+
+    it("🐌 fails closed with TranscriptRedactionError naming the turn index when one 64 MB turn blows the redaction budget", async () => {
+      /** REAL trigger, no stub or test-only parameter: 64 MB of connection strings is the slowest shape measured through the real safeRedact
+       *  (2539 ms = 5.1x the 500 ms budget; the other shapes took 0.8-2.5 s). The big file is deleted in `finally` (64 MB, far under the 4 GB test cap). */
+      const big = "://a:b@h/c ".repeat(5_820_000);
+      const p = write([userLine("u1", "a harmless first turn"), userLine("u2", big)]);
+      try {
+        const err = await readTranscript(p).catch((e: unknown) => e);
+        expect(err).toBeInstanceOf(TranscriptRedactionError);
+        expect((err as Error).message).toMatch(/secret redaction failed at turn index 1 \(transcript line 2\): .*wall-clock budget/s);
+      } finally {
+        rmSync(p, { force: true });
+      }
+    }, 180_000);
+
+    it("TranscriptRedactionError names the turn index and transcript line when it has them", () => {
+      /** the message readTranscript raises at the failing turn: turn index = turns kept so far, plus the 1-based line. */
+      const e = new TranscriptRedactionError("budget exceeded", 1, 2);
+      expect(e.message).toMatch(/secret redaction failed at turn index 1 \(transcript line 2\): budget exceeded/);
+      expect(e.reason).toBe("budget exceeded");
+    });
+
+    it("readTranscript on 14000 unterminated PEM headers (the old quadratic trigger) now redacts within budget instead of throwing", async () => {
+      /** the old lazy PEM_BLOCK made this input blow the 500 ms budget (ok:false); the linear pattern redacts it, header gone. */
+      const pemHeader = "-----BEGIN " + "PRIVATE KEY" + "-----";
+      const p = write([userLine("u1", "a harmless first turn"), userLine("u2", pemHeader.repeat(14000))]);
+      const { turns } = await readTranscript(p);
+      expect(turns).toHaveLength(2);
+      expect(turns[1].text).not.toContain("BEGIN PRIVATE KEY");
+      expect(turns[1].text).toContain("[REDACTED:PEM_BLOCK]");
+    }, 60_000);
   });
 });

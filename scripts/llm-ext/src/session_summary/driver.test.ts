@@ -154,6 +154,92 @@ describe("driver: summarizeSession", () => {
     expect(callModel).toHaveBeenCalledTimes(1);
   });
 
+  // ── Secret redaction before egress (TRDD-G49XPDNI) ───────────────────
+  // The fake secret is built at runtime so no secret-shaped literal sits in this source file.
+
+  it("never puts a secret from the transcript into any prompt handed to the model (TRDD-G49XPDNI)", async () => {
+    const fakeSecret = "sk-" + "Zq8".repeat(10);
+    const p = writeTranscript([
+      userTurn("u1", `deploy with this key ${fakeSecret} please`),
+      {
+        type: "assistant",
+        uuid: "a1",
+        parentUuid: "u1",
+        timestamp: "t",
+        message: { role: "assistant", content: [{ type: "tool_use", id: "x1", name: "Bash", input: { command: "q".repeat(60) + fakeSecret + " --verbose" } }] },
+      },
+    ]);
+    const prompts: string[] = [];
+    const callModel = vi.fn<CallModelFn>(async (prompt) => {
+      prompts.push(prompt);
+      return summaryFixture("SUMMARY");
+    });
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+
+    expect(prompts.length).toBeGreaterThanOrEqual(1);
+    for (const prompt of prompts) {
+      expect(prompt).not.toContain(fakeSecret);
+      expect(prompt).not.toContain(fakeSecret.slice(0, 20)); // the fragment an 80-char cut would leave
+    }
+    expect(prompts.join("\n")).toContain("[REDACTED:API_KEY]");
+  });
+
+  it("the old quadratic PEM trigger (14000 unterminated headers) is now redacted, not refused: the model prompt carries no PEM header (TRDD-G49XPDNI)", async () => {
+    // The fail-closed refusal (a redactor that cannot finish) has its own 🐌 test below with a real 64 MB turn. This test proves the default
+    // path through the driver: the quadratic trigger of the old lazy PEM pattern is now redacted within the budget.
+    const pemHeader = "-----BEGIN " + "PRIVATE KEY" + "-----";
+    const p = writeTranscript([userTurn("u1", pemHeader.repeat(14000))]);
+    const prompts: string[] = [];
+    const callModel = vi.fn<CallModelFn>(async (prompt) => {
+      prompts.push(prompt);
+      return summaryFixture("SUMMARY");
+    });
+
+    await summarizeSession({
+      transcriptPath: p,
+      checkpointPath: checkpointPath(),
+      modelId: FREE_MODEL,
+      modelMaxContext: 1_000_000,
+      modelMaxCompletionTokens: 65_536,
+      callModel,
+    });
+
+    expect(prompts.length).toBeGreaterThanOrEqual(1);
+    for (const prompt of prompts) expect(prompt).not.toContain("BEGIN PRIVATE KEY");
+    expect(prompts.join("\n")).toContain("[REDACTED:PEM_BLOCK]");
+  }, 60_000);
+
+  it("🐌 fails closed before any model call when one 64 MB turn blows the redaction budget (TRDD-G49XPDNI)", async () => {
+    // REAL trigger, no stub of the redactor: 64 MB of connection strings takes ~2.5 s through safeRedact (5x the 500 ms budget). Only the
+    // model call is the injected seam, as everywhere in this file; the assertion is zero model requests. The big file is deleted in `finally`.
+    const big = "://a:b@h/c ".repeat(5_820_000);
+    const p = writeTranscript([userTurn("u1", big)]);
+    const callModel = vi.fn<CallModelFn>(async () => summaryFixture("must never be called"));
+    try {
+      await expect(
+        summarizeSession({
+          transcriptPath: p,
+          checkpointPath: checkpointPath(),
+          modelId: FREE_MODEL,
+          modelMaxContext: 1_000_000,
+          modelMaxCompletionTokens: 65_536,
+          callModel,
+        }),
+      ).rejects.toThrow(/secret redaction failed at turn index 0/);
+      expect(callModel).not.toHaveBeenCalled();
+    } finally {
+      rmSync(p, { force: true });
+    }
+  }, 180_000);
+
   // ── Compaction-equivalent prompt schema (map-only — no fold call) ────
 
   it("map prompt asks for the nine compaction sections, verbatim headings, in order, with verbatim-user-message and no-filler instructions", async () => {

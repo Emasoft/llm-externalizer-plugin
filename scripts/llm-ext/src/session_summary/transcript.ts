@@ -44,6 +44,7 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
+import { safeRedact } from "../security_scan/intake.js";
 
 export type PruneLevel = "aggressive" | "moderate" | "none";
 
@@ -124,6 +125,38 @@ const DATA_URI_IMAGE_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
 function stripInlineImageData(text: string): string {
   if (!text.includes("data:image")) return text;
   return text.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
+}
+
+/** Thrown when a transcript string could not be fully redacted. The run must stop: nothing may be sent. */
+export class TranscriptRedactionError extends Error {
+  constructor(
+    readonly reason: string,
+    turnIndex?: number,
+    line?: number,
+  ) {
+    super(
+      `secret redaction failed${turnIndex === undefined ? "" : ` at turn index ${turnIndex} (transcript line ${line})`}: ${reason}. ` +
+        "Nothing was sent to any model; the transcript is not summarized.",
+    );
+    this.name = "TranscriptRedactionError";
+  }
+}
+
+/** Redact secrets with llm-ext's own redactor (security_scan/intake.ts), fail closed.
+ *
+ *  TRDD-G49XPDNI: the summarizer sends this text to a remote model. `safeRedact` reports `ok:false`
+ *  on a redactor error or when its wall-clock budget is exceeded; the text is then NOT trustworthy,
+ *  so this throws instead of returning it (never a silent drop, never unredacted text). Must run on a
+ *  RAW string before any cut or truncation: a secret cut in half leaves a fragment no pattern matches. */
+function redactOrThrow(text: string): string {
+  const r = safeRedact(text);
+  if (!r.ok) throw new TranscriptRedactionError(r.reason ?? "redactor reported failure");
+  return r.redacted;
+}
+
+/** Image data first (a base64 blob would otherwise be scanned for nothing), then secrets. */
+function scrubText(text: string): string {
+  return redactOrThrow(stripInlineImageData(text));
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +286,15 @@ export async function readTranscript(
         continue;
       }
 
-      const turn = extractTurn(parsed, pruneLevel, truncateLines);
+      let turn: Turn | null;
+      try {
+        turn = extractTurn(parsed, pruneLevel, truncateLines);
+      } catch (e) {
+        // TRDD-G49XPDNI: fail closed AND fail fast. Name where it stopped; the run must end here,
+        // never skip the turn (silent loss) and never carry on with text that was not redacted.
+        if (e instanceof TranscriptRedactionError) throw new TranscriptRedactionError(e.reason, turns.length, linesRead);
+        throw e;
+      }
       if (turn === null) continue;
       turns.push(turn);
       const serialized = JSON.stringify(turn);
@@ -270,6 +311,9 @@ export async function readTranscript(
       }
     }
   } finally {
+    // TRDD-G49XPDNI: a redaction failure throws out of the loop above; readline's iterator closes the
+    // interface but never destroys the file stream, so close the descriptor here instead of leaking it.
+    stream.destroy();
     if (strippedOut) {
       strippedOut.end();
       await once(strippedOut, "finish");
@@ -321,7 +365,7 @@ function extractQueueOperationTurn(d: Record<string, unknown>): Turn | null {
   const content = d.content;
   if (typeof content !== "string" || content.trim() === "") return null;
 
-  const text = stripInlineImageData(content);
+  const text = scrubText(content);
   if (isMachineGeneratedUserTurn(text)) return null;
 
   return {
@@ -350,7 +394,7 @@ function extractMessageTurn(
   const errors: string[] = [];
 
   if (typeof content === "string") {
-    if (content.trim() !== "") textParts.push(stripInlineImageData(content));
+    if (content.trim() !== "") textParts.push(scrubText(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors);
@@ -398,7 +442,7 @@ function extractBlock(
   const b = block as Record<string, unknown>;
 
   if (b.type === "text") {
-    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(stripInlineImageData(b.text));
+    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(scrubText(b.text));
     return;
   }
 
@@ -415,25 +459,30 @@ function extractBlock(
     // scratchpad, not narrative the user needs back.
     if (pruneLevel === "aggressive") return;
     if (typeof b.thinking === "string" && b.thinking.trim() !== "") {
-      textParts.push(`[thinking] ${stripInlineImageData(b.thinking)}`);
+      textParts.push(`[thinking] ${scrubText(b.thinking)}`);
     }
     return;
   }
 
   if (b.type === "tool_use") {
-    const name = typeof b.name === "string" ? b.name : "unknown_tool";
+    // TRDD-G49XPDNI: the tool name is also sent to the model (chunker renders `${name} ${argSummary}`), so it is scrubbed too.
+    const name = typeof b.name === "string" ? scrubText(b.name) : "unknown_tool";
     toolCalls.push({ name, argSummary: summarizeToolInput(b.input) });
     return;
   }
 
   if (b.type === "tool_result") {
-    const resultText = toolResultText(b.content);
     const isError = b.is_error === true;
+    // TRDD-G49XPDNI: under `aggressive` a non-error payload is dropped, so decide that BEFORE scrubbing:
+    // redacting text that is never sent is wasted work, and a redaction failure on a huge dropped payload
+    // (fail closed, see redactOrThrow) would kill a run over content that would never have left the machine.
+    if (pruneLevel === "aggressive" && !isError) return;
+    const resultText = toolResultText(b.content);
     if (isError) {
       errors.push(
         resultText.trim() !== ""
           ? resultText
-          : `(tool_use_id ${String(b.tool_use_id ?? "unknown")} reported an error with no message)`,
+          : `(tool_use_id ${scrubText(String(b.tool_use_id ?? "unknown"))} reported an error with no message)`, // TRDD-G49XPDNI: sent to the model, so scrubbed
       );
     }
     if (pruneLevel === "aggressive") {
@@ -462,14 +511,14 @@ function extractSystemTurn(d: Record<string, unknown>): Turn | null {
     const err = d.error;
     if (err !== null && typeof err === "object") {
       const msg = (err as Record<string, unknown>).message;
-      if (typeof msg === "string" && msg.trim() !== "") errors.push(stripInlineImageData(msg));
+      if (typeof msg === "string" && msg.trim() !== "") errors.push(scrubText(msg));
     }
   }
 
   const hookErrors = d.hookErrors;
   if (Array.isArray(hookErrors)) {
     for (const e of hookErrors) {
-      if (typeof e === "string" && e.trim() !== "") errors.push(stripInlineImageData(e));
+      if (typeof e === "string" && e.trim() !== "") errors.push(scrubText(e));
     }
   }
 
@@ -492,7 +541,7 @@ function extractSystemTurn(d: Record<string, unknown>): Turn | null {
  *  read into a string, only the marker survives (see IMAGE_OMITTED_MARKER's
  *  header). */
 function toolResultText(content: unknown): string {
-  if (typeof content === "string") return stripInlineImageData(content);
+  if (typeof content === "string") return scrubText(content);
   if (Array.isArray(content)) {
     return content
       .map((item) => {
@@ -500,7 +549,7 @@ function toolResultText(content: unknown): string {
         const it = item as Record<string, unknown>;
         if (it.type === "text") {
           const t = it.text;
-          return typeof t === "string" ? stripInlineImageData(t) : "";
+          return typeof t === "string" ? scrubText(t) : "";
         }
         if (it.type === "image") return IMAGE_OMITTED_MARKER;
         return "";
@@ -523,17 +572,23 @@ function headTailTruncate(text: string, n: number): string {
 function summarizeToolInput(input: unknown): string {
   if (input === undefined) return "";
   if (input === null || typeof input !== "object") {
-    return truncateOneLine(String(input), ARG_SUMMARY_MAX_LEN);
+    return truncateOneLine(scrubText(String(input)), ARG_SUMMARY_MAX_LEN);
   }
   const entries = Object.entries(input as Record<string, unknown>).map(([key, value]) => {
+    // TRDD-G49XPDNI: scrub the FULL raw value BEFORE the 80-char slice below and the 160-char
+    // truncateOneLine. A secret cut at either boundary leaves a fragment (say the first 20 chars of a
+    // key) that no pattern matches, so scrubbing after the cut would leak it: the order is load-bearing.
+    // Non-string values are scrubbed leaf by leaf on their decoded strings, not on their JSON text,
+    // where escape sequences can hide a secret from the patterns.
     let rendered: string;
     if (typeof value === "string" && value.length > ARG_VALUE_TRUNCATE_AT) {
-      const stripped = stripInlineImageData(value);
-      rendered = `"${stripped.slice(0, ARG_VALUE_TRUNCATE_AT)}…(${value.length} chars)"`;
+      rendered = `"${scrubText(value).slice(0, ARG_VALUE_TRUNCATE_AT)}…(${value.length} chars)"`;
     } else {
-      rendered = JSON.stringify(typeof value === "string" ? stripInlineImageData(value) : value);
+      rendered = JSON.stringify(value, (_k, v: unknown) => (typeof v === "string" ? scrubText(v) : v));
     }
-    return `${key}=${rendered}`;
+    // Second pass on name + value together: some secrets are recognisable only by the argument name
+    // beside them (password="..."), which the value-only pass above cannot see.
+    return redactOrThrow(`${key}=${rendered}`);
   });
   return truncateOneLine(entries.join(", "), ARG_SUMMARY_MAX_LEN);
 }

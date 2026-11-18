@@ -36,6 +36,7 @@ import {
   buildPerFileSectionPrompt,
   walkDir,
   sanitizeInputPath,
+  redactSecrets,
   type FileData,
 } from "./scan-pipeline.js";
 import { mkdirSync, realpathSync } from "node:fs";
@@ -326,6 +327,96 @@ describe("readAndGroupFiles — FFD bin-packing over real temp files", () => {
     const bigPrompt = readAndGroupFiles([a, b], promptBytes, false, budget);
     expect(bigPrompt.groups.length).toBeGreaterThan(noPrompt.groups.length);
     expect(bigPrompt.autoBatched).toBe(true);
+  });
+});
+
+
+describe("redactSecrets — ENV_SECRET and PEM_BLOCK are linear-time (TRDD-G49XPDNI)", () => {
+  it("hostile newline+whitespace blob (100 KB) redacts in under 1000 ms", () => {
+    /** the old `\s*` spanned newlines and was quadratic: 100 KB took ~2.4 s, 500 KB > 120 s. */
+    const blob = "\n    ".repeat(20_000);
+    const started = performance.now();
+    const out = redactSecrets(blob);
+    const elapsed = performance.now() - started;
+    expect(out.count).toBe(0);
+    expect(elapsed).toBeLessThan(1000);
+  });
+
+  it("still redacts a real indented ENV_SECRET assignment", () => {
+    /** the line-local `[ \t]*` rewrite keeps catching KEY=value lines. */
+    const r = redactSecrets("    API_KEY = 'abcd1234efgh5678'\n");
+    expect(r.count).toBe(1);
+    expect(r.redacted).not.toContain("abcd1234efgh5678");
+  });
+
+  it("redacts an ENV_SECRET whose value is on the line after the separator (YAML shape)", () => {
+    /** the line-local rewrite first lost `API_KEY:` newline `  value`; the optional single newline recovers it. */
+    const r = redactSecrets("API_KEY:\n  abcd1234efgh5678\n");
+    expect(r.count).toBe(1);
+    expect(r.redacted).not.toContain("abcd1234efgh5678");
+  });
+
+  it("redacts an ENV_SECRET with a blank line between the separator and the value, and one with the separator on the next line", () => {
+    /** the old `\s*` covered both shapes; the bounded-newline form must still redact them (fail closed). */
+    for (const text of ["API_KEY:\n\n  abcd1234efgh5678\n", "API_KEY\n= abcd1234efgh5678\n", "\n\x0bPASSWORD=abcd1234efgh5678\n"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("redacts a terminated PEM block with a 20000-char body whole, through its END line", () => {
+    /** a body longer than the 16384-char window must not leave its tail or the END line visible. */
+    const b64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let body = "";
+    for (let i = 0; i < 20_000; i++) body += b64[i % 64] + (i % 64 === 63 ? "\n" : "");
+    const pem = "-----BEGIN " + "PRIVATE KEY-----\n" + body + "\n-----END " + "PRIVATE KEY-----";
+    const r = redactSecrets("before\n" + pem + "\nafter");
+    expect(r.redacted).toBe("before\n[REDACTED:PEM_BLOCK]\nafter");
+    expect(r.count).toBe(1);
+  });
+
+  it("redacts an ENV_SECRET with up to 3 newlines before the separator or after it", () => {
+    /** the old `\s*` covered these; the bounded `{0,3}` newline groups on both sides of the separator must too (fail closed). */
+    for (const text of ["API_KEY\n\n= abcd1234efgh5678\n", "API_KEY\n\n\n= abcd1234efgh5678\n", "API_KEY:\n\n\n  abcd1234efgh5678\n", "API_KEY\n\n\n=\n\n\n  abcd1234efgh5678\n"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("redacts an ENV_SECRET whose separator or value is after a bare CR line break (old Mac file)", () => {
+    /** the old `\s*` matched a lone `\r`; `\r?\n` alone did not, which leaked these values to the model. */
+    for (const text of ["API_KEY\r= abcd1234efgh5678\r", "API_KEY=\r  abcd1234efgh5678\r", "API_KEY:\r\r  abcd1234efgh5678\r"]) {
+      const r = redactSecrets(text);
+      expect(r.count).toBeGreaterThanOrEqual(1);
+      expect(r.redacted).not.toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("DOCUMENTED LIMIT: ENV_SECRET values separated from the key by 4+ newlines (before or after the separator) are NOT redacted", () => {
+    /** pins the bounded-newline trade-off (the old unbounded `\s*` matched these but backtracked > 120 s on 500 KB); widening must update this test on purpose. */
+    for (const text of ["API_KEY:\n\n\n\n\n  abcd1234efgh5678\n", "API_KEY\n\n\n\n\n= abcd1234efgh5678\n"]) {
+      expect(redactSecrets(text).redacted).toContain("abcd1234efgh5678");
+    }
+  });
+
+  it("hostile PEM (20000 unterminated BEGIN headers) redacts in under 1000 ms, header gone", () => {
+    /** the old lazy [\s\S]*? re-scanned to end of input per header (quadratic). */
+    const hostile = "-----BEGIN " + "PRIVATE KEY" + "-----";
+    const input = hostile.repeat(20_000);
+    const started = performance.now();
+    const out = redactSecrets(input);
+    const elapsed = performance.now() - started;
+    expect(elapsed).toBeLessThan(1000);
+    expect(out.redacted).not.toContain("BEGIN PRIVATE KEY");
+  });
+
+  it("redacts a terminated PEM block whole", () => {
+    /** a normal-size block is still one BEGIN..END match. */
+    const pem = "-----BEGIN RSA " + "PRIVATE KEY-----\n" + "MIIEowIBAAKCAQEAx7Qz".repeat(160) + "\n-----END RSA " + "PRIVATE KEY-----";
+    const r = redactSecrets("before\n" + pem + "\nafter");
+    expect(r.redacted).toBe("before\n[REDACTED:PEM_BLOCK]\nafter");
   });
 });
 
