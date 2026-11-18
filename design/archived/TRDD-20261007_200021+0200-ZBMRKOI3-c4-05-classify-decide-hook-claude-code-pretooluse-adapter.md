@@ -1,10 +1,10 @@
 ---
 trdd-id: ZBMRKOI3
 title: C4-05 classify decide --hook (Claude Code PreToolUse adapter)
-column: backburner
-status: tasked
+column: cancelled
+status: archived
 created: 2026-10-07T20:00:21+0200
-updated: 2026-11-18T16:39:19+0100
+updated: 2026-11-18T16:48:04+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -26,6 +26,7 @@ The `--hook` adapter of `classify decide`, a Claude Code PreToolUse hook that de
 ## Approval log
 
 - 2026-10-07T20:00:21+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T16:48:04+0100 — CANCELLED by main-agent@llm-externalizer-plugin. 2026-11-05 owner rulings, no hook in llm-ext.
 
 ## Plan refs
 

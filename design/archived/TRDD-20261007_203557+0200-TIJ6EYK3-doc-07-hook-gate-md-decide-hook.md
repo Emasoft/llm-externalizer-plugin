@@ -1,10 +1,10 @@
 ---
 trdd-id: TIJ6EYK3
 title: DOC-07 hook-gate.md (decide --hook)
-column: backburner
-status: tasked
+column: cancelled
+status: archived
 created: 2026-10-07T20:35:57+0200
-updated: 2026-11-18T16:39:19+0100
+updated: 2026-11-18T16:48:05+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -25,6 +25,7 @@ The classify skill's `references/hook-gate.md` describing `classify decide --hoo
 ## Approval log
 
 - 2026-10-07T20:35:57+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T16:48:05+0100 — CANCELLED by main-agent@llm-externalizer-plugin. documents the cancelled ZBMRKOI3.
 
 ## Plan refs
 

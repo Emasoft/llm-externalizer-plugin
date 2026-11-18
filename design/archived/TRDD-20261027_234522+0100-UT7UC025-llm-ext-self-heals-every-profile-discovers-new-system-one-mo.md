@@ -1,10 +1,10 @@
 ---
 trdd-id: UT7UC025
 title: llm-ext self-heals every profile, discovers new system-one models, falls back to a local small model
-column: design
-status: tasked
+column: complete
+status: archived
 created: 2026-10-27T23:45:22+0100
-updated: 2026-11-18T16:38:24+0100
+updated: 2026-11-18T16:48:05+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -86,6 +86,7 @@ https://huggingface.co/srv-sngh/Ornith-9B-mlx-nvfp4
 ## Approval log
 
 - 2026-10-27T23:45:22+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T16:48:05+0100 — COMPLETE by main-agent@llm-externalizer-plugin. every EHT child terminal; rulings recorded under the USER delegation of 2026-11-18.
 
 ## USER decisions
 
@@ -102,4 +103,4 @@ USER directive verbatim (2026-10-28, repeating the /goal with one addition): "si
 
 ## Acceptance
 
-- [ ] every EHT child is terminal: 5Q79QZM7, 28BAL5ER, O93LFMF3, WSPV40Y5, PN0N4290, M4KERGEF complete; 3CG178O7, 78LZFUVJ published; J7AIC7ZW cancelled and 8HDAFJ3N superseded by the main agent
+- [x] every EHT child is terminal: 5Q79QZM7, 28BAL5ER, O93LFMF3, WSPV40Y5, PN0N4290, M4KERGEF complete; 3CG178O7, 78LZFUVJ published; J7AIC7ZW cancelled and 8HDAFJ3N superseded by the main agent

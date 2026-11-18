@@ -1,10 +1,10 @@
 ---
 trdd-id: 8HDAFJ3N
 title: Repair user-defined profiles with benchmarked models
-column: backburner
-status: tasked
+column: superseded
+status: archived
 created: 2026-10-27T23:56:09+0100
-updated: 2026-11-18T16:38:34+0100
+updated: 2026-11-18T16:48:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-27T23:56:09+0100
+superseded-by: [SZ7TO9FW]
 ---
 
 # Repair user-defined profiles with benchmarked models
@@ -34,3 +35,4 @@ Apply the repair chain to user-defined profiles too, as the USER directive says 
 
 - 2026-10-27T23:56:09+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-11-18T16:38:34+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): superseded by TRDD-SZ7TO9FW: the USER 2026-10-27 directive ("any profile, default or not") is met by run-time substitution without rewriting user keys (design/specs/profile-contract.md section 7 item 2, acceptance cases A1 and A2). The settings.yaml rewrite and rollback in this card contradict the contract (Principle 3).
+- 2026-11-18T16:48:04+0100 — SUPERSEDED by main-agent@llm-externalizer-plugin. run-time substitution of the profile contract replaces rewriting user profiles.
