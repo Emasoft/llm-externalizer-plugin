@@ -4693,9 +4693,8 @@ export function formatResolvedProfileLines(
   }
   lines.push(`Timeout: ${resolved.timeout}s`);
   lines.push(`Context window: ${resolved.contextWindow.toLocaleString()} tokens`);
-  lines.push(
-    `Auth: ${resolved.authToken ? `set (${resolved.authToken.length} chars)` : "NOT SET"}`,
-  );
+  // The token length is not printed: it is information about a secret (TRDD-TN8OUZ50).
+  lines.push(`Auth: ${resolved.authToken ? "set" : "NOT SET"}`);
   return lines;
 }
 
