@@ -167,7 +167,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
     { flag: "--only", property: "only", field: "only", render: true, help: "Show only these classes (comma separated); the count line still lists all.", parse: (raw) => raw },
     { flag: "--verbose", property: "verbose", field: "verbose", type: "boolean", render: true, help: "List every item with its confidence, grouped by class; a ? marks a low-confidence one.", parse: () => true },
     { flag: "--save", property: "save", field: "save", render: true, help: "Write every labelled item ([{id, label, confidence}], JSON) to this file.", parse: (raw) => raw },
-    // TRDD-WYY3SPDX: --context FILE fills `context`, the same flag as `classify requirements` (earlier messages as background, sent with every request). `classify filter` has the same flag since TRDD-7ZA3EE6Z.
+    // TRDD-WYY3SPDX: --context FILE fills `context`, the same flag as `classify requirements` (earlier messages as background, sent with every request). WHY label only: `classify filter` is left for a separate card because its text-items instruction never references the shared context, so the flag would be sent and ignored there.
     { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw },
   ],
   input: labelInputSchema,

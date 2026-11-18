@@ -82,9 +82,7 @@ function build(i: FilterInput, t: Thresholds): Built {
     seen.add(id);
   });
   // WHY kind text: an item may be a long file, which the planner cuts into chunks (plan §5); the question is the caller's and stays in instructions, the item text stays in state and the guard tells the model not to obey it (D5).
-  // WHY the wording depends on the context (TRDD-7ZA3EE6Z): the shared state here is the bare context string, so `shared.context` does not exist (label/requirements use that wording) and "the state" would also cover the context; a text unit travels alone, so `units` holds only the item and `shared` is the background. `shared` holds the caller's earlier messages, which are untrusted, so the guard names it too (as findings.ts does). Without a context the request stays byte-identical to what it was before the flag existed.
-  const guard = i.context === undefined ? dataGuard("the text in the state") : `${dataGuard("`shared` and the text in `units`")} Use \`shared\` as background.`;
-  const units: BuiltUnit[] = i.items.map((it, k) => ({ kind: "text", state: it.text, questions: { [indexKey("p", k)]: noul(`${i.question} ${guard}`) } }));
+  const units: BuiltUnit[] = i.items.map((it, k) => ({ kind: "text", state: it.text, questions: { [indexKey("p", k)]: noul(`${i.question} ${dataGuard("the text in the state")}`) } }));
   return { sharedState, units, unsplittable: {} };
 }
 
@@ -196,8 +194,6 @@ export const spec: DecisionSpec<FilterInput, FilterResult> = {
   flags: [
     { flag: "--no-collapse", property: "no_collapse", field: "noCollapse", type: "boolean", render: true, help: "Print every row of a --lines run; by default rows whose text differs only in numbers are shown once as ×N with their line numbers.", parse: () => true },
     { flag: "--save", property: "save", field: "save", render: true, help: "Write every answered row ([{id, p}], JSON, best first) to this file.", parse: (raw) => raw },
-    // TRDD-7ZA3EE6Z: --context FILE fills `context`, the same flag as `classify label` and `classify requirements` (earlier messages as background, sent with every request).
-    { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw },
   ],
   input,
   thresholds: {

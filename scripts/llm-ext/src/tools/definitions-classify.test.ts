@@ -229,11 +229,11 @@ describe("TRDD-58CFBQHN: classify --help lists --estimate, never --preview", () 
   });
 });
 
-// TRDD-WYY3SPDX increment A and TRDD-7ZA3EE6Z: `--context` is a flag of label, requirements, rule-check and filter only.
+// TRDD-WYY3SPDX increment A: `--context` is a flag of label, requirements and rule-check only. filter is left out on purpose: its text-items instruction never references the shared context.
 describe("TRDD-WYY3SPDX: the `context` property", () => {
-  it("label, requirements, rule-check and filter list context as a string; every other command does not", () => {
+  it("label, requirements and rule-check list context as a string; filter and every other command do not", () => {
     for (const e of entries) {
-      const has = e.name === "classify_label" || e.name === "classify_requirements" || e.name === "classify_rule_check" || e.name === "classify_filter";
+      const has = e.name === "classify_label" || e.name === "classify_requirements" || e.name === "classify_rule_check";
       if (has) expect(props(e)["context"]?.type, e.name).toBe("string");
       else expect(props(e)["context"], e.name).toBeUndefined();
     }
