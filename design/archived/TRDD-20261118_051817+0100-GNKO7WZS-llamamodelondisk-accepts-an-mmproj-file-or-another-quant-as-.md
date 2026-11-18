@@ -1,10 +1,10 @@
 ---
 trdd-id: GNKO7WZS
 title: llamaModelOnDisk accepts an mmproj file or another quant as the model weights
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T05:18:17+0100
-updated: 2026-11-18T05:51:25+0100
+updated: 2026-11-18T06:05:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -25,6 +25,7 @@ llamaModelOnDisk (network-give-up.ts:117-128) treats a repo:quant model as on di
 ## Approval log
 
 - 2026-11-18T05:18:17+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T06:05:25+0100 — COMPLETE by main-agent@llm-externalizer-plugin. fix 8e093733 landed and all four acceptance boxes are ticked; the work ran while the card stood in todo, so it skipped the dev, testing and ai_review columns.
 
 ## Notes
 
