@@ -75,3 +75,44 @@ def test_skips_report_with_dot_fixer_sidecar(sut, tmp_path):
     result = sut._find_report_files(tmp_path, skip_if_fixer_exists=True)
     assert report not in result
     assert result == []
+
+
+def _init_run(sut, base: Path, capsys) -> dict[str, str]:
+    """Run `init-run --base <base>` and return its KEY=VALUE stdout lines as a dict."""
+    capsys.readouterr()
+    assert sut.main(["init-run", "--base", str(base)]) == 0
+    return dict(line.split("=", 1) for line in capsys.readouterr().out.splitlines())
+
+
+def test_init_run_routes_summary_to_reports_and_intermediates_to_reports_dev(sut, tmp_path, capsys):
+    """init-run writes the final summary under reports/ and the four intermediates under reports_dev/."""
+    # TRDD-PNU8XECB (issue #18): reports/ is git-tracked and holds final files only; the bug
+    # list, snapshots and progress log are intermediate and belong in gitignored reports_dev/.
+    paths = _init_run(sut, tmp_path, capsys)
+    root = tmp_path.resolve()
+    final_dir = root / "reports" / "llm-externalizer"
+    scratch_dir = root / "reports_dev" / "llm-externalizer"
+    assert Path(paths["OUTDIR"]) == final_dir
+    assert Path(paths["SCRATCHDIR"]) == scratch_dir
+    assert final_dir.is_dir()
+    assert scratch_dir.is_dir()
+    assert Path(paths["SUMMARY"]).parent == final_dir
+    for key in ("BUGS_TO_FIX", "INITIAL_STATE", "SNAPSHOT", "PROGRESS_LOG"):
+        assert Path(paths[key]).parent == scratch_dir, key
+
+
+def test_init_run_file_names_use_dashes_and_summary_stays_a_sidecar(sut, tmp_path, capsys):
+    """init-run names every file <RUN_TS>-fix-found-bugs-<part>, and the aggregator still skips the summary."""
+    paths = _init_run(sut, tmp_path, capsys)
+    ts = paths["RUN_TS"]
+    expected = {
+        "BUGS_TO_FIX": "bugs-to-fix.md",
+        "INITIAL_STATE": "initial-state.txt",
+        "SNAPSHOT": "snapshot.txt",
+        "SUMMARY": "summary.md",
+        "PROGRESS_LOG": "progress.log",
+    }
+    for key, part in expected.items():
+        assert Path(paths[key]).name == f"{ts}-fix-found-bugs-{part}", key
+    # The summary lives in reports/, the directory the aggregator scans for per-file reports.
+    assert sut._is_sidecar(Path(paths["SUMMARY"]).name)

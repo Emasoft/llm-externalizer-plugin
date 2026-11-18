@@ -112,11 +112,10 @@ describe("benchmark CLI — --auto-replace / --apply (TRDD-828238b5 A7-P3)", () 
     expect(combined).toMatch(/ADVISORY only/);
     expect(r.stdout).toMatch(/recommended_replacements=0/);
     // A report file was written under the tmp project root.
-    // row99c SF6: routed through defaultOutputDir() (project-root.ts), which
-    // nests under <project>/reports/llm-externalizer/ — the ONLY USER-approved
-    // report root — instead of the old <project>/reports/auto-replace/.
-    // TRDD-PNU8XECB: auto-replace output is model-pool tool configuration, so it now
-    // lands in the gitignored <project>/reports_dev/llm-externalizer/ scratch root.
+    // row99c SF6: routed through the project-root.ts resolvers instead of the old
+    // <project>/reports/auto-replace/. TRDD-PNU8XECB: auto-replace output is model-pool
+    // tool configuration, so it lands in the gitignored
+    // <project>/reports_dev/llm-externalizer/ scratch root, not in reports/.
     const reportDir = join(root, "reports_dev", "llm-externalizer", "auto-replace");
     const reports = readdirSync(reportDir).filter((f) => f.endsWith("-auto-replace.md"));
     expect(reports.length).toBe(1);

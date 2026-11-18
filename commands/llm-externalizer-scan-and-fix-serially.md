@@ -331,7 +331,7 @@ Phase 2. The scan produced N per-file reports under `./reports/llm-externalizer/
 ```bash
 H='python3 "${CLAUDE_PLUGIN_ROOT}/scripts/fix_found_bugs_helper.py"'
 eval "$H init-run" | while IFS='=' read -r k v; do export "$k=$v"; done
-# Exports: RUN_TS (run-scoped, may differ from the scan's $RUN_TS — both are sortable), OUTDIR, BUGS_TO_FIX, INITIAL_STATE, SNAPSHOT, SUMMARY, PROGRESS_LOG
+# Exports: RUN_TS (run-scoped, may differ from the scan's $RUN_TS — both are sortable), OUTDIR (reports/llm-externalizer), SCRATCHDIR (reports_dev/llm-externalizer), BUGS_TO_FIX, INITIAL_STATE, SNAPSHOT, SUMMARY, PROGRESS_LOG — SUMMARY is under OUTDIR, the other four files under SCRATCHDIR
 
 eval "$H aggregate-reports \
   --reports-dir \"$REPORTS_DIR\" \
@@ -477,7 +477,7 @@ Print the summary's absolute path to the user. Also mention: bugs fixed this run
 - Zero parent-conversation inheritance (each `Agent` spawn is fresh; user/project CLAUDE.md load the same way they did under `claude -p`). This is why `subagent_type: "fork"` is forbidden here: a fork would inherit the whole conversation.
 - Each fixer DOES run as a background agent (Claude Code 2.1.232), but the loop is still serial: it dispatches one and waits for that agent's completion notification before the next iteration. Ending the parent session between iterations stops the loop cleanly; ending it while a fixer is mid-flight abandons that fixer's turn, and any edits it had already written to disk stay written.
 - No commits.
-- All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.fix-found-bugs.*` prefix.
+- Output files: the final `summary.md` lives under `./reports/llm-externalizer/` (`$OUTDIR`); the bug list, snapshots and progress log are intermediate and live under the gitignored `./reports_dev/llm-externalizer/` (`$SCRATCHDIR`). Every file carries the `<RUN_TS>-fix-found-bugs-` prefix.
 - Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 
 ## Three-surface compliance: by-design slash-only (GAP-12)

@@ -516,7 +516,7 @@ Commands are slash-invoked inside Claude Code. The format is `/llm-externalizer:
 | `/llm-externalizer:llm-externalizer-high-quality-scan` | Folder scan with ONE strong remote model (default `z-ai/glm-5.2`) at max reasoning + prompt cache, NOT the cheap ensemble. Paid + OpenRouter-only — fails fast on a local backend, `free_only`, or no credit | Per-file scan reports (or merged) |
 | `/llm-externalizer:llm-externalizer-high-quality-scan-and-fix` | High-quality scan (above) → parallel **Opus** fixer subagents (≤15) verify and fix each finding in the same run | Per-file reports + Opus fixer summaries + joined report |
 | `/llm-externalizer:llm-externalizer-fix-report` | Dispatch ONE fixer subagent on an already-generated scan report | One `.fixer.`-tagged summary |
-| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings from all reports in `./reports/llm-externalizer/` and fix serially | Canonical bug list + serial summary |
+| `/llm-externalizer:llm-externalizer-fix-found-bugs` | Aggregate unfixed findings from all reports in `./reports/llm-externalizer/` and fix serially | Canonical bug list + progress log (intermediate, `./reports_dev/llm-externalizer/`) and serial summary (final, `./reports/llm-externalizer/`) |
 
 ### Mass-scout (one dispatcher command, 16 actions)
 
@@ -1375,7 +1375,7 @@ local_governor:
 
 What the governor does not promise:
 
-- It limits only what llm-ext starts. Other programs, a model server you started yourself (its threads, its own loaded model, its GPU use), and an inference already running are never stopped or slowed; when other programs keep the machine over the CPU limit, llm-ext still runs one inference at a time.
+- It limits only what llm-ext starts. Other programs, a model server you started yourself (its threads, its own loaded model, its GPU use), and an inference already running are never stopped or slowed. It does not start local work while the machine is busy: when other programs keep CPU at or over `cpu_limit_pct`, no new local inference or model load starts until the reading falls under it, however long that takes, and only `--command_timeout` ends the wait (set `cpu_limit_pct: 100` to switch the CPU limit off).
 - A config dir with `enabled: false`, an llm-ext version older than the governor still running during an upgrade, and a model server started by hand on another port that llm-ext never sends to are invisible to it.
 - LM Studio and Ollama load a model on the first request that names it (just-in-time loading): such a load gets no load grant and no RAM projection, only the inference lease.
 - GPU memory on Apple Silicon is covered only through the RAM reading (unified memory). A discrete GPU (Linux, Windows) is not read at all: a model offloaded to VRAM is invisible to the RAM limit, and VRAM has no limit of its own.

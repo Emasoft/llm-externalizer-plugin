@@ -12,7 +12,7 @@ Typical orchestration:
     # If a merged report is supplied as an argument:
     fix_found_bugs_helper.py aggregate-reports \\
         --merged-report /abs/path/merged.md \\
-        --output /abs/path/reports/llm-externalizer/<RUN_TS>.fix-found-bugs.bugs-to-fix.md
+        --output <SCRATCHDIR from init-run>/<RUN_TS>-fix-found-bugs-bugs-to-fix.md
 
     # Otherwise, scan the default reports dir for per-file reports that still
     # contain unfixed bugs (i.e. no '.fixer.'/'-fixer-' sibling indicating prior success),
@@ -21,7 +21,7 @@ Typical orchestration:
     fix_found_bugs_helper.py aggregate-reports \\
         --reports-dir ./reports/llm-externalizer \\
         --skip-if-fixer-exists \\
-        --output /abs/path/reports/llm-externalizer/<RUN_TS>.fix-found-bugs.bugs-to-fix.md
+        --output <SCRATCHDIR from init-run>/<RUN_TS>-fix-found-bugs-bugs-to-fix.md
 
     # Then the fix-found-bugs loop runs:
     fix_found_bugs_helper.py init-run
@@ -44,6 +44,9 @@ from pathlib import Path
 # ── Output layout ────────────────────────────────────────────────────────────
 
 REPORTS_SUBDIR = Path("reports") / "llm-externalizer"
+# Gitignored sibling for intermediate files (TRDD-PNU8XECB, issue #18): reports/ is
+# git-tracked and final-only, so scratch must never be written there.
+SCRATCH_SUBDIR = Path("reports_dev") / "llm-externalizer"
 # Canonical timestamp format per ~/.claude/rules/agent-reports-location.md:
 #   local time + GMT offset in compact ±HHMM form, underscore between date and
 #   time so it's filesystem-safe on every OS. Example: 20260421_183012+0200.
@@ -55,10 +58,10 @@ def _now_ts() -> str:
     return datetime.now().astimezone().strftime(TS_FORMAT)
 
 
-def _reports_dir(base: str | None) -> Path:
-    """Return absolute path to <base>/reports/llm-externalizer, creating it."""
+def _run_dir(base: str | None, subdir: Path) -> Path:
+    """Return absolute path to <base>/<subdir> (base defaults to cwd), creating it."""
     root = Path(base).expanduser().resolve() if base else Path.cwd().resolve()
-    target = (root / REPORTS_SUBDIR).resolve()
+    target = (root / subdir).resolve()
     target.mkdir(parents=True, exist_ok=True)
     return target
 
@@ -660,17 +663,22 @@ def cmd_timestamp(args: argparse.Namespace) -> int:
 
 def cmd_init_run(args: argparse.Namespace) -> int:
     ts = _now_ts()
-    outdir = _reports_dir(args.base)
+    # TRDD-PNU8XECB (issue #18): only the final summary belongs in the git-tracked
+    # reports/; the bug list, snapshots and progress log are intermediate artifacts
+    # and go to the gitignored reports_dev/ (USER directive 2026-11-15).
+    outdir = _run_dir(args.base, REPORTS_SUBDIR)
+    scratchdir = _run_dir(args.base, SCRATCH_SUBDIR)
     # Canonical filename shape: <ts±tz>-<slug>.<ext>. Everything after the
     # timestamp is the slug, joined by hyphens (not dots) so the slug is
     # one segment and the extension is unambiguous.
     print(f"RUN_TS={ts}")
     print(f"OUTDIR={outdir}")
-    print(f"BUGS_TO_FIX={outdir / f'{ts}-fix-found-bugs-bugs-to-fix.md'}")
-    print(f"INITIAL_STATE={outdir / f'{ts}-fix-found-bugs-initial-state.txt'}")
-    print(f"SNAPSHOT={outdir / f'{ts}-fix-found-bugs-snapshot.txt'}")
+    print(f"SCRATCHDIR={scratchdir}")
+    print(f"BUGS_TO_FIX={scratchdir / f'{ts}-fix-found-bugs-bugs-to-fix.md'}")
+    print(f"INITIAL_STATE={scratchdir / f'{ts}-fix-found-bugs-initial-state.txt'}")
+    print(f"SNAPSHOT={scratchdir / f'{ts}-fix-found-bugs-snapshot.txt'}")
     print(f"SUMMARY={outdir / f'{ts}-fix-found-bugs-summary.md'}")
-    print(f"PROGRESS_LOG={outdir / f'{ts}-fix-found-bugs-progress.log'}")
+    print(f"PROGRESS_LOG={scratchdir / f'{ts}-fix-found-bugs-progress.log'}")
     return 0
 
 
@@ -744,9 +752,10 @@ def build_parser() -> argparse.ArgumentParser:
             "  6. diff-fixed --file $BUGS_TO_FIX --previous $SNAPSHOT\n"
             "  7. save-summary --file $BUGS_TO_FIX --output $SUMMARY\n"
             "\n"
-            "Output location: all persistent artifacts land under\n"
-            "<cwd>/reports/llm-externalizer/ with a sortable local-TZ\n"
-            "ISO-8601 prefix (e.g. 20260418T153045+0200.fix-found-bugs.summary.md)."
+            "Output location: the final summary lands under\n"
+            "<cwd>/reports/llm-externalizer/ and every intermediate file (bug list,\n"
+            "snapshots, progress log) under <cwd>/reports_dev/llm-externalizer/, all\n"
+            "with a sortable local-TZ prefix (e.g. 20260418_153045+0200-fix-found-bugs-summary.md)."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -842,17 +851,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "timestamp",
-        help="Print a fresh sortable local-timezone ISO-8601 basic timestamp (e.g. 20260418T153045+0200).",
+        help="Print a fresh sortable local-timezone timestamp (e.g. 20260418_153045+0200).",
     )
     p.set_defaults(func=cmd_timestamp)
 
     p = sub.add_parser(
         "init-run",
         help=(
-            "Create ./reports/llm-externalizer/ (relative to --base or cwd) and "
-            "emit the full set of TS-prefixed output paths as shell-parseable "
-            "lines: RUN_TS, OUTDIR, BUGS_TO_FIX, INITIAL_STATE, SNAPSHOT, "
-            "SUMMARY, PROGRESS_LOG."
+            "Create ./reports/llm-externalizer/ (final files) and "
+            "./reports_dev/llm-externalizer/ (intermediate files), both relative "
+            "to --base or cwd, and emit the full set of TS-prefixed output paths "
+            "as shell-parseable lines: RUN_TS, OUTDIR, SCRATCHDIR, BUGS_TO_FIX, "
+            "INITIAL_STATE, SNAPSHOT, SUMMARY, PROGRESS_LOG."
         ),
     )
     p.add_argument(

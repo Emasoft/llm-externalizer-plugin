@@ -1,7 +1,9 @@
 /**
  * Resolve the user's MAIN project directory that report writes anchor on, so
- * reports ALWAYS land under `<main-project-dir>/reports/<component>/` — never in
- * a subfolder, a worktree, an enclosing repo, or the plugin install cache.
+ * final reports ALWAYS land under `<main-project-dir>/reports/<component>/` and
+ * intermediate output under `<main-project-dir>/reports_dev/<component>/`
+ * (TRDD-PNU8XECB) — never in a subfolder, a worktree, an enclosing repo, or the
+ * plugin install cache.
  *
  * SINGLE SOURCE OF TRUTH — every report-path resolver in the server routes here.
  *
@@ -44,10 +46,11 @@ export function resolveProjectMainRoot(override?: string): string {
 // (from index.ts) so security_scan/report.ts can reuse it without pulling
 // in the whole CLI entrypoint module (a direct report.ts->index.ts edge
 // would add one; this module has zero deps beyond node:fs/node:path).
-// Every llm-ext report lands under
+// Every llm-ext FINAL report lands under
 // `<project-root>/reports/llm-externalizer/[<subdir>]` — the write-roots
 // rule's (2026-09-18) USER-approved exception to "only ~/.llm-externalizer/
-// + plugin/plugin-data".
+// + plugin/plugin-data". Intermediate output goes to the gitignored scratch
+// root below, defaultScratchDir() (TRDD-PNU8XECB).
 //
 // Resolution order (highest precedence first):
 //   1. `mainRootOverride` param — an explicit caller-resolved root (e.g. a

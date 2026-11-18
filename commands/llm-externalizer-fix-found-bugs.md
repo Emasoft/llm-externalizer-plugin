@@ -36,23 +36,23 @@ Subcommands (run `$H --help` for the full tree, or `$H <sub> --help` for per-fla
 | `fixed-titles --file PATH` | Snapshot FIXED titles | One title per line, sorted |
 | `diff-fixed --file PATH --previous SNAP` | User-facing progress updates | `Fixed: <title> — N unfixed remaining` per newly-FIXED bug |
 | `print-fallback-prompt --file PATH` | Prompt for general-purpose Agent dispatch (when the selected serial-fixer variant isn't installed) | Full prompt text |
-| `timestamp` | Fresh sortable local-TZ ISO-8601 prefix | `20260418T153045+0200` |
-| `init-run [--base DIR]` | Create `./reports/llm-externalizer/` + emit all TS-prefixed output paths | Shell-parseable: `RUN_TS=...`, `OUTDIR=...`, `BUGS_TO_FIX=...`, `INITIAL_STATE=...`, `SNAPSHOT=...`, `SUMMARY=...`, `PROGRESS_LOG=...` |
+| `timestamp` | Fresh sortable local-TZ prefix | `20260418_153045+0200` |
+| `init-run [--base DIR]` | Create `./reports/llm-externalizer/` (final) and `./reports_dev/llm-externalizer/` (intermediate) + emit all TS-prefixed output paths | Shell-parseable: `RUN_TS=...`, `OUTDIR=...`, `SCRATCHDIR=...`, `BUGS_TO_FIX=...`, `INITIAL_STATE=...`, `SNAPSHOT=...`, `SUMMARY=...`, `PROGRESS_LOG=...` |
 | `save-summary --file PATH --output PATH [--run-start-ts TS]` | Write final markdown summary (counts + FIXED/unfixed title lists) | Absolute path of the written file |
 
 ## Output location
 
-All persistent artifacts land in **`./reports/llm-externalizer/`** (relative to the current working directory; the helper creates the dir). Every saved file has a **sortable local-timezone ISO-8601 prefix** so `ls -1` orders them chronologically. Filename shape (all run-scoped files share the same `<RUN_TS>`):
+The final summary lands in **`./reports/llm-externalizer/`** (git tracked, final files only) and every intermediate file in **`./reports_dev/llm-externalizer/`** (gitignored), both relative to the current working directory; the helper creates both dirs. Every saved file has a **sortable local-timezone prefix** so `ls -1` orders them chronologically. Filename shape (all run-scoped files share the same `<RUN_TS>`; the helper is the source of truth for these names):
 
 ```
-<RUN_TS>.fix-found-bugs.bugs-to-fix.md       # aggregated canonical bug list (input to the loop)
-<RUN_TS>.fix-found-bugs.initial-state.txt    # initial FIXED-titles snapshot
-<RUN_TS>.fix-found-bugs.snapshot.txt         # per-iteration snapshot (overwritten each loop)
-<RUN_TS>.fix-found-bugs.summary.md           # final markdown summary
-<RUN_TS>.fix-found-bugs.progress.log         # per-iteration agent result line (append)
+reports_dev/llm-externalizer/<RUN_TS>-fix-found-bugs-bugs-to-fix.md       # aggregated canonical bug list (input to the loop)
+reports_dev/llm-externalizer/<RUN_TS>-fix-found-bugs-initial-state.txt    # initial FIXED-titles snapshot
+reports_dev/llm-externalizer/<RUN_TS>-fix-found-bugs-snapshot.txt         # per-iteration snapshot (overwritten each loop)
+reports_dev/llm-externalizer/<RUN_TS>-fix-found-bugs-progress.log         # per-iteration agent result line (append)
+reports/llm-externalizer/<RUN_TS>-fix-found-bugs-summary.md               # final markdown summary
 ```
 
-Example: `20260418T153045+0200.fix-found-bugs.summary.md`.
+Example: `20260418_153045+0200-fix-found-bugs-summary.md`.
 
 ## ⚠️ What this command is NOT
 
@@ -74,13 +74,13 @@ Abort with `[FAILED] llm-externalizer-fix-found-bugs — <one-line reason>` on a
 
 ### Step 1 — Init run
 
-Call the helper once and parse the shell-style key=value output into local variables (`RUN_TS`, `OUTDIR`, `BUGS_TO_FIX`, `INITIAL_STATE`, `SNAPSHOT`, `SUMMARY`, `PROGRESS_LOG`):
+Call the helper once and parse the shell-style key=value output into local variables (`RUN_TS`, `OUTDIR`, `SCRATCHDIR`, `BUGS_TO_FIX`, `INITIAL_STATE`, `SNAPSHOT`, `SUMMARY`, `PROGRESS_LOG`):
 
 ```bash
 $H init-run
 ```
 
-Every filename this run produces uses `$RUN_TS` as its prefix. Every orchestrator path lives under `$OUTDIR`.
+Every filename this run produces uses `$RUN_TS` as its prefix. `$OUTDIR` (`reports/llm-externalizer/`) holds only the final `$SUMMARY`; every other run file (`$BUGS_TO_FIX`, `$INITIAL_STATE`, `$SNAPSHOT`, `$PROGRESS_LOG`) lives under `$SCRATCHDIR` (`reports_dev/llm-externalizer/`).
 
 Resolve `MAIN_ROOT` at the start of every `Bash` step (the tool spawns a fresh subshell per invocation, so env vars do not persist). `MAIN_ROOT` MUST be the **main-repo root** — `git worktree list | head -n1` always names the main checkout first, so audit output never scatters across linked worktrees.
 
@@ -278,6 +278,6 @@ Per TRDD-a24b213c §C, this is a documented exemption from the "every capability
 - Zero parent-conversation inheritance (each `Agent` spawn is fresh — `~/.claude/CLAUDE.md`, project `CLAUDE.md`, and auto-memory still load the same way they did for `claude -p`). This is why `subagent_type: "fork"` is forbidden here: a fork would inherit the whole conversation.
 - Each fixer DOES run as a background agent (Claude Code 2.1.232), but the loop is still serial: it dispatches one and waits for that agent's completion notification before the next iteration. Ending the parent session between iterations stops the loop cleanly; ending it while a fixer is mid-flight abandons that fixer's turn, and any edits it had already written to disk stay written.
 - No commits.
-- All output files live under `./reports/llm-externalizer/` with a `<RUN_TS>.` prefix. `reports/` is git tracked (sanitized of secrets before committing) and is never gitignored; intermediate artifacts and scratch go to the gitignored `reports_dev/`.
+- Output files: the final `summary.md` lives under `./reports/llm-externalizer/` (`$OUTDIR`), which is git tracked (sanitized of secrets before committing) and never gitignored; the bug list, snapshots and progress log are intermediate artifacts and live under the gitignored `./reports_dev/llm-externalizer/` (`$SCRATCHDIR`). Every file carries the `<RUN_TS>-fix-found-bugs-` prefix.
 - Scratch vs final: temporary or scratch files (backups, partial lists, per-chunk pieces) go to the `*_dev` folders (`reports_dev/`, …), which are gitignored; final files go to the tracked folders (`reports/` is git tracked and sanitized of secrets before committing). Dispatched fixer agents already carry this rule in their own definition, so their prompts stay the bare path; any other subagent prompt you write must state it.
 - **Never exceed 15 concurrent `Agent` calls.** This command dispatches serially (one at a time) because bug order matters — later bugs may be superseded by fixes in earlier ones. Do not rewrite the loop to parallelise.

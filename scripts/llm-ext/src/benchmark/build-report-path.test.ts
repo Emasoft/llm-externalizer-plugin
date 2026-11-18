@@ -1,8 +1,8 @@
 // C9 write-roots sweep (2026-09-18): buildReportPath()'s non-isolated
 // (LLM_EXT_CONFIG_DIR unset) branch used to return
 // `<mainRoot>/reports/benchmark/<ts>-model-comparison.md` — OUTSIDE every
-// USER-approved write root. It now routes through defaultOutputDir(), the
-// approved exception root (<project-root>/reports/llm-externalizer/).
+// USER-approved write root. It now routes through defaultScratchDir() (TRDD-PNU8XECB),
+// the gitignored <project-root>/reports_dev/llm-externalizer/ scratch root.
 //
 // The LLM_EXT_CONFIG_DIR (isolated) branch already had coverage via
 // populate-default-profile.test.ts's fix-queue-29 test (a full run through

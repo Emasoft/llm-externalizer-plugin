@@ -308,10 +308,9 @@ export async function runDiscoverNewArrivals(
   opts: RunDiscoverNewArrivalsOptions = {},
 ): Promise<{ report: NewArrivalsReport; reportPath: string }> {
   const report = await discoverNewArrivals(opts);
-  // write-roots fix (c9b, 2026-09-18): route the default through
-  // defaultOutputDir() so it lands under reports/llm-externalizer/model-arrivals
-  // (the USER-approved tree) and honors LLM_EXT_OUTPUT_DIR like every other
-  // report writer; an explicit outputDir still wins verbatim.
+  // write-roots fix (c9b, 2026-09-18): the default routes through the project-root.ts
+  // resolvers (not a bare top-level reports/model-arrivals/) and honors LLM_EXT_OUTPUT_DIR
+  // like every other report writer; an explicit outputDir still wins verbatim.
   // TRDD-PNU8XECB: model-arrivals output describes llm-ext's own model pool (tool configuration), so it is
   // scratch output for the gitignored reports_dev/llm-externalizer/, not a final tracked report.
   const dir = opts.outputDir ?? join(defaultScratchDir(), "model-arrivals");

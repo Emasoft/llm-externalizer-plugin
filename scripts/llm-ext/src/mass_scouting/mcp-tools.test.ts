@@ -491,8 +491,8 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     const text = res.content[0]!.text;
     expect(text).toContain("google/gemini-2.5-flash");
     expect(text).toContain("Report:");
-    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
-    // not a bare top-level reports/model-health/.
+    // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
+    // (TRDD-PNU8XECB), not a bare top-level reports/model-health/.
     expect(text).toContain("reports_dev/llm-externalizer/model-health");
   });
 
@@ -551,8 +551,8 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     expect(res.isError).toBeFalsy();
     const text = res.content[0]!.text;
     expect(text).toContain("seeded the snapshot");
-    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
-    // not a bare top-level reports/model-arrivals/.
+    // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
+    // (TRDD-PNU8XECB), not a bare top-level reports/model-arrivals/.
     expect(text).toContain("reports_dev/llm-externalizer/model-arrivals");
   });
 
@@ -619,8 +619,8 @@ describe("dispatchMassScoutTool — check_tool_replacements (TRDD-828238b5 A7-P3
     // Summary mentions the advisory posture + the report path under the tmp root.
     expect(text).toContain("advisory");
     expect(text).toContain("Report:");
-    // write-roots fix (c9b): default now nests under reports/llm-externalizer/,
-    // not a bare top-level reports/auto-replace/.
+    // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
+    // (TRDD-PNU8XECB), not a bare top-level reports/auto-replace/.
     expect(text).toContain("reports_dev/llm-externalizer/auto-replace");
     // The report file was actually written.
     const reportLine = text.split("\n").find((l) => l.startsWith("Report:"));
