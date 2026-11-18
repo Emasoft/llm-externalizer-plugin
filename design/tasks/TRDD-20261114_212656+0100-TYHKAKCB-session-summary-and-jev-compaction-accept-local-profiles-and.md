@@ -4,7 +4,7 @@ title: session-summary and Jev compaction accept local profiles and prefer Local
 column: design
 status: tasked
 created: 2026-11-14T21:26:56+0100
-updated: 2026-11-15T01:24:30+0100
+updated: 2026-11-18T15:40:31+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -47,3 +47,10 @@ Known cost: a remote run with an uncalibrated preferred local model may wait up 
 driver.test.ts not run by the worker (rule); coordinator to run it before push.
 2026-11-15T01:24:29+0100 Known cost fixed (uncommitted, local-model.ts): queueLocalCalibrations no longer calls queueManual (30 s synchronous lock wait); it enqueues under withStateLock(dir, 0) (at most one 20 ms poll); a busy lock = one stderr line, nothing queued, no runner start, per-process memo cleared so a later run retries. markProfileUsed untouched (still only startCalibration calls it). Test src/session_summary/local-model-lock.test.ts passes.
 2026-11-15T01:24:30+0100 CORRECTION: the 5638718b claim 'local models never hold a lease as a loser' was not true for the replaced-slot fan-out path (applyFanoutTransition can hand a slot the local model; its owner and speculative calls carried no abort signal) until the TRDD-3SNQAGIC hedge/speculative abort fix; governor queueing is not exercised by any test (the e2e uses a stand-in broker).
+
+## Acceptance
+
+- [x] local session_summary fallback shipped (existence and ancestry check only, tests unrun) in c4dc6bd5 (v14.3.0, in origin/main): session_summary/local-model.ts with local-model.test.ts and local-model-lock.test.ts; remote free models first, the first fit managed local model last, an explicitly selected local profile runs local-only (STATE block of this card; triage report b4-design-dev-testing)
+- [x] tools/definitions.ts session_summary accepts LFP (definitions.ts:354 session_summary: LFP; LFP = TEXT_PROFILE_TYPES = local, free, paid at profile-accept.ts:8, definitions.ts:338), so a local profile is no longer refused by profileSelectionRefusal
+- [~] caveats (informational, not an acceptance criterion): the named model LFM3-1.7B-MLX-4bit was measured unfit for aggregate (fill 0) and is skipped with a stderr line, so another model serves; a single transcript turn larger than the local chunk budget fails loudly; governor queueing is covered by no test (the end-to-end test uses a stand-in broker); the listed tests were not run in this triage
+- [ ] the goal items not shown met: the owner named model LFM3-1.7B-MLX-4bit serves session summaries (measured unfit for aggregate, so it does not), and Jev compaction on a local profile (consumer-guidelines.md:11 says session compact accepts local, free, paid since 14.3.0, not re-checked here); the main agent decides whether to strike as obsolete or tick with evidence

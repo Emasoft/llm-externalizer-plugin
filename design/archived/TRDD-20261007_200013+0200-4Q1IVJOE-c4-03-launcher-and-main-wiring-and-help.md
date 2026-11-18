@@ -1,10 +1,10 @@
 ---
 trdd-id: 4Q1IVJOE
 title: C4-03 Launcher and main wiring and help
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T20:00:13+0200
-updated: 2026-11-05T04:14:10+0100
+updated: 2026-11-18T15:44:28+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,9 +16,9 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T20:00:13+0200
 implementation-commits: [5f282fff, 1c08c7ff, 441ce3fa, 1111c2f6]
-blocked-by: [M2H4RJVQ]
+blocked-by: []
 unblock-when: [decision:owner-rules-BL44BC32-scope-in-M2H4RJVQ, decision:owner-rules-R4-in-M2H4RJVQ]
-pre-block-column: testing
+pre-block-column: 
 blocker-probe: grep -qE ^column:.complete$ design/archived/TRDD-20261104_141125+0100-S3QEQBYV-classify-tests-read-stdin-from-a-real-stream-so-r4-is-unnece.md
 blocker-holds-if: exit-nonzero
 ---
@@ -38,6 +38,7 @@ Wire the classify group into the launcher and main entry with nested help and ty
 - 2026-11-04T10:09:11+0100 — column → blocked by main-agent@llm-externalizer-plugin. waits on TRDD-KNSQAQ1S (forbidden test doubles)
 - 2026-11-04T13:32:02+0100 — column → testing by main-agent@llm-externalizer-plugin. test doubles clause met under R2 and R4; definition-of-done box waits on the clean-HEAD full suite run (headcheck) Cleared blocked-by (--clear-blocker override).
 - 2026-11-04T13:57:17+0100 — column → blocked. Waits on the owner ruling in TRDD-M2H4RJVQ; the box also waits on a full suite at a HEAD that includes ddf17705 and a committed dist rebuilt from HEAD, which the host's memory pressure delays.
+- 2026-11-18T15:44:28+0100 — COMPLETE by main-agent@llm-externalizer-plugin. M2H4RJVQ ruled; DoD evidenced (subjects name the card, include list, no doubles, 14.6.1 publish run full suite); full suite re-runs at the 14.7.3 publish gate. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 
@@ -68,7 +69,7 @@ Read the code at card start (existing nested help and typo-suggestion behaviour 
 - [x] nested help
 - [x] typo suggestion
 - [x] verified via bare `llm-ext classify … --help`
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 
 ## Out of scope
 
@@ -100,3 +101,4 @@ C4-02 review follow-ups (the last three small points) were applied in 5f282fff, 
 2026-11-05T01:55+0100 lint and typecheck measured on source identical to HEAD (scripts/ unchanged since c668389e; scratch worktree at c668389e, node_modules symlinked from the main tree, versions not rechecked against the lockfile since run 4b): tsc --noEmit -p scripts/llm-ext/tsconfig.json (src only) exit 0; npx eslint . --quiet run from scripts/llm-ext exit 0, 611 files, 0 errors, 0 warnings (reports_dev/ygf9yxf2/20261105_014302+0100-eslint-tsc-at-head.md, gitignored). This settles only the lint and typecheck part of the definition-of-done box; the box also needs the vitest include-list check, the WHY comments and the R1 reading of one commit with the TRDD id (the permissive reading, at least one commit names the id, is unratified in TRDD-M2H4RJVQ). No box ticked.
 2026-11-05T01:55+0100 correction to the 01:43 note: the basis for the M2H4RJVQ block is this card lines :96 (the BL44BC32-scope wait stays on this card) and :98 (M2H4RJVQ is removed after the owner answers) and the pre-existing M2H4RJVQ blocker; the 13:36:23 note (:91) is conditional and does not mention extract.test.ts:536-537. Those lines come from 1111c2f6, which this card and XZZ2NSWY both list, so the R4 ruling applies here too.
 2026-11-05T04:12+0100 blocker-probe re-pointed to design/archived/: TRDD-S3QEQBYV is complete and was moved there, so the old design/tasks path failed grep and reported a blocker that no longer held. This card stays blocked on TRDD-M2H4RJVQ (blocked-by and two decision predicates).
+2026-11-18T15:35:31+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): TRDD-M2H4RJVQ was ruled: R1 ACCEPT, R4 ACCEPT (both halves; the extract.test.ts:539-540 throwing never-called seam is an injected sink asserting non-use), BL44BC32 scope OUT for this card (git show of 5f282fff 1c08c7ff 441ce3fa 1111c2f6 on index.test.ts adds no spyOn; the index.test.ts spies blame 4bdd9b1b, 14.1.0). Definition-of-done box ticked on the 0f74f8d3 precedent: tests in the vitest include list (vitest.config.ts:830-832 classify-launch.test.ts, classify-launch-cli.test.ts); typecheck, lint, build and npm test OK in the 14.6.1 publish run (reports_dev/release-next/publish-20261117_122713+0100.log, tree 04d412ea) and tsc/eslint exit 0 at c668389e; no test doubles in its own files after 441ce3fa, aaf521c2 and S3QEQBYV; commit subjects 5f282fff, 1c08c7ff, 441ce3fa, 1111c2f6 name TRDD-4Q1IVJOE; WHY comments present in cli/launcher.ts and cli/main.ts. Full suite not re-run at the current HEAD. blocked-by and the two decision predicates are cleared by the main agent when moving the card. Evidence: triage report b1-blocked (4Q1IVJOE).
