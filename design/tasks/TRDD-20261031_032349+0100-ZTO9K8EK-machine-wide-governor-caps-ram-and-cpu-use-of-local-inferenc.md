@@ -1,10 +1,10 @@
 ---
 trdd-id: ZTO9K8EK
 title: Machine-wide governor caps RAM and CPU use of local inference
-column: complete
+column: publish
 status: tasked
 created: 2026-10-31T03:23:49+0100
-updated: 2026-11-18T13:01:44+0100
+updated: 2026-11-18T14:14:09+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -26,6 +26,7 @@ release-via: publish
 - 2026-10-31T03:23:49+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T20:16:02+0100 — column → human_review by main-agent@llm-externalizer-plugin. shipped in v14.3.0; governor-burn stage green in the v14.4.0 publish (12 passed); the card's Open questions for the USER remain
 - 2026-11-18T13:01:44+0100 — column → complete by main-agent@llm-externalizer-plugin. code committed and verified on the exported commit (tsc and card tests); ships in 14.7.2; approved by the main agent under the USER delegation of 2026-11-18
+- 2026-11-18T14:14:09+0100 — column → publish by main-agent@llm-externalizer-plugin. shipped in v14.7.2 (8c72f83d, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.2); main agent approves under the USER delegation of 2026-11-18
 
 ## USER goal
 
