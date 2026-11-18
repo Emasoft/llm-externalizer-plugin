@@ -75,6 +75,48 @@ describe("classify, a remote failure answered by the local decider", () => {
     expect(w[0]!.message).toContain("a split piece of 1 question was not answered");
     expect(stderr.filter((l) => l.includes("needs 16460 tokens; the limit is 16384"))).toHaveLength(1);
   });
+  // WHY not "by the decider counts": with 2 questions a split by the 422 counts and a split in halves both give [2, 1, 1], so this test cannot tell them apart.
+  it("a decider 422 on a two-question local escalation splits it into single questions and answers both (TRDD-5AV8UBL1)", async () => {
+    const { runDecision } = await import("./run-decision.js");
+    const { spec } = await import("./catalog/filter.js");
+    const stderr: string[] = [];
+    const sizes: number[] = []; // question count of every request the decider received, in order
+    const fetch: GlobalFetch = async (url, init) => {
+      if (url.startsWith(DECIDER)) {
+        if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", loaded: ["elephant-1"] }), { status: 200 });
+        const q = (JSON.parse(String(init.body)) as { questions: Record<string, unknown> }).questions;
+        sizes.push(Object.keys(q).length);
+        // WHY 20001 > 16384: the refusal names its counts, which is what the split must plan its pieces from
+        if (Object.keys(q).length > 1) return new Response(JSON.stringify({ error: { message: "the question with its state needs 20001 tokens; the limit is 16384 and input is not cut", type: "invalid_request_error" } }), { status: 422 });
+        const real = (JSON.parse(fx("p01", "dec-noul").body) as { answers: Record<string, unknown> }).answers.is_bug;
+        return new Response(JSON.stringify({ model: "elephant-1", answers: Object.fromEntries(Object.keys(q).map((k) => [k, real])), usage: { input_tokens: 5, output_tokens: 1 } }), { status: 200 });
+      }
+      if (url.includes("output_modalities=decisions")) {
+        const body = JSON.parse(fx("p02", "models-decisions").body) as { data: { id: string; description?: string }[] };
+        body.data = body.data.filter((m) => m.id.includes("typesafe/") || !/system\s*one/i.test(m.description ?? ""));
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/endpoints")) return replayFixture(fx("p02", "target-endpoints"));
+      return syntheticResponse(402, JSON.stringify({ error: { code: 402, message: "Insufficient credits" } }), { "content-type": "application/json" });
+    };
+    const deps: RunDeps = {
+      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: KEY_REF, max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
+      fetch,
+      catalogOptions: { path: join(tmp, "catalog.json") },
+      sigint: new EventEmitter(),
+      stderr: (l: string) => { stderr.push(l); },
+      localFallback: { requestTimeoutMs: 20_000, attemptTimeoutMs: 2000, startTimeoutMs: 1000, maxAttempts: 1 },
+      localFallbackDeps: { discover: async () => [{ pid: 23342, urls: [DECIDER] }], singletonInstalled: () => true, platform: "darwin" },
+    };
+    const out = await runDecision(spec, { input: { propositions: Array.from({ length: 2 }, (_v, i) => ({ text: `claim ${i}` })) } }, deps);
+    // one escalated 2-question request refused, then each question alone
+    expect(sizes).toEqual([2, 1, 1]);
+    expect(out.exitCode).toBe(0);
+    expect(out.envelope!.warnings.filter((x) => x.code === "split_piece_failed")).toHaveLength(0);
+    const decision = out.envelope!.decision as { rows: { id: string }[]; invalid: unknown[] };
+    expect(decision.invalid).toEqual([]);
+    expect(decision.rows.map((r) => r.id).sort()).toEqual(["proposition_0", "proposition_1"]);
+  });
   it("the stderr line and the local_decider warning name the remote 402 message and class", async () => {
     const { runDecision } = await import("./run-decision.js");
     const { spec } = await import("./catalog/filter.js");
