@@ -24,8 +24,6 @@ export interface AcquireRequest {
   /** A server's thread count, 0 when unknown, as for a user-started server (D9). */
   threads?: number;
   serverPid?: number | null;
-  /** The job's --queue_timeout, recorded on the waiter. No governor rule reads it since TRDD-ZTO9K8EK removed the CPU floor, its only use (D6). */
-  queueTimeoutMs?: number | null;
   /** A load only: its projected RAM, an upper bound (D11). */
   bytes?: number;
   /** A load only: its lower bound, weights and headroom; a load whose upper bound never fits is admitted alone on it (D11). */
@@ -249,7 +247,7 @@ function attempt(dir: string, req: AcquireRequest, config: GovernorConfig, keepP
     const now = Date.now();
     let waiter = state.waiters.find((w) => w.id === id);
     if (!waiter) {
-      waiter = { id, kind, weight: req.weight ?? 1, holder: self, since: now, polledAt: now, queueTimeoutMs: req.queueTimeoutMs ?? null, limits: config.limits };
+      waiter = { id, kind, weight: req.weight ?? 1, holder: self, since: now, polledAt: now, limits: config.limits };
       state.waiters.push(waiter);
       placed.add(`${dir}\0${kind}`);
     }
@@ -392,7 +390,7 @@ export function loadVerdict(req: AcquireRequest): Denial | null {
   // Round 5 m3: only load waiters are passed, as before round 4; decide reads only its own kind (no behaviour change).
   const loads = state.waiters.filter((w) => w.kind === "load");
   const own = loads.find((w) => w.id === waiterId("load"));
-  const self: Waiter = own ?? { id: waiterId("load"), kind: "load", weight: 1, holder: holder(), since: now, polledAt: now, queueTimeoutMs: req.queueTimeoutMs ?? null, limits: config.limits };
+  const self: Waiter = own ?? { id: waiterId("load"), kind: "load", weight: 1, holder: holder(), since: now, polledAt: now, limits: config.limits };
   const waiters = own ? loads : [...loads, self];
   const request = { ...self, limits: config.limits, threads: 0, serverPid: null, bytes: req.bytes ?? 0, minBytes: req.minBytes, alone: req.alone, outgoingBytes: req.outgoingBytes ?? 0 };
   return decide({ ...state, waiters }, request, now, controllerConfig(config)).denial;
@@ -534,7 +532,7 @@ function readingAge(metrics: Metrics): number | null {
   return metrics.at === 0 ? null : Date.now() - metrics.at;
 }
 
-function blockedBy(denial: Denial, state: GovernorState, config: GovernorConfig, kind: LeaseKind): string {
+export function blockedBy(denial: Denial, state: GovernorState, config: GovernorConfig, kind: LeaseKind): string {
   const { cpuPct, freePct } = state.metrics;
   const { limits } = config;
   switch (denial) {
@@ -542,14 +540,22 @@ function blockedBy(denial: Denial, state: GovernorState, config: GovernorConfig,
       return `RAM is ${Math.round(100 - (freePct ?? 0))}% used, limit ${limits.ramLimitPct}%${kind === "load" ? ", or the model would not fit under it" : ""}`;
     case "cpu":
       return `CPU is ${Math.round(cpuPct ?? 0)}% busy, limit ${limits.cpuLimitPct}%`;
-    case "threads":
-      return `${threadsInUse(state.leases)} server threads are running, budget ${threadBudget(coreCount(), limits.cpuLimitPct)}`;
+    case "threads": {
+      // WHY the singular branch: "1 server threads are running" read as a bug (TRDD-YRRZJ5UH); a count of 1 must read
+      // "1 server thread is running".
+      const n = threadsInUse(state.leases);
+      return `${n} server ${n === 1 ? "thread is" : "threads are"} running, budget ${threadBudget(coreCount(), limits.cpuLimitPct)}`;
+    }
     case "alone":
       return "the model may not fit beside anything else, so it loads only when nothing else runs or is loaded";
     case "load":
       return "another model is loading";
-    case "window":
-      return `${runningWeight(state.leases)} inferences are running, window ${state.window.w}`;
+    case "window": {
+      // WHY the singular branch: with max_inferences 1 the count is always 1, and "1 inferences are running" read as a
+      // bug (TRDD-YRRZJ5UH).
+      const n = runningWeight(state.leases);
+      return `${n} ${n === 1 ? "inference is" : "inferences are"} running, window ${state.window.w}`;
+    }
     default:
       return `${state.waiters.length} requests are queued`;
   }

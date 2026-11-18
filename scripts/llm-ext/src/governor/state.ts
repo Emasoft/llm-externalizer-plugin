@@ -48,7 +48,6 @@ export interface Waiter {
   since: number;
   /** Its last critical section, or when it became head: a rank below the head does not poll the lock, so only a head has a live stamp. */
   polledAt: number;
-  queueTimeoutMs: number | null;
   limits: GovernorLimits;
 }
 

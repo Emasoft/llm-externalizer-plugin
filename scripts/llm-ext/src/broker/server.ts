@@ -327,16 +327,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   /**
    * D8 takes the lease before `take`, so no job is known yet. The longest
    * execution timeout keeps the expiry backstop behind every job the lease can
-   * serve; the shortest queue timeout is recorded on the waiter (no governor rule reads it since TRDD-ZTO9K8EK removed the CPU floor).
+   * serve. No queue timeout is passed: no governor rule reads one since TRDD-ZTO9K8EK removed the CPU floor, and
+   * TRDD-7B7TAQGD removed the dead field; the broker queue deadline lives in the scheduler.
    */
-  const leaseLimits = (key: string): { timeoutMs: number; queueTimeoutMs: number | null } => {
+  const leaseLimits = (key: string): { timeoutMs: number } => {
     let timeoutMs = 0;
-    let queueTimeoutMs: number | null = null;
-    for (const j of sched.allQueued(key)) {
-      timeoutMs = Math.max(timeoutMs, j.timeoutMs);
-      queueTimeoutMs = Math.min(queueTimeoutMs ?? Infinity, j.queueTimeoutMs);
-    }
-    return { timeoutMs, queueTimeoutMs };
+    for (const j of sched.allQueued(key)) timeoutMs = Math.max(timeoutMs, j.timeoutMs);
+    return { timeoutMs };
   };
   /**
    * D11, round 4 #1: what breaches of a model taught, by key, since its last good load: a lower bound (learnedLowerBound)

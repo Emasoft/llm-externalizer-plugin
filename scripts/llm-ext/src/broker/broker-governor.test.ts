@@ -486,7 +486,7 @@ describe("the broker through a real governor (two tiny GGUF models)", () => {
       // the broker only polls the file.
       withStateLock(governorDir, (s) => {
         const limits = { ramLimitPct: 99, cpuLimitPct: 100, maxInferences: 1 };
-        s.waiters.push({ id: "stopped", kind: "load", weight: 1, holder: { pid: sleeper.pid as number, start: "" }, since: Date.now(), polledAt: Date.now() - 7_000, queueTimeoutMs: null, limits });
+        s.waiters.push({ id: "stopped", kind: "load", weight: 1, holder: { pid: sleeper.pid as number, start: "" }, since: Date.now(), polledAt: Date.now() - 7_000, limits });
       });
       const id = await submit(ep, A);
       await until("the broker to wait behind the head", () => gov.snapshot().waiters.some((w) => w.holder.pid === ep.pid), 2_500);
@@ -520,14 +520,14 @@ describe("the broker through a real governor (two tiny GGUF models)", () => {
         reason = res.headers.get(GOVERNOR_WAIT_HEADER);
         return reason !== null;
       }, 60_000);
-      expect(reason).toContain("inferences are running");
+      expect(reason).toContain("1 inference is running");
       // The client: a real process running brokerExchange, its own stderr.
       const child = spawn(process.execPath, [clientBundle, ep.url, ep.token, String(ep.pid), A], { stdio: ["ignore", "ignore", "pipe"] });
       let said = "";
       child.stderr.on("data", (c: Buffer) => (said += c.toString()));
       const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
       try {
-        await until("the client to say why it waits", () => said.includes("local inference waiting: ") && said.includes("inferences are running"), 60_000);
+        await until("the client to say why it waits", () => said.includes("local inference waiting: ") && said.includes("1 inference is running"), 60_000);
         expect(said).toContain("bound the wait with --command_timeout");
         expect(child.exitCode).toBeNull();
         release();

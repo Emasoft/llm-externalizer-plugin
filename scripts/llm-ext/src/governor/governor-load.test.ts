@@ -51,7 +51,7 @@ const DEADLINE_MS = 180_000;
 const TEST_MS = 300_000;
 
 function waiter(id: string, over: Partial<Waiter> = {}): Waiter {
-  return { id, kind: "load", weight: 1, holder: { pid: 1, start: "" }, since: NOW, polledAt: NOW, queueTimeoutMs: null, limits: LIMITS, ...over };
+  return { id, kind: "load", weight: 1, holder: { pid: 1, start: "" }, since: NOW, polledAt: NOW, limits: LIMITS, ...over };
 }
 
 function loadRequest(over: Partial<GrantRequest> = {}): GrantRequest {

@@ -18,7 +18,7 @@ import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pidState } from "../local-llama-server.js";
 import { memoryFreePercent } from "../local-locals-server.js";
-import { acquire, release, snapshot, tryAcquire, waitBehindHead, withdraw } from "./client.js";
+import { acquire, blockedBy, release, snapshot, tryAcquire, waitBehindHead, withdraw } from "./client.js";
 import { decide, GovernorConfigError, pollDelayMs, resolveConfig, stepWindow, threadBudget, threadsInUse, type GrantRequest } from "./controller.js";
 import { freeFloorPct, governorConfig } from "./settings.js";
 import { cpuBusyPercent, emptyMetrics, needsReading, nextMetrics, readMemory, type Metrics } from "./metrics.js";
@@ -35,7 +35,7 @@ function metrics(cpuPct: number, freePct: number, at = NOW): Metrics {
 }
 
 function waiter(id: string, over: Partial<Waiter> = {}): Waiter {
-  return { id, kind: "inference", weight: 1, holder: { pid: 1, start: "" }, since: NOW, polledAt: NOW, queueTimeoutMs: null, limits: LIMITS, ...over };
+  return { id, kind: "inference", weight: 1, holder: { pid: 1, start: "" }, since: NOW, polledAt: NOW, limits: LIMITS, ...over };
 }
 
 function request(over: Partial<GrantRequest> = {}): GrantRequest {
@@ -66,7 +66,6 @@ describe("controller: grant table", () => {
     { name: "CPU over, a short wait: denied", m: over, leases: [], req: { since: NOW - 29_999 }, grant: false, denial: "cpu" },
     { name: "CPU over, 30 s waited (the old floor wait), nothing running: still denied", m: over, leases: [], req: longWait, grant: false, denial: "cpu" },
     { name: "CPU over, 10 minutes waited, nothing running: still denied", m: over, leases: [], req: { since: NOW - 600_000 }, grant: false, denial: "cpu" },
-    { name: "CPU over, --queue_timeout elapsed: still denied, the queue timeout no longer ends a CPU wait", m: over, leases: [], req: { since: NOW - 5_000, queueTimeoutMs: 5_000 }, grant: false, denial: "cpu" },
     { name: "CPU over, long wait, something running: denied", m: over, leases: [lease()], req: longWait, grant: false, denial: "cpu" },
     { name: "CPU over, long wait, a load running: denied", m: over, leases: [lease({ kind: "load" })], req: longWait, grant: false, denial: "cpu" },
     { name: "CPU over, long wait, inside the thread budget: still denied", m: over, leases: [], req: { ...longWait, threads: 6 }, grant: false, denial: "cpu" },
@@ -450,6 +449,12 @@ describe("the state directory", () => {
     const { polledAt: _dropped, ...oldWaiter } = waiter("w");
     writeFileSync(join(dir, "state-1.json"), JSON.stringify({ ...emptyState(), waiters: [oldWaiter] }));
     expect(readState(dir).waiters).toEqual([]);
+  });
+  // WHY (TRDD-7B7TAQGD): Waiter.queueTimeoutMs was removed; a state file a live older process wrote still carries it on its
+  // waiters, and parseState checks only polledAt, so such a file must keep loading with its waiters, not reset to empty.
+  it("a waiter an older process wrote with queueTimeoutMs still loads", () => {
+    writeFileSync(join(dir, "state-1.json"), JSON.stringify({ ...emptyState(), waiters: [{ ...waiter("w"), queueTimeoutMs: 5_000 }] }));
+    expect(readState(dir).waiters.map((w) => w.id)).toEqual(["w"]);
   });
   it("a busy lock is reported at once, and nothing runs", () => {
     mkdirSync(join(dir, "lock"));
@@ -1032,5 +1037,19 @@ describe("hermetic setup", () => {
 
   it("the limits default to out of reach: a test about them sets its own", () => {
     expect(governorConfig().limits).toMatchObject({ cpuLimitPct: 100, ramLimitPct: 99 });
+  });
+});
+
+describe("blockedBy: the reason text agrees with its count", () => {
+  const config = { enabled: true, serverThreads: 0, limits: LIMITS, settleMs: 2_000, loadYieldMs: 120_000 };
+  const stateWith = (leases: Lease[]): GovernorState => ({ ...emptyState(), leases });
+  // WHY (TRDD-YRRZJ5UH): "1 inferences are running" and "1 server threads are running" read as bugs in the wait notice.
+  it("one running inference reads singular, several read plural", () => {
+    expect(blockedBy("window", stateWith([lease()]), config, "inference")).toMatch(/^1 inference is running, window /);
+    expect(blockedBy("window", stateWith([lease({ id: "a" }), lease({ id: "b" })]), config, "inference")).toMatch(/^2 inferences are running, window /);
+  });
+  it("one busy server thread reads singular, several read plural", () => {
+    expect(blockedBy("threads", stateWith([lease({ threads: 1, serverPid: 10 })]), config, "inference")).toMatch(/^1 server thread is running, budget /);
+    expect(blockedBy("threads", stateWith([lease({ threads: 4, serverPid: 10 })]), config, "inference")).toMatch(/^4 server threads are running, budget /);
   });
 });
