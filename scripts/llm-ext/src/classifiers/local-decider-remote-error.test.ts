@@ -14,6 +14,7 @@ import type { RunDeps } from "./run-decision.js";
 
 const KEY = "[REDACTED:openai-key]";
 const DECIDER = "http://127.0.0.1:8000";
+const KEY_REF = "$XJE_TEST_KEY"; // WHY: the settings env-reference syntax for the key set at process.env.XJE_TEST_KEY, not a key itself
 const fx = (dir: string, n: string): RecordedReply => JSON.parse(readFileSync(new URL(`./__fixtures__/${dir}/${n}.json`, import.meta.url), "utf8")) as RecordedReply;
 
 let tmp: string;
@@ -58,7 +59,7 @@ describe("classify, a remote failure answered by the local decider", () => {
       return syntheticResponse(402, JSON.stringify({ error: { code: 402, message: "Insufficient credits" } }), { "content-type": "application/json" });
     };
     const deps: RunDeps = {
-      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$XJE_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
+      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: KEY_REF, max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
       fetch,
       catalogOptions: { path: join(tmp, "catalog.json") },
       sigint: new EventEmitter(),
@@ -94,7 +95,7 @@ describe("classify, a remote failure answered by the local decider", () => {
       return syntheticResponse(402, JSON.stringify({ error: { code: 402, message: "Insufficient credits" } }), { "content-type": "application/json" });
     };
     const deps: RunDeps = {
-      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$XJE_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
+      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: KEY_REF, max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
       fetch,
       catalogOptions: { path: join(tmp, "catalog.json") },
       sigint: new EventEmitter(),
