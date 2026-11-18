@@ -3,7 +3,7 @@
 
 Output is a single Markdown report on stdout (no tarball — easier to paste
 into GitHub issues). Every value is run through a redaction pass that
-matches the plugin's own SECRET_PATTERNS (kept in sync via a comment block;
+matches the CLI's secret patterns in scripts/llm-ext/src/secret-patterns.ts (kept in sync via a comment block;
 this script intentionally re-implements a smaller subset rather than
 depending on the CLI's TypeScript regexes).
 
@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Redaction patterns. Mirror the CLI's SECRET_PATTERNS approximately
+# Redaction patterns. Mirror the CLI's secret patterns in scripts/llm-ext/src/secret-patterns.ts approximately
 # (full sync is too brittle — these cover the same OAuth / vendor key shapes
 # plus the wildcard *_KEY / *_TOKEN / *_SECRET / *_PASSWORD pattern that
 # v9.9.0 added).
@@ -34,9 +34,12 @@ _REDACTION_PATTERNS = [
     re.compile(r"sk-or-v1-[A-Za-z0-9_\-]{16,}"),
     # Generic Bearer <token>
     re.compile(r"Bearer\s+[A-Za-z0-9_\-]{8,}"),
-    # ENV name = value (mirror of SECRET_PATTERNS in scripts/llm-ext/src/scan-pipeline.ts)
+    # ENV name = value (mirror of ENV_SECRET in scripts/llm-ext/src/secret-patterns.ts)
     re.compile(
-        r"(?im)^\s*((?:[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|"
+        # WHY `^[^\S\r\n]*` and not `^\s*` (TRDD-GBWVXEF6, same fix as TRDD-G49XPDNI in the TypeScript copies): under (?m) a leading `\s*`
+        # spans line breaks, so the match started at the preceding blank line and the substitution deleted it, merging lines in the dump.
+        # Indentation is intra-line whitespace only.
+        r"(?im)^[^\S\r\n]*((?:[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|"
         r"_APIKEY|_API_KEY|_AUTH)|PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|"
         r"AUTH|AUTH_TOKEN|ACCESS_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|"
         r"DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|"

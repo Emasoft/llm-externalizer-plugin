@@ -15,6 +15,7 @@ that a user invokes from a terminal.
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -207,6 +208,26 @@ def test_dump_state_redacts_secret_shaped_substrings(tmp_path: Path) -> None:
     assert secret not in proc.stdout, (
         f"literal secret {secret!r} leaked into stdout — redaction broken.\n"
         f"stdout sample: {proc.stdout[:800]}"
+    )
+
+
+def test_dump_state_redact_keeps_blank_line_before_env_secret() -> None:
+    """redact() must not swallow the blank line in front of an `API_KEY=value` line.
+
+    The ENV pattern used to start with `^\\s*`, which under re.MULTILINE spans line breaks: the match began at the blank line and the
+    substitution deleted it, merging the line above with the redacted one (TRDD-GBWVXEF6). The module is loaded in-process so the real
+    `redact()` runs on the exact text.
+    """
+    spec = importlib.util.spec_from_file_location("dump_state_under_test", DUMP_STATE)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    redacted, count = module.redact("first line\n\nAPI_KEY=abcdefgh12345\nnext line\n")
+
+    assert count == 1, f"expected exactly one redaction; got {count}: {redacted!r}"
+    assert redacted == "first line\n\nAPI_KEY=[REDACTED]\nnext line\n", (
+        f"blank line before the secret was swallowed or the secret leaked: {redacted!r}"
     )
 
 
