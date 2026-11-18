@@ -19,6 +19,7 @@ depend on sys.path.
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -116,3 +117,27 @@ def test_init_run_file_names_use_dashes_and_summary_stays_a_sidecar(sut, tmp_pat
         assert Path(paths[key]).name == f"{ts}-fix-found-bugs-{part}", key
     # The summary lives in reports/, the directory the aggregator scans for per-file reports.
     assert sut._is_sidecar(Path(paths["SUMMARY"]).name)
+
+
+def test_init_run_scratch_dir_is_invisible_to_git(sut, tmp_path, capsys):
+    """init-run makes reports_dev/llm-externalizer self-ignoring: a file in it leaves git status empty."""
+    # TRDD-PNU8XECB: a user project may have no reports_dev ignore rule; `git add -A` must not pick up scratch.
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    paths = _init_run(sut, tmp_path, capsys)
+    Path(paths["BUGS_TO_FIX"]).write_text("# bugs\n", encoding="utf-8")
+    status = subprocess.run(
+        ["git", "-C", str(tmp_path), "status", "--porcelain", "--untracked-files=all"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert status.stdout == ""
+
+
+def test_init_run_keeps_an_existing_scratch_gitignore(sut, tmp_path, capsys):
+    """init-run never overwrites a .gitignore the user already put in the scratch dir."""
+    scratch_dir = tmp_path.resolve() / "reports_dev" / "llm-externalizer"
+    scratch_dir.mkdir(parents=True)
+    (scratch_dir / ".gitignore").write_text("keep-me\n", encoding="utf-8")
+    _init_run(sut, tmp_path, capsys)
+    assert (scratch_dir / ".gitignore").read_text(encoding="utf-8") == "keep-me\n"

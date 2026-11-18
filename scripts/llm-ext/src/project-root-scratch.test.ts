@@ -7,7 +7,8 @@
  * decision against real temp directories (resolveProjectMainRoot only honours a
  * CLAUDE_PROJECT_DIR that exists on disk).
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -51,7 +52,8 @@ describe("defaultScratchDir", () => {
 
   it("honours an explicit main-root override like defaultOutputDir does", () => {
     process.env.LLM_EXT_SCRATCH_DIR = join(root, "ignored");
-    expect(defaultScratchDir("/tmp/fake-root")).toBe("/tmp/fake-root/reports_dev/llm-externalizer");
+    const fakeRoot = join(root, "fake-root");
+    expect(defaultScratchDir(fakeRoot)).toBe(join(fakeRoot, "reports_dev", "llm-externalizer"));
   });
 
   it("LLM_EXT_SCRATCH_DIR relocates only the scratch root", () => {
@@ -77,6 +79,48 @@ describe("defaultScratchDir", () => {
     process.env.LLM_EXT_SCRATCH_DIR = join(root, "later");
     _resetDefaultOutputDirCache();
     expect(defaultScratchDir()).toBe(resolve(root, "later"));
+  });
+});
+
+
+describe("defaultScratchDir self-ignoring root", () => {
+  // TRDD-PNU8XECB: a user project may have no reports_dev ignore rule; the project scratch root
+  // must be invisible to `git add -A` on its own, while caller-chosen dirs are left untouched.
+  const gitStatus = (repo: string): string =>
+    execFileSync("git", ["-C", repo, "status", "--porcelain", "--untracked-files=all"], {
+      encoding: "utf8",
+    });
+
+  it("a main-root override scratch dir ignores itself: files in it leave git status empty", () => {
+    execFileSync("git", ["init", "-q", root]);
+    const dir = defaultScratchDir(root);
+    writeFileSync(join(dir, "piece.md"), "# piece\n");
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("*\n");
+    expect(gitStatus(root)).toBe("");
+  });
+
+  it("the default <project>/reports_dev/llm-externalizer root ignores itself too", () => {
+    execFileSync("git", ["init", "-q", root]);
+    const dir = defaultScratchDir();
+    writeFileSync(join(dir, "piece.md"), "# piece\n");
+    expect(gitStatus(root)).toBe("");
+  });
+
+  it("never overwrites a .gitignore already present in the scratch dir", () => {
+    const dir = join(root, "reports_dev", "llm-externalizer");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, ".gitignore"), "keep-me\n");
+    defaultScratchDir(root);
+    expect(readFileSync(join(dir, ".gitignore"), "utf8")).toBe("keep-me\n");
+  });
+
+  it("LLM_EXT_SCRATCH_DIR and LLM_EXT_OUTPUT_DIR dirs get no .gitignore (caller-chosen folders)", () => {
+    process.env.LLM_EXT_SCRATCH_DIR = join(root, "scr");
+    expect(existsSync(join(defaultScratchDir(), ".gitignore"))).toBe(false);
+    delete process.env.LLM_EXT_SCRATCH_DIR;
+    process.env.LLM_EXT_OUTPUT_DIR = join(root, "iso");
+    _resetDefaultOutputDirCache();
+    expect(existsSync(join(defaultScratchDir(), ".gitignore"))).toBe(false);
   });
 });
 

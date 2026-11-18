@@ -36,7 +36,7 @@ llm-ext --version
 ## Where output goes
 
 Reports are written to `<project>/reports/llm-externalizer/` and the path is printed on stdout. Read that file (with your normal file-reading tool) instead of asking for the content. Pass `--output_dir <abs path>` (many actions) to redirect; `-o <dir>` is a working global shorthand for the action's output option (`--output_dir`; for `session compact` it maps to `--output`), e.g. `llm-ext session compact ./session.jsonl -o /tmp`. Actions with no output option (for example `settings show`) refuse it with "no output option".
-Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). Files you write yourself follow the same split: scratch to the `*_dev` folders (gitignored), final files to the tracked ones.
+Intermediate output (the per-file pieces of a merged run, a partial run, model-pool benchmark and health reports) defaults to `<root>/reports_dev/llm-externalizer/<sub>/`; final reports stay in `reports/llm-externalizer/` (TRDD-PNU8XECB). llm-ext creates `<root>/reports_dev/llm-externalizer/` with a `.gitignore` of `*` (never overwriting an existing one) so its intermediate files are never committed; this does not apply to a folder you chose with `LLM_EXT_SCRATCH_DIR` or `LLM_EXT_OUTPUT_DIR`. Files you write yourself follow the same split: scratch to the `*_dev` folders (gitignored), final files to the tracked ones.
 
 Scout and classify actions have their own output rules; see their reference files.
 

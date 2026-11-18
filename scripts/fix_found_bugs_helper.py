@@ -668,6 +668,13 @@ def cmd_init_run(args: argparse.Namespace) -> int:
     # and go to the gitignored reports_dev/ (USER directive 2026-11-15).
     outdir = _run_dir(args.base, REPORTS_SUBDIR)
     scratchdir = _run_dir(args.base, SCRATCH_SUBDIR)
+    # TRDD-PNU8XECB: a user project may have no reports_dev ignore rule, so the scratch dir ignores itself
+    # ("*" also ignores this .gitignore); "x" mode never overwrites a file the user already put there.
+    try:
+        with open(scratchdir / ".gitignore", "x", encoding="utf-8") as gi:
+            gi.write("*\n")
+    except FileExistsError:
+        pass
     # Canonical filename shape: <ts±tz>-<slug>.<ext>. Everything after the
     # timestamp is the slug, joined by hyphens (not dots) so the slug is
     # one segment and the extension is unambiguous.

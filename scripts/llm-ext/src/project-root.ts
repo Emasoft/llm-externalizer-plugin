@@ -29,7 +29,7 @@
  * A per-call explicit `output_dir` still overrides everything upstream of this.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export function resolveProjectMainRoot(override?: string): string {
@@ -83,6 +83,22 @@ export function defaultOutputDir(mainRootOverride?: string): string {
 }
 
 
+// WHY (TRDD-PNU8XECB): a user project may have no reports_dev ignore rule, so without this the
+// scratch files show up untracked and `git add -A` commits them. A `*` .gitignore inside the
+// folder also ignores itself, making the whole folder invisible to git. Only the two PROJECT
+// roots use it — LLM_EXT_SCRATCH_DIR / LLM_EXT_OUTPUT_DIR are folders the caller chose.
+// Flag "wx" never overwrites a .gitignore the user already put there; any error but EEXIST throws.
+function ensureSelfIgnoringDir(dir: string): string {
+  mkdirSync(dir, { recursive: true });
+  try {
+    writeFileSync(join(dir, ".gitignore"), "*\n", { flag: "wx" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  }
+  return dir;
+}
+
+
 // ── Default scratch-output root (TRDD-PNU8XECB) ─────────────────────────
 // USER directive 2026-11-15: `reports/` is git-tracked and holds only FINAL,
 // complete or merged reports; `reports_dev/` is gitignored and holds
@@ -109,7 +125,7 @@ let _cachedDefaultScratchDir: string | undefined;
 
 export function defaultScratchDir(mainRootOverride?: string): string {
   if (mainRootOverride && mainRootOverride.length > 0) {
-    return join(mainRootOverride, "reports_dev", "llm-externalizer");
+    return ensureSelfIgnoringDir(join(mainRootOverride, "reports_dev", "llm-externalizer"));
   }
   if (_cachedDefaultScratchDir) return _cachedDefaultScratchDir;
   const scratchEnv = process.env.LLM_EXT_SCRATCH_DIR?.trim();
@@ -119,7 +135,9 @@ export function defaultScratchDir(mainRootOverride?: string): string {
   } else if (outputEnv) {
     _cachedDefaultScratchDir = resolve(outputEnv);
   } else {
-    _cachedDefaultScratchDir = join(resolveProjectMainRoot(), "reports_dev", "llm-externalizer");
+    _cachedDefaultScratchDir = ensureSelfIgnoringDir(
+      join(resolveProjectMainRoot(), "reports_dev", "llm-externalizer"),
+    );
   }
   return _cachedDefaultScratchDir;
 }
