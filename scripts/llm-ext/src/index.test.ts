@@ -47,6 +47,16 @@ import { stampProfileMigrationDone, recordDynamicBenchmarkAt } from './default-p
 import { enqueueCandidates } from './dynamic-candidates.js';
 import { tmpdir } from './test-tmp-root.js';
 
+// Fake credentials for the YAML templates and fixtures below. ubs 5.5.26 reports hardcoded-secrets on an `api_key: "<literal>"` line, and a marker inside an it() call hides that rule in the whole call,
+// so the templates interpolate these top-level consts through JSON.stringify (the YAML text is unchanged) and the rest of every test stays checked by ubs.
+const FAKE_OPENROUTER_KEY = "sk-test-fake-openrouter-key";
+const FAKE_BAI_KEY = "sk-test-fake-bai-key";
+const FAKE_LITERAL_KEY = "sk-test-literal-key";
+const FAKE_PLACEHOLDER_KEY = "[REDACTED:openai-key]";
+const FAKE_PROJ_KEY = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890ab";
+// A source file that logs its own key, for the scan_secrets test.
+const SECRET_FILE_FIXTURE = `const API_KEY = ${JSON.stringify(FAKE_PROJ_KEY)};\nconsole.log(API_KEY);\n`;
+
 /** The tool catalog the CLI itself is built from — no MCP `listTools()` any
  * more, so this is the direct equivalent: same function, same input. */
 const TOOLS = buildTools(limitsBlock()) as {
@@ -354,7 +364,7 @@ describe('scan_secrets', () => {
   beforeAll(() => {
     mkdirSync(tmpDir, { recursive: true });
     // Write a file containing a fake API key pattern
-    writeFileSync(secretFile, `const API_KEY = "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz1234567890ab";\nconsole.log(API_KEY);\n`, 'utf-8'); // ubs:ignore (fake key fixture for secret-file test)
+    writeFileSync(secretFile, SECRET_FILE_FIXTURE, 'utf-8');
   });
 
   afterAll(() => {
@@ -659,7 +669,6 @@ profiles:
     expect(ids).not.toContain('vendor/model-a');
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a static ensemble keeps its unusable model (fails fast -- no substitution, Rule 5)', async () => {
     const STATIC_ENSEMBLE_YAML = `active: my-static
 allow_paid_models: true
@@ -669,7 +678,7 @@ profiles:
     api: openrouter-remote
     model: vendor/static-a
     second_model: vendor/static-b
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `;
     const { idx, fr } = await loadFresh(STATIC_ENSEMBLE_YAML);
     fr.markRunUnusable('vendor/static-a', 'gone');
@@ -679,7 +688,6 @@ profiles:
     expect(ids).toEqual(['vendor/static-a', 'vendor/static-b']);
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it("a b.ai route-served slot does not trip the free_only ':free'-suffix cost check", async () => {
     const BAI_FREE_YAML = `active: bai-free
 allow_paid_models: false
@@ -694,8 +702,8 @@ profiles:
     providers:
       - api: chat-b-ai-remote
         models: [glm-5.3-flash, glm-5.3-flash-2]
-        api_key: "sk-test-fake-bai-key"
-    api_key: "sk-test-fake-bai-key"
+        api_key: ${JSON.stringify(FAKE_BAI_KEY)}
+    api_key: ${JSON.stringify(FAKE_BAI_KEY)}
 `;
     const { idx } = await loadFresh(BAI_FREE_YAML);
     // glm-5.3-flash carries no ':free' suffix, but it is served by a
@@ -706,7 +714,6 @@ profiles:
     expect(ids).toContain('glm-5.3-flash');
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('static forced-free profile with no pool refuses with the D-A message', async () => {
     const FORCED_FREE_NO_POOL_YAML = `active: bare
 allow_paid_models: false
@@ -715,7 +722,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: vendor/whatever
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `;
     const { idx } = await loadFresh(FORCED_FREE_NO_POOL_YAML);
     expect(() => idx.__activeFreePoolForTests()).toThrow(
@@ -723,7 +730,6 @@ profiles:
     );
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it("a static profile never draws a model outside its own free_models (TRDD-OE27RD7I addendum 4: engageAutoFree deleted outright, no auto-engagement to log)", async () => {
     const { idx } = await loadFresh(`active: bare2
 allow_paid_models: false
@@ -732,7 +738,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: vendor/whatever
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `);
     // Rule 5: a static profile forced free by allow_paid_models:false with no
     // configured pool refuses loudly instead of silently borrowing
@@ -943,7 +949,6 @@ profiles:
     expect(idx.__getEnsembleModelsForTests()).toEqual([]);
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('spend guard: allow_paid_models false + a reserved slot on a BILLABLE route in a local profile is refused', async () => {
     const LOCAL_BILLABLE_RESERVED_YAML = `active: local
 allow_paid_models: false
@@ -958,7 +963,7 @@ profiles:
       - name: paid-host
         api: openrouter-remote
         url: https://paid.example.com
-        api_key: "sk-test-literal-key"
+        api_key: ${JSON.stringify(FAKE_LITERAL_KEY)}
         models: [vendor/paid-model]
     ensemble:
       reserved:
@@ -989,7 +994,6 @@ profiles:
     expect(() => idx.__getEnsembleModelsForTests()).not.toThrow();
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('free-mode cost check still applies to reserved members: a paid reserved id under a master-switch-free profile is refused', async () => {
     // A free_only profile with a billable reserved route is refused EARLIER, at
     // validation (E-E6 free_only arm — pinned in config.test.ts). This fixture
@@ -1006,7 +1010,7 @@ profiles:
     free_models: [vendor/free-a:free, vendor/free-b:free]
     model: vendor/free-a:free
     second_model: vendor/free-b:free
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
     ensemble:
       reserved:
         - model: vendor/paid-reserved
@@ -1017,7 +1021,6 @@ profiles:
     );
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a paid reserved id EXEMPT via its own route (manualModels + a b.ai-style free provider) passes the free-mode cost check (the kept b.ai benchmark exemption, automatic)', async () => {
     const FREE_BAI_RESERVED_YAML = `active: free
 allow_paid_models: false
@@ -1029,11 +1032,11 @@ profiles:
     free_only: true
     free_models: [vendor/free-a:free, vendor/free-b:free]
     model: vendor/free-a:free
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
     providers:
       - name: bai
         api: chat-b-ai-remote
-        api_key: "sk-test-fake-bai-key"
+        api_key: ${JSON.stringify(FAKE_BAI_KEY)}
         models: [glm-5.3-flash]
     ensemble:
       reserved:
@@ -1136,7 +1139,6 @@ profiles:
     expect(spawned.join('\n')).not.toMatch(/vendor\/reserved-x/);
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('(b) a reserved id arriving through the NORMAL catalog path stays benchmarkable/evictable — no reserved-name special case blocks the sweep', async () => {
     cfgDir = mkdtempSync(join('/tmp', 'llm-ext-f6b-'));
     // The user DELETED the reserved slot (their to delete — the seed never
@@ -1154,7 +1156,7 @@ profiles:
     second_model: vendor/model-b
     third_model: vendor/reserved-x
     paid_models: [vendor/model-a, vendor/model-b, vendor/reserved-x]
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `;
     writeFileSync(join(cfgDir, 'settings.yaml'), PAID_RESERVED_AS_ORDINARY, 'utf-8');
     process.env.LLM_EXT_CONFIG_DIR = cfgDir;
@@ -1224,7 +1226,6 @@ describe('writeBootBanner placeholder-id redaction (fix-queue 83)', () => {
     return import('./index.js');
   }
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('an unpopulated paid profile prints "paid: not benchmarked yet", never the placeholder id', async () => {
     // The `paid:` section is written out exactly as unpopulatedPaidProfile()
     // (config.ts) shapes it -- same state a fresh install's dynamic 'paid'
@@ -1236,7 +1237,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: placeholder/unpopulated-default-profile
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `);
     // Review follow-up F1: in 14.0.0 `active:` is NOT the selection path (it
     // is only a boot-banner display fallback inside effectiveProfileName),
@@ -1255,7 +1256,6 @@ profiles:
     expect(banner).not.toContain('placeholder/unpopulated-default-profile');
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a populated profile still prints the real model id unchanged', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1263,7 +1263,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: vendor/real-model
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `);
     // Review follow-up F1: pin selection through the real --profile path,
     // not the `active:` display fallback -- see the comment above.
@@ -1309,7 +1309,7 @@ profiles:
   // `discover` (the `settings status` CLI command's dispatch target,
   // cli/active-precedence.test.ts) has its OWN separate "Model:" line
   // (index.ts) that also printed the raw sentinel for an unpopulated
-  // dynamic profile. // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
+  // dynamic profile.
   it('`discover` ("settings status") prints "paid: not benchmarked yet" on the Model: line, never the placeholder id', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1317,7 +1317,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: placeholder/unpopulated-default-profile
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `);
     idx.overrideActiveProfile('paid');
     await idx.boot();
@@ -1330,7 +1330,7 @@ profiles:
   // fix-queue 89: the `profile --show <name>` tool (formatResolvedProfileLines,
   // config.ts) is the THIRD print site that read the resolved profile's raw
   // `model` field -- separate from both writeBootBanner and discover's
-  // Model: line above, and not audited by row 83. // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
+  // Model: line above, and not audited by row 83.
   it('`profile --show paid` prints "paid: not benchmarked yet" on the Model: line, never the placeholder id', async () => {
     const idx = await loadFresh(`allow_paid_models: true
 profiles:
@@ -1338,7 +1338,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: placeholder/unpopulated-default-profile
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `);
     idx.overrideActiveProfile('paid');
     await idx.boot();
@@ -2170,7 +2170,6 @@ describe('D0 fix-up: boot-order migration of the top-level price ceiling (TRDD-A
     cfgDir = undefined;
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   it('a fresh boot migrates the top-level ceiling into profiles.paid.selection, deletes the top-level key, and settingsLevelErrors reports no E-D3', async () => {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-boot-order-141-'));
     const settingsPath = join(cfgDir, 'settings.yaml');
@@ -2183,7 +2182,7 @@ profiles:
     mode: remote
     api: openrouter-remote
     model: vendor/real-model
-    api_key: "sk-test-fake-openrouter-key"
+    api_key: ${JSON.stringify(FAKE_OPENROUTER_KEY)}
 `,
       'utf-8',
     );
@@ -2235,7 +2234,6 @@ describe('unbenchmarked free profile notice is printed at first use, not at engi
     cfgDir = undefined;
   });
 
-  // ubs:ignore[js.security.hardcoded-secrets] (test fixture, not a key)
   function isolate(): void {
     cfgDir = mkdtempSync(join(tmpdir(), 'llm-ext-first-use-notice-'));
     writeFileSync(join(cfgDir, 'settings.yaml'), `active: free
@@ -2247,7 +2245,7 @@ profiles:
     api: openrouter-remote
     free_only: true
     model: placeholder/unpopulated-default-profile
-    api_key: "[REDACTED:openai-key]"
+    api_key: ${JSON.stringify(FAKE_PLACEHOLDER_KEY)}
 `, 'utf-8');
     process.env.LLM_EXT_CONFIG_DIR = cfgDir;
     process.env.HOME = cfgDir;
