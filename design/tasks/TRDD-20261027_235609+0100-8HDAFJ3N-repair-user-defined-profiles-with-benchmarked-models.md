@@ -4,7 +4,7 @@ title: Repair user-defined profiles with benchmarked models
 column: backburner
 status: tasked
 created: 2026-10-27T23:56:09+0100
-updated: 2026-10-27T23:56:09+0100
+updated: 2026-11-18T16:38:34+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -33,3 +33,4 @@ Apply the repair chain to user-defined profiles too, as the USER directive says 
 ## Approval log
 
 - 2026-10-27T23:56:09+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-11-18T16:38:34+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): superseded by TRDD-SZ7TO9FW: the USER 2026-10-27 directive ("any profile, default or not") is met by run-time substitution without rewriting user keys (design/specs/profile-contract.md section 7 item 2, acceptance cases A1 and A2). The settings.yaml rewrite and rollback in this card contradict the contract (Principle 3).

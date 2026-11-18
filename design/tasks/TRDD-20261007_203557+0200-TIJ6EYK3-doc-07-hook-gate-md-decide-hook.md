@@ -4,7 +4,7 @@ title: DOC-07 hook-gate.md (decide --hook)
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:57+0200
-updated: 2026-11-05T02:29:18+0100
+updated: 2026-11-18T16:39:19+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -58,3 +58,4 @@ The command itself (C4-05).
 ## Open owner question
 
 2026-11-05 open owner question: the owner rulings recorded on TRDD-ZB41KG62 and TRDD-EME7S0D3 ("i did not asked for any hook. you must only create llm-ext commands and skills."; how a command is used and by which program is not a concern of llm-externalizer, "the same is true for all jev commands") may put this caller-specific adapter out of scope. Not acted on; the card stays where it is until the owner rules.
+2026-11-18T16:39:19+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): cancelled with ZBMRKOI3 (documents a command that is retired by the 2026-11-05 owner rulings).

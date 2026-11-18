@@ -4,7 +4,7 @@ title: RL-13 Close cards, update ZB41KG62 STATE
 column: todo
 status: tasked
 created: 2026-10-07T20:41:39+0200
-updated: 2026-11-16T10:28:02+0100
+updated: 2026-11-18T16:42:19+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -65,3 +65,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 ## Notes
 
 2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
+2026-11-18T16:42:19+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): scope reduced. This card closes only the finished cards and refreshes the ZB41KG62 STATE; it no longer waits for a release. Reduced scope: (a) archive every card in design/tasks whose column is complete, published, superseded or cancelled; (b) append the refreshed NEXT ACTION to ZB41KG62; (c) record the commands run. The per-card audit of the backburner children is not part of this card; it goes to a new card (see ZB41KG62 STATE). RL-10 publish stays a separate USER-gated act. Fact: NL2012O9, 09905HDI and H0JE5W6K are column complete with release-via publish, so they reach published (and archive) only with the next release; this card ticks its boxes after that.

@@ -4,7 +4,7 @@ title: A text chunk the local decider refuses as too large cannot be cut again a
 column: complete
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T16:32:47+0100
+updated: 2026-11-18T16:42:30+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -54,6 +54,7 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 2026-11-18T10:11:51+0100 main agent: re-read at HEAD 54236bf8 (planner.ts:100-200, split-on-overflow.ts:20-60): replanRequest refuses a request with fewer than 2 units and re-expands with the original limits; answerWithSplit returns the first 422 when the re-plan refuses; so a refused lone text chunk is never cut smaller. Option 1 (re-cut with the scaled budget, merge the sub-answers under the original key) is agent-doable after red tests in split-on-overflow.test.ts, local-decision.test.ts and local-decider-remote-error.test.ts. USER decisions: Option 2 (packing, against D31), Option 3 (max_requests_per_call), removing the 16384 clamp (run-decision.ts:409-410), planner headroom.
 2026-11-18T10:24:01+0100 main agent decision under the USER delegation of 2026-11-18 ("solve all issues yourself. i need results."): Option 1 is to be implemented (a refused lone text chunk is re-cut with the scaled budget, down to CHUNK_CHARS_MIN, and the piece answers merge under the original key; a chunk still refused at CHUNK_CHARS_MIN returns the original 422). The 16384 clamp stays: removing it reverses the USER-quoted rationale in the comment above it in run-decision.ts. Option 2 is rejected: it contradicts D31 (plan ZB41KG62 line 167, no packing of independent items). Option 3 and a planner headroom margin are not taken. This supersedes the USER-decisions list in the 2026-11-18 note above.
 2026-11-18T15:56:02+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 3 input lost: no recorded command for the 2026-11-17 05:18 run (reports_dev/nl2012o9-rerun/20261118_143051+0100-report.md). Comparable input reports_dev/publish/test.log (535948 bytes): installed 14.7.2 and a build of 9fd5dea0 refuse it (the plan needs 20 requests, over the limit of 16); a build of 0a682690 plans 10 requests, 205299 estimated input tokens, exit 0 (reports_dev/nl2012o9-measure/20261118_152728+0100-report.md and 20261118_153213+0100-parent-report.md). The only source change between the two builds is 0a682690 (git log 9fd5dea0..0a682690 lists that one commit). Limits: single run per build, node_modules shared with the working tree and not from each commit lockfile, estimate only (nothing was sent), and the 0a682690 run printed a settings notice about the or-jev profile name that the parent run did not, so the 20 to 10 drop is not isolated to the planner by this evidence. 0a682690 is added to implementation-commits. Box 3 struck and replaced below.
+2026-11-18T16:42:30+0100 correction (main agent): the approval-log line of 2026-11-18T16:32:47 says archive pass; no archive happened, because release-via is publish; the card reaches published with the next release.
 
 ## Progress
 

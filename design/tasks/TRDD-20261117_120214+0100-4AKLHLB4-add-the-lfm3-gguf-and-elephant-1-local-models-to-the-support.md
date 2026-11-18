@@ -4,7 +4,7 @@ title: Add the LFM3 GGUF and elephant-1 local models to the supported list and t
 column: todo
 status: tasked
 created: 2026-11-17T12:02:14+0100
-updated: 2026-11-18T07:11:12+0100
+updated: 2026-11-18T16:42:09+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-17T12:02:14+0100
-eht: [R7NKAJ5B, C7ACDK79, GLK56Q6F, RS2MTVP7, GNKO7WZS]
+eht: [R7NKAJ5B, C7ACDK79, GLK56Q6F, RS2MTVP7, GNKO7WZS, B2GGSMB2]
 ---
 
 # Add the LFM3 GGUF and elephant-1 local models to the supported list and to every profile fallback chain
@@ -24,6 +24,7 @@ eht: [R7NKAJ5B, C7ACDK79, GLK56Q6F, RS2MTVP7, GNKO7WZS]
 - DONE 2026-11-18 (reports_dev/local-models/20261118_050033+0100-model-cards.md and 20261118_050018+0100-code-map.md): NEXT ACTION: two read-only research reports, then a design section here: (a) model cards of the 8 repos -> reports_dev/local-models/20261117-model-cards.md; (b) where llm-ext keeps its supported local model list, the per-profile fallback chains and the classifier (decider) model -> reports_dev/local-models/20261117-code-map.md.
 - Related: TRDD-7CFPEDUK (local image classifier). Decided after report (a): image input belongs to C4 (TRDD-RS2MTVP7), with TRDD-7CFPEDUK as its first consumer; which weights the decider singleton serves is asked under C3 (TRDD-GLK56Q6F).
 - 2026-11-18T05:18:31+0100 NEXT ACTION: work C1 and C5; C2 waits on TRDD-SZ7TO9FW; Q1-Q4 are with the USER.
+2026-11-18T16:42:07+0100 NEXT ACTION: C1 and C5 complete (archived). Wait for SZ7TO9FW child 1 (TRDD-0RRMPPAH) before C2; ask the mlx-decision owner which weights it serves before C3; C4 with TRDD-7CFPEDUK. C6 (B2GGSMB2) prints the skipped-target note.
 
 ## Why
 USER 2026-11-17 (verbatim): "maybe i was wrong about elephant-1 (`https://huggingface.co/baselabs/elephant-1`) not accepting images. this mlx quantization of elephant-1 accepts images for exmple, add it to the models options:
@@ -47,6 +48,7 @@ Earlier the same day: "prefer the followings" (GGUF over MLX for LiquidAI models
 - Classifier vs chat chains: each list entry carries its role; the decider chain reads only classifier entries, the completion chain only chat entries.
 - Moved from TRDD-7CFPEDUK (2026-11-17): image input for the GGUF chat models (LFM3-VL, LFM3-Omni, abliter8 VL, mizahnyx Omni) needs --mmproj in buildServerArgv (local-llama-server.ts:111-136, 0 hits for mmproj today) and image_url parts in the local completion body (0 hits for image_url in src).
 - Abliterated repos: AtomicChat/LFM3-1.7B-Uncensored-GGUF, abliter8-ai/lfm3-2b-vl-abliter8-gguf and mizahnyx/lfm3-omni-2b-abliterated-heretic-v2-GGUF have refusals removed; the mizahnyx card says it will comply with harmful requests. Mark them in the list; whether any becomes a DEFAULT fallback in a profile is an open user decision.
+- C6 (TRDD-B2GGSMB2): print one note when a local fallback target is skipped as not ready (Q1 ruling).
 
 ## Approval log
 
@@ -84,3 +86,4 @@ Card ids: C1 = TRDD-R7NKAJ5B, C2 = TRDD-C7ACDK79, C3 = TRDD-GLK56Q6F, C4 = TRDD-
 
 2026-11-18, corrections of the message of commit b148a1ee, recorded here because TRDD-R7NKAJ5B is archived: (1) the message gives TS2304 at network-give-up.ts(183,55) as the cause of a tsc exit 2; that cause is inferred (another worker was editing that file at the time), not established. (2) The tsc and eslint exit 0 in that message rest on the worker report, not on a run by the main agent. (3) The catalog test (5 passed) was first read from the worker run; the main agent ran it itself at 06:46:02 on 2026-11-18, after TRDD-R7NKAJ5B was archived in 5bbe68ba, on a tree where the catalog source, its test and the docs page equalled b148a1ee and config.ts carried an uncommitted edit to formatResolvedProfileLines, a function that test does not call: 5 passed, exit 0.
 2026-11-18, addendum to item (3) of the correction line above: config.ts names network-give-up.ts only in comments (lines 452, 459, 3832, 3868), not in an import, but the full import closure of the 06:46:02 run was not traced, and a worker was editing network-give-up.ts at that time. The run that settles box 3 of TRDD-R7NKAJ5B is a clean detached checkout of 487d6513 at 06:58:53: the catalog test 5 passed, network-give-up.test.ts 82 passed, tsc --noEmit exit 0. Eslint linted nothing there (files outside its base path), so lint rests on the run in the working tree, whose four files were identical to that commit.
+2026-11-18T16:42:07+0100 main agent rulings (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not owner answers): Q1 absent model: PRINT A NOTE. When a ready-check skips a local fallback target, print one stderr line naming the target and the reason (not on disk, not calibrated, engine missing, wrong platform), then return the ORIGINAL remote error; never exit with a new error and never download (UT7UC025 2026-11-13 constraint 1 "ready-now or no fallback ... else original error + one enable line" and constraint 6 "never silent"; fail-fast is met because the original failure is still the exit). Carded as C6, TRDD-B2GGSMB2. Q2 abliterated models, agent reading, not a USER quote: KEEP the abliterated LFM3 head. Every abliterated entry is marked in the catalog (local-model-catalog.ts abliterated: true on 4 entries) and nothing extra is printed; the head follows the model list the USER pasted on 2026-11-17 (AtomicChat/LFM3-1.7B-Uncensored-GGUF, commit 452887a8) and the llm-ext fallback only reads files and returns text, it takes no action; the alternative is a non-abliterated default with the abliterated ones opt-in. Q3 downloads to verify the VL and Omni GGUFs: allowed, explicit only (1,511,202,656 plus 2,082,051,040 bytes, 3.59 GB total, by llm-ext models calibrate or hf download into ~/.cache/huggingface/hub, free-disk check recorded first), but deferred until C4 (TRDD-RS2MTVP7) is worked; the 4 GB test-data cap names tests, fixtures and measurements, not model files (agent reading). Q4 narrowing: ACCEPT. baselabs/elephant-1 (CUDA-only vendor engine), sergolsub/mlx-elephant-v1-9B (vendor loader, a decider) and AtomicChat/LFM3-Audio-2B-GGUF (speech) are listed in the catalog with the reason and cannot join a chat chain (card decision 4).

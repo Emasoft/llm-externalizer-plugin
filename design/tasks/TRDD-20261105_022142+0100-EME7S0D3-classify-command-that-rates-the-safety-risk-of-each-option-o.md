@@ -4,7 +4,7 @@ title: Classify command that rates the safety risk of each option of a prompt
 column: design
 status: tasked
 created: 2026-11-05T02:21:42+0100
-updated: 2026-11-05T04:43:00+0100
+updated: 2026-11-18T16:39:16+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -58,6 +58,9 @@ approval-datetime: 2026-11-05T02:21:42+0100
 - Which context facts llm-ext detects itself and which the caller passes in; how "executed repeatedly in the past" is measured (which history source); how the facts are tied to the place the action runs rather than to the llm-ext process.
 - What "level of sandboxing" means and how it is detected.
 - The output shape and exit codes; the labelled prompt set for calibration and how it is built.
+2026-11-18T16:39:15+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): (hook) The owner rulings of 2026-11-05 ("how such command will be used and by what program is not a concern of llm-externalizer. the same is true for all jev commands." and "i did not asked for any hook. you must only create llm-ext commands and skills.") retire the caller-specific adapter cards ZBMRKOI3 and TIJ6EYK3. Caveat (INFERRED): the 2026-11-05 "no hook" sentence was said about this new command; ZB41KG62 STATE scope (2026-10-07, plan approved) lists "decide (+--hook)". The first quote, "the same is true for all jev commands", is general, and ZB41KG62 "Owner rulings 2026-11-05" says the rulings "bind the whole classify group", so cancelling is the faithful reading; the USER may veto.
+2026-11-18T16:39:15+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): (facts) Codify only facts that code can establish on the side of the caller as INPUT FIELDS the caller passes (sandbox level, repo committed, backup exists, temp/cache path, admin, worktree/branch, prior-run count); llm-ext may compute only pure-text facts (path under tmp/cache, shell parse check, dangerous-rm patterns) from the action text. "Executed repeatedly in the past" = a caller-passed count. Reason: the card requires that the facts describe where the action will run, not the llm-ext process, so llm-ext-side detection (git state, privileges) would describe the wrong place, and history.log would count llm-ext runs.
+2026-11-18T16:39:15+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): (output shape) Per option a rating, plus a recommended option, plus the facts used; exit codes as the other classify commands. Detail is left to the design section.
 
 ## Ordering
 

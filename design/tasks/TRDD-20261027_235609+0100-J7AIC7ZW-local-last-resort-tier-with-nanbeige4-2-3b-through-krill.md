@@ -4,7 +4,7 @@ title: Local last-resort tier with Nanbeige4.2-3B through Krill
 column: backburner
 status: tasked
 created: 2026-10-27T23:56:09+0100
-updated: 2026-10-27T23:56:09+0100
+updated: 2026-11-18T16:38:34+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -42,3 +42,4 @@ Parent: TRDD-UT7UC025. Last tier, after the remote tiers fail.
 ## Approval log
 
 - 2026-10-27T23:56:09+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+2026-11-18T16:38:34+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): cancelled under the delegation. USER 2026-10-28 (verbatim) "since we are using Locals for all mlx models, you can drop the support for kiril." No Krill code at HEAD; local last-resort delivered by local_llama and locals-mlx (452887a8) and the remote-to-local fallback (1e5ca0d7). Unchecked boxes are obsolete, not met.

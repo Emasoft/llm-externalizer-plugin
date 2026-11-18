@@ -5,7 +5,7 @@ title: classifiers command group - system-one inference with the Jev model via O
 column: todo
 
 created: 2026-10-07T05:02:14+0200
-updated: 2026-11-15T17:27:54+0100
+updated: 2026-11-18T16:42:26+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -17,6 +17,7 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T05:02:14+0200
 npt: []
+eht: [T6F52GB8]
 ---
 
 # classifiers command group - system-one inference with the Jev model via OpenRouter
@@ -87,6 +88,7 @@ Scope of the 2026-10-31 ruling: PERMISSIVE covers only the three categories of t
 2026-11-04 correction to the drain line above: the user's 2026-11-04 message answered three bug-scan questions (subprocess timeouts, JSON.parse, the governor test skip) and does not by itself cover R1 to R3. They rest on the standing user rule to decide on verified facts without stalling, on drain-by-default, and on the 2026-10-31 precedent where the coordinator ruled on this same definition of done. R1 accepts a body mention where the clause's words say subject: it serves the clause's purpose (git log --grep finds the id; implementation-commits links back) but departs from its wording, so it stands pending owner ratification. The six cards closed under it are archived and immutable; if the owner rejects R1, each needs a follow-up commit naming its id. Blocked cards now carry unblock-when [trdd:KNSQAQ1S] and a probe on that card, replacing the stale test-doubles-ruling probe.
 2026-11-04T13:31:22+0100 R4 (coordinator reading, pending owner ratification like R1, under the standing rule to decide on verified facts): a seam that throws to fail the test if it is ever invoked asserts non-use and is not a double, because a real dependency would make the assertion vacuous (read 2026-11-04: classify-launch.test.ts:164 and definitions-classify.test.ts:25 readStdin, extract.test.ts:536-537 spawn). A seam that returns substitute data is a double, allowed only under (a), (b) or (c). A data-returning readStdin (run-decision.test.ts:206, 413, 502; input-args.test.ts:90) is read as (a), assumed and not measured: a test worker is taken to have no controllable stdin; the same content can be produced end to end by spawning the built CLI with piped stdin, so this is the weakest part. Where a real function gives the same guarantee it must be used: a settings {} literal (definitions-classify.test.ts:22; a real settings.yaml through loadSettings is possible) and a throwing readFile (:24; real readFileSync throws ENOENT) are forbidden. If the owner rejects the data-returning part, input-args and run-decision reopen and LMSYDGVB, AQ82IO1T, XHHH0N1E, DCI7C2Y7, BUL4EEBP and XZZ2NSWY return to blocked.
 - 2026-11-05: two owner rulings bind the whole classify group, see the section "Owner rulings 2026-11-05" below: no hook or caller-specific adapter; llm-ext provides only commands and skills, and how a command is used, and by which program, is not its concern. Open owner question: whether they retire TRDD-ZBMRKOI3 and TRDD-TIJ6EYK3.
+2026-11-18T16:42:26+0100 NEXT ACTION: (1) audit card T6F52GB8 audits the 89 backburner children, one verdict per card (done, obsolete, still wanted); ZVS3IMKT only closes the finished cards and refreshes this STATE; (2) hook cards ZBMRKOI3 and TIJ6EYK3 ruled cancelled per the 2026-11-05 owner rulings; (3) browse epic decision, inside T6F52GB8. Releases shipped since the line of 2026-10-07: tags v14.2.0 through v14.7.2.
 
 ## USER directives verbatim (2026-10-07, continued)
 
