@@ -44,6 +44,7 @@ const extractInputSchema = z
         z.strictObject({
           id: z.string(),
           // The pattern and flags are the input of `spec.prepare` to the regex worker (SP-22); this spec never runs them.
+          // WHY max 500: no recorded reason found. The file header names jev-mcp jev_extract (server.ts:1111-1286, lib.ts caps) as the port source, but no jev-mcp source is in the repo, so whether this value comes from it is unverified.
           pattern: z.string().min(1).max(500),
           // WHY letters only (SP-22): the regex worker refuses anything else as an error result; refusing at parse time names the field before any worker or request exists.
           flags: z.string().max(8).regex(/^[a-zA-Z]*$/, "flags must be letters only").optional(),
@@ -137,6 +138,7 @@ export async function withMatches(i: ExtractInput, cap: number, opts: RegexOptio
 // WHY one function for build and project: both must derive the same candidate list, or an answer key would name a different value than the one that was asked.
 function prepare(i: ExtractInput, t: Thresholds): Prepared[] {
   const cap = t["candidate-cap"]!;
+  // WHY whole number here too (inferred): withMatches checks the cap on the run path, but build and project reach this with thresholds that may not have passed through it, and a fractional cap has no meaning as a count of candidates. No recorded reason found; sibling specs cite quicksilver's integer checks (qs.mjs:91-98) for --top and --chunk.
   if (!Number.isInteger(cap)) throw new PolicyError(`--candidate-cap must be a whole number, got ${cap}`);
   const cut = cutDocument(i.document).text;
   return i.fields.map((f) => {
