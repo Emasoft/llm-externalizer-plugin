@@ -246,20 +246,40 @@ describe("TRDD-1L9VMEY7: every classify action answers through the local decider
   });
 
   // WHY skipIf: the clamp applies only where mlx-decision can run (macOS on Apple silicon); elsewhere the plan is unchanged.
-  it.skipIf(!localsPlatformSupported())("a remote run with the local fallback on plans every request to fit the decider limit (more requests than with it off)", async () => {
-    const { spec } = await import("./catalog/filter.js");
+  // TRDD-NL2012O9: the clamp applies to a job the local escalation cannot re-cut (atomic units); a text-only job is exempt because 21699151 re-cuts a refused text chunk on the escalation.
+  const dryRun = async (input: unknown, localFallback: unknown, which: "filter" | "test-output" = "filter") => {
+    const spec = DECISION_SPECS.find((s) => s.id === which)!;
     const fetch: GlobalFetch = async (url) => {
       if (url.includes("output_modalities=decisions")) return replayFixture(fx("p02", "models-decisions"));
       if (url.endsWith("/endpoints")) return replayFixture(fx("p02", "target-endpoints"));
       throw new Error(`unexpected request in a dry run: ${url}`);
     };
     const remote = { ...REMOTE, max_requests_per_call: 100 } as unknown as Profile;
-    const run = (localFallback: unknown) => runDecision(spec, { input: BIG, profileFlag: "r", estimate: true }, { settings: settingsWith({ r: remote }), ...seams(fetch, localFallback) });
-    const off = await run({ enabled: false });
-    const on = await run(undefined);
-    expect(off.exitCode, off.cause).toBe(0);
-    expect(on.exitCode, on.cause).toBe(0);
-    expect(estimateOf(on).requests).toBeGreaterThan(estimateOf(off).requests);
+    const out = await runDecision(spec, { input, profileFlag: "r", estimate: true }, { settings: settingsWith({ r: remote }), ...seams(fetch, localFallback) });
+    expect(out.exitCode, out.cause).toBe(0);
+    return estimateOf(out);
+  };
+  it.skipIf(!localsPlatformSupported())("a remote run of a text-only job with the local fallback on is planned for the remote limit, the same requests as with it off (TRDD-NL2012O9)", async () => {
+    const off = await dryRun(BIG, { enabled: false });
+    const on = await dryRun(BIG, undefined);
+    expect(on.requests).toBe(off.requests);
+    expect(on.input_tokens).toBe(off.input_tokens);
+  });
+  // WHY test-output too: it is the command that motivated TRDD-NL2012O9 (a 535948 byte log was refused with "the plan needs 20 requests, over the limit of 16"); its units are text units with a bare string state. The profile here allows 100 requests, so only the equality with the fallback-off plan is asserted, not the default cap.
+  it.skipIf(!localsPlatformSupported())("a remote run of a test-output log of 535948 bytes with the local fallback on is planned for the remote limit and accepted (TRDD-NL2012O9)", async () => {
+    const lines = Array.from({ length: 8000 }, (_v, i) => `ok suite/case_${i} passed in ${i % 90} ms`);
+    const log = `${lines.join("\n")}\nFAIL suite/case_x\n`.padEnd(535_948, "\n");
+    const input = { log, matches: [8001] };
+    const off = await dryRun(input, { enabled: false }, "test-output");
+    const on = await dryRun(input, undefined, "test-output");
+    expect(on.requests).toBe(off.requests);
+  });
+  it.skipIf(!localsPlatformSupported())("a remote run of an atomic job with the local fallback on is still planned to fit the decider limit (more requests than with it off)", async () => {
+    // WHY 64 propositions of 2000 chars: the filter maximum, about 41000 estimated tokens, over one decider window and under two remote ones.
+    const atomic = { propositions: Array.from({ length: 64 }, (_v, i) => ({ text: `claim ${i} ${"lorem ipsum dolor sit amet ".repeat(74)}`.slice(0, 2000) })) };
+    const off = await dryRun(atomic, { enabled: false });
+    const on = await dryRun(atomic, undefined);
+    expect(on.requests).toBeGreaterThan(off.requests);
   });
 });
 

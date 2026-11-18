@@ -201,6 +201,16 @@ function recutTextRequest<U extends BuiltUnit>(job: SplitJob<U>, request: Planne
   return sub.ok ? { ok: true, requests: sub.requests, recutKeys } : sub;
 }
 
+// TRDD-NL2012O9: the unit replanRequest cuts again on a decider refusal (a text chunk with a string state). run-decision.ts asks recutOnOverflow for the whole job, so the clamp under the decider window and the re-cut cannot drift apart.
+export function isRecuttableTextUnit(unit: BuiltUnit): boolean {
+  return unit.kind === "text" && typeof unit.state === "string";
+}
+
+// TRDD-NL2012O9: true when every request of the job is one re-cuttable text chunk and no question is unsplittable, i.e. when replanRequest can answer a decider refusal of any request of it by cutting the text again. A job with an atomic unit, an object-state text unit or an unsplittable question has no re-cut, so it must be planned to fit the decider from the start.
+export function recutOnOverflow<U extends BuiltUnit>(job: SplitJob<U>): boolean {
+  return Object.keys(job.unsplittable).length === 0 && job.units.length > 0 && job.units.every(isRecuttableTextUnit);
+}
+
 /**
  * TRDD-1L9VMEY7: re-plan the units of ONE planned request into smaller requests, after the local decider refused it with a 422
  * ("needs 16460 tokens; the limit is 16384", measured 2026-11-17). WHY it exists: the planner sizes by the l1 estimate, which is
@@ -218,7 +228,7 @@ export function replanRequest<U extends BuiltUnit>(job: SplitJob<U>, request: Pl
   if (!(overflow.neededTokens > 0) || !(overflow.limitTokens > 0)) throw new Error(`the overflow counts must be positive, got needed ${overflow.neededTokens} and limit ${overflow.limitTokens}`);
   if (Object.keys(job.unsplittable).length > 0) return { ok: false, kind: "request-unsplittable", message: "the request carries unsplittable questions that travel with every unit, so it cannot be split" };
   // TRDD-NL2012O9: a text unit travels alone (D31), so a refused text chunk is a 1-unit request. It is cut again instead of refused: its own text, never the neighbours (it has none).
-  if (request.units.length === 1 && typeof request.units[0]!.state === "string" && request.units[0]!.kind === "text") {
+  if (request.units.length === 1 && isRecuttableTextUnit(request.units[0]!)) {
     const cut = scaledContext(limits, request, overflow);
     return typeof cut === "number" ? recutTextRequest(job, request, limits, cut) : cut;
   }

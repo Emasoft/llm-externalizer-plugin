@@ -23,7 +23,7 @@ import { IdError } from "./l2/ids.js";
 import { InputError } from "./l2/input-error.js";
 import type { CollectOptions } from "./l2/inputs.js";
 import { assertChunkChars } from "./l2/chunker.js";
-import { ENVELOPE_TOKENS, modelLimits, planRequests, type PlannedRequest } from "./l2/planner.js";
+import { ENVELOPE_TOKENS, modelLimits, planRequests, recutOnOverflow, type PlannedRequest } from "./l2/planner.js";
 import { answerWithSplit } from "./l2/split-on-overflow.js";
 import { LOCAL_DECISION_API, LOCAL_DECISION_CONTEXT_TOKENS, localsPlatformSupported } from "../config.js";
 import { PolicyError, resolveThresholds } from "./l2/policy-kit.js";
@@ -398,7 +398,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits, ...questionCap }));
   // WHY "ok" in: modelLimits returns ModelLimits or a LimitsRefusal ({ ok: false, message }); only the refusal has an ok key.
   if ("ok" in limits) throw new Refusal(limits.message);
-  // TRDD-1L9VMEY7 (USER: "ensure reliability and fallbacks"): while the local decider fallback is on, every request is planned to
+  // TRDD-1L9VMEY7 (USER: "ensure reliability and fallbacks"): while the local decider fallback is on, every request of a job the escalation cannot re-cut (see planLimits below) is planned to
   // fit the decider too, min(remote limit, LOCAL_DECISION_CONTEXT_TOKENS), so any request the remote side fails can be answered
   // locally. Before this, chunks were cut for the remote limit only, and the decider refused them with its 422 over-limit text
   // (live 2026-11-16: 17141 to 28700 tokens against its 16384). Cost: an input that fitted a remote request between the two limits
@@ -408,7 +408,8 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   // WHY the platform gate too: mlx-decision is an MLX server (macOS on Apple silicon only, localsPlatformSupported), so elsewhere the
   // fallback can never answer, and splitting remote requests for it would only add remote requests.
   const fitsLocal = refusing(1, () => localFallbackConfig(deps.localFallback).enabled) && localsPlatformSupported();
-  const planLimits = fitsLocal ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
+  // WHY !recutOnOverflow(built) (TRDD-NL2012O9): the clamp is only for a job whose refused request the escalation cannot re-cut. 21699151 cuts a text chunk the decider refuses with a 422 again, from its own counts (replanRequest, answerWithSplit), so a text-only job needs no clamp up front, and the clamp doubled the remote requests of a long text (`classify test-output` on a 535948 byte log was refused, "the plan needs 20 requests, over the limit of 16"). A job with an atomic unit, an object-state text unit or an unsplittable question has no re-cut and keeps the clamp. recutOnOverflow is the predicate replanRequest itself uses, so the two cannot drift.
+  const planLimits = fitsLocal && !recutOnOverflow(built) ? { ...limits, contextTokens: Math.min(limits.contextTokens, LOCAL_DECISION_CONTEXT_TOKENS) } : limits;
   // WHY kept: the local escalation of a refused piece re-plans it on a decider 422 (answerWithSplit) with the limits the job was planned with, chunkChars included.
   const remotePlanLimits = { ...planLimits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) };
   const plan = planRequests(built, remotePlanLimits);

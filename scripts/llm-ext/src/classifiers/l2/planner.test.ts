@@ -4,7 +4,7 @@ import { noul } from "../l1/questions.js";
 import { estimateTokens } from "../l1/estimate.js";
 import type { DecisionsModel } from "../l0/catalog.js";
 import { endpointPromptLimit, resolveModel } from "../l0/model.js";
-import { ENVELOPE_TOKENS, chunkOf, modelLimits, planRequests, replanRequest, toGlobalIndex, type ModelLimits, type SplitJob } from "./planner.js";
+import { ENVELOPE_TOKENS, chunkOf, modelLimits, planRequests, recutOnOverflow, replanRequest, toGlobalIndex, type ModelLimits, type SplitJob } from "./planner.js";
 
 const limits = (o: Partial<ModelLimits> = {}): ModelLimits => ({ contextTokens: 1000, envelopeTokens: 64, maxRequests: 100, concurrency: 4, ...o });
 const atom = (i: number, text = "x".repeat(1600)) => ({ kind: "atomic" as const, state: { text }, questions: { [`q${i}`]: noul(`Is claim ${i} true?`) } });
@@ -478,5 +478,20 @@ describe("replanRequest (TRDD-1L9VMEY7: split a request the decider refused with
     const plan = planRequests(j, big);
     if (!plan.ok) throw new Error(plan.message);
     expect(() => replanRequest(j, plan.requests[0]!, big, { neededTokens: 0, limitTokens: 4000 })).toThrow(/positive/);
+  });
+});
+
+// TRDD-NL2012O9: the one predicate run-decision.ts uses to keep the decider-window clamp only for a job whose refused request the escalation cannot re-cut.
+describe("recutOnOverflow (TRDD-NL2012O9)", () => {
+  const text = (state: unknown = "file body") => ({ kind: "text" as const, state, questions: { t: noul("T?") } });
+  it.each([
+    ["text units with string states", job([text(), text("other")]), true],
+    ["an atomic unit", job([atom(0)]), false],
+    ["a text unit and an atomic unit", job([text(), atom(1)]), false],
+    ["a text unit with an object state", job([text({ file: "a" })]), false],
+    ["unsplittable questions beside a text unit", { ...job([text()]), unsplittable: { u: noul("U?") } }, false],
+    ["no units", job([]), false],
+  ])("%s: %s", (_name, j, expected) => {
+    expect(recutOnOverflow(j)).toBe(expected);
   });
 });
