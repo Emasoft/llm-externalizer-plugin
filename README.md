@@ -1354,7 +1354,7 @@ Two local profiles are built in and added to `settings.yaml` once (not active by
 
 #### Local inference governor (machine-wide RAM and CPU limits)
 
-Every llm-ext process on this machine that runs a local model (the broker, a calibration run, a direct send to a model server on this machine: LM Studio, Ollama, llama.cpp, vLLM on a loopback address) asks one shared governor before it starts an inference or loads a model. The governor lets the work start only while RAM and CPU are under their limits, and never more than `max_inferences` inferences at once across all of them. A request that has to wait is never an error: it waits, prints why once a minute (`llm-ext: local inference waiting: RAM is 92% used, limit 80%`), and is bounded only by `--command_timeout`. Sends to a LAN or remote server never touch it.
+Every llm-ext process on this machine that runs a local model (the broker, a calibration run, a direct send to a model server on this machine: LM Studio, Ollama, llama.cpp, vLLM on a loopback address) asks one shared governor before it starts an inference or loads a model. The governor lets the work start only while RAM and CPU are under their limits, and never more than `max_inferences` inferences at once across all of them. A request that has to wait is never an error: it waits, prints why once a minute (`llm-ext: local inference waiting: RAM is 92% used, limit 80%`), and is bounded only by `--command_timeout`. The line is printed by the command that waits, for a request sent through the local-model broker as for a direct send. Sends to a LAN or remote server never touch it.
 
 Settings, in `settings.yaml` (each key has an environment override, which wins over the file; a value out of range or an unknown key fails at once):
 

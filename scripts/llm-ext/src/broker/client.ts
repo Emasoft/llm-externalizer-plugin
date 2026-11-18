@@ -24,6 +24,7 @@ import {
   QUEUE_TIMEOUT_HEADER,
   NO_HOLD_HEADER,
   STATE_HEADER,
+  GOVERNOR_WAIT_HEADER,
   HELD_HEADER,
   TIMEOUT_HEADER,
   TOKEN_HEADER,
@@ -268,6 +269,18 @@ function printHeld(model: string, engine: BrokerEngine): void {
   process.stderr.write(`llm-ext: waiting for the calibration of '${model}' (${engine}); llm-ext models calibration-status shows its progress\n`);
 }
 
+/**
+ * TRDD-ZTO9K8EK: the governor denies this call's job (CPU, RAM, window, threads): say why, at once and at most once a minute, like
+ * the direct path (governor/client.ts printWait). With no CPU floor the wait ends only when the reading allows it or at
+ * --command_timeout, so a brokered CLI must never wait silently. `reason` is the broker's text from the poll reply.
+ */
+let governorWaitPrintedAt = 0;
+function printGovernorWait(reason: string): void {
+  if (Date.now() - governorWaitPrintedAt < HELD_PRINT_MS) return;
+  governorWaitPrintedAt = Date.now();
+  process.stderr.write(`llm-ext: local inference waiting: ${reason}; requests queue, nothing fails; bound the wait with --command_timeout\n`);
+}
+
 /** Calls cancelling their own job (the finally of brokerExchange), and the job ids whose DELETE failed once the command was stopping (follow-up review m1). */
 const selfCancels = new Set<Promise<void>>();
 const uncancelled: string[] = [];
@@ -400,6 +413,8 @@ export async function brokerExchange(
         const state = res.headers.get(STATE_HEADER);
         if (at !== null && state === "running") opts.onDispatched?.(Number(at));
         // P6: a job held for calibration waits (never an error, bounded only by --command_timeout).
+        const governorWait = res.headers.get(GOVERNOR_WAIT_HEADER);
+        if (state === "queued" && governorWait !== null) printGovernorWait(governorWait);
         if (state === "held" && res.headers.get(HELD_HEADER) !== null) noteHeld();
         else heldOn = null;
         continue;

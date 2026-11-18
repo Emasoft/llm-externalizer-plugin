@@ -43,7 +43,7 @@ const GIB = 1024 ** 3;
 const TOTAL = 64 * GIB;
 const NOW = 1_000_000;
 const LIMITS: GovernorLimits = { ramLimitPct: 90, cpuLimitPct: 100, maxInferences: 8 };
-const CONFIG = { cores: 8, totalBytes: TOTAL, settleMs: 2_000, cpuFloorWaitMs: 30_000, loadYieldMs: 120_000 };
+const CONFIG = { cores: 8, totalBytes: TOTAL, settleMs: 2_000, loadYieldMs: 120_000 };
 const LLAMA_CACHE = "/tmp/llm-ext-llama-cache";
 const A = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const B = "ggml-org/tiny-llamas/stories260K.gguf";
@@ -431,7 +431,7 @@ describe("the governor's own state: a RAM-denied load asks for an idle server ba
     expect(flagged()).toEqual([]);
     // A load that fits is granted at once, the projection and nothing else being the difference.
     gov.withdraw("load");
-    let granted: gov.AttemptResult = { lease: null, denial: null };
+    let granted: gov.AttemptResult = { lease: null, denial: null, reason: null };
     while (!granted.lease) {
       if (Date.now() > deadline + 30_000) throw new Error("a small load was never granted");
       granted = gov.attemptLease({ kind: "load", timeoutMs: 60_000, bytes: GIB });
@@ -460,7 +460,7 @@ describe("the governor's own state: a RAM-denied load asks for an idle server ba
     }
     expect(flagged()).toEqual([900_011]);
     // Its owner takes an inference on it: in use, so the flag is withdrawn at the grant.
-    let inference: gov.AttemptResult = { lease: null, denial: null };
+    let inference: gov.AttemptResult = { lease: null, denial: null, reason: null };
     while (!inference.lease) {
       if (Date.now() > deadline) throw new Error(`the inference was never granted (${String(inference.denial)})`);
       inference = gov.attemptLease({ kind: "inference", timeoutMs: 60_000, serverPid: 900_011 });

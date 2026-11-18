@@ -13,7 +13,6 @@ export interface ControllerConfig {
   /** This machine's RAM, for the load projection (D11). A parameter, so the rules stay pure. */
   totalBytes: number;
   settleMs: number;
-  cpuFloorWaitMs: number;
   /** How long a load head its own projection denies keeps yielding to smaller loads behind it (D11, D13). */
   loadYieldMs: number;
 }
@@ -25,7 +24,6 @@ export interface GovernorConfig {
   serverThreads: number;
   limits: GovernorLimits;
   settleMs: number;
-  cpuFloorWaitMs: number;
   loadYieldMs: number;
 }
 
@@ -48,8 +46,6 @@ export type Denial = "queued" | "stale" | "ram" | "cpu" | "window" | "threads" |
 export interface Decision {
   window: GovernorWindow;
   grant: boolean;
-  /** The grant came from the D6 CPU floor: the machine is over the ceiling and llm-ext runs one at a time. */
-  floor: boolean;
   denial: Denial | null;
   /** The head goes to the tail: its own limit denied it, and a waiter behind it is not bound by that limit (D13). */
   yields: boolean;
@@ -108,7 +104,6 @@ export interface LocalGovernorSection {
 /** Test-only timings, env alone (D13: they are not settings). */
 const TIMING_SETTINGS = [
   { env: "LLM_EXT_GOVERNOR_SETTLE_MS", fallback: 2_000 },
-  { env: "LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS", fallback: 30_000 },
   { env: "LLM_EXT_GOVERNOR_LOAD_YIELD_MS", fallback: 120_000 },
 ] as const;
 
@@ -170,8 +165,8 @@ export function resolveConfig(env: NodeJS.ProcessEnv, section: LocalGovernorSect
   } else if (serverThreads > budget) {
     throw new GovernorConfigError(`local_governor.server_threads in ${where} must be ${threadsText}, got ${serverThreads}`);
   }
-  const [settleMs, cpuFloorWaitMs, loadYieldMs] = TIMING_SETTINGS.map(({ env: name, fallback }) => envInt(env, name, 1, Number.MAX_SAFE_INTEGER) ?? fallback);
-  return { enabled, limits, serverThreads, settleMs, cpuFloorWaitMs, loadYieldMs };
+  const [settleMs, loadYieldMs] = TIMING_SETTINGS.map(({ env: name, fallback }) => envInt(env, name, 1, Number.MAX_SAFE_INTEGER) ?? fallback);
+  return { enabled, limits, serverThreads, settleMs, loadYieldMs };
 }
 /** A live head that stopped polling. The grace grows with `rank`, so a stopped rank 1 cannot hide a stopped head from the ranks behind it while 100 waiters still do not all rush the lock. */
 export function headStopped(head: Waiter, rank: number, now: number): boolean {
@@ -338,7 +333,7 @@ function isOver(reading: { cpuPct: number; ramUsedPct: number }, limits: Governo
 
 /** The verdict on one request. Only the head of its kind may grant itself or move the window (D7). */
 export function decide(view: View, request: GrantRequest, now: number, config: ControllerConfig): Decision {
-  const denied = (window: GovernorWindow, denial: Denial, yields = false): Decision => ({ window, grant: false, floor: false, denial, yields });
+  const denied = (window: GovernorWindow, denial: Denial, yields = false): Decision => ({ window, grant: false, denial, yields });
   const [head, ...behind] = view.waiters.filter((w) => w.kind === request.kind);
   if (head?.id !== request.id) return denied(view.window, "queued");
   const { cpuPct, freePct } = view.metrics;
@@ -359,13 +354,11 @@ export function decide(view: View, request: GrantRequest, now: number, config: C
 
   // RAM has no floor: CPU overload slows a machine, RAM exhaustion takes it down (D6).
   if (reading.ramUsedPct >= limits.ramLimitPct) return blockedByOwn("ram", () => true);
-  let floor = false;
-  if (cpuOver(reading, limits)) {
-    const floorWaitMs = Math.min(config.cpuFloorWaitMs, request.queueTimeoutMs ?? Infinity);
-    // "Nothing running" includes a load: the floor is for a machine llm-ext has left alone.
-    if (view.leases.length > 0 || now - request.since < floorWaitMs) return blockedByOwn("cpu", () => true);
-    floor = true;
-  }
+  // TRDD-ZTO9K8EK: CPU has no floor either. The owner directive (2026-11-01, quoted at LOCAL_GOVERNOR_KEYS) is to never start
+  // a new inference while CPU is at or over the limit; the old floor granted one after 30 s, which starts work the directive
+  // forbids. So a waiter stays denied however long it has waited and whatever is running, and only --command_timeout ends
+  // the wait. Cost: while other programs keep CPU over the limit, local inference waits.
+  if (cpuOver(reading, limits)) return blockedByOwn("cpu", () => true);
   if (request.kind === "load") {
     // A load's RAM shows in the reading only gradually, so two at once would each see the other's room (D11).
     if (view.leases.some((l) => l.kind === "load")) return denied(window, "load");
@@ -386,11 +379,11 @@ export function decide(view: View, request: GrantRequest, now: number, config: C
       const alone = !view.leases.some((l) => l.kind === "inference") && !view.servers.some((s) => s.ownerPid !== request.holder.pid);
       if (!alone) return blockedByOwn("alone", mayYield);
       if (!loadFits(reading.ramUsedPct, request.minBytes ?? upper, outgoing, limits, config.totalBytes, booked)) return blockedByOwn("ram", mayYield);
-      return { window, grant: true, floor, denial: null, yields: false };
+      return { window, grant: true, denial: null, yields: false };
     }
     // The projection is the head's own figure: a smaller load behind it may fit where it does not (D13).
     if (!loadFits(reading.ramUsedPct, upper, outgoing, limits, config.totalBytes, booked)) return blockedByOwn("ram", mayYield);
-    return { window, grant: true, floor, denial: null, yields: false };
+    return { window, grant: true, denial: null, yields: false };
   }
   // A weight above `w` runs alone; without this it could never run at all (D9).
   if (running > 0 && running + request.weight > Math.min(window.w, limits.maxInferences)) {
@@ -400,12 +393,11 @@ export function decide(view: View, request: GrantRequest, now: number, config: C
     return blockedByOwn("window", (w) => w.limits.maxInferences > limits.maxInferences);
   }
 
-  // After the floor, on purpose: the floor lifts the utilisation ceiling, never llm-ext's own bounded share (D6).
   const onRunningServer = request.serverPid !== null && view.leases.some((l) => l.kind === "inference" && l.serverPid === request.serverPid);
   const added = onRunningServer ? 0 : request.threads;
   const budget = threadBudget(config.cores, limits.cpuLimitPct);
   if (added > 0 && threadsInUse(view.leases) + added > budget) return blockedByOwn("threads", (w) => threadBudget(config.cores, w.limits.cpuLimitPct) > budget);
-  return { window, grant: true, floor, denial: null, yields: false };
+  return { window, grant: true, denial: null, yields: false };
 }
 
 /**

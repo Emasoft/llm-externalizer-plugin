@@ -26,7 +26,7 @@ import { emptyState, governorDirFor, LOCK_STALE_MS, ownStart, reap, readStarts, 
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LIMITS: GovernorLimits = { ramLimitPct: 90, cpuLimitPct: 85, maxInferences: 8 };
-const CONFIG = { cores: 8, totalBytes: 64 * 1024 ** 3, settleMs: 2_000, cpuFloorWaitMs: 30_000, loadYieldMs: 120_000 };
+const CONFIG = { cores: 8, totalBytes: 64 * 1024 ** 3, settleMs: 2_000, loadYieldMs: 120_000 };
 const NOW = 1_000_000;
 const COOL = { cpuPct: 20, freePct: 60 };
 
@@ -55,42 +55,45 @@ describe("controller: grant table", () => {
   const hotRam = { cpuPct: 20, freePct: 5 };
   const longWait = { since: NOW - 30_000 };
   it.each([
-    { name: "cool machine, free window", m: COOL, leases: [], req: {}, grant: true, floor: false, denial: null },
-    { name: "no reading yet", m: emptyMetrics(), leases: [], req: {}, grant: false, floor: false, denial: "stale" },
-    { name: "reading older than 2 s", m: metrics(20, 60, NOW - 2_001), leases: [], req: {}, grant: false, floor: false, denial: "stale" },
-    { name: "reading exactly 2 s old", m: metrics(20, 60, NOW - 2_000), leases: [], req: {}, grant: true, floor: false, denial: null },
-    { name: "RAM over, however long it waited, with nothing running: no floor", m: hotRam, leases: [], req: longWait, grant: false, floor: false, denial: "ram" },
-    { name: "RAM exactly at the limit counts as over", m: { cpuPct: 20, freePct: 10 }, leases: [], req: {}, grant: false, floor: false, denial: "ram" },
-    { name: "CPU over, floor wait not done", m: over, leases: [], req: { since: NOW - 29_999 }, grant: false, floor: false, denial: "cpu" },
-    { name: "CPU over, floor wait done, nothing running: floor grant", m: over, leases: [], req: longWait, grant: true, floor: true, denial: null },
-    { name: "CPU over, --queue_timeout shortens the floor wait", m: over, leases: [], req: { since: NOW - 5_000, queueTimeoutMs: 5_000 }, grant: true, floor: true, denial: null },
-    { name: "CPU over, floor wait done, something running: no floor", m: over, leases: [lease()], req: longWait, grant: false, floor: false, denial: "cpu" },
-    { name: "CPU over, floor wait done, a load running: no floor", m: over, leases: [lease({ kind: "load" })], req: longWait, grant: false, floor: false, denial: "cpu" },
-    { name: "floor grant refused when its server alone exceeds the thread budget", m: over, leases: [], req: { ...longWait, threads: 7 }, grant: false, floor: false, denial: "threads" },
-    { name: "floor grant inside the thread budget", m: over, leases: [], req: { ...longWait, threads: 6 }, grant: true, floor: true, denial: null },
-    { name: "window full", m: COOL, leases: [lease({ weight: 2 })], req: {}, w: 2, changedAt: NOW, grant: false, floor: false, denial: "window" },
-    { name: "a released lease is replaced at once", m: COOL, leases: [lease()], req: {}, w: 2, changedAt: NOW, grant: true, floor: false, denial: null },
-    { name: "weight above the window runs alone", m: COOL, leases: [], req: { weight: 5 }, w: 2, changedAt: NOW, grant: true, floor: false, denial: null },
-    { name: "weight above the window waits while anything runs", m: COOL, leases: [lease()], req: { weight: 5 }, w: 2, changedAt: NOW, grant: false, floor: false, denial: "window" },
-    { name: "thread budget filled by another server", m: COOL, leases: [lease({ threads: 4, serverPid: 10 })], req: { threads: 3, serverPid: 11 }, w: 4, changedAt: NOW, grant: false, floor: false, denial: "threads" },
-    { name: "thread budget filled exactly", m: COOL, leases: [lease({ threads: 4, serverPid: 10 })], req: { threads: 2, serverPid: 11 }, w: 4, changedAt: NOW, grant: true, floor: false, denial: null },
-    { name: "a second inference on a running server adds no threads", m: COOL, leases: [lease({ threads: 6, serverPid: 10 })], req: { threads: 6, serverPid: 10 }, w: 4, changedAt: NOW, grant: true, floor: false, denial: null },
-    { name: "unknown threads are outside the budget", m: COOL, leases: [lease({ threads: 6, serverPid: 10 })], req: { threads: 0 }, w: 4, changedAt: NOW, grant: true, floor: false, denial: null },
+    { name: "cool machine, free window", m: COOL, leases: [], req: {}, grant: true, denial: null },
+    { name: "no reading yet", m: emptyMetrics(), leases: [], req: {}, grant: false, denial: "stale" },
+    { name: "reading older than 2 s", m: metrics(20, 60, NOW - 2_001), leases: [], req: {}, grant: false, denial: "stale" },
+    { name: "reading exactly 2 s old", m: metrics(20, 60, NOW - 2_000), leases: [], req: {}, grant: true, denial: null },
+    { name: "RAM over, however long it waited, with nothing running: no floor", m: hotRam, leases: [], req: longWait, grant: false, denial: "ram" },
+    { name: "RAM exactly at the limit counts as over", m: { cpuPct: 20, freePct: 10 }, leases: [], req: {}, grant: false, denial: "ram" },
+    // TRDD-ZTO9K8EK (owner directive 2026-11-01, USER delegation 2026-11-18): no CPU floor. CPU at or over the limit denies
+    // every new inference and load, however long it waited and whatever is running; only --command_timeout ends the wait.
+    { name: "CPU over, a short wait: denied", m: over, leases: [], req: { since: NOW - 29_999 }, grant: false, denial: "cpu" },
+    { name: "CPU over, 30 s waited (the old floor wait), nothing running: still denied", m: over, leases: [], req: longWait, grant: false, denial: "cpu" },
+    { name: "CPU over, 10 minutes waited, nothing running: still denied", m: over, leases: [], req: { since: NOW - 600_000 }, grant: false, denial: "cpu" },
+    { name: "CPU over, --queue_timeout elapsed: still denied, the queue timeout no longer ends a CPU wait", m: over, leases: [], req: { since: NOW - 5_000, queueTimeoutMs: 5_000 }, grant: false, denial: "cpu" },
+    { name: "CPU over, long wait, something running: denied", m: over, leases: [lease()], req: longWait, grant: false, denial: "cpu" },
+    { name: "CPU over, long wait, a load running: denied", m: over, leases: [lease({ kind: "load" })], req: longWait, grant: false, denial: "cpu" },
+    { name: "CPU over, long wait, inside the thread budget: still denied", m: over, leases: [], req: { ...longWait, threads: 6 }, grant: false, denial: "cpu" },
+    { name: "CPU over, a load waited 10 minutes with nothing running: still denied", m: over, leases: [], req: { kind: "load" as const, bytes: 1024 ** 3, since: NOW - 600_000 }, grant: false, denial: "cpu" },
+    { name: "window full", m: COOL, leases: [lease({ weight: 2 })], req: {}, w: 2, changedAt: NOW, grant: false, denial: "window" },
+    { name: "a released lease is replaced at once", m: COOL, leases: [lease()], req: {}, w: 2, changedAt: NOW, grant: true, denial: null },
+    { name: "weight above the window runs alone", m: COOL, leases: [], req: { weight: 5 }, w: 2, changedAt: NOW, grant: true, denial: null },
+    { name: "weight above the window waits while anything runs", m: COOL, leases: [lease()], req: { weight: 5 }, w: 2, changedAt: NOW, grant: false, denial: "window" },
+    { name: "thread budget filled by another server", m: COOL, leases: [lease({ threads: 4, serverPid: 10 })], req: { threads: 3, serverPid: 11 }, w: 4, changedAt: NOW, grant: false, denial: "threads" },
+    { name: "thread budget filled exactly", m: COOL, leases: [lease({ threads: 4, serverPid: 10 })], req: { threads: 2, serverPid: 11 }, w: 4, changedAt: NOW, grant: true, denial: null },
+    { name: "a second inference on a running server adds no threads", m: COOL, leases: [lease({ threads: 6, serverPid: 10 })], req: { threads: 6, serverPid: 10 }, w: 4, changedAt: NOW, grant: true, denial: null },
+    { name: "unknown threads are outside the budget", m: COOL, leases: [lease({ threads: 6, serverPid: 10 })], req: { threads: 0 }, w: 4, changedAt: NOW, grant: true, denial: null },
     // A load of known size (an unknown one, bytes 0, runs alone since round 2 of unit 4 and would wait for the inference).
-    { name: "a load is not an inference: it passes a full window", m: COOL, leases: [lease()], req: { kind: "load" as const, bytes: 1024 ** 3 }, w: 1, changedAt: NOW, grant: true, floor: false, denial: null },
-    { name: "one load at a time", m: COOL, leases: [lease({ kind: "load" })], req: { kind: "load" as const }, grant: false, floor: false, denial: "load" },
-    { name: "a running load does not fill the window", m: COOL, leases: [lease({ kind: "load" })], req: {}, grant: true, floor: false, denial: null },
-  ])("$name", ({ m, leases, req, w, changedAt, grant, floor, denial }) => {
+    { name: "a load is not an inference: it passes a full window", m: COOL, leases: [lease()], req: { kind: "load" as const, bytes: 1024 ** 3 }, w: 1, changedAt: NOW, grant: true, denial: null },
+    { name: "one load at a time", m: COOL, leases: [lease({ kind: "load" })], req: { kind: "load" as const }, grant: false, denial: "load" },
+    { name: "a running load does not fill the window", m: COOL, leases: [lease({ kind: "load" })], req: {}, grant: true, denial: null },
+  ])("$name", ({ m, leases, req, w, changedAt, grant, denial }) => {
     const r = request(req);
     const d = decide({ metrics: metrics(m.cpuPct as number, m.freePct as number, "at" in m ? m.at : NOW), window: windowOf(w ?? 1, { changedAt: changedAt ?? 0 }), waiters: [r], leases, servers: [] }, r, NOW, CONFIG);
-    expect({ grant: d.grant, floor: d.floor, denial: d.denial }).toEqual({ grant, floor, denial });
+    expect({ grant: d.grant, denial: d.denial }).toEqual({ grant, denial });
   });
 
   it("only the head of a kind is judged, and a non-head leaves the window alone", () => {
     const window = windowOf(3);
     const r = request();
     const d = decide({ metrics: metrics(20, 60), window, waiters: [waiter("first"), r], leases: [], servers: [] }, r, NOW, CONFIG);
-    expect(d).toEqual({ window, grant: false, floor: false, denial: "queued", yields: false });
+    expect(d).toEqual({ window, grant: false, denial: "queued", yields: false });
     const load = request({ id: "x", kind: "load" });
     expect(decide({ metrics: metrics(20, 60), window, waiters: [waiter("first"), load], leases: [], servers: [] }, load, NOW, CONFIG).grant).toBe(true);
   });
@@ -99,7 +102,6 @@ describe("controller: grant table", () => {
     const r = request({ limits: { ...LIMITS, cpuLimitPct: 100 } });
     const d = decide({ metrics: metrics(100, 60), window: windowOf(1), waiters: [r], leases: [], servers: [] }, r, NOW, CONFIG);
     expect(d.grant).toBe(true);
-    expect(d.floor).toBe(false);
   });
 
   describe("a limit binds only its own request (D13)", () => {
@@ -204,9 +206,9 @@ describe("controller: polling and settings", () => {
   it("the defaults are the spec's, and a valid override applies", () => {
     // WHY: LIMITS (90/85) is a judge() fixture, not the default. The owner-ruled defaults are 80/80 (51cbf755, TRDD-ZTO9K8EK),
     // so the expectation spells them out instead of reusing the fixture.
-    expect(resolveConfig({}, null, 8)).toEqual({ enabled: true, limits: { ramLimitPct: 80, cpuLimitPct: 80, maxInferences: 8 }, serverThreads: 0, settleMs: 2_000, cpuFloorWaitMs: 30_000, loadYieldMs: 120_000 });
-    const cfg = resolveConfig({ LLM_EXT_GOVERNOR_ENABLED: "false", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "70", LLM_EXT_GOVERNOR_CPU_LIMIT_PCT: "100", LLM_EXT_GOVERNOR_MAX_INFERENCES: "3", LLM_EXT_GOVERNOR_SERVER_THREADS: "2", LLM_EXT_GOVERNOR_SETTLE_MS: "5", LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS: "6", LLM_EXT_GOVERNOR_LOAD_YIELD_MS: "7" }, null, 8);
-    expect(cfg).toEqual({ enabled: false, limits: { ramLimitPct: 70, cpuLimitPct: 100, maxInferences: 3 }, serverThreads: 2, settleMs: 5, cpuFloorWaitMs: 6, loadYieldMs: 7 });
+    expect(resolveConfig({}, null, 8)).toEqual({ enabled: true, limits: { ramLimitPct: 80, cpuLimitPct: 80, maxInferences: 8 }, serverThreads: 0, settleMs: 2_000, loadYieldMs: 120_000 });
+    const cfg = resolveConfig({ LLM_EXT_GOVERNOR_ENABLED: "false", LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "70", LLM_EXT_GOVERNOR_CPU_LIMIT_PCT: "100", LLM_EXT_GOVERNOR_MAX_INFERENCES: "3", LLM_EXT_GOVERNOR_SERVER_THREADS: "2", LLM_EXT_GOVERNOR_SETTLE_MS: "5", LLM_EXT_GOVERNOR_LOAD_YIELD_MS: "7" }, null, 8);
+    expect(cfg).toEqual({ enabled: false, limits: { ramLimitPct: 70, cpuLimitPct: 100, maxInferences: 3 }, serverThreads: 2, settleMs: 5, loadYieldMs: 7 });
   });
 
   it("D13: env over settings.yaml over the defaults, key by key", () => {
@@ -236,7 +238,6 @@ describe("controller: polling and settings", () => {
     ["LLM_EXT_GOVERNOR_ENABLED", "yes"],
     ["LLM_EXT_GOVERNOR_ENABLED", "1"],
     ["LLM_EXT_GOVERNOR_SETTLE_MS", "soon"],
-    ["LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS", "-1"],
   ])("%s=%s fails fast and names the variable", (name, value) => {
     expect(() => resolveConfig({ [name]: value }, null, 8)).toThrow(name);
     expect(() => resolveConfig({ [name]: value }, null, 8)).toThrow(GovernorConfigError);

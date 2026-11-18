@@ -45,8 +45,8 @@ if (!process.env.LLM_EXT_GOVERNOR_DIR) {
   process.env.LLM_EXT_GOVERNOR_DIR = createdGovernorDir;
 }
 
-// A suite running in parallel, or a 2-core runner, sits over the default limits, and every job would wait up to the
-// 30 s CPU floor. A test about the limits sets its own strict ones.
+// A suite running in parallel, or a 2-core runner, sits over the default limits, and with no CPU floor every job would wait
+// for as long as it stays there. A test about the limits sets its own strict ones.
 process.env.LLM_EXT_GOVERNOR_CPU_LIMIT_PCT ??= "100";
 process.env.LLM_EXT_GOVERNOR_RAM_LIMIT_PCT ??= "99";
 // boot() calls installUsageRule(), which writes the REAL ~/.claude/rules/use-llm-externalizer.md; opt out

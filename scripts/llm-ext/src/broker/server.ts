@@ -58,6 +58,7 @@ import {
   COMMAND_HEADER,
   CTX_HEADER,
   DISPATCHED_HEADER,
+  GOVERNOR_WAIT_HEADER,
   HELD_HEADER,
   ENGINE_HEADER,
   QUEUE_TIMEOUT_HEADER,
@@ -90,6 +91,8 @@ const TICK_MS = 1000;
 const DIR_MISSING_EXIT_MS = 10_000;
 /** P6: how often the records of models with held jobs are re-read (spec section 2). */
 const HELD_CHECK_MS = 5000;
+/** TRDD-ZTO9K8EK: how long a governor denial reason is sent to the pollers of its jobs after the last denial that set it (the retry timer re-denies every 1 to 2 s). */
+const GOV_WAIT_FRESH_MS = 5000;
 /** How long a finished job's result stays readable after it finished or was last polled. */
 const FINISHED_KEEP_MS = 600_000;
 /** A request body above this is refused: a local model's context bounds a real request far below it. */
@@ -211,6 +214,28 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   const govLeases = new Set<gov.Lease>();
   /** The kinds this broker has a place for in the governor queue. tryAcquire keeps that place until a grant or a withdraw. */
   const govWaiting = new Set<gov.LeaseKind>();
+  /**
+   * TRDD-ZTO9K8EK: why the governor last denied the jobs of a queue key, and when. Sent on the 204 poll reply of a queued job, so
+   * its CLI says why it waits: with no CPU floor, a CPU or RAM wait ends only at the reading or at --command_timeout. A reason
+   * older than GOV_WAIT_FRESH_MS is not sent (the denial may be over, and nothing clears a key whose queue emptied).
+   */
+  const govWait = new Map<string, { reason: string; at: number }>();
+  /** The reason to send for a queued job now, or undefined (none set, too old, or the job is not queued). */
+  const freshGovWait = (job: Job): string | undefined => {
+    const w = job.state === "queued" ? govWait.get(job.key) : undefined;
+    return w !== undefined && Date.now() - w.at <= GOV_WAIT_FRESH_MS ? w.reason : undefined;
+  };
+  /** Jobs whose client was already sent a reason: their next poll waits the normal long poll. */
+  const govTold = new WeakSet<Job>();
+  const noteGovWait = (key: string, reason: string): void => {
+    const prev = govWait.get(key);
+    const first = prev === undefined || Date.now() - prev.at > GOV_WAIT_FRESH_MS;
+    // A header value is ASCII (review F2 of the held header): anything else becomes "?".
+    govWait.set(key, { reason: reason.replace(/[^\x20-\x7e]/g, "?"), at: Date.now() });
+    // A first denial wakes the long poll of the key's queued jobs, so the client says why at once, not after its 60 s poll. Only
+    // the first: the text carries live numbers, and waking on every change would turn the long poll into a busy loop.
+    if (first) for (const j of sched.allQueued(key)) for (const wake of [...(waiters.get(j.id) ?? [])]) wake();
+  };
   let govTimer: NodeJS.Timeout | null = null;
   /** Since when, or since the last credit to the scheduler, inferences are denied with nothing running on the server. */
   let deniedSince: number | null = null;
@@ -249,11 +274,12 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       const same = gov.snapshot().waiters.filter((w) => w.kind === req.kind);
       rank = Math.max(same.findIndex((w) => w.holder.pid === process.pid), 0);
       if (gov.waitBehindHead(same, rank, Date.now())) {
+        noteGovWait(key, "requests of other llm-ext processes are queued ahead of this one");
         govRetry(rank);
         return null;
       }
     }
-    const { lease, denial } = gov.attemptLease(req);
+    const { lease, denial, reason } = gov.attemptLease(req);
     if (!lease) {
       if (req.kind === "load" && denial !== null && denial !== "stale") {
         const why = `${key.split("\u0000")[0]}: ${denial}`;
@@ -261,11 +287,13 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         if (why !== loadDenial) o.log(`model '${key.split("\u0000")[0]}' waits for a load grant (${denialText(denial, req.alone === true ? (req.minBytes ?? 0) : (req.bytes ?? 0))}); the loaded server keeps serving its queue`); // ubs:ignore log dedupe of denial text, not a secret
         loadDenial = why;
       }
+      if (reason !== null) noteGovWait(key, reason);
       govWaiting.add(req.kind);
       govRetry(rank);
       return null;
     }
     if (req.kind === "load") loadDenial = null;
+    govWait.delete(key);
     govWaiting.delete(req.kind);
     govLeases.add(lease);
     return lease;
@@ -299,7 +327,7 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
   /**
    * D8 takes the lease before `take`, so no job is known yet. The longest
    * execution timeout keeps the expiry backstop behind every job the lease can
-   * serve; the shortest queue timeout is the one that may shorten the CPU floor.
+   * serve; the shortest queue timeout is recorded on the waiter (no governor rule reads it since TRDD-ZTO9K8EK removed the CPU floor).
    */
   const leaseLimits = (key: string): { timeoutMs: number; queueTimeoutMs: number | null } => {
     let timeoutMs = 0;
@@ -1296,7 +1324,10 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
       job.pollers++;
       job.lastPolledAt = Date.now();
       try {
-        if (job.state === "queued" || job.state === "held" || job.state === "running") {
+        // TRDD-ZTO9K8EK: a queued job that was never told why it waits gets its first answer at once, not after the 60 s long
+        // poll: a job submitted while the denial is already fresh has no first-denial wake-up (noteGovWait) to bring it.
+        const toldAtOnce = freshGovWait(job) !== undefined && !govTold.has(job);
+        if (!toldAtOnce && (job.state === "queued" || job.state === "held" || job.state === "running")) {
           await new Promise<void>((resolve) => {
             const timer = setTimeout(done, waitMs);
             function done(): void {
@@ -1320,6 +1351,11 @@ export async function runBroker(o: BrokerOptions): Promise<void> {
         const h: Record<string, string> = { [STATE_HEADER]: job.state };
         if (job.dispatchedAt !== undefined) h[DISPATCHED_HEADER] = String(job.dispatchedAt); // ubs:ignore constant header-name key
         if (job.state === "held") h[HELD_HEADER] = "1"; // ubs:ignore constant header-name key; review F2: a fixed ASCII marker; the client names the model it already knows (a raw id can hold non-Latin-1 text, which a header cannot)
+        const waitReason = freshGovWait(job);
+        if (waitReason !== undefined) { // ubs:ignore constant header-name key; TRDD-ZTO9K8EK
+          h[GOVERNOR_WAIT_HEADER] = waitReason; // ubs:ignore constant header-name key; TRDD-ZTO9K8EK: ASCII by noteGovWait
+          govTold.add(job);
+        }
         return reply(res, 204, undefined, h);
       }
       // Review m5: once the result reached its caller, forget the job and its bodies

@@ -53,6 +53,11 @@ export const STATE_HEADER = "x-llm-ext-job-state";
 export const DISPATCHED_HEADER = "x-llm-ext-dispatched-at";
 /** P6: on a 204 poll reply of a held job, "1" (a fixed ASCII marker, review F2): the client prints its own held line, naming the model it knows. */
 export const HELD_HEADER = "x-llm-ext-held";
+/**
+ * TRDD-ZTO9K8EK: on a 204 poll reply of a queued job the governor denies right now, why (ASCII, for example "CPU is 91% busy, limit 80%").
+ * With no CPU floor a governed wait has no bound but --command_timeout, so the client prints it as its own wait line, like a direct send.
+ */
+export const GOVERNOR_WAIT_HEADER = "x-llm-ext-governor-wait";
 /** argv[2] that turns an llm-ext process into a broker (cli/main.ts, before anything else loads). */
 export const BROKER_ARGV = "__broker";
 /** argv[2] of the detached calibration runner (P6); a cal server whose owner does not carry it is an orphan. */

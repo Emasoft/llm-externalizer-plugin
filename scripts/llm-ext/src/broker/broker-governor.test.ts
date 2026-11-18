@@ -24,7 +24,7 @@ import { withStateLock } from "../governor/state.js";
 import { isLocalsServerArgv, processSnapshot, SPAWN_MARKER } from "../local-llama-server.js";
 import { tmpdir } from "../test-tmp-root.js";
 import { ensureBroker, type BrokerEndpoint } from "./client.js";
-import { COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, isBrokerProcess, QUEUE_TIMEOUT_HEADER, readBrokerState, TIMEOUT_HEADER, TOKEN_HEADER } from "./protocol.js";
+import { COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, GOVERNOR_WAIT_HEADER, isBrokerProcess, QUEUE_TIMEOUT_HEADER, readBrokerState, TIMEOUT_HEADER, TOKEN_HEADER } from "./protocol.js";
 import { readRegistry } from "./registry.js";
 import { DEFAULT_TIMINGS, queueKey, Scheduler, type Job } from "./scheduler.js";
 
@@ -37,6 +37,12 @@ const TEST_MS = 300_000;
 const nodeExternals = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 const REQUIRE_SHIM = `import { createRequire as __cjsCreateRequire } from "node:module";\nconst require = __cjsCreateRequire(import.meta.url);\n`;
 const ENTRY = `import { runBrokerMain } from "./server.ts";\nawait runBrokerMain("t1");\n`;
+/** A real client process: one request through brokerExchange, which prints its own wait lines on stderr (argv: url, token, pid, model). */
+const CLIENT_ENTRY = `import { brokerExchange } from "./client.ts";
+const [url, token, pid, model] = process.argv.slice(2);
+const res = await brokerExchange({ url, token, pid: Number(pid) }, { engine: "llama", body: JSON.stringify({ model, messages: [{ role: "user", content: "Once upon a time" }], max_tokens: 4 }), model, ctx: 1024, timeoutMs: 120000 });
+process.exit(res.status === 200 ? 0 : 1);
+`;
 
 interface Reply {
   state: string;
@@ -48,6 +54,7 @@ interface Reply {
 
 let workDir: string;
 let bundle: string;
+let clientBundle: string;
 let governorDir: string;
 const dirs: string[] = [];
 const identities = new Map<string, LoadedIdentity>();
@@ -83,6 +90,17 @@ beforeAll(async () => {
     banner: { js: REQUIRE_SHIM },
     external: nodeExternals,
     outfile: bundle,
+  });
+  clientBundle = join(workDir, "client-entry.mjs");
+  await build({
+    stdin: { contents: CLIENT_ENTRY, resolveDir: HERE, sourcefile: "client-entry.ts", loader: "ts" },
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    target: "node22",
+    banner: { js: REQUIRE_SHIM },
+    external: [...nodeExternals, "better-sqlite3"],
+    outfile: clientBundle,
   });
   for (const m of [A, B]) await measure(m);
 }, TEST_MS);
@@ -477,6 +495,50 @@ describe("the broker through a real governor (two tiny GGUF models)", () => {
       expect(gov.snapshot().waiters.map((w) => w.id)).toEqual(["stopped"]);
     } finally {
       sleeper.kill("SIGKILL");
+    }
+  }, TEST_MS);
+  it("TRDD-ZTO9K8EK: a job the governor denies says why on its poll reply, and a real client prints one stderr wait line naming it", async () => {
+    // With no CPU floor a governed wait is bounded only by --command_timeout, so a brokered client must not wait silently.
+    // The denial is a real one: this process holds the only inference lease (max_inferences 1), the way the other tests here deny.
+    governorLimits(1);
+    const dir = newDir();
+    const ep = await startBroker(dir);
+    expect(await outcome(ep, await submit(ep, A))).toMatchObject({ state: "done" });
+    const denial = await gov.acquire({ timeoutMs: DEADLINE_MS });
+    let released = false;
+    const release = (): void => {
+      if (!released) gov.release(denial);
+      released = true;
+    };
+    try {
+      // The channel: the 204 poll reply of the queued job carries the governor reason, as the held header carries a hold.
+      const id = await submit(ep, A);
+      let reason: string | null = null;
+      await until("the poll reply to name the governor denial", async () => {
+        const res = await fetch(`${ep.url}/v1/jobs/${id}?wait=5`, { headers: { [TOKEN_HEADER]: ep.token } });
+        expect(res.status).toBe(204);
+        reason = res.headers.get(GOVERNOR_WAIT_HEADER);
+        return reason !== null;
+      }, 60_000);
+      expect(reason).toContain("inferences are running");
+      // The client: a real process running brokerExchange, its own stderr.
+      const child = spawn(process.execPath, [clientBundle, ep.url, ep.token, String(ep.pid), A], { stdio: ["ignore", "ignore", "pipe"] });
+      let said = "";
+      child.stderr.on("data", (c: Buffer) => (said += c.toString()));
+      const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+      try {
+        await until("the client to say why it waits", () => said.includes("local inference waiting: ") && said.includes("inferences are running"), 60_000);
+        expect(said).toContain("bound the wait with --command_timeout");
+        expect(child.exitCode).toBeNull();
+        release();
+        expect(await exited).toBe(0);
+        expect(said.match(/local inference waiting/g)).toHaveLength(1);
+      } finally {
+        if (child.exitCode === null) child.kill("SIGKILL");
+      }
+      expect(await outcome(ep, id)).toMatchObject({ state: "done" });
+    } finally {
+      release();
     }
   }, TEST_MS);
   it("an unusable governor dir fails the jobs naming the path; nothing runs ungoverned and the broker stays up", async () => {

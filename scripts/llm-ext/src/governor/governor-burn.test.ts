@@ -33,8 +33,10 @@ const REPO = join(HERE, "..", "..", "..", "..");
 const SNAP_DIR = join(REPO, "reports_dev", "governor", "burn");
 const DEADLINE_MS = 180_000;
 const N = 16;
+/** burn-direct: how long the CLIs get to be released by the reading falling before the test raises cpu_limit_pct for them (no CPU floor, TRDD-ZTO9K8EK). */
+const RELEASE_WAIT_MS = 30_000;
 /** Every governor variable this file sets in its own process; restored in afterAll. */
-const GOV_KEYS = ["LLM_EXT_GOVERNOR_DIR", "LLM_EXT_GOVERNOR_CPU_LIMIT_PCT", "LLM_EXT_GOVERNOR_RAM_LIMIT_PCT", "LLM_EXT_GOVERNOR_MAX_INFERENCES", "LLM_EXT_GOVERNOR_SETTLE_MS", "LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS", "LLM_EXT_GOVERNOR_ENABLED", "LLM_EXT_GOVERNOR_TEST_RAM_LIMIT_MIN"];
+const GOV_KEYS = ["LLM_EXT_GOVERNOR_DIR", "LLM_EXT_GOVERNOR_CPU_LIMIT_PCT", "LLM_EXT_GOVERNOR_RAM_LIMIT_PCT", "LLM_EXT_GOVERNOR_MAX_INFERENCES", "LLM_EXT_GOVERNOR_SETTLE_MS", "LLM_EXT_GOVERNOR_ENABLED", "LLM_EXT_GOVERNOR_TEST_RAM_LIMIT_MIN"];
 const externals = [...builtinModules, ...builtinModules.map((m) => `node:${m}`), "better-sqlite3"];
 // The CJS shim of esbuild.config.mjs: bundled CJS deps (yaml) call require().
 const BANNER = `import { createRequire as __cjsCreateRequire } from "node:module";
@@ -50,6 +52,7 @@ const __dirname = __cjsDirname(__filename);
  * POST, appends every signal it receives to a second file (and survives it, so a signal can be seen), and optionally
  * starts a child of its own, so a test can check that neither is touched.
  */
+// ubs:ignore[javascript.ctcompare.unsafe_secret_compare] the child script compares an argv flag, not a credential (TRDD-ZTO9K8EK)
 const SERVER = `
 import { createServer } from "node:http";
 import { appendFileSync } from "node:fs";
@@ -71,7 +74,7 @@ const server = createServer((req, res) => {
   }, Number(holdMs)));
 });
 server.listen(0, "127.0.0.1", () => {
-  const child = withChild === "1" ? spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }) : null; // ubs:ignore unsafe_secret_compare (pid/flag comparison or loopback test token, not a secret)
+  const child = withChild === "1" ? spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" }) : null;
   process.stdout.write(JSON.stringify({ port: server.address().port, child: child ? child.pid : null }) + "\\n");
 });
 `;
@@ -283,7 +286,6 @@ beforeEach(() => {
     LLM_EXT_GOVERNOR_RAM_LIMIT_PCT: "99",
     LLM_EXT_GOVERNOR_MAX_INFERENCES: "8",
     LLM_EXT_GOVERNOR_SETTLE_MS: "100",
-    LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS: "300",
   });
   // Set by single tests only (D2, M3, status off; the ram-limit minimum): never carried into the next test.
   delete process.env.LLM_EXT_GOVERNOR_ENABLED;
@@ -335,18 +337,25 @@ async function ramLimitUnderReading(): Promise<number> {
 }
 
 describe("governor burn tests (spec section 3)", () => {
-  it("🐌 burn-direct: one at a time while CPU burners keep the reading over cpu_limit_pct; after they are killed, more than one once the reading stays under the limit, one while it stays over; never over max_inferences; every CLI exits 0", async () => {
+  it("🐌 burn-direct: nothing is sent while CPU burners keep the reading over cpu_limit_pct and every CLI says it waits; after they are killed, more than one once the reading stays under the limit; never over max_inferences; every CLI exits 0", async () => {
     const srv = await standIn(1_000);
     const burners = Array.from({ length: 2 * cpus().length }, () => burner());
     // Burning before any CLI asks: a grant needs a fresh reading, so the first one already sees the machine over.
     const cpuLimit = 50;
     const governor = [`cpu_limit_pct: ${cpuLimit}`, "max_inferences: 4", "ram_limit_pct: 99"];
     const runs = Array.from({ length: N }, (_, i) => runCli(configDir(`cfg-${i}`, srv.url, governor)));
-    await until("3 requests served under the burners", () => posts(srv) >= 3);
+    const said: string[] = runs.map(() => "");
+    runs.forEach((r, i) => r.child.stderr?.on("data", (c: Buffer) => (said[i] += c.toString())));
+    // TRDD-ZTO9K8EK: there is no CPU floor. While the burners hold the reading over cpu_limit_pct 50 every CLI is denied
+    // and waits, whatever the time (the old floor let one inference through after 30 s): all N sit in the queue, the head
+    // says why on stderr, and the stand-in server has received nothing.
+    await until("every CLI waiting under the burners", () => snapshot().waiters.length >= N);
+    await until("a CLI to say it waits for CPU", () => said.some((s) => s.includes("local inference waiting: CPU is")));
     const over = snapshot();
     expect(over.cpuPct ?? 0, "the sampler must show CPU over cpu_limit_pct 50 while the burners run").toBeGreaterThanOrEqual(cpuLimit);
-    // Review M4: the governor's own CPU reading after the kill, with the CLIs still waiting, so the test can tell "the
-    // machine is still busy" (D6 grants one at a time, specified) from "the brake never released".
+    expect(posts(srv), "no CPU floor: nothing is sent while every CLI waits over the limit").toBe(0);
+    // Review M4: the governor own CPU reading after the kill, with the CLIs still waiting, so the test can tell "the
+    // machine is still busy" (the brake holds, specified) from "the brake never released".
     const samples: Array<{ at: number; cpu: number | null; waiting: number }> = [];
     const killedAt = Date.now();
     for (const b of burners) if (b.pid) killPid(b.pid);
@@ -355,8 +364,19 @@ describe("governor burn tests (spec section 3)", () => {
       samples.push({ at: Date.now(), cpu: s.cpuPct, waiting: s.waiters.length });
     }, 200);
     let results: Array<{ code: number | null; stderr: string }>;
+    let raisedAt: number | null = null;
+    let postsAtRaise = 0;
     try {
-      results = await Promise.all(runs.map((r) => r.done));
+      const finished = Promise.all(runs.map((r) => r.done));
+      const settled = await Promise.race([finished.then(() => true), new Promise<boolean>((resolve) => setTimeout(() => resolve(false), RELEASE_WAIT_MS))]);
+      if (!settled) {
+        // Other programs keep the machine over the limit and, with no CPU floor, nothing here ever releases the CLIs:
+        // raise cpu_limit_pct in every settings.yaml, the way ram-limit raises its limit, so the run still ends.
+        raisedAt = Date.now();
+        postsAtRaise = posts(srv);
+        for (let i = 0; i < N; i++) writeSettings(join(root, `cfg-${i}`), srv.url, ["cpu_limit_pct: 100", "max_inferences: 4", "ram_limit_pct: 99"]);
+      }
+      results = await finished;
     } finally {
       clearInterval(sampler);
     }
@@ -367,11 +387,13 @@ describe("governor burn tests (spec section 3)", () => {
     const afterKill = rows.filter((e) => e.at >= killedAt).reduce((m, e) => Math.max(m, e.now), 0);
     // Hysteresis (coordinator amendment): the release branch only once the reading stayed 10 points under the limit, with
     // 2 or more CLIs still waiting, for one settle interval (100 ms here) plus one head poll delay (at most 250 ms), and
-    // judged only on the server rows after that grace; the D6 branch only when every reading stayed 10 points over it.
+    // judged only on the server rows after that grace; the held branch only when every reading before the limit was
+    // raised stayed 10 points over it.
+    const heldSamples = samples.filter((s) => raisedAt === null || s.at < raisedAt);
     const graceMs = 100 + 250;
     let runStart: number | null = null;
     let releasedAt: number | null = null;
-    for (const s of samples) {
+    for (const s of heldSamples) {
       if (s.cpu === null || s.cpu >= cpuLimit - 10 || s.waiting < 2) {
         runStart = null;
         continue;
@@ -382,16 +404,16 @@ describe("governor burn tests (spec section 3)", () => {
         break;
       }
     }
-    const stayedOver = samples.length > 0 && samples.every((s) => s.cpu !== null && s.cpu > cpuLimit + 10);
-    const branch = releasedAt !== null ? "release" : stayedOver ? "D6" : "inconclusive";
+    const stayedOver = raisedAt !== null && heldSamples.length > 0 && heldSamples.every((s) => s.cpu !== null && s.cpu > cpuLimit + 10);
+    const branch = releasedAt !== null ? "release" : stayedOver ? "held" : "inconclusive";
     const readings = samples.map((s) => s.cpu).filter((c): c is number => c !== null);
     const afterRelease = releasedAt === null ? null : rows.filter((e) => e.at >= (releasedAt as number)).reduce((m, e) => Math.max(m, e.now), 0);
     process.stdout.write(`governor-burn: burn-direct ${N} CLIs, peak ${before} under the burners, ${afterKill} after the kill; branch ${branch}; ${samples.length} readings after the kill, CPU min ${readings.length ? Math.round(Math.min(...readings)) : "none"} max ${readings.length ? Math.round(Math.max(...readings)) : "none"}${afterRelease === null ? "" : `, peak ${afterRelease} after the release`}\n`);
     appendFileSync(join(SNAP_DIR, "burn-direct-branches.txt"), `${new Date().toISOString()} branch ${branch} before ${before} afterKill ${afterKill} afterRelease ${afterRelease}\n`);
-    expect(before).toBe(1);
+    expect(before).toBe(0);
     expect(afterKill).toBeLessThanOrEqual(4);
     if (branch === "release") expect(afterRelease).toBeGreaterThan(1);
-    if (branch === "D6") expect(afterKill).toBe(1);
+    if (branch === "held") expect(postsAtRaise, "no CPU floor: nothing was sent while every reading stayed over the limit").toBe(0);
     expect(posts(srv)).toBe(N);
     expect(snapshot().leases).toEqual([]);
   }, DEADLINE_MS * 2);

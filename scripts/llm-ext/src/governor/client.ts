@@ -24,7 +24,7 @@ export interface AcquireRequest {
   /** A server's thread count, 0 when unknown, as for a user-started server (D9). */
   threads?: number;
   serverPid?: number | null;
-  /** The job's --queue_timeout, which can only shorten the CPU floor wait (D6). */
+  /** The job's --queue_timeout, recorded on the waiter. No governor rule reads it since TRDD-ZTO9K8EK removed the CPU floor, its only use (D6). */
   queueTimeoutMs?: number | null;
   /** A load only: its projected RAM, an upper bound (D11). */
   bytes?: number;
@@ -71,6 +71,7 @@ const READING_FAILURES_TO_ERROR = 3;
 
 type Op = (state: GovernorState) => void;
 interface Attempt {
+  reason: string | null;
   lease: Lease | null;
   denial: Denial | null;
 }
@@ -118,7 +119,7 @@ function waiterId(kind: LeaseKind): string {
 }
 
 function controllerConfig(config: GovernorConfig): ControllerConfig {
-  return { cores: coreCount(), totalBytes: totalmem(), settleMs: config.settleMs, cpuFloorWaitMs: config.cpuFloorWaitMs, loadYieldMs: config.loadYieldMs };
+  return { cores: coreCount(), totalBytes: totalmem(), settleMs: config.settleMs, loadYieldMs: config.loadYieldMs };
 }
 
 function headsOf(state: GovernorState): Waiter[] {
@@ -130,7 +131,7 @@ function headsOf(state: GovernorState): Waiter[] {
   return heads;
 }
 
-/** `since` stays: a waiter moved back has still waited that long, for the CPU floor (D6). */
+/** `since` stays: a waiter moved back has still waited that long, for the load yield bound (D13). */
 function toTail(state: GovernorState, waiter: Waiter): void {
   state.waiters = [...state.waiters.filter((w) => w !== waiter), waiter];
 }
@@ -234,7 +235,7 @@ function attempt(dir: string, req: AcquireRequest, config: GovernorConfig, keepP
     // gives its place back through commit, which reports a failed write and never throws, so it never blocks this send.
     const kind = req.kind ?? "inference";
     if (placed.has(`${dir}\0${kind}`)) withdrawFrom(dir, kind);
-    return { lease: unrecordedLease(req), denial: null };
+    return { lease: unrecordedLease(req), denial: null, reason: null };
   }
   const failure = failures.get(dir);
   if (failure !== undefined) {
@@ -275,14 +276,17 @@ function attempt(dir: string, req: AcquireRequest, config: GovernorConfig, keepP
     if (!decision.grant) {
       // D13 status: the reason server-status shows. "stale" says nothing about the machine: no reading yet.
       // Review nit: nor "queued", which only says others wait first, and would overwrite the reason that blocks them all.
-      if (decision.denial !== null && decision.denial !== "stale" && decision.denial !== "queued") state.lastDenial = { kind, reason: blockedBy(decision.denial, state, config, kind), pid: process.pid, at: now };
-      return { lease: null, denial: decision.denial, reading };
+      // TRDD-ZTO9K8EK: `reason` is the same text for every denial a reading judged, "queued" included: the broker prints it to its
+      // CLIs, which would otherwise wait silently now that only --command_timeout ends a CPU wait.
+      const reason = decision.denial === null || decision.denial === "stale" ? null : blockedBy(decision.denial, state, config, kind);
+      if (reason !== null && decision.denial !== "queued") state.lastDenial = { kind, reason, pid: process.pid, at: now };
+      return { lease: null, denial: decision.denial, reason, reading };
     }
     if (keepPlace) {
       // D7: a requester granted with work left goes to the tail, so 100 requesters take turns; not dropped, which left it
       // out of the queue until its next poll. Not kept at the head: a scan with more acquires than the window always has
       // one pending and would never let anyone else in. `since` restarts: the next request has waited from now, and the
-      // CPU floor (D6) must not see the wait of one already granted.
+      // load yield bound (D13) must not see the wait of one already granted.
       waiter.since = now;
       toTail(state, waiter);
     } else {
@@ -307,9 +311,9 @@ function attempt(dir: string, req: AcquireRequest, config: GovernorConfig, keepP
     // stop it under the job it just took the moment that job ends.
     const served = lease.kind === "inference" ? state.servers.find((s) => s.pid === lease.serverPid) : undefined;
     if (served) served.wantUnload = false;
-    return { lease, denial: null, reading };
+    return { lease, denial: null, reason: null, reading };
   });
-  if (!result.locked) return { lease: null, denial: null };
+  if (!result.locked) return { lease: null, denial: null, reason: null };
   if (result.value.reading.due) startSampling(dir, result.value.reading.pids);
   return result.value;
 }
@@ -360,12 +364,14 @@ export interface AttemptResult {
   lease: Lease | null;
   /** Why not, for a caller that must tell a load denial from RAM; null for a busy lock, which says nothing. */
   denial: Denial | null;
+  /** TRDD-ZTO9K8EK: the wait line text of that denial (`CPU is 91% busy, limit 80%`), for a broker that says why its jobs wait; null for a grant, a busy lock or "stale" (no reading yet). */
+  reason: string | null;
 }
 
 /** `tryAcquire` with the reason of a denial: the broker keeps serving its loaded model while a load is denied (D8). */
 export function attemptLease(req: AcquireRequest): AttemptResult {
-  const { lease, denial } = attempt(governorDir(), req, governorConfig());
-  return { lease, denial };
+  const { lease, denial, reason } = attempt(governorDir(), req, governorConfig());
+  return { lease, denial, reason };
 }
 
 /**
@@ -514,7 +520,7 @@ export function snapshot(): GovernorSnapshot {
 
 /**
  * Whether a waiter at `rank` may only read the file. Not when the head of its
- * kind is dead, or stopped (SIGSTOP, Ctrl-Z, a debugger): a live head that
+ * kind is dead, or stopped (SIGSTOP, Ctrl-Z, a paused debug session): a live head that
  * stopped polling grants nothing and samples nothing, and reaping happens only
  * in a critical section, so someone behind it has to take one.
  */
