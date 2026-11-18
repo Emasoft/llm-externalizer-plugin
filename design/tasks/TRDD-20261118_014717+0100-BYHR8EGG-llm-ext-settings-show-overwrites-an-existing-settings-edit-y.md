@@ -4,7 +4,7 @@ title: llm-ext settings show overwrites an existing settings_edit.yaml copy with
 column: blocked
 status: tasked
 created: 2026-11-18T01:47:17+0100
-updated: 2026-11-18T02:02:23+0100
+updated: 2026-11-18T02:18:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -17,8 +17,9 @@ approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T01:47:17+0100
 blocked-by: [TYSKX72I]
 pre-block-column: todo
-blocker-probe: test -f design/tasks/TRDD-20261117_224108+0100-TYSKX72I-split-scripts-llm-ext-src-index-ts-so-the-ubs-taint-analysis.md
-blocker-holds-if: exit-0
+blocker-probe: trddgrep show TYSKX72I --porcelain
+blocker-holds-if: not-match:\t(complete|completed|published|live)\t
+unblock-when: []
 ---
 
 # llm-ext settings show overwrites an existing settings_edit.yaml copy without keeping it
@@ -33,4 +34,4 @@ Measured 2026-11-18: get_settings in scripts/llm-ext/src/index.ts (about line 63
 
 ## Blocker probe
 
-Run blocker-probe with the working directory set to the directory that holds design/ (builds_dev/dev-after-14.3.0 in the llm-externalizer checkout), not the repo root: from the repo root it exits 1 and the block reads as released. No trddgrep verb runs blocker-probe, and trddgrep validate says it never executes one.
+Run blocker-probe with the working directory set to the directory that holds design/ (builds_dev/dev-after-14.3.0 in the llm-externalizer checkout), not the repo root: from the repo root it exits 1, which reads as held, so the probe never releases from there. No trddgrep verb runs blocker-probe, and trddgrep validate says it never executes one.
