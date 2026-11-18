@@ -61,6 +61,7 @@ const quoted = (q: string): string => `The query is: ${JSON.stringify(q)}.`;
 // WHY the constant: build() cannot see the run's --chunk-chars, so pieces and chunks are bounded by the default; a smaller planner chunk-chars would make the planner refuse (never cut) an oversized chunk (plan §5 chunk-chars default 60,000; qs.mjs:1083-1086).
 function fileLines(text: string): { n: string; text: string }[] {
   const out: { n: string; text: string }[] = [];
+  // WHY \r?\n: a CRLF file must not leave a \r at the end of each line, and its 1-based line numbers must equal those of the same text with LF (same split as l2/inputs.ts toLines).
   text.split(/\r?\n/).forEach((line, idx) => {
     if (line.trim() === "") return;
     chunkText(line, CHUNK_CHARS_DEFAULT).forEach((piece, p) => out.push({ n: p === 0 ? String(idx + 1) : `${idx + 1}.${p + 1}`, text: piece.text }));
@@ -146,6 +147,7 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
       const ids = itemIds(i);
       // Why unsplittable: best picks among ALL candidates, so one request must hold them all; the planner refuses (never splits) if they do not fit.
       // Why no `none` option: the exists noul answers "does any candidate match", as in jev-mcp; best only orders the candidates.
+      // WHY keys u<k>: the option keys of best ARE the keys of its probabilities, and the text names the unit as units[k]; project() reads the probabilities back with the same `u${k}` form and maps k to the caller id, so changing this form means changing it there too.
       const criteria = Object.fromEntries(ids.map((_, k) => [`u${k}`, `units[${k}]`]));
       return {
         sharedState: null,
@@ -181,6 +183,7 @@ export const spec: DecisionSpec<FindInput, FindResult> = {
       const invalid: FindResult["invalid"] = [];
       if (!b.ok) invalid.push({ key: "best", reason: b.reason });
       if (!e.ok) invalid.push({ key: "exists", reason: e.reason });
+      // A refused best still reports a valid exists probability; ranked stays empty because no ranking can be built without best.
       if (!b.ok || !e.ok) return { mode: "json", status: "invalid", ranked: [], tie: false, exists: e.ok ? (e.answer as NoulAnswer).noul : null, hits: [], invalid };
       const pick = b.answer as ChoiceAnswer;
       const exists = (e.answer as NoulAnswer).noul;
