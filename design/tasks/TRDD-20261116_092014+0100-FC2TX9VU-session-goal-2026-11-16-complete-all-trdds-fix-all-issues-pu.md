@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-18T00:39:08+0100
+updated: 2026-11-18T08:41:35+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -33,7 +33,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 
 ## STATE (read first on resume)
 
-2026-11-16 NEXT: read-only triage. (1) dev and testing cards, check implementation-commits are on origin/main and check agent worktrees for stranded work. (2) RL-01..13 and DOC-11 against the 14.3.0 publish log. (3) map each issue to a card and retest against installed 14.3.0. (4) trddgrep roots and why for blocked cards. Then one batched message of USER-only blockers.
+2026-11-18T08:56:06+0100 STATE (authoritative; supersedes the Next list N1-N7, which is the 2026-11-18 00:45 plan): worktree builds_dev/dev-after-14.3.0, branch dev/after-14.3.0, HEAD fcdd58c6, no commit after v14.7.0 (dc6acf32) pushed yet. Held out of the next release: TRDD-7ZA3EE6Z classify filter --context (028ad703, reverted by fcdd58c6 after its live-check case c failed; USER decision). Parked and uncommitted: the TRDD-TN8OUZ50 auth-line edits in config.ts and index.ts (patches docs_dev/tn8ouz50-parked/*-after-ceb16c5c.patch; TN8OUZ50 is blocked by the TYSKX72I route, a USER decision). NEXT: take the parked edits out with git apply -R, run the full suite once with nothing else running (env -u CLAUDE_PID), run scripts/publish.py --patch from the worktree in the background with nothing else touching git, verify the Release run and its assets, update the installed plugin and the homebrew version, put the parked edits back and check their content, then the final USER report. Superseded 2026-11-16 line: read-only triage of dev and testing cards, RL-01..13, issues and blockers (done, see the Triage log).
 
 ## Approval log
 
@@ -66,6 +66,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 2026-11-16 22:37+0100: correction to the previous note. The test totals come from reports_dev/publish/test.log, last written 22:30:44+0100, 79 s before the v14.4.1 release commit 9e6069d7 (22:32:03+0100) and two hours after v14.4.0 (20:10:49+0100), so they belong to the 14.4.1 publish. The v14.4.1 GitHub release exists with 0 assets until Release run 43961101755 attaches SHA256SUMS and provenance. The cache-binary version check self-installed better-sqlite3 into the temp config dir (cfg/native), not into the plugin cache.
 2026-11-17 00:58+0100 STATE: v14.5.0 published (release commit on origin/main 65a0f055; publish gate 6389+220+12+1 tests passed) and installed at user scope (restart needed). Carries: 120 min CI ceiling 32a7024e (TRDD-36L97JC9), legacy broker drain removal 3ed140b7 (TRDD-ZGSGGHQG), local-decision classifier profile fc3052b0 (TRDD-1L9VMEY7). NEXT: (1) read CI 43983678292 and Release 43983677848 for 65a0f055: green means close 36L97JC9 and set the final ceiling from measured stage durations; red means read --log-failed and fix. (2) read reports_dev/classify-local/v1450 (re-run of the inputs that hit the 16384 422 on 14.4.1) and move 1L9VMEY7 on if clean. (3) open gap: l1/estimate.ts undercounts random base64 about 2x. (4) unpushed local branch ci/linux-stage-timing and worktree builds_dev/ci-linux-stage-timing can be removed (32a7024e is now released).
 2026-11-17T09:03:16+0100 STATE: v14.6.0 published (publish.py --minor 07:38-08:14, exit 0, full gate green; release commit 0cb2f70d on origin/main, tag v14.6.0, GitHub release; log builds_dev/dev-after-14.3.0/reports_dev/release-14.6.0/) and installed at user scope (14.5.0 -> 14.6.0, restart needed); worktree push config undone. Carries a473a6b0 split on 422, 628142c0 split-piece reasons, ea77d4d5 timeout retry-once, 0476ca55 Linux test fixes. CI 44037104295 on Linux: the ps test and the temp-dir leak are fixed; the RAM test now stops at its own precondition with about 1 GiB used on the runner. NEXT: RAM test drift margin (B window is U wide), then next release and CI.
+2026-11-18T08:41:35+0100 Evidence for the 704e1430 moves to published, recorded here because the four archived cards refuse appends (main agent, git grep and git show on 2026-11-18): 1FJAUVBU rests on v14.7.0 scripts/llm-ext/src/scan-pipeline.ts:230 (the Allowed roots text of a30f4d22); PN84WC1L on v14.7.0 command-stop.ts:150 runOutcome and :156 failedHeader plus 3 runOutcome calls in scan-folder/core.ts (40e7a8e7); OK1NN5RN on v14.7.0 cli/main.ts:350 and :364 (ff8b730c) and vitest.config.ts:92 (dd6f5302); 4TTFUIL0 on v14.7.0 estimate.ts:385-401, the refusal gate in its slotRefusal form, and the 38a7e9a8 diff shows slotRefusal replacing assertSlotAllowed (its lines 15-16, 60-80, 120-124). The implementation SHAs are on the pre-squash history only, so tag ancestry cannot show this. The 704e1430 message claim that the few missing lines were rewritten by later commits of the same card is verified for 4TTFUIL0 only; for the other three cards the distinctive lines above stand in for it.
 
 ## Next
 
