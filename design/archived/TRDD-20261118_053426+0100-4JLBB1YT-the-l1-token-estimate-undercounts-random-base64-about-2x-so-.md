@@ -1,10 +1,10 @@
 ---
 trdd-id: 4JLBB1YT
 title: The l1 token estimate undercounts random base64 about 2x so a planned request can exceed the decider limit
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T05:34:26+0100
-updated: 2026-11-18T08:03:37+0100
+updated: 2026-11-18T08:05:37+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -33,6 +33,7 @@ Found in TRDD-1L9VMEY7 (notes of fc3052b0): the l1 token estimate undercounts ra
 ## Approval log
 
 - 2026-11-18T05:34:26+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T08:05:37+0100 — COMPLETE by main-agent@llm-externalizer-plugin. estimator fix ceb16c5c landed; acceptance 3/3; remaining planner headroom tracked on TRDD-NL2012O9.
 
 ## Notes
 
