@@ -41,6 +41,7 @@ import {
 } from "./mass_scouting/mcp-tools.js";
 import { safeReadJson } from "./safe-body.js";
 import { buildTools } from "./tools/definitions.js";
+import { writeSettingsCopy } from "./tools/settings-copy.js";
 import {
   runClusterSynonyms,
   type ClusterSynonymsHooks,
@@ -5592,10 +5593,11 @@ async function dispatchCallToolInner(
           // endpoints), never a final report, so it goes to the gitignored scratch root, not reports/.
           const targetDir = outputDir || defaultScratchDir();
           mkdirSync(targetDir, { recursive: true });
-          const copyPath = join(targetDir, "settings_edit.yaml");
-          writeFileSync(copyPath, raw, "utf-8");
+          // TRDD-BYHR8EGG: a differing earlier copy is kept under a stamped name, never overwritten (see tools/settings-copy.ts).
+          const { copyPath, keptPath } = writeSettingsCopy(targetDir, raw);
+          const keptNote = keptPath === undefined ? "" : `\nPrevious differing copy kept as: ${keptPath}`;
           return {
-            content: [{ type: "text", text: `${summary}\n\nFull settings file copied to: ${copyPath}` }],
+            content: [{ type: "text", text: `${summary}\n\nFull settings file copied to: ${copyPath}${keptNote}` }],
           };
         } catch (err) {
           // Resolved-profile summary still printed even when the copy fails
