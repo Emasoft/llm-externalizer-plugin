@@ -1,0 +1,5 @@
+# WHY: Windows runners (actions/checkout with core.autocrlf=true) check out text files with CRLF.
+# A CR on the shebang line of bin/llm-ext makes the kernel/Git Bash look for "node\r", and CRLF
+# breaks byte-exact test fixtures. Forcing LF at checkout keeps the Windows tree identical to the
+# index (all LF today, so no renormalization). No .bat/.cmd/.ps1 files are tracked, so no eol=crlf rule.
+* text=auto eol=lf

@@ -1,0 +1,114 @@
+name: Windows
+
+# WHY a separate workflow and not a second job in ci.yml: the README claims Windows support
+# and this is the first time that claim is exercised; its first runs are expected to be red
+# (TRDD-61EINA10). A likely-red job inside ci.yml would turn the whole Linux CI red. Kept
+# apart, a Windows failure is visible without hiding a real Linux regression behind it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref instead of letting them pile up.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  windows:
+    name: Build, CLI smoke and unit tests (Windows)
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    # The default ceiling is 360 min; a hung npm/vitest step would otherwise
+    # burn six hours of Actions minutes before anyone noticed.
+    timeout-minutes: 60
+    defaults:
+      run:
+        # Git Bash everywhere unless a step says otherwise: one command syntax across
+        # steps, and `bash` on GitHub runners adds `-eo pipefail`, so the `| tee` below
+        # cannot hide a vitest failure.
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: scripts/llm-ext/package-lock.json
+
+      # `npm ci` (not `npm install`): build against the locked dep tree. Mirrors ci.yml.
+      - name: Install dependencies
+        working-directory: scripts/llm-ext
+        run: npm ci --ignore-scripts
+
+      # `--ignore-scripts` blocks every package install hook for supply-chain safety, but
+      # better-sqlite3 ships a native addon the tests load at runtime. Rebuild only that
+      # package; the explicit `--no-ignore-scripts` is mandatory because a global
+      # `ignore-scripts=true` would otherwise silently no-op the rebuild. Mirrors ci.yml.
+      - name: Rebuild native modules
+        working-directory: scripts/llm-ext
+        run: npm rebuild better-sqlite3 --no-ignore-scripts
+
+      - name: Typecheck
+        working-directory: scripts/llm-ext
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: scripts/llm-ext
+        run: npm run build
+
+      # `!cancelled()` on every step below: each is an independent signal for the Windows
+      # claim (shim in Git Bash, shim in PowerShell, unit tests), so one failure must not
+      # hide the others; it still lets a manual cancel or a superseded run stop the job.
+      # Never `continue-on-error`: a failing step must turn the job red.
+
+      # bin/llm-ext starts with a `#!/usr/bin/env node` shebang; Git Bash is the only shell
+      # here that honours it. A CRLF checkout would put a CR on that line (see .gitattributes).
+      - name: CLI smoke through the shim (Git Bash)
+        if: ${{ !cancelled() }}
+        run: |
+          bin/llm-ext --version
+          bin/llm-ext --help
+
+      # PowerShell and cmd.exe ignore shebangs, so the shim is invoked as `node bin/llm-ext`.
+      # PowerShell does not stop on a native command's non-zero exit by itself, hence the
+      # explicit $LASTEXITCODE check after each call.
+      - name: CLI smoke through the shim (PowerShell)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          node bin/llm-ext --version
+          if ($LASTEXITCODE -ne 0) { throw "node bin/llm-ext --version exited with $LASTEXITCODE" }
+          node bin/llm-ext --help
+          if ($LASTEXITCODE -ne 0) { throw "node bin/llm-ext --help exited with $LASTEXITCODE" }
+
+      # Stage 1 only (`test:unit`). The other stages (`test:broker`, `test:burn`, `test:e2e`)
+      # drive a real llama-server, and ci.yml pins only the Linux llama-server asset (and its
+      # SHA-256); there is no pinned Windows asset or model cache yet, so those stages are
+      # not run here (follow-up card, parent TRDD-61EINA10). npm runs scripts through
+      # cmd.exe on Windows, which keeps single quotes, so the glob in `test:unit` is
+      # double-quoted in package.json. The junit file is written inside the workspace so the
+      # upload step below can find it.
+      - name: Unit tests (stage 1)
+        if: ${{ !cancelled() }}
+        working-directory: scripts/llm-ext
+        run: npm run test:unit -- --reporter=default --reporter=junit --outputFile.junit=junit-unit.xml 2>&1 | tee vitest-unit.log
+
+      - name: Upload test output
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-unit-test-output
+          path: |
+            scripts/llm-ext/junit-unit.xml
+            scripts/llm-ext/vitest-unit.log
