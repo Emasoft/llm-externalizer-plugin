@@ -187,6 +187,8 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
     // Why null criteria: the descriptions live once in shared state; repeating them in every item's question would multiply the cost by the item count.
     const criteria = Object.fromEntries(i.classes.map((c) => [c.id, null]));
     const background = [i.purpose === undefined ? "" : " Use `shared.purpose` as the reason for the classification.", i.context === undefined ? "" : " Use `shared.context` as background."].join("");
+    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
+    const contextSubject = i.context === undefined ? "" : "`shared.context` and ";
     const units: BuiltUnit[] = i.items.map((it, k) => ({
       kind: i.mode === "files" ? "text" : "atomic",
       // Why a bare string for text: the planner chunks a string state by lines; an object state would be split by entries and refuse a long `text`.
@@ -194,7 +196,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
       // D5, D14: the question names the unit by position and the key is built from the index; no item text and no caller id reach the instructions.
       questions: {
         [indexKey(KEY, k)]: choice(
-          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`the content of \`units[${k}]\``, "classify")}${background}`,
+          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
           criteria,
         ),
       },

@@ -138,8 +138,10 @@ export const spec: DecisionSpec<RuleCheckInput, RuleCheckResult> = {
   validation: DEFAULT_POLICY,
   build(i) {
     const background = i.context === undefined ? "" : " Use `shared.context` as background.";
+    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
+    const subjectNames = i.context === undefined ? "`shared.phrase`" : "`shared.phrase`, `shared.context`";
     const units: BuiltUnit[] = i.rules.map((r, k) => {
-      const subject = `\`shared.phrase\` and the rule in \`units[${k}]\``;
+      const subject = `${subjectNames} and the rule in \`units[${k}]\``;
       return {
         kind: "atomic",
         state: { id: r.id, text: r.text },

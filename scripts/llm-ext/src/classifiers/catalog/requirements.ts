@@ -78,13 +78,15 @@ export const spec: DecisionSpec<RequirementsInput, RequirementsResult> = {
     const background = i.context === undefined ? "" : " Use `shared.context` as background.";
     // Why null criteria: the descriptions live once in shared state; repeating them in every sentence's question would multiply the cost by the sentence count.
     const criteria = Object.fromEntries(CLASSES.map((c) => [c.id, null]));
+    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
+    const contextSubject = i.context === undefined ? "" : "`shared.context` and ";
     const units: BuiltUnit[] = textSentences(i.prompt).map((s, k) => ({
       kind: "atomic",
       state: { id: s.id, text: s.text },
       // WHY the wording of `classify label`: the scoring gate was measured through `classify label` in json mode, so the shipped question is that question byte for byte. The sentence text never reaches the instructions (D5): the question names the unit by position.
       questions: {
         [indexKey(KEY, k)]: choice(
-          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`the content of \`units[${k}]\``, "classify")}${background}`,
+          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
           criteria,
         ),
       },
