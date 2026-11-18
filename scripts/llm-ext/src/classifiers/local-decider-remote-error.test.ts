@@ -168,6 +168,53 @@ describe("classify, a remote failure answered by the local decider", () => {
     expect(decision.invalid).toEqual([{ id: "proposition_1", reason: "answer missing from reply" }]);
   });
 
+  // TRDD-NL2012O9: a text item travels alone, so the escalated request is one text chunk; the decider counts it above the limit the l1 estimate planned it under and refuses it with a 422, which used to end its question as "no answer" because a 1-unit request was never cut again.
+  it("a text item the decider refuses on the local escalation is cut again and answered under its key (TRDD-NL2012O9)", async () => {
+    const { runDecision } = await import("./run-decision.js");
+    const { spec } = await import("./catalog/filter.js");
+    const stderr: string[] = [];
+    const counted: number[] = []; // decider token count (chars / 2) of every request the decider received, in order
+    // WHY lorem text and chars / 2: about 0.32 estimated tokens per char against the 0.5 this fake decider counts, so 39606 chars plan as ONE request (about 12650 estimated) that the decider (about 19800) refuses
+    const text = `${"lorem ipsum dolor ".repeat(2200)}NEEDLE`;
+    const fetch: GlobalFetch = async (url, init) => {
+      if (url.startsWith(DECIDER)) {
+        if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", loaded: ["elephant-1"] }), { status: 200 });
+        const body = JSON.parse(String(init.body)) as { state: unknown; questions: Record<string, unknown> };
+        const json = JSON.stringify(body.state);
+        const tokens = Math.ceil(json.length / 2);
+        counted.push(tokens);
+        if (tokens > 16384) return new Response(JSON.stringify({ error: { message: `the question with its state needs ${tokens} tokens; the limit is 16384 and input is not cut`, type: "invalid_request_error" } }), { status: 422 });
+        return new Response(JSON.stringify({ model: "elephant-1", answers: Object.fromEntries(Object.keys(body.questions).map((k) => [k, { type: "noul", noul: json.includes("NEEDLE") ? 0.9 : 0.1 }])), usage: { input_tokens: 5, output_tokens: 1 } }), { status: 200 });
+      }
+      if (url.includes("output_modalities=decisions")) {
+        const body = JSON.parse(fx("p02", "models-decisions").body) as { data: { id: string; description?: string }[] };
+        body.data = body.data.filter((m) => m.id.includes("typesafe/") || !/system\s*one/i.test(m.description ?? ""));
+        return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
+      }
+      if (url.endsWith("/endpoints")) return replayFixture(fx("p02", "target-endpoints"));
+      return syntheticResponse(402, JSON.stringify({ error: { code: 402, message: "Insufficient credits" } }), { "content-type": "application/json" });
+    };
+    const deps: RunDeps = {
+      settings: { active: "c", active_classifier: "c", profiles: { c: { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: KEY_REF, max_attempts: 1, timeout_ms: 5000, concurrency: 1 } as unknown as Profile } },
+      fetch,
+      catalogOptions: { path: join(tmp, "catalog.json") },
+      sigint: new EventEmitter(),
+      stderr: (l: string) => { stderr.push(l); },
+      localFallback: { requestTimeoutMs: 20_000, attemptTimeoutMs: 2000, startTimeoutMs: 1000, maxAttempts: 1 },
+      localFallbackDeps: { discover: async () => [{ pid: 23342, urls: [DECIDER] }], singletonInstalled: () => true, platform: "darwin" },
+    };
+    const out = await runDecision(spec, { input: { question: "Does it mention a needle?", items: [{ id: "big", text }] } }, deps);
+    expect(out.exitCode, `${out.cause ?? ""} ${out.text ?? ""}`).toBe(0);
+    // the whole text first (refused), then pieces that each fit the decider
+    expect(counted[0]).toBeGreaterThan(16384);
+    expect(counted.length).toBeGreaterThan(2);
+    expect(counted.slice(1).every((n) => n <= 16384)).toBe(true);
+    expect(out.envelope!.warnings.filter((x) => x.code === "split_piece_failed")).toHaveLength(0);
+    const decision = out.envelope!.decision as { rows: { id: string; p: number }[]; invalid: unknown[] };
+    expect(decision.invalid).toEqual([]);
+    expect(decision.rows.map((r) => [r.id, r.p])).toEqual([["big", 0.9]]);
+  });
+
   it("the stderr line and the local_decider warning name the remote 402 message and class", async () => {
     const { runDecision } = await import("./run-decision.js");
     const { spec } = await import("./catalog/filter.js");

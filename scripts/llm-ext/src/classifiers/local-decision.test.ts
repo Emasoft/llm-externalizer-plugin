@@ -58,14 +58,15 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-/** A fake decider: /health says elephant-1 is loaded; a POST answers with `answer(questions)` or the given HTTP reply. Every other URL is recorded. */
-function deciderFetch(answer: (questions: Record<string, unknown>) => Response): { fetch: GlobalFetch; others: string[]; posts: number } {
+/** A fake decider: /health says elephant-1 is loaded; a POST answers with `answer(questions, state)` or the given HTTP reply. Every other URL is recorded. */
+function deciderFetch(answer: (questions: Record<string, unknown>, state: unknown) => Response): { fetch: GlobalFetch; others: string[]; posts: number } {
   const state = { others: [] as string[], posts: 0 };
   const fetch: GlobalFetch = async (url, init) => {
     if (url.startsWith(DECIDER)) {
       if (url.endsWith("/health")) return new Response(JSON.stringify({ status: "ok", model: "elephant-1", loaded: ["elephant-1"] }), { status: 200 });
       state.posts++;
-      return answer((JSON.parse(String(init.body)) as { questions: Record<string, unknown> }).questions);
+      const body = JSON.parse(String(init.body)) as { state: unknown; questions: Record<string, unknown> };
+      return answer(body.questions, body.state);
     }
     state.others.push(url);
     return syntheticResponse(599, "not reachable in this test", {});
@@ -156,6 +157,30 @@ describe("TRDD-1L9VMEY7: every classify action answers through the local decider
     expect(d.others).toEqual([]);
   });
 
+  // TRDD-NL2012O9: a text item travels alone, and the l1 estimate plans it under the 16384 window; the decider counts it higher and refuses it with a 422, which used to end its question as "no answer".
+  it("a text item the decider refuses with a 422 is cut again and answered from its pieces: exit 0, the item matched, nothing remote", async () => {
+    // WHY lorem text and chars / 2: about 0.32 estimated tokens per char against the 0.5 this fake decider counts, so 39606 chars (about 12650 estimated) plan as ONE request that the decider (about 19800) refuses.
+    const text = `${"lorem ipsum dolor ".repeat(2200)}NEEDLE`;
+    const counted: number[] = [];
+    const d = deciderFetch((q, state) => {
+      const json = JSON.stringify(state);
+      const tokens = Math.ceil(json.length / 2);
+      counted.push(tokens);
+      if (tokens > 16384) return new Response(JSON.stringify({ error: { message: `the question with its state needs ${tokens} tokens; the limit is 16384 and input is not cut`, type: "invalid_request_error" } }), { status: 422 });
+      return reply(Object.fromEntries(Object.keys(q).map((k) => [k, { type: "noul", noul: json.includes("NEEDLE") ? 0.9 : 0.1 }])));
+    });
+    const { spec } = await import("./catalog/filter.js");
+    const out = await runDecision(spec, { input: { question: "Does it mention a needle?", items: [{ id: "big", text }] }, profileFlag: "local-decision" }, { settings: settingsWith({ "local-decision": LOCAL }), ...seams(d.fetch) });
+    expect(out.exitCode, `${out.cause ?? ""} ${out.text ?? ""}`).toBe(0);
+    // the whole text first (refused), then pieces that each fit the decider
+    expect(counted[0]).toBeGreaterThan(16384);
+    expect(counted.length).toBeGreaterThan(2);
+    expect(counted.slice(1).every((n) => n <= 16384)).toBe(true);
+    const decision = out.envelope!.decision as { rows: { id: string; p: number }[]; invalid: unknown[] };
+    expect(decision.invalid).toEqual([]);
+    expect(decision.rows.map((r) => [r.id, r.p])).toEqual([["big", 0.9]]);
+    expect(d.others).toEqual([]);
+  });
   it("a split request whose piece the decider refuses names that piece reason and question count on stderr and in the warnings, not only \"answer missing from reply\"", async () => {
     // TRDD-1L9VMEY7: the decider refuses every multi-question request, then the second single-question piece, each with the measured 422 text.
     const refusal = (needed: number): Response => new Response(JSON.stringify({ error: { message: `the question with its state needs ${needed} tokens; the limit is 16384 and input is not cut`, type: "invalid_request_error" } }), { status: 422 });

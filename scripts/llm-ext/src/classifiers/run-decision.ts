@@ -301,6 +301,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
       const answered = await answerWithSplit({
         job: built,
         limits: localPlanLimits,
+        defaultLabels,
         request,
         stop,
         ask: (r) => answerWithLocalDecider({
@@ -551,6 +552,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
       const local = await answerWithSplit({
         job: built,
         limits: remotePlanLimits,
+        defaultLabels,
         request,
         stop,
         ask: (r) => answerWithLocalDecider({
