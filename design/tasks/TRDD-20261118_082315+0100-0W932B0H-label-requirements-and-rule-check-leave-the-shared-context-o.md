@@ -1,10 +1,10 @@
 ---
 trdd-id: 0W932B0H
 title: label requirements and rule-check leave the shared context outside the injection guard
-column: todo
+column: testing
 status: tasked
 created: 2026-11-18T08:23:15+0100
-updated: 2026-11-18T10:11:28+0100
+updated: 2026-11-18T10:27:24+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
