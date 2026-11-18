@@ -123,7 +123,7 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
-  const profile = (over: Record<string, unknown> = {}): Profile => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C403_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over }) as unknown as Profile;
+  const profile = (over: Record<string, unknown> = {}): Profile => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C403_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over }) as unknown as Profile; // ubs:ignore env-var reference, not a secret
   function serve(onDecision: (questions: Record<string, unknown>) => Response) {
     const urls: string[] = [];
     const fetch: GlobalFetch = async (url, init) => {
@@ -168,6 +168,8 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
       readStdin: () => readAllFrom(stdin),
       stdout: (t) => out.push(t),
       stderr: (l) => err.push(l),
+      // WHY the local decider is OFF (as in run-decision.test.ts depsOf): an absent section means ENABLED. Measured: with the section absent the exit-5 test times out at 20 s, and with only `localFallback: { enabled: false }` added all 26 pass. The mechanism is traced, not measured: the remote 500 likely escalates to answerWithLocalDecider, which retries a retryable "decider not ready" refusal every 2 s up to a 400 s budget on a host with mlx-decision installed. This helper serves every test here; none asserts a fallback answer.
+      localFallback: { enabled: false },
     };
     return { out, err, deps, stdin };
   };
@@ -228,7 +230,7 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
   });
 
   // Profile selection on the classify path: the runner applies PT-03 to --profile, else active_classifier:, and never reads `active:`.
-  const text = { "profile-type": "paid", api: "openrouter-remote", model: "some/model", api_key: "$C403_TEST_KEY" };
+  const text = { "profile-type": "paid", api: "openrouter-remote", model: "some/model", api_key: "$C403_TEST_KEY" }; // ubs:ignore env-var reference, not a secret
   const mixed = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ active: "t", active_classifier: "c", profiles: { t: text, c: profile() }, ...over });
 
   it("(a) no --profile, a text `active:` and a classifier `active_classifier:`: the command runs", async () => {
@@ -302,7 +304,7 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
         if (!url.includes("output_modalities=decisions") && !url.endsWith("/endpoints")) auth.push(String((init.headers as Record<string, string>).Authorization));
         return s.fetch(url, init);
       };
-      const { err, deps, stdin } = io(fetch, {}, { active: "c", active_classifier: "c", profiles: { c: profile(), z: profile({ api_key: "$C403_Z_KEY" }) } });
+      const { err, deps, stdin } = io(fetch, {}, { active: "c", active_classifier: "c", profiles: { c: profile(), z: profile({ api_key: "$C403_Z_KEY" }) } }); // ubs:ignore env-var reference, not a secret
       const code = await runClassifyCommand(filterSpec, ["--", "Does it fail?", inputFile], "z", deps);
       expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
       expect(code).toBe(0);
