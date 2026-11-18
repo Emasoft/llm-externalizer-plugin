@@ -224,7 +224,7 @@ describe("chatCompletionWithRetry — D2 split (item D2/A4)", () => {
         billable: true, // the hypothetical paid non-openrouter preset
         isLocal: false,
         baseUrl: url,
-        apiKey: "paid-remote-key",
+        apiKey: "paid-remote-key", // ubs:ignore test fixture, not a secret
         model: "paid/remote-empty-model",
         __version: 1,
       };
@@ -414,7 +414,7 @@ describe("chatCompletionWithRetry — no same-model retry on a deterministic 4xx
       api: "chat-b-ai-remote",
       protocol: "openai_api",
       url,
-      authToken: "route-key",
+      authToken: "route-key", // ubs:ignore test fixture, not a secret
       keyRef: "none",
       isLocal: false,
       isFreeProvider: false,
@@ -521,19 +521,19 @@ async function startModelRoutedServer(
   return { url: `http://127.0.0.1:${addr.port}`, requestCount: () => count };
 }
 
-describe("the credential-success discriminator on a generic 403 (TRDD-90DM5YHO item 1)", () => {
+describe("the credential-success discriminator on a generic 403 (TRDD-90DM5YHO item 1)", () => { // ubs:ignore test fixture, not a secret
   afterEach(() => {
     resetCredentialSuccessForTests();
   });
 
-  it("(a) generic 403 on model A with NO prior success on this credential — not marked, raw error surfaces", async () => {
+  it("(a) generic 403 on model A with NO prior success on this credential — not marked, raw error surfaces", async () => { // ubs:ignore test fixture, not a secret
     const { url } = await startErrorServer(403, "No auth credentials found");
     const backend: BackendConfig = {
       type: "openrouter",
       billable: false,
       isLocal: false,
       baseUrl: url,
-      apiKey: "sk-shared-credential",
+      apiKey: "sk-shared-credential", // ubs:ignore test fixture, not a secret
       model: "model/a:free",
       __version: 1,
     };
@@ -544,7 +544,7 @@ describe("the credential-success discriminator on a generic 403 (TRDD-90DM5YHO i
     expect(isRunUnusable("model/a:free")).toBe(false);
   }, 30_000);
 
-  it("(b) success on model B, THEN a generic 403 on model A (same credential, same endpoint) — A is marked run-unusable", async () => {
+  it("(b) success on model B, THEN a generic 403 on model A (same credential, same endpoint) — A is marked run-unusable", async () => { // ubs:ignore test fixture, not a secret
     // ONE server, ONE baseUrl — the credential fingerprint includes baseUrl
     // (review finding, 2026-09-16), so both requests must hit the SAME
     // endpoint to exercise "same real-world credential, different model".
@@ -557,7 +557,7 @@ describe("the credential-success discriminator on a generic 403 (TRDD-90DM5YHO i
       billable: false,
       isLocal: false,
       baseUrl: url,
-      apiKey: "sk-shared-credential",
+      apiKey: "sk-shared-credential", // ubs:ignore test fixture, not a secret
       model: "model/b:free",
       __version: 1,
     };
@@ -582,7 +582,7 @@ describe("the credential-success discriminator on a generic 403 (TRDD-90DM5YHO i
       billable: false,
       isLocal: false,
       baseUrl: url,
-      apiKey: "sk-shared-credential",
+      apiKey: "sk-shared-credential", // ubs:ignore test fixture, not a secret
       model: "model/a:free",
       __version: 1,
     };
@@ -789,6 +789,25 @@ describe("payment errors — skip when certain, retry once when not, never a bre
     await expect(chatCompletionWithRetry(MESSAGES, { model: "chain/transient", deadlineAt: started + 5000 }, transientDeps)).rejects.toThrow(/upstream exploded|API error 500/);
     expect(transient.requestCount()).toBeGreaterThanOrEqual(1);
     expect(Date.now() - started).toBeLessThan(5000);
+  }, 20_000);
+  // GitHub-15 item 2 (issue #15): 405 and 422 are refusals, not outages: no breaker count and no same-model retry (one POST per model); six of them (past the breaker threshold of 5) leave the breaker untouched. They used to count and park the walk in 60 s sleeps. Other 4xx keep their same-model retries (see the WHY comment at the gate in completion.ts).
+  it.each([[405, "method not allowed"], [422, "unprocessable entity"]])("HTTP %i is a refusal, not an outage: it never feeds the circuit breaker (GitHub-15 item 2)", async (status, body) => {
+    resetServiceHealthForTests();
+    const { url, requestCount } = await startErrorServer(status, body);
+    const deps = baseDeps(backendAt(url), null);
+    const stderr = captureStderr();
+    const t0 = Date.now();
+    try {
+      for (let i = 1; i <= 6; i++) {
+        await expect(chatCompletionWithRetry(MESSAGES, { model: `chain/refused-${status}-${i}`, deadlineAt: Date.now() + 5000 }, deps)).rejects.toThrow(`API error ${status}`);
+        expect(requestCount(), `HTTP ${status}: model ${i} must be asked exactly once`).toBe(i);
+      }
+      expect(serviceFailureCountForTests()).toBe(0);
+      expect(stderr.text()).not.toContain("[circuit-breaker]");
+    } finally {
+      stderr.restore();
+    }
+    expect(Date.now() - t0).toBeLessThan(10_000);
   }, 20_000);
   it("six consecutive deterministic 403s: one POST per model and no circuit-breaker pause (GitHub-15, D4)", async () => {
     // GitHub-15 finding 2: the breaker exists for outages; a permanent 403

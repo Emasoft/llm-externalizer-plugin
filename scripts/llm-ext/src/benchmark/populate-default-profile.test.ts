@@ -28,6 +28,7 @@ import { bookDailySpend, dailySpendPath } from "./daily-spend.js";
 // questions the old shape answered wrongly and silently.
 import { getSettingsPath, setAllowPaidModels, setActiveFreeOnly, resolveProfile, validateSettings, validateProfile, type Profile } from "../config.js";
 import { getProfileRecord, getDynamicProfileRecord } from "../default-profiles-state.js";
+import { GONE_EVICT_STRIKES, goneEvictedModels, recordUnavailable, resetCooldownCacheForTests } from "../free-rotation.js";
 import { enqueueCandidates } from "../dynamic-candidates.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -157,6 +158,8 @@ describe("--populate-default-profile", () => {
     else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
     if (prevBaiKey === undefined) delete process.env.BAI_API_KEY;
     else process.env.BAI_API_KEY = prevBaiKey;
+    // GitHub-15 item 3 tests persist eviction strikes in the in-memory cooldown cache; dropped here so a failed assertion cannot leak them into later tests (the store file itself lives under the per-test LLM_EXT_CONFIG_DIR).
+    resetCooldownCacheForTests();
     rmSync(cfg, { recursive: true, force: true });
   });
 
@@ -1036,6 +1039,75 @@ describe("--populate-default-profile", () => {
 
     expect(r.ok).toBe(false);
     expect(getProfileRecord("paid")?.failCount).toBe(1);
+  });
+
+  // GitHub-15 item 3: the free-pool sweep must not offer a model the runtime already evicted (three persisted "gone" verdicts), or the next populate benchmarks, and may re-adopt, a model that answers every call with a 403/404. Both sources are covered: the profile's own free_models (candidateIds) and the catalog auto-discovery.
+  it("a model with three persisted 'gone' verdicts is dropped from both the configured pool and the auto-discovered pool before the sweep (GitHub-15 item 3)", async () => {
+    writeFileSync(
+      settingsPath,
+      SETTINGS.replace("    free_models: []", "    free_models: [v/configured-evicted:free, v/configured-ok:free]"),
+      "utf-8",
+    );
+    resetCooldownCacheForTests();
+    for (const id of ["v/configured-evicted:free", "v/discovered-evicted:free"]) {
+      // Distinct, past timestamps: a verdict inside the model's own cooldown is recorded once, so each strike is a separate "run" a minute apart.
+      for (let strike = 0; strike < GONE_EVICT_STRIKES; strike++) recordUnavailable(id, "API error 404: not found", Date.now() - 10 * 60_000 + strike * 60_000);
+    }
+    expect(goneEvictedModels().has("v/configured-evicted:free")).toBe(true);
+    expect(goneEvictedModels().has("v/discovered-evicted:free")).toBe(true);
+    const swept: string[][] = [];
+    const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
+    const deps: PopulateDefaultProfileDeps = {
+      fetchCatalog: async () => [
+        model("v/configured-evicted:free", 0, 0),
+        model("v/configured-ok:free", 0, 0),
+        model("v/discovered-evicted:free", 0, 0),
+        model("v/discovered-ok:free", 0, 0),
+      ],
+      runSweep: async (sweepOpts): Promise<SweepOutcome> => {
+        swept.push([...(sweepOpts.includeIds ?? [])]);
+        return {
+          dryRun: false,
+          candidates: 0,
+          baselines: 1,
+          results: [result({ modelId: "v/configured-ok:free", meanF1: 0.99 })],
+          reportPath: "",
+          passers: 1,
+          total: 1,
+        };
+      },
+    };
+
+    const r = await runPopulateDefaultProfilePhase(opts, deps);
+
+    expect(r.ok).toBe(true);
+    expect(swept).toHaveLength(1);
+    expect(swept[0]).toContain("v/configured-ok:free");
+    expect(swept[0]).toContain("v/discovered-ok:free");
+    expect(swept[0]).not.toContain("v/configured-evicted:free");
+    expect(swept[0]).not.toContain("v/discovered-evicted:free");
+  });
+  // Same GitHub-15 item 3 rule when EVERY id is evicted: nothing is left to sweep, so the populate banks a benchmark failure and never calls the sweep.
+  it("a pool whose every id is evicted sweeps nothing and banks a benchmark failure (GitHub-15 item 3)", async () => {
+    writeFileSync(
+      settingsPath,
+      SETTINGS.replace("    free_models: []", "    free_models: [v/only-evicted:free]"),
+      "utf-8",
+    );
+    for (let strike = 0; strike < GONE_EVICT_STRIKES; strike++) recordUnavailable("v/only-evicted:free", "API error 404: not found", Date.now() - 10 * 60_000 + strike * 60_000);
+    expect(goneEvictedModels().has("v/only-evicted:free")).toBe(true);
+    const opts = { ...baseOpts(), populateDefaultProfile: "free" as const };
+    const deps: PopulateDefaultProfileDeps = {
+      fetchCatalog: async () => [model("v/only-evicted:free", 0, 0)],
+      runSweep: async (): Promise<SweepOutcome> => {
+        throw new Error("runSweep must not be called when every id is evicted");
+      },
+    };
+
+    const r = await runPopulateDefaultProfilePhase(opts, deps);
+
+    expect(r.ok).toBe(false);
+    expect(getProfileRecord("free")?.failCount).toBe(1);
   });
 
   // p14.1-c2c (TRDD-38QAM06E follow-up, review of 51a100c item 3c), D5 shape:

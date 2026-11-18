@@ -1646,11 +1646,11 @@ export async function chatCompletionWithRetry(
       // before a guaranteed refusal (issue 15: 530 of 941 s were breaker
       // sleeps triggered solely by permanent 403s). Never breaker food.
       const deterministic4xx = /\bAPI error (402|403|404|410)\b/.test(errMsg);
+      // GitHub-15 item 2: the breaker exists for OUTAGES, so only 408, 429, 5xx and transport failures (no HTTP status) count. Every other 4xx is the server refusing THIS request (400/401 bad request or key, 405/413/422 and the rest), which waiting cannot change; counting it parked later calls in 60/120/350 s sleeps. 400/401 keep their own retry policy, separate from this gate.
+      const nonOutage4xx = callStatus !== undefined && callStatus >= 400 && callStatus < 500 && callStatus !== 408 && callStatus !== 429;
       // YG72CYY7 D4: a stop verdict (TLS) cannot heal by waiting, so it is not breaker food; refused connections and DNS budgets still are.
-      // Request/auth refusals are not outages; their existing retry policy stays separate.
-      const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
       // TRDD-WSPV40Y5: a local-fallback failure is not remote-service breaker food either (it is another service).
-      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err)?.final !== "stop" && options.localFallback !== true)
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !nonOutage4xx && failureOf(err)?.final !== "stop" && options.localFallback !== true)
         recordServiceFailure();
       // Bumped unconditionally even for a deterministic4xx/price-ceiling
       // refusal that throws below without ever reading it again this call —
@@ -1763,6 +1763,9 @@ export async function chatCompletionWithRetry(
         !stopped() &&
         !deterministic4xx &&
         callStatus !== 401 &&
+        // GitHub-15 item 2 (issue #15): no same-model retry for 405 and 422, the statuses the issue observed repeating as permanent refusals. Deliberately NOT every 4xx: a default request pins no provider (body.provider is set only from options.provider, the high-quality-scan path), so a same-model retry can be load-balanced to another upstream provider; for every other 4xx (409, 413, ...) there is no evidence either way, so today's retries stay. 400 keeps its owner-ruled retries (TRDD-YG72CYY7); 408/429 are outages and retry; 401 and 402/403/404/410 are gated separately.
+        callStatus !== 405 &&
+        callStatus !== 422 &&
         !isPriceCeilingRefusal &&
         !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
         unavailableKind !== "daily-quota" // ubs:ignore availability enum, not a secret

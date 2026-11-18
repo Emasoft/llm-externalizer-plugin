@@ -61,6 +61,7 @@ import {
 import { paymentErrorCertainty } from "./free-mode.js";
 import { registeredTools } from "../model-qualification/registry.js";
 import { readCandidates, clearCandidates } from "../dynamic-candidates.js";
+import { goneEvictedModels } from "../free-rotation.js";
 import { bookDailySpend, dailyRemainingUsd } from "./daily-spend.js";
 import { runUpdateAll, estimateWorkloadCostUsd, type EnsembleSweepRun, type ToolBenchmarkRun } from "./update-all.js";
 import {
@@ -1759,7 +1760,9 @@ async function runPopulateFreeDefaultProfile(
   const queue = readCandidates(routesFor);
   const queuedIds = queue.free.map((e) => e.id);
   const configuredSet = new Set(configured);
-  const candidateIds = [...configured, ...queuedIds.filter((id) => !configuredSet.has(id))];
+  // GitHub-15 item 3: a model with GONE_EVICT_STRIKES persisted "gone" verdicts (a 403/404 on every call) is evicted at runtime; the sweep must not re-offer it, or the populate benchmarks it and may write it back into free_models. Dropped here (profile and queue ids) and again after resolveFreePool (auto-discovered ids, which this list never held).
+  const goneEvicted = goneEvictedModels();
+  const candidateIds = [...configured, ...queuedIds.filter((id) => !configuredSet.has(id))].filter((id) => !goneEvicted.has(id));
 
   // TRDD-38QAM06E root cause 2: resolveFreePool classifies ONLY against the live
   // OpenRouter catalog, so an id served by a `providers[]` route to a DIFFERENT
@@ -1797,7 +1800,7 @@ async function runPopulateFreeDefaultProfile(
   // Same reasoning as --update-all's free phase (see runUpdateAllPhase): the runtime
   // send-time chokepoint (assertFreeOnlyModel) admits ONLY ':free'-suffixed ids, so a
   // zero-cost id lacking that suffix must be dropped here, before it reaches the sweep.
-  const freeIds = freeSuffixOnly(discoveredPool);
+  const freeIds = freeSuffixOnly(discoveredPool).filter((id) => !goneEvicted.has(id)); // GitHub-15 item 3: evicted ids found by catalog auto-discovery
   if (freeIds.length === 0) {
     recordBenchmarkFailure("free", Date.now());
     return {
@@ -3067,9 +3070,9 @@ export function buildReportPath(): string {
   // Write-roots rule (2026-09-18): the non-isolated (production) branch used
   // to join resolveMainRoot() + "reports"/"benchmark" directly, landing at
   // <project-root>/reports/benchmark/ — OUTSIDE every USER-approved write
-  // root. Route it through project-root.ts instead (the single approved
-  // exception root, <project-root>/reports/llm-externalizer/) and nest
-  // "benchmark" under that.
+  // root. Route it through project-root.ts instead (defaultScratchDir(), by default the gitignored
+  // <project-root>/reports_dev/llm-externalizer/ scratch root, per TRDD-PNU8XECB below) and
+  // nest "benchmark" under that, so the report no longer lands in the tracked reports/.
   const reportDir = process.env.LLM_EXT_CONFIG_DIR
     ? join(getConfigDir(), "reports", "benchmark")
     // TRDD-PNU8XECB: a model-pool comparison is tool configuration and usually runs detached, so it
