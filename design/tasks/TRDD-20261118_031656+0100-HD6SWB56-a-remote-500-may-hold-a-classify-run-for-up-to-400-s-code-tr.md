@@ -4,10 +4,10 @@ title: A remote 500 may hold a classify run for up to 400 s (code trace, not mea
 column: backburner
 status: tasked
 created: 2026-11-18T03:16:56+0100
-updated: 2026-11-18T03:18:58+0100
+updated: 2026-11-18T03:24:28+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
-task-type: bugfix
+task-type: spike
 min-approval-requirement: none
 assignee: main-agent@llm-externalizer-plugin
 mandate: true
