@@ -27,6 +27,11 @@ const testOutputInput = z
     // 1-based numbers of the lines that show a failure, found by the caller with its own pattern in the isolated regex worker (SP-22). Absent: the built-in pattern decides. Empty: nothing matched.
     matches: z.array(z.number().int().min(1)).optional(),
     // Lines kept on each side of a failing line.
+    // Why max 100 and default 5 (TRDD-O5NUD6IT): no reason for these two numbers is recorded in the plan (§9),
+    // the card or the git history, so this states only what the code guarantees. Failing lines, each with
+    // `context` lines on both sides, form the failing blocks sent first; windows that touch merge into one
+    // block; every other line goes into the "rest" part, so the whole log is read for any value (E74). 100
+    // limits the window of a single failing line to 201 lines; findings.ts caps its `window` at the same 100.
     context: z.number().int().min(0).max(100).default(5),
   })
   .superRefine((v, ctx) => {
@@ -176,6 +181,11 @@ export const spec: DecisionSpec<TestOutputInput, TestOutputResult> = {
         part,
         failure_class: (val(0) as ChoiceAnswer).choice as FailureClass,
         regression: (val(1) as NoulAnswer).noul,
+        // Why Math.round (TRDD-O5NUD6IT): SCORE_POLICY is in expected-value mode, so the score is a float in
+        // [0, 3] (validateScore rejects anything outside), while SEVERITY is indexed by whole levels. The nearest
+        // level is the one the answer is centred on; a half-way score takes the more severe level (Math.round
+        // rounds .5 up); `score` keeps the unrounded value. findings.ts (SP-14) uses the same mapping.
+        // No older recorded reason was found in the plan, the card or the git history.
         severity: { score: sev, level: SEVERITY[Math.round(sev)]! },
         evidence_sufficient: (val(3) as NoulAnswer).noul,
         invalid: null,
