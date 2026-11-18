@@ -153,6 +153,16 @@ describe("outcome", () => {
     expect(check(rows).outcome).toBe("uncertain");
     expect(check(rows, { ...T, "min-confidence": 0.5 }).outcome).toBe("duplicate");
   });
+  it("an updated version below --min-confidence is uncertain, and the rule stays a candidate with its id, label and probabilities (the measured earlier-version case)", () => {
+    // Shape measured 2026-11-18 on the phrase against r2, u1, u2: r2 labelled updated_version at confidence 0.33, the other rules confident new.
+    // The 3-pillars converter shows this candidate to a person, so it must keep its id and label (TRDD-FS5WW86J).
+    const r = check([[NEW()], [rel("updated_version", [0, 0.55, 0.45], 0.33)], [NEW()]]);
+    expect(r).toMatchObject({ outcome: "uncertain", rule_id: null, ambiguous: false, confident_new_count: 2 });
+    expect(r.candidates).toHaveLength(1);
+    expect(r.candidates[0]).toMatchObject({ id: "S64.134", label: "updated_version", confidence: 0.33, unanswered: false });
+    expect(r.candidates[0]!.probabilities).toMatchObject({ duplicate: 0, updated_version: 0.55, new: 0.45 });
+    expect(spec.attention(r)).toBe(true);
+  });
   it("a relation with no confidence is never confident: a duplicate without one is uncertain and a new without one is a candidate", () => {
     const noConf = check([[rel("duplicate", [0.9, 0.05, 0.05], null)], [NEW()]]);
     expect(noConf).toMatchObject({ outcome: "uncertain", rule_id: null, confident_new_count: 1 });
