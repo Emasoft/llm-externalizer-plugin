@@ -86,6 +86,7 @@ describe("cutToTokens contract (shared with buildEvidence maxTokens)", () => {
   it("is bounded: no prefix longer than budget x the cheapest chars-per-token is ever estimated", () => {
     const seen: number[] = [];
     const real = JSON.stringify;
+    // Kept as a pass-through observer exemption (calls the real function, returns its result unchanged, asserts only a count or length) under TRDD-052F3ZC9.
     const spy = vi.spyOn(JSON, "stringify").mockImplementation(((v: unknown, ...rest: unknown[]) => { if (typeof v === "string") seen.push(v.length); return (real as (...a: unknown[]) => string)(v, ...rest); }) as typeof JSON.stringify);
     try {
       const r = cutToTokens("a".repeat(1_000_000), 100);

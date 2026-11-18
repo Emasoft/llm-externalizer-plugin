@@ -7,6 +7,7 @@ import { replayFetch, syntheticResponse, type RecordedReply } from "./test-fetch
 
 // Passthrough fs that only counts reads of a named file; the real code runs unchanged.
 const fsReads = vi.hoisted(() => ({ file: "", count: 0 }));
+// Kept as a pass-through observer exemption (calls the real function, returns its result unchanged, asserts only a count or length) under TRDD-052F3ZC9.
 vi.mock("node:fs", async (orig) => {
   const real = await orig<typeof import("node:fs")>();
   return { ...real, readFileSync: ((p: unknown, ...rest: unknown[]) => { if (p === fsReads.file) fsReads.count++; return (real.readFileSync as (...a: unknown[]) => unknown)(p, ...rest); }) as typeof real.readFileSync };

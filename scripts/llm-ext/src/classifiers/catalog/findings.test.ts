@@ -229,7 +229,8 @@ describe("each source is split once per call", () => {
     const many = parse({ task: "t", intent: "i", sources: [{ file: "a.ts", text: src }], findings: Array.from({ length: 50 }, (_, k) => ({ id: `f${k}`, file: "a.ts", line: 10 + k * 30, text: "x" })) });
     const real = String.prototype.split;
     let hits = 0;
-    // Counting wrapper around the real split (calls through), not a double: it only counts splits of the big source text.
+    // Counting wrapper around the real split (calls through): it only counts splits of the big source text.
+    // Kept as a pass-through observer exemption (calls the real function, returns its result unchanged, asserts only a count or length) under TRDD-052F3ZC9.
     const spy = vi.spyOn(String.prototype, "split").mockImplementation(function (this: string, ...a: Parameters<typeof real>) {
       if (String(this) === src) hits++;
       return real.apply(this, a);
@@ -389,7 +390,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 // WHY a real settings.yaml read back by loadSettings (precedent 441ce3fa, TRDD-4Q1IVJOE): a hand-built object cast to Settings skips the production loader. LLM_EXT_CONFIG_DIR is `tmp` (beforeEach), removed with it in afterEach.
-const profileDoc = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$SP14_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 };
+const profileDoc = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$SP14_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 1 }; // ubs:ignore (env-var reference, not a key)
 const depsOf = (fetch: GlobalFetch): RunDeps => {
   writeFileSync(join(tmp, "settings.yaml"), stringify({ active: "c", active_classifier: "c", profiles: { c: profileDoc } }));
   const settings = loadSettings();
