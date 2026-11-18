@@ -1,10 +1,10 @@
 ---
 trdd-id: 1L9VMEY7
 title: Local-only classifier profile local-decision that sends classify requests straight to mlx-decision
-column: dev
+column: human_review
 status: tasked
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-18T05:44:50+0100
+updated: 2026-11-18T05:48:05+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -57,6 +57,7 @@ A classifier profile named `local-decision` that sends every classify request st
 ## Approval log
 
 - 2026-11-16T23:20:23+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T05:48:05+0100 — column → human_review by main-agent@llm-externalizer-plugin. acceptance boxes 1-4 met (unit tests, live pass of v14.7.0); eht NL2012O9 and 5AV8UBL1 open; USER items: max_requests_per_call and the D31 packing option on NL2012O9
 
 ## Notes
 
