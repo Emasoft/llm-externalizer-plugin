@@ -258,6 +258,27 @@ Both use `server: managed`: llm-ext starts and stops the model server itself. Yo
 - **Calibration.** A model of a managed profile is calibrated once, automatically: on its first use, or when a model id changes in a profile that has been used (a profile nobody used is never calibrated on its own). Requests for it are held until its record is complete, which can take hours. Held requests are bounded only by `--command_timeout`. Check progress with `llm-ext models calibration-status`. Start or redo it by hand with `llm-ext models calibrate --model <id> [--force]`; `--force` is required when a record already exists.
 - Calibration pauses while the broker has work for another model and waits a bounded time for free memory; if memory stays short, the model gets a `memory-limited` record.
 
+### Local model catalog
+
+The catalog (`scripts/llm-ext/src/local-model-catalog.ts`) lists the local models llm-ext knows, and listing a model never downloads or calibrates it. No runtime code reads the catalog yet. A test checks that every entry has a row here, with the same size and refusals cells, and that the models of the two built-in profiles and the served decider are catalog entries. In the last column, yes means llm-ext knows no reason it cannot run the model, not that it was verified: only the served decider is recorded as verified, the VL and Omni GGUFs rest on their model cards, and abliter8-ai reports its own tests on llama.cpp with a server patch.
+
+| Model id | Role | Runtime | Inputs | Refusals removed | Size in bytes (weights + projector) | Runs in llm-ext |
+|---|---|---|---|---|---|---|
+| `AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K` | chat | llama.cpp | text | yes | 1587969920 | yes |
+| `bartowski/Nanbeige_Nanbeige4.2-3B-GGUF/Nanbeige_Nanbeige4.2-3B-Q6_K.gguf` | chat | llama.cpp | text | no | 3595603104 | yes |
+| `insraq/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF/Qwen3.5-4B-EmperoAI-Qwen3.8-Distill-Heretic-Abliterated-MTP-GGUF-Q8_0.gguf` | chat | llama.cpp | text | yes | 4610580640 | yes |
+| `LiquidAI/LFM3-1.7B-MLX-4bit` | chat | mlx-locals | text | no | 973083386 | yes |
+| `mlx-community/Nanbeige4.2-3B-OptiQ-4bit` | chat | mlx-locals | text | no | 3303644285 | yes |
+| `mlx-community/Qwen3.5-4B-MLX-4bit` | chat | mlx-locals | text | no | 3034300695 | yes |
+| `AtomicChat/LFM3-VL-2B-GGUF:AD-Q4_K_M` | chat | llama.cpp | text, image | no | 1132207168 + 378995488 | yes |
+| `AtomicChat/LFM3-Omni-2B-GGUF:AD-Q4_K_M` | chat | llama.cpp | text, image, audio | no | 1132209888 + 949841152 | yes |
+| `AtomicChat/LFM3-Audio-2B-GGUF:AD-Q4_K_M` | speech | llama.cpp | text, audio | no | 1132205824 + 570846304 | a speech model (ASR and TTS); llm-ext sends text completions only. |
+| `abliter8-ai/lfm3-2b-vl-abliter8-gguf:Q4_K_M` | chat | llama.cpp | text, image | yes | 1099627392 + 378995328 | yes |
+| `mizahnyx/lfm3-omni-2b-abliterated-heretic-v2-GGUF:Q4_K_M` | chat | llama.cpp | text, image, audio, video | yes | 1099629696 + 506841856 | yes |
+| `baselabs/elephant-1` | decider | vendor | text, image | no | 18819722392 | CUDA-only safetensors run by the vendor engine (qev); llm-ext reaches the decider only through the mlx-decision server. |
+| `sergolsub/mlx-elephant-v1-9B` | decider | vendor | text, image | no | 11380138801 | MLX weights run by the vendor loader onejev_mlx.py, not by mlx_lm or Locals; llm-ext reaches the decider only through the mlx-decision server. |
+| `elephant-1` | decider | mlx-decision | text | no | not known (served by mlx-decision) | yes |
+
 ## Local inference governor
 
 Every llm-ext process that runs a local model (the broker, a calibration run, a direct send to a model server on a loopback address: LM Studio, Ollama, llama.cpp, vLLM) asks one machine-wide governor first. Work starts only while RAM and CPU are under their limits, and never more than `max_inferences` inferences at once across all processes. Waiting is never an error: the waiter prints its reason once a minute, and only `--command_timeout` bounds the wait. A LAN or remote server is never governed.

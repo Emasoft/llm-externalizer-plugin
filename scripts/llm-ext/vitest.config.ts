@@ -851,6 +851,8 @@ export default defineConfig({
       'src/benchmark/hq-scan-quality-cli.test.ts',
       // TRDD-3SNQAGIC: an aborted request cancels its broker job.
       'src/provider/broker-abort.test.ts',
+      // TRDD-R7NKAJ5B: the local model catalog against the built-in local profiles and the docs table (the include list is explicit, so a new test file runs only once listed here).
+      'src/local-model-catalog.test.ts',
     ],
   },
 });
