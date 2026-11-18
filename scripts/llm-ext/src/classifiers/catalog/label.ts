@@ -27,7 +27,7 @@ const labelInputSchema = z
   .superRefine((v, ctx) => {
     const ids = v.classes.map((c) => c.id);
     if (new Set(ids).size !== ids.length) ctx.addIssue({ code: "custom", message: "duplicate class id" });
-    // Why refuse: l1/validate-choice.ts stores probabilities in a plain {}, where `probs["__proto__"] = p` is silently dropped, so every answer for such a class would fail its sum check; failing here names the cause.
+    // Why refuse: l1/validate-choice.ts stores probabilities in a plain {}, where `probs["__proto__"] = p` is silently dropped, so every answer for such a class would fail its sum check; failing here names the cause. ubs:ignore (the comment names __proto__; line 31 refuses it)
     if (ids.includes("__proto__")) ctx.addIssue({ code: "custom", message: 'a class id may not be "__proto__"' });
     if (v.default !== undefined && !ids.includes(v.default)) ctx.addIssue({ code: "custom", message: `default must be one of the class ids: ${ids.join(", ")}` });
     const size = JSON.stringify(v.classes).length;
@@ -167,7 +167,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
     { flag: "--only", property: "only", field: "only", render: true, help: "Show only these classes (comma separated); the count line still lists all.", parse: (raw) => raw },
     { flag: "--verbose", property: "verbose", field: "verbose", type: "boolean", render: true, help: "List every item with its confidence, grouped by class; a ? marks a low-confidence one.", parse: () => true },
     { flag: "--save", property: "save", field: "save", render: true, help: "Write every labelled item ([{id, label, confidence}], JSON) to this file.", parse: (raw) => raw },
-    // TRDD-WYY3SPDX: --context FILE fills `context`, the same flag as `classify requirements` (earlier messages as background, sent with every request). WHY label only: `classify filter` is left for a separate card because its text-items instruction never references the shared context, so the flag would be sent and ignored there.
+    // TRDD-WYY3SPDX: --context FILE fills `context`, the same flag as `classify requirements` (earlier messages as background, sent with every request). `classify filter` has the same flag since TRDD-7ZA3EE6Z.
     { flag: "--context", property: "context", field: "context", file: true, help: "File of earlier messages (- reads stdin) as background, never scored; sent with every request.", parse: (raw) => raw },
   ],
   input: labelInputSchema,
