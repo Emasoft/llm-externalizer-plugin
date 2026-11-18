@@ -4,7 +4,7 @@ title: IN-09 rank and find text output (--top, --all listing, chunk notes)
 column: backburner
 status: tasked
 created: 2026-10-10T08:23:45+0200
-updated: 2026-10-10T08:28:29+0200
+updated: 2026-11-18T16:53:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -42,3 +42,7 @@ Plan 283-284; qs:1054-1140; E129 (find line pieces).
 
 - 2026-10-10T08:23:45+0200 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T08:28:29+0200 — column → backburner. depends on IN-07 (LWDKZO2A), which waits on open question Q4
+
+## Notes
+
+2026-11-18T16:53:22+0100 72c0a3a0 (pre-squash, code in c4dc6bd5) also delivers IN-09 per the M8GT4AYB evidence; verify with its own tests before closing.

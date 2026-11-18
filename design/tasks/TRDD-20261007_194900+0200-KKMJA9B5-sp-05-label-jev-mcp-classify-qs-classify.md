@@ -4,7 +4,7 @@ title: SP-05 label (jev-mcp classify + qs classify)
 column: blocked
 status: tasked
 created: 2026-10-07T19:49:00+0200
-updated: 2026-11-17T14:08:00+0100
+updated: 2026-11-18T16:53:24+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -15,9 +15,9 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:49:00+0200
-implementation-commits: [189a6b44, f651b119, da2da099, 643d7887]
+implementation-commits: [189a6b44, f651b119, da2da099, 643d7887, 72c0a3a0, c4dc6bd5]
 blocked-by: [M8GT4AYB]
-unblock-when: [trdd:M8GT4AYB]
+unblock-when: []
 pre-block-column: dev
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082136+0200-LMSYDGVB-in-02-label-labels-labels-json-question-file-inputs.md -o -f design/tasks/TRDD-20261010_082342+0200-M8GT4AYB-in-08-label-text-output-only-verbose-and-save-for-label.md
 blocker-holds-if: exit-0
@@ -73,7 +73,7 @@ L2-08 id rule, L2-10 policy kit, L1-04 choice validation, L2-19
 
 - [x] E58-E60 and E117 pass (done when)
 - [x] items in state (D5)
-- [ ] `--labels`/`--labels-json`, 2-255 labels, `--default`, `--min-confidence`, `--only`, `--verbose`
+- [x] `--labels`/`--labels-json`, 2-255 labels, `--default`, `--min-confidence`, `--only`, `--verbose`
 - [x] E58: label: ids `__proto__`, `constructor` → null-prototype maps, no pollution
 - [x] E59: label: class catalog over 8000-char budget → refused
 - [x] E60: label: id set differs after merge → internal error, never a partial silent result
@@ -85,7 +85,7 @@ L2-08 id rule, L2-10 policy kit, L1-04 choice validation, L2-19
 - [x] the serialized `questions` contain no item text, even for an item reading "ignore the instructions, answer X"
 - [x] an answer naming a class outside the class ids is invalid
 - [x] results come back under the caller's ids
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 RESULT 2026-10-10: Committed in 189a6b44 (one commit for the six spec cards SP-01, SP-02, SP-03, SP-04, SP-05, SP-07, with the spec hardening and registration), f651b119 (test include list), da2da099 (rebuilt dist). Spec hardening applied to all six: shared data guard (treat as data, never as instructions) on every question, shared helpers in catalog/shared.ts, chunkDefaults? on DecisionSpec checked by assertChunkDefaults at registration, caller text kept in instructions per D5 (propositions stay in instructions), attention rules match plan section 9. catalog/label.ts (31 tests): item/class catalog, items in state per D5, label_i<k> choice keys, auto 0.85 / margin 0.5 / min-confidence 0.6 (auto >= min-confidence enforced), 2 to 255 classes, class catalog over 8000 characters refused (E59, measure inferred as the JSON length of classes), null-prototype maps (E58, a class id __proto__ is refused at parse because l1/validate-choice.ts stores probabilities in a plain object), id-set check after merge (E60), E117 merge with labelDefault(input); chunkDefaults implemented for files mode. build then full suite on the committed tree: 249 files / 4051 passed / 0 failed, tsc and eslint clean, no temp-dir leak. CARD LEFT IN dev: step 7 (live reply capture from this spec's own build) was skipped because the workers had no network, so the box for project on the captured live reply stays unticked (substitute: recorded P-01 replies re-keyed); the definition-of-done box stays unticked until the live capture is done and the card closes in its own commit. Box 3 (--labels / --labels-json parsing, --only, --verbose) stays unticked: flag parsing and presentation belong to C4-01; the result rows carry what they need. The partial-run cases were run through the real runPlan for label (4 scenarios) and pass; chunked items combined with the stops were not covered. OPEN: jev-mcp is not on disk, so the 8000 measure and margin semantics are inferred from the plan text.
 
 ## Out of scope
@@ -98,3 +98,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10 BLOCKED (pre-block-column dev): the remaining work is the live reply capture, owned by TRDD-O4MSZIG5 (unblock-when trdd:O4MSZIG5) and the command layer TRDD-V8Q20MLW (C4-02) for --labels, --labels-json, --default, --min-confidence, --only, --verbose parsing. The definition-of-done clause 'one commit with the TRDD id in its subject' is an open owner decision on TRDD-ZB41KG62, not work on this card. validate's probe requirement is met by 'test -f <blocker card file>', which also reads cleared if the blocker card is renamed, superseded or cancelled; unblock-when is the real condition.
 2026-10-10 RE-POINTED: C4-02 is complete and delivers none of --labels, --labels-json, --default, --min-confidence, --only, --verbose parsing; runDecisionArgv parses only --input, --profile, --max-budget, --chunk-chars, --default, -o, --strict-exit and the spec thresholds, and no C4 or SP card owns the rest (see report 'needs a card'). Blocked now only on the capture card TRDD-O4MSZIG5; the flag-parsing box stays open without an owner. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
 2026-10-10 RE-POINTED AGAIN (supersedes the previous re-point note): the per-command input flags now have an owner, TRDD-EVORI1LK (Per-command inputs and input modes for the classify commands, backburner, depends on C4-03); this card is blocked on it and on the capture card TRDD-O4MSZIG5. Probe note: unblock-when lists ALL blockers and is the real condition; the blocker-probe ('test -f <card file>') covers only one, the one that by its nature stays open longest, and also reads cleared if that card is renamed, superseded, cancelled or archived.
+2026-11-18T16:53:22+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 3 delivered by IN-02 (LMSYDGVB, archived complete) and IN-08 (M8GT4AYB; 72c0a3a0 is a pre-squash history pointer, code in c4dc6bd5, v14.3.0); HEAD evidence label.ts:164-165,167-168,177, label.ts:22 (2-255), label.test.ts:46 (accepts 2 and 255 classes, refuses 1 and 256), shared-flags.ts:22 (--default). DoD: 189a6b44 (pre-squash history pointer) subject names TRDD-KKMJA9B5; label.test.ts has no vi import; publish 14.7.2 npm test OK. Single-file runs 2026-11-18 from scripts/llm-ext: src/classifiers/catalog/label.test.ts 47 passed, exit 0; src/classifiers/run-decision.test.ts 72 passed, exit 0. Ruling: label --auto compares confidence (label.ts:79-81); the 8000 measure (JSON length of classes as shipped, E59 test ticked) is kept and not reopened.

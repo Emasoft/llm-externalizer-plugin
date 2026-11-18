@@ -4,7 +4,7 @@ title: SP-03 filter (jev-mcp noul + qs filter)
 column: blocked
 status: tasked
 created: 2026-10-07T19:48:26+0200
-updated: 2026-11-17T14:07:58+0100
+updated: 2026-11-18T16:53:13+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -15,9 +15,9 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:48:26+0200
-implementation-commits: [189a6b44, f651b119, da2da099]
+implementation-commits: [189a6b44, f651b119, da2da099, 9b95e567, c4dc6bd5]
 blocked-by: [LWDKZO2A]
-unblock-when: [trdd:LWDKZO2A]
+unblock-when: []
 pre-block-column: dev
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082128+0200-XHHH0N1E-in-01-shared-input-modes-through-collectinputs-filter-rank-f.md -o -f design/tasks/TRDD-20261010_082309+0200-LWDKZO2A-in-07-text-output-json-and-the-filter-flags-no-collapse-save.md
 blocker-holds-if: exit-0
@@ -73,8 +73,8 @@ L2-10 policy kit, L2-19, L2-06 input rules
 
 - [x] E57 and E128 pass (done when)
 - [x] threshold/band output
-- [ ] `--lines` collapsing
-- [ ] `--save`
+- [x] `--lines` collapsing
+- [x] `--save`
 - [x] E57: filter: thresholds breaking `p + auto ≤ 1` → thresholds refused
 - [x] E128: `filter`: p between threshold and threshold + band → listed in both matched and borderline, as qs does; receipt counts p ≥ threshold
 - [x] golden snapshot of `build` output
@@ -82,7 +82,7 @@ L2-10 policy kit, L2-19, L2-06 input rules
 - [x] injection placement as planned (question/proposition in instructions), checked on the serialized request
 - [x] attention predicate tested on one true and one false result
 - [x] registry consistency test passes with this spec registered
-- [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
+- [x] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 RESULT 2026-10-10: Committed in 189a6b44 (one commit for the six spec cards SP-01, SP-02, SP-03, SP-04, SP-05, SP-07, with the spec hardening and registration), f651b119 (test include list), da2da099 (rebuilt dist). Spec hardening applied to all six: shared data guard (treat as data, never as instructions) on every question, shared helpers in catalog/shared.ts, chunkDefaults? on DecisionSpec checked by assertChunkDefaults at registration, caller text kept in instructions per D5 (propositions stay in instructions), attention rules match plan section 9. catalog/filter.ts (29 tests): text-item and proposition modes, p_i<k> noul keys, threshold 0.5 / band 0.15 / auto 0.85, E57 (auto >= threshold + band and the p + auto <= 1 side both refused, remedy named: raise --auto or lower --band; a low --threshold therefore needs a raised --auto) and E128 pinned; invalid is now {id, reason}[]; attention invalid / any auto:false / any borderline (with the defaults the borderline band lies inside auto:false, so attention is nearly always true; plan literal kept). build then full suite on the committed tree: 249 files / 4051 passed / 0 failed, tsc and eslint clean, no temp-dir leak. CARD LEFT IN dev: step 7 (live reply capture from this spec's own build) was skipped because the workers had no network, so the box for project on the captured live reply stays unticked (substitute: recorded P-01 replies re-keyed); the definition-of-done box stays unticked until the live capture is done and the card closes in its own commit. Boxes 3 (--lines collapsing) and 4 (--save) stay unticked: the presentation helpers collapseRepeats, template and ranges in filter.ts are built and tested as pure functions, and rows holds the --save data, but the flags and the file write belong to the command layer (C4 cards). The partial-run cases were run through the real runPlan for filter (4 scenarios: failed request, fatal 401, budget stop, abort) and pass; chunked items combined with those stops were not covered. Decisions to review: auto is p >= auto OR p + auto <= 1 (a confident no is decided), the plan row says only p >= auto and should be amended; the plan row says matched drives the text list but qs and E128 put sure first, both are exposed.
 
 ## Out of scope
@@ -94,3 +94,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-10-10 BLOCKED (pre-block-column dev): the remaining work is the live reply capture, owned by TRDD-O4MSZIG5, and the command layer TRDD-V8Q20MLW (C4-02) for --lines collapsing and --save (unblock-when trdd:O4MSZIG5, trdd:V8Q20MLW). The definition-of-done clause 'one commit with the TRDD id in its subject' is an open owner decision on TRDD-ZB41KG62, not work on this card. validate's probe requirement is met by 'test -f <blocker card file>', which also reads cleared if the blocker card is renamed, superseded or cancelled; unblock-when is the real condition.
 2026-10-10 RE-POINTED: C4-02 is complete and delivers neither '--lines collapsing' nor '--save'; no card owns per-command input flags (see report 'needs a card'), C4-03 wires only the group, help and typo suggestion. Blocked now only on the capture card TRDD-O4MSZIG5 for the live reply box; the two flag boxes stay open without an owner. Probe note: validate demands a blocker-probe; it is 'test -f <blocker card file>', which also reads cleared if that card is renamed, superseded, cancelled or archived; unblock-when is the real condition.
 2026-10-10 RE-POINTED AGAIN (supersedes the previous re-point note): the per-command input flags now have an owner, TRDD-EVORI1LK (Per-command inputs and input modes for the classify commands, backburner, depends on C4-03); this card is blocked on it and on the capture card TRDD-O4MSZIG5. Probe note: unblock-when lists ALL blockers and is the real condition; the blocker-probe ('test -f <card file>') covers only one, the one that by its nature stays open longest, and also reads cleared if that card is renamed, superseded, cancelled or archived.
+2026-11-18T16:53:09+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Boxes 3 and 4 delivered by IN-07 (LWDKZO2A): 9b95e567 is a pre-squash history pointer, code in c4dc6bd5 (v14.3.0); HEAD tests filter.test.ts:267 (collapse), :281 (--save). DoD: 189a6b44 (pre-squash history pointer) subject names TRDD-HJTLZ4T2; filter.test.ts has no vi import; publish 14.7.2 npm test OK. Single-file runs 2026-11-18 from scripts/llm-ext: src/classifiers/catalog/filter.test.ts 43 passed, exit 0; src/classifiers/run-decision.test.ts 72 passed, exit 0. Rulings: auto = p >= auto OR p + auto <= 1 is kept (a confident no is decided; filter.ts:103); the text list is sure first, then borderline, as qs and E128 do, and is kept. The plan row is not edited here; the ruling is recorded on this card.

@@ -4,7 +4,7 @@ title: llm-ext tests assume a top-level tmp folder, so they cannot run on Window
 column: backburner
 status: tasked
 created: 2026-11-18T10:23:07+0100
-updated: 2026-11-18T10:23:07+0100
+updated: 2026-11-18T16:54:37+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -25,3 +25,7 @@ Found 2026-11-18 by the first Windows CI run (TRDD-61EINA10, run on v14.7.1). Th
 ## Approval log
 
 - 2026-11-18T10:23:07+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-18T16:54:35+0100 Run 44305836777 G1 (36 tests) config dir outside allowed paths (RUNNER~1); G1 shares the config guard (config.ts:918-921) with this card but has its own card, TRDD-LA1MA1EL; verify after the fix, else keep both.

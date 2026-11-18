@@ -4,7 +4,7 @@ title: llm-ext runs local MLX models through the Locals server with a mac-only l
 column: todo
 status: tasked
 created: 2026-10-28T19:10:21+0100
-updated: 2026-11-16T23:07:27+0100
+updated: 2026-11-18T17:07:53+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: user
 task-type: feature
@@ -16,6 +16,7 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-28T19:10:21+0100
 implementation-commits: [97fdae64]
+eht: []
 ---
 
 # llm-ext runs local MLX models through the Locals server with a mac-only locals-mlx profile
@@ -81,3 +82,7 @@ USER answer verbatim (2026-10-28) confirming the --queue-timeout reading (forces
 
 2026-11-16 22:37+0100: shares commit 97fdae64 with TRDD-1OOAH3LD. The main agent read its completion.ts hunks after the 14.4.1 publish: withLocalThinking skips routed sends, a missing dep and a body that already has chat_template_kwargs; thinkingSent is true only for a non-routed local (broker, or llama.cpp/Locals api) send with enable_thinking true. filterBodyForSupportedParams cannot drop chat_template_kwargs (it is not in FILTERABLE_REQUEST_FIELDS, completion.ts:280). Tests are in local-input-budget.test.ts lines 548-728 (switch per kind and model, strip on and off, JSON path, unclosed tag, routed and remote sends). Not verified live: whether Locals puts a think block in content.
 2026-11-16 23:07+0100: decision B1 (main agent, under the USER delegation of 2026-11-15, started WITHOUT a harness review of its proposal): retire the pre-ZGSGGHQG broker drain path (review F-1: protocol.ts LEGACY_BROKER_STATE_FILES/readLegacyBrokerStates, server.ts checkLegacy, broker.test.ts legacy test). Why: no commit on origin/main ever shipped a broker that writes broker-llama.json (18 broker dists scanned, all carry broker-local.json; shipped code only reads the file), the test needs local-only commit fd7c3862 (GitHub API 422) so it can never pass on CI, and the project forbids legacy code. Process snapshot at 23:07+0100: no __broker process running on this machine. Reversible from git.
+2026-11-18T16:59:16+0100 Open items moved to child cards: OZDCW0MF (K1, calibrate the six built-in local models, todo), AWAUDOGX (K2, P10 command matrix with one real run and one fork quality evaluation per command, backburner), 8Z4LXZO0 (K3, broker job held for memory never trips --stop_on_errors), 6VSPCOSC (K4, llama.cpp auto-install and configure), 3N8YSCLC (K5, one symbolic API key for every local service); all five carry parent-trdd 1OOAH3LD and name both TRDD-1OOAH3LD and TRDD-ZGSGGHQG in the body. eht is [OZDCW0MF, AWAUDOGX] on both cards: this card stays todo until K1 and K2 are terminal; K3 to K5 are parent link only. The STATE CURRENT STATE item 2 of 2026-11-16T20:56:09 (per-command thinking never sent) is stale: withLocalThinking shipped (completion.ts:531, index.ts:1960, 97fdae64).
+2026-11-18T16:59:16+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): The open user questions listed in this card (8-minute worst-case wait, --stop_on_errors on ensemble members and remote profiles, local_llama vs local-llama, held vs provisional, W beyond 32k, scouting context, Locals start method) are answered by the shipped behaviour for each one (held, W 32768, local_llama, 5 minute default queue wait, Locals started through the server module directly); this ruling was not re-checked against the code line by line. A question becomes a card only on a reported problem.
+2026-11-18T17:01:48+0100 Correction to the open-questions ruling of this date: of the shipped behaviours named there, only withLocalThinking (provider/completion.ts:531) and its wiring (index.ts:1960 getLocalThinking) were re-read in source by the card writer; the defaults held, W 32768, local_llama, 5 minute queue wait and the Locals start method were NOT checked against code. Treat the ruling as unverified for those; verify before relying on it.
+2026-11-18T17:07:51+0100 main agent fix (graph repair): eht [OZDCW0MF, AWAUDOGX] is removed here, because a card has one parent and both already name TRDD-1OOAH3LD (validate GRAPH-TWO-PARENTS). Both cards cover locals-mlx too, so this card still does not reach complete before OZDCW0MF and AWAUDOGX are terminal.

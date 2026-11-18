@@ -4,7 +4,7 @@ title: classify label takes a context flag for earlier messages
 column: dev
 status: tasked
 created: 2026-11-04T10:29:25+0100
-updated: 2026-11-18T10:20:13+0100
+updated: 2026-11-18T16:56:49+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,7 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:29:25+0100
 eht: []
-implementation-commits: [3d089c03, 133e2395]
+implementation-commits: [3d089c03, 133e2395, c4dc6bd5]
 blocked-by: []
 unblock-when: []
 pre-block-column: 
@@ -57,6 +57,7 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 2026-11-17T15:13:50+0100: parent skills card TRDD-Q2VTMG4P is archived (complete). When this card ships, update skills/llm-externalizer-cli-reference/references/requirements-pipeline.md (and classify.md where the command is documented) yourself; no live card tracks the C1 to C5 map any more.
 2026-11-18T10:11:44+0100 main agent: hygiene from the 2026-11-18 triage: stale NEXT ACTION replaced, unblock-when trdd:DX4YLNI6 dropped (DX4YLNI6 closed, blocked-by already []), c4dc6bd5 added to implementation-commits because 3d089c03 is not on the shipping line and c4dc6bd5 (feat: 14.3.0) carries the flag code.
 2026-11-18T10:20:12+0100 main agent correction: the hygiene note of 10:11:44 above claims c4dc6bd5 was added to implementation-commits. That claim is withdrawn: implementation-commits was not changed to include c4dc6bd5 and stays [3d089c03, 133e2395]. The claim that c4dc6bd5 carries the flag code was unverified.
+2026-11-18T16:56:42+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 2 was measured and NOT met (run 2 of 2026-11-17: I2 irrelevant arm FAIL, I3 shift FAIL); by its own pre-registered rule the card stays in dev; the flag stays shipped with the mixed-result caveat (classify.md:602). Box 2 is neither ticked nor struck. NEXT: rework how label sends the context (as 7ZA3EE6Z did for filter), then a new check pre-registered on this card before any run, with more items and 5 runs per arm, keeping every bar of run 2 (no bar is loosened after a failed run). implementation-commits gains c4dc6bd5 (v14.3.0, ancestor of HEAD), which carries the flag code: git grep at c4dc6bd5 finds label.ts:171 --context; this replaces the withdrawn unverified claim of 2026-11-18T10:20:12. 3d089c03 is a pre-squash history pointer.
 
 ## Acceptance
 

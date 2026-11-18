@@ -4,7 +4,7 @@ title: session-summary and Jev compaction accept local profiles and prefer Local
 column: design
 status: tasked
 created: 2026-11-14T21:26:56+0100
-updated: 2026-11-18T15:40:31+0100
+updated: 2026-11-18T17:01:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-14T21:26:56+0100
+implementation-commits: [c4dc6bd5]
 ---
 
 # session-summary and Jev compaction accept local profiles and prefer Locals with LFM3 1.7B
@@ -53,4 +54,9 @@ driver.test.ts not run by the worker (rule); coordinator to run it before push.
 - [x] local session_summary fallback shipped (existence and ancestry check only, tests unrun) in c4dc6bd5 (v14.3.0, in origin/main): session_summary/local-model.ts with local-model.test.ts and local-model-lock.test.ts; remote free models first, the first fit managed local model last, an explicitly selected local profile runs local-only (STATE block of this card; triage report b4-design-dev-testing)
 - [x] tools/definitions.ts session_summary accepts LFP (definitions.ts:354 session_summary: LFP; LFP = TEXT_PROFILE_TYPES = local, free, paid at profile-accept.ts:8, definitions.ts:338), so a local profile is no longer refused by profileSelectionRefusal
 - [~] caveats (informational, not an acceptance criterion): the named model LFM3-1.7B-MLX-4bit was measured unfit for aggregate (fill 0) and is skipped with a stderr line, so another model serves; a single transcript turn larger than the local chunk budget fails loudly; governor queueing is covered by no test (the end-to-end test uses a stand-in broker); the listed tests were not run in this triage
-- [ ] the goal items not shown met: the owner named model LFM3-1.7B-MLX-4bit serves session summaries (measured unfit for aggregate, so it does not), and Jev compaction on a local profile (consumer-guidelines.md:11 says session compact accepts local, free, paid since 14.3.0, not re-checked here); the main agent decides whether to strike as obsolete or tick with evidence
+- [~] ~~the goal items not shown met~~ resolved by ruling: local profiles are ACCEPTED by session compact (definitions.ts:354, consumer-guidelines.md:18); no real local summary run was verified; the MLX model named in the title is unfit and skipped, the GGUF LFM3 is the local_llama head, calibration and a real run tracked on OZDCW0MF (K1, calibration) and AWAUDOGX (K2, P10 command matrix with real runs); original text of the box: the owner named model LFM3-1.7B-MLX-4bit serves session summaries (measured unfit for aggregate, so it does not), and Jev compaction on a local profile (consumer-guidelines.md:11 says session compact accepts local, free, paid since 14.3.0, not re-checked here); the main agent decides whether to strike as obsolete or tick with evidence
+
+## Notes
+
+2026-11-18T16:59:49+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): D2 = A: the local model for session summaries is the LFM3 GGUF via local_llama, calibrated first on OZDCW0MF (K1). D1 (chain order) is NOT ruled and stays a USER question: the owner text "Always use the locale inferencer" (#111) points to local first; the USER permission of 2026-11-18 to send sessions to free models named the janitor secrets-shield, while the product redacts with llm-ext own safeRedact (G49XPDNI line 46, a main-agent decision); the shipped order (remote free first, local last) stays until the USER answers. Same question as SZ7TO9FW Q9. This card stays open (column design); box 4 is struck by the edit of this turn, not by an owner answer. Code is in c4dc6bd5 (v14.3.0); 5638718b and cf7873ae are old-line SHAs not on HEAD, history pointers only.
+2026-11-18T17:01:48+0100 Check 2026-11-18: git grep at c4dc6bd5 finds resolveSessionSummaryChain (session_summary/local-model.ts:348) and session_summary: LFP (tools/definitions.ts:354), so the code claim behind implementation-commits [c4dc6bd5] holds. Box 4 is struck by ruling; no real local summary run was verified (K1 OZDCW0MF, K2 AWAUDOGX).

@@ -4,7 +4,7 @@ title: llm-ext runs local GGUF models through llama.cpp with a local_llama profi
 column: todo
 status: tasked
 created: 2026-10-28T13:55:28+0100
-updated: 2026-11-16T22:36:04+0100
+updated: 2026-11-18T17:01:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-28T13:55:28+0100
 implementation-commits: [f105c646, 97fdae64]
+eht: [OZDCW0MF, AWAUDOGX]
 ---
 
 # llm-ext runs local GGUF models through llama.cpp with a local_llama profile
@@ -138,3 +139,7 @@ Sent by the coordinator to the calibration worker on 2026-10-29 at 17:50 +0100; 
 
 2026-11-14T16:20+0100 TRDD-SWNIIFTF (--stop_on_errors) closed its box (c), a request queued for memory still completes, on the governor queue (164fa021), not on the broker memory queue its npt named (this card and ZGSGGHQG). When the broker memory wait lands, re-check that a broker job held for memory never trips --stop_on_errors (the user ruling of 2026-10-28: not having enough memory is not a failure, it only queues the request).
 2026-11-16 22:36+0100: the main agent read the shipped completion.ts hunks of 97fdae64 AFTER the 14.4.1 publish (git show 97fdae64 -- scripts/llm-ext/src/provider/completion.ts). withLocalThinking skips routed sends, a missing dep and a body that already has chat_template_kwargs; thinkingSent is true only for a non-routed local (broker, or llama.cpp/Locals api) send with enable_thinking true; the JSON path strips after the length check and before the parse. Matches the worker report. Not verified live: whether llama-server or Locals put a think block in content.
+2026-11-18T16:59:16+0100 Open items moved to child cards: OZDCW0MF (K1, calibrate the six built-in local models, todo), AWAUDOGX (K2, P10 command matrix with one real run and one fork quality evaluation per command, backburner), 8Z4LXZO0 (K3, broker job held for memory never trips --stop_on_errors), 6VSPCOSC (K4, llama.cpp auto-install and configure), 3N8YSCLC (K5, one symbolic API key for every local service); all five carry parent-trdd 1OOAH3LD and name both TRDD-1OOAH3LD and TRDD-ZGSGGHQG in the body. eht is [OZDCW0MF, AWAUDOGX] on both cards: this card stays todo until K1 and K2 are terminal; K3 to K5 are parent link only. The STATE CURRENT STATE item 2 of 2026-11-16T20:56:09 (per-command thinking never sent) is stale: withLocalThinking shipped (completion.ts:531, index.ts:1960, 97fdae64).
+2026-11-18T16:59:16+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): The open user questions listed in this card (8-minute worst-case wait, --stop_on_errors on ensemble members and remote profiles, local_llama vs local-llama, held vs provisional, W beyond 32k, scouting context, Locals start method) are answered by the shipped behaviour for each one (held, W 32768, local_llama, 5 minute default queue wait, Locals started through the server module directly); this ruling was not re-checked against the code line by line. A question becomes a card only on a reported problem.
+2026-11-18T17:01:48+0100 Correction to the open-questions ruling of this date: of the shipped behaviours named there, only withLocalThinking (provider/completion.ts:531) and its wiring (index.ts:1960 getLocalThinking) were re-read in source by the card writer; the defaults held, W 32768, local_llama, 5 minute queue wait and the Locals start method were NOT checked against code. Treat the ruling as unverified for those; verify before relying on it.
+2026-11-18T17:01:48+0100 Graph conflict: eht [OZDCW0MF, AWAUDOGX] was set on both this card and ZGSGGHQG, as ordered; trddgrep validate reports GRAPH-TWO-PARENTS on both children (parent-trdd is 1OOAH3LD only). The main agent should keep eht on one parent and link the other by body text.

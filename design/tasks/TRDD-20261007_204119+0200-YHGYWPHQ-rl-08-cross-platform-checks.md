@@ -4,7 +4,7 @@ title: RL-08 Cross-platform checks
 column: blocked
 status: tasked
 created: 2026-10-07T20:41:19+0200
-updated: 2026-11-17T14:07:41+0100
+updated: 2026-11-18T17:03:06+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -16,7 +16,7 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T20:41:19+0200
 blocked-by: [61EINA10]
-unblock-when: [trdd:61EINA10]
+unblock-when: []
 pre-block-column: todo
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*61EINA10\*'
 blocker-holds-if: exit-nonzero
@@ -55,8 +55,8 @@ read the code at card start
 
 ## Acceptance
 
-- [ ] (derived from title) the cross-platform checks pass on every platform listed at card start
-- [ ] definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
+- [~] (scope reading, see Notes 2026-11-18: macOS and Linux only, Windows NOT verified green; not a literal pass) (derived from title) the cross-platform checks pass on every platform listed at card start
+- [~] (scope reading: publish authority by main-agent reading of the USER goal of 2026-11-16, see Notes) definition of done for a release step: the step's command output recorded on the card; nothing pushed, published or installed without the USER's word; RL-10 and RL-12 wait for the USER (D13)
 - [x] src/cli/classify-stdin-cli.test.ts passes on Linux with util-linux script, the pty test running and not skipped (its linux branch has never run, TRDD-2GC5DHR7)
 
 ## Out of scope
@@ -72,3 +72,6 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 2026-11-14T15:49+0100 for the Linux run of classify-stdin-cli.test.ts (TRDD-2GC5DHR7): if the pty test goes red, look first at util-linux script closing the session at once because its own stdin is /dev/null (EOF), which can drop or truncate the child's stdin is a terminal message; with -e the exit stays 1, so it fails on the message assertion. A skip, not a failure, means the util-linux probe missed.
 2026-11-16T10:27:58+0100 RETARGETED by the main agent (goal TRDD-FC2TX9VU): 14.3.0 was published 2026-11-15 by the TRDD-EB1XGLMJ run, not through this checklist, so every 14.3.0 in this card now means the next release after 14.3.0 (version set by git-cliff at publish). The card stays open and is worked at that release. RL-10 USER gate: the USER goal of 2026-11-16 says publish and update.
 2026-11-17T14:06:57+0100 Platforms listed at card start (step 1): the README claims macOS, Linux and Windows (README.md:15, :129). macOS (darwin arm64): typecheck, lint, build and full npm test OK in the 14.6.1 publish run (publish-20261117_122713+0100.log lines 14, 16, 20). Linux (ubuntu-latest): GitHub CI 44079104801 on 04d412ea success, Test Files 345 passed, 5 skipped (the 5 are opt-in real-model suites, each one env-gated describe.skipIf); classify-stdin-cli.test.ts ran 5 tests, none skipped, so the pty test ran on Linux (box 3 met). Windows: no run exists; both workflows use ubuntu-latest only. Box 1 waits on TRDD-61EINA10 (Windows CI job). Box 2 publish authority: decided under the USER delegation of 2026-11-15, see TRDD-6PIGEAN0 Notes.
+2026-11-18T16:55:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Supported platforms for RL-08 are macOS and Linux; Windows is experimental (README.md:15, 16719d1d) and its failures are tracked by the cards under TRDD-61EINA10 (12 group cards, ids in its Notes). Box 1 is read on macOS and Linux: 14.6.1 publish log lines 14,16,20 (macOS), CI 44079104801 (Linux). Box 2: step output recorded in the Notes of 2026-11-17T14:06:57; publish authority as ruled for RL-02 in TRDD-6PIGEAN0 Notes 2026-11-17T14:05:41 (main-agent reading of the USER goal of 2026-11-16, same shape as the closed RL-02, RL-05, RL-09).
+2026-11-18T17:01:48+0100 Scope reading, not a strike: boxes 1 and 2 were ticked on the main-agent ruling that the supported platforms are macOS and Linux (Windows experimental); box text unchanged. Windows is NOT verified green; its failures are open on the cards under TRDD-61EINA10. A reader who needs Windows checked must untick box 1.
+2026-11-18T17:03:04+0100 Update: the scope-reading boxes (E9AQOQ5X 1 and 3, YHGYWPHQ 1 and 2) are now marked [~] with the reading stated in the box, not [x]; the box text is kept. Box 54 of E9AQOQ5X (box 2) is still open.

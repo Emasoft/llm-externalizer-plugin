@@ -1,10 +1,10 @@
 ---
 trdd-id: 7ZA3EE6Z
 title: classify filter takes a context flag for earlier messages
-column: human_review
+column: dev
 status: tasked
 created: 2026-11-14T17:11:46+0100
-updated: 2026-11-18T16:50:07+0100
+updated: 2026-11-18T17:02:42+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -22,8 +22,8 @@ implementation-commits: [028ad703, fcdd58c6]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-18
 
-- Status: held. Code landed in 028ad703 and was reverted in fcdd58c6 because live-check case (c) failed (see Notes). HEAD has no classify filter --context.
-- NEXT ACTION: option 2 chosen by the main agent 2026-11-18 (delegated). Run live check 2 (Notes) on a scratch worktree with fcdd58c6 reverted; re-land on the branch and do docs step 5 only on a pass.
+- Status: held. Code landed in 028ad703 and was reverted in fcdd58c6. Live check 1 case (c) failed; live check 2 (2026-11-18) failed bar (c) for both unrelated contexts (Notes). HEAD has no classify filter --context. The card stays active on USER request (Notes, USER lines of 2026-11-18).
+- NEXT ACTION: wording spike 3 (reports_dev/7za3ee6z/brief-spike3.md, on a scratch worktree) separates wording from context content and tests four wordings, one built to the USER design. Then pre-register a fresh ship check on new items before any run; re-land, docs step 5 and the label port (TRDD-WYY3SPDX) only on a pass.
 - Decided: find and compare get no context input (Notes 2026-11-18T08:22:59).
 
 Increment B of TRDD-WYY3SPDX. Increment A (3d089c03) gave `--context FILE` to `classify label`, whose instruction already uses the shared context. `classify filter` was left out on purpose: its text-items instruction (classifiers/catalog/filter.ts, about line 85, `${i.question} ${dataGuard("the text in the state")}`) never mentions `shared.context`, although filter.ts sets `sharedState = i.context ?? null` (about line 61). Adding the flag alone would send the context and have it ignored.
@@ -41,6 +41,7 @@ Tests go through the recorded-reply GlobalFetch seam, the same as the label test
 
 - 2026-11-14T17:11:46+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T08:59:01+0100 — column → human_review by main-agent@llm-externalizer-plugin. held: live-check case c failed, code reverted in fcdd58c6; USER chooses ship with a caveat or a new pre-registered check
+- 2026-11-18T17:02:42+0100 — column → dev by main-agent@llm-externalizer-plugin. USER asked for a working --context (2026-11-18); wording spike 3 running
 
 ## Notes
 
@@ -58,3 +59,6 @@ Tests go through the recorded-reply GlobalFetch seam, the same as the label test
 2026-11-18T16:41:15+0100 correction before any run: replaces the live check 2 pre-registration of 2026-11-18T16:39:29+0100. Live check 2, pre-registered before any run. Question for every item: "Does this text approve deleting the production database?". Items: I1 "Yes, go ahead with it." (flip item); I2 "I approve deleting the production database."; I3 "Do not delete the production database."; I4 "Please go ahead and delete the production database now."; I5 "The quarterly report is due on Friday.". Arms: A no --context (control); C context "User: My favourite colour is blue."; D context "Assistant: Shall I delete the production database now?". 5 runs per item per arm (75 calls), default settings in a temporary HOME, a build of the 028ad703 code re-landed on a scratch worktree. Matched = mean p >= 0.5, the default threshold of filter (filter.ts:200). Validity: A must leave I1 unmatched, else the run is void. Bars, each a stop: (a) D matches I1; (c) for every item, C gives the same matched verdict as A and |mean C - mean A| <= 0.15 (the run 1 tolerance, equal to the default band, filter.ts:201). Reported, not gated: D on I2-I5 and every drift. A miss on (a) or (c) stops the ship: the code stays out of the release and the card goes to backburner. Record the profile, the model of every call and every p.
 2026-11-18T16:49:19+0100 correction before any run: replaces the live check 2 pre-registration of 2026-11-18T16:41:15+0100 (the correction line that keeps the 0.15 tolerance). Everything in that line stands, with two changes. (1) A fourth arm R with the unrelated context of run 1, "User: what is the weather in Rome?", gated by bar (c) exactly like arm C; so 4 arms, 100 calls. (2) The build is HEAD of dev/after-14.3.0 with fcdd58c6 reverted, uncommitted, on a scratch worktree; it carries later commits such as e6c31136, so it is not 028ad703 alone. Why: the neutral context of arm C was chosen after run 1 failed, on a reading made after that run; arm R keeps the failing context of run 1, so a ship needs both C and R to pass. All changes from run 1: items I2-I5 added; 5 runs per cell instead of 3; arm C added; arms A, R and D are the (b), (c) and (a) of run 1; bars (a) and (c) and the 0.15 tolerance unchanged.
 2026-11-18T16:50:06+0100 correction (main agent) to the entry dated 2026-11-18T16:49:19+0100 above: as first written it cited 2026-11-18T16:39:29+0100 as the line it replaces; the right line is 2026-11-18T16:41:15+0100. The main agent corrected the entry in place before any run (commit 216c926e), so the entry above now reads correctly; this line records the fix.
+2026-11-18T17:02:39+0100 USER, 2026-11-18 (verbatim): "we need --context to make classifiers any useful." and "it is hard to judge from what is often a single line of text is something is more or less relevant without a minimum context. but we need to making clear to the classifier that it must not evaluate/classify the context part, but only the input part. this is why the prompt must clarify this and add the specific context block when the --context option is used."
+2026-11-18T17:02:39+0100 Live check 2 result (by worker report, reports_dev/7za3ee6z/20261118_165345+0100-live-check-2.md; the main agent spot-checked raw runs C-4-1 p 0.43, R-4-1 p 0.37, A-4-1 p 0.88 and the model typesafe/jev-1.14-20261014): validity pass; bar (a) pass, D matches I1 (mean 0.968); bar (c) FAIL for C and R. I4 goes from matched in A (0.890) to unmatched in C (0.450) and R (0.352); I1 drifts from 0.320 to 0.124 (C) and 0.086 (R), past the 0.15 tolerance. No ship: the code stays out of the branch. Not separated: the arms ran in sequence A, C, R, D; with any context filter.ts:86 also switches the question wording, and no arm sent the new wording with an empty context, so the run cannot tell the wording from the context content.
+2026-11-18T17:02:39+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): the 16:41:15 pre-registration sent the card to backburner on a miss; the USER lines above ask for a working --context, so the card stays active instead. No bar is loosened and nothing ships. Next: exploration spike 3 (reports_dev/7za3ee6z/brief-spike3.md) on the scratch worktree separates wording from content with an empty-context arm and tests four wordings; the fourth follows the USER design, a named context block plus an instruction to judge only the units and never the context. A wording it picks then gets a fresh pre-registered ship check on new items and a new question, with the run 2 bars; on a pass the same wording goes to label too (TRDD-WYY3SPDX).
