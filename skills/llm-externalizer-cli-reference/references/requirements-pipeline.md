@@ -87,7 +87,7 @@ The same instruction without labels (no label prefixes, no "labels are hints" li
 
 Candidate rules come from the rules file (one rule per line is easiest). The examples use four rules: r1 "make the background color of the loading dialog of a shade of blue" (a duplicate of the new phrase), r2 "the background of the load panel must not be transparent." (an earlier version of the same requirement), u1 "every API response must include a request id header" and u2 "the settings page must be reachable from the main menu" (unrelated).
 
-`--json` on `classify find` and `classify label` (steps 2a and 2b) ships in llm-ext 14.3.0 and later: llm-ext 14.2.0 exits 1 with `llm-ext: unknown option --json for classify find` (the same for `classify label`; measured 2026-11-04).
+`--json` on `classify find` and `classify label` (step 2a and the 2b measurements of 2026-11-04) ships in llm-ext 14.3.0 and later: llm-ext 14.2.0 exits 1 with `llm-ext: unknown option --json for classify find` (the same for `classify label`; measured 2026-11-04).
 
 ### 2a. Does one of the rules say the same thing? (C3)
 
@@ -109,38 +109,21 @@ Result (exit 0, `decision` only): `status` answered, `exists` 0.71, `ranked` r1 
 
 A rerun of the same request on llm-ext 14.6.1 (2026-11-17, n=1, remote typesafe/jev-1.14) gave `status` partial, `exists` 0.36, `ranked` r1 0.92, r2 0.06, u1 0.01, u2 0.01: `exists` for the same request varied between runs (0.71 and 0.36), so `status` partial is not proof that no rule says the same thing. r1 stayed ranked first, and the top 3 go on to 2b either way (next paragraph), so 2b decides.
 
-Which rules go on to 2b (rule of this document, not measured): the top 3 of `ranked` (all of them, if fewer), in rank order, also when `status` is absent, because an earlier version of a rule can come back absent (r2 did in every run here) and stopping at absent would lose case 2 of step 3. The reading rules of 2b then combine their verdicts. When the combined verdict is updated_version, step 3 merges with the candidate that got updated_version at confidence >= 0.6; if two or more did, ask the user which rule to update.
+Which rules go on to 2b (rule of this document, not measured): the top 3 of `ranked` (all of them, if fewer), in rank order, also when `status` is absent, because an earlier version of a rule can come back absent (r2 did in every run here) and stopping at absent would lose case 2 of step 3. 2b is `classify rule-check` over those rules (or over the whole list, see its request counts in `classify.md`). When its outcome is updated_version, step 3 merges with `rule_id`; if `ambiguous` is true (two or more rules qualify), ask the user which rule to update.
 
 Repeated in sequence (n=1, 2026-11-04), 2b on the top-ranked candidate of 2a: find on r2, u1 and u2 gave `status` absent, `exists` 0.14, `ranked[0]` r2 0.97; label on r2 gave updated_version, confidence 0.89 (probabilities 0.01 / 0.93 / 0.06).
 
 ### 2b. Is it a duplicate, an updated version or new? (C5)
 
-`classify label` with three classes, one run per candidate rule. The item holds the new phrase and one existing rule; the class descriptions carry the definitions. `label-r2.json` (the files for r1 and u2 differ only in the text after `EXISTING RULE:`):
-
-```json
-{"mode": "json",
- "purpose": "Decide how a NEW requirement phrase relates to ONE EXISTING rule of a requirements file.",
- "items": [{"id": "pair", "text": "NEW PHRASE: the loading screen background should be blue.\nEXISTING RULE: the background of the load panel must not be transparent."}],
- "classes": [
-   {"id": "duplicate", "description": "the new phrase asks for the same thing as the existing rule, in other words"},
-   {"id": "updated_version", "description": "the new phrase changes, extends or refines the same requirement as the existing rule: same subject, different or additional detail"},
-   {"id": "new", "description": "the new phrase is about a different requirement than the existing rule"}]}
-```
+`classify rule-check` answers it in one command (TRDD-LFTQCFUX; not in llm-ext 14.6.5 or earlier, ships in the next release; measured 2026-11-18 on a development build after 14.6.5, remote typesafe/jev-1.14, two runs of the same file). It asks two questions per rule, how the phrase relates to the rule (duplicate, updated_version or new) and whether it contradicts it, and decides the outcome in code. The request is a JSON file, `rule-check-example.json` (in this folder: the phrase and the four example rules, `{id, text}` each), and the earlier messages go in `--context` (`rule-check-example-context.txt`, the earlier messages of the goal example):
 
 ```bash
-llm-ext classify label --input ./label-r2.json --json
-llm-ext classify label --input ./label-r2.json --json --context ./context.txt   # earlier messages as background; ships in llm-ext 14.3.0 and later (label-r2.json must not hold a `context` key); measured effect mixed, see classify.md
+llm-ext classify rule-check --json --input ./rule-check-example.json --context ./rule-check-example-context.txt
 ```
 
-Results (exit 0 each, first row of `decision.rows`):
+Result (exit 0, `decision` only, no warning, no `answered_by`): `outcome` duplicate, `rule_id` r1, `ambiguous` false, `conflict` false, `unanswered` empty, `confident_new_count` 2, `reason` "duplicate of r1 (confidence 0.68)". `candidates` lists the rules that are not a confident new: r1 duplicate, confidence 0.68 (probabilities 0.79 / 0.20 / 0.01 for duplicate / updated_version / new), and r2 new, confidence 0.40 (0 / 0.40 / 0.60). u1 and u2 are the 2 confident news and are only counted. The outcome matched the expectation (duplicate r1); the per-rule expectation for r2 (updated_version) did not: in these two runs of the same file (n=2) r2 came back new at confidence 0.40 and 0.42, so this n=2 sample shows no case of the earlier-version label for r2 (it is not a measured rate). Because the outcome is duplicate, r2 does not change it. For comparison, the two-command recipe this command replaces (`classify label` with three classes, one run per rule; 2026-11-04, n=1) labelled r2 updated_version at confidence 0.86 (probabilities 0.01 / 0.91 / 0.08), so on this sample the older recipe found the earlier version and rule-check did not.
 
-| rule | label | confidence | probabilities (duplicate / updated_version / new) | auto | review |
-|---|---|---|---|---|---|
-| r1 | duplicate | 0.70 | 0.80 / 0.19 / 0.01 | false | true |
-| r2 | updated_version | 0.86 | 0.01 / 0.91 / 0.08 | true | false |
-| u2 | new | 1 | 0 / 0 / 1 | true | false |
-
-Rules for reading the runs (rule of this document, not measured): duplicate wins if any candidate is `duplicate` with confidence >= 0.6; otherwise updated_version if any candidate is `updated_version` with confidence >= 0.6; new if every candidate is `new`; any other outcome is uncertain and goes to the LLM or the user (0.6 is the default `--min_confidence` of `classify label`). Gap: no single command returns duplicate / updated version / new yet; until one exists this two-command recipe is the way. Here r1 at 0.70 passes but is below the 0.85 `auto` line, so `review` is true.
+How the outcome is read (`classify.md`, section rule-check): `duplicate` and `updated_version` name `rule_id`, which step 3 uses (updated_version: merge into that rule; duplicate: nothing is written); `new`: add the phrase as is; `uncertain`, `ambiguous` true (two or more rules qualify as updated_version) and `conflict` true (the phrase contradicts a rule) go to the user or the LLM, with `candidates` as the evidence. A rule whose answer is missing makes the outcome `uncertain` even when another rule is a confident duplicate, so a stopped run never reads as new. Run `--estimate` first on a long rules file; request counts are in `classify.md`.
 
 ### 2c. Deduplicate a list of rules (C4)
 

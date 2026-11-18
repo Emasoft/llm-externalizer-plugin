@@ -17,6 +17,7 @@
 - `llm-ext classify findings`
 - `llm-ext classify test-output`
 - `llm-ext classify requirements`
+- `llm-ext classify rule-check`
 - Request JSON shapes (`--input` of `classify filter`, `label`, `find`)
 - `llm-ext classify ping`
 
@@ -491,6 +492,77 @@ Limits:
 - Long prompts: a prompt file over `--max_bytes` is not refused; it keeps its last lines and drops the start, and prints a warning on stderr, e.g. `over 100 bytes; kept the last 71 bytes and dropped 98 bytes from the start`. Requirements in the dropped start are lost, and the only sign is that warning on stderr. When the last line alone is over the cap it is refused: `the last line alone is over 100 bytes; raise --max-bytes` (exit 1). The cap value is 1 to 104857600 bytes (`shared-flags.ts`).
 
 Known limitation (measured 2026-11-04, TRDD-S5KOOT2S): the check used 10 vague improvement requests and 10 concrete property requests, each run alone and inside a three-sentence prompt. All 20 property runs were returned as requirements. One vague run was also returned as a requirement: "make it a bit more professional" inside "the page looks off. make it a bit more professional. rebuild it and open it for me." (confidence 0.79); sent alone, the same sentence had confidence 0.51 and was rejected. The label of a borderline sentence can change between runs (the goal example's "let's improve it a little." was argmax requirement in one run and instruction in another). In the two runs, 3 of 10 and 4 of 10 vague items had requirement as their top label and were stopped only by the gate. The `--min_confidence` gate (default 0.6) usually keeps such sentences out, not always. The check used one context ("we built the settings page yesterday.") and one opener, so the measured rate holds only for that setup. Review the returned list before writing it into a rules file.
+
+### `llm-ext classify rule-check`
+
+`classify rule-check` is new (TRDD-LFTQCFUX): it is not in llm-ext 14.6.5 or earlier and ships in the next release. The runs quoted here were made on a development build after 14.6.5, 2026-11-18, remote typesafe/jev-1.14, one run per check except the example request, which ran twice (once with `--json`, once in text form), with the environment `HOME`, `LLM_EXT_CONFIG_DIR` (under `HOME`: a config directory elsewhere is refused), `LLM_EXT_OUTPUT_DIR`, `LLM_EXT_SCRATCH_DIR` set to scratch folders and `LLM_EXT_INSTALL_RULE=0`. The binary was `dist/llm-ext.js` (the `bin` of package.json).
+
+- Usage: `llm-ext classify rule-check --input <file.json> [--context FILE] [--flag value ...]` (or the JSON input on stdin); there is no bare file argument
+- Accepted profile types: classifier
+
+This section comes from live runs and the source (`catalog/rule-check.ts`), not from --help.
+
+Purpose: say whether a new phrase DUPLICATES one of a list of existing rules, is an UPDATED VERSION of one, or is NEW. For every rule Jev answers two questions about the pair: how the phrase relates to the rule (`duplicate`: says the same thing; `updated_version`: changes, extends or replaces the rule on the same subject; `new`: a subject the rule does not cover) and whether the phrase contradicts the rule. The outcome is then decided in code, never by the model.
+
+Input: `{"phrase": "...", "rules": [{"id": "G7.4", "text": "..."}, ...], "context": "..."}`; `rules` has at least 1 entry, `context` is optional (the `--context` file fills it), no other key is accepted. A rule id matches `[A-Za-z0-9_.:-]{1,64}` (so PRRD ids such as `G7.4` and `S64.134` are returned unchanged), ids must be unique and `__proto__` is refused. The rule text and the phrase never appear in a question, only in the request state. Example request: `references/rule-check-example.json` with `references/rule-check-example-context.txt`.
+
+| Flag | Type | Meaning |
+|---|---|---|
+| `--conflict` | number | The phrase contradicts a rule when the contradiction probability is at or above this (default 0.6, range 0..1). |
+| `--min_confidence` | number | A relation counts only when its confidence is at or above this; below it the rule stays a candidate (default 0.6, range 0..1). |
+| `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request. |
+| `--max_questions_per_request` | number | Most questions per request, a whole number of 1 or more (all classify commands). It multiplies the request count: rule-check asks 2 questions per rule, so 2 sends one rule per request. A value below the questions of one unit (1 for rule-check) is refused for the whole run: exit 1, `llm-ext: unit 0 (questions: rel_i0, con_i0) has 2 questions, over the limit of 1 per request` (measured). 0, 1.5 or a negative value is refused with `llm-ext: --max-questions-per-request must be a whole number of 1 or more, got ...`. |
+| `--input`, `--json`, `--estimate`, `--max_budget`, `--output_dir`, `--profile`, `--strict_exit`, `--chunk_chars` | | As for the other classify commands. `--default` is listed but does not apply: rule-check has no choice question over text. |
+
+Output (`decision` object): `outcome` (`duplicate`, `updated_version`, `new` or `uncertain`), `rule_id` (the matched rule, else null), `ambiguous`, `conflict`, `reason` (one line built from the result), `unanswered` (ids of the rules with no valid answer), `candidates` and `confident_new_count`. A candidate is a rule that is NOT a confident new: `{id, label, confidence, probabilities, contradicts: {yes, probability} or null, unanswered, invalid}`, sorted by the probability of `new` ascending, unanswered last. `confident_new_count` counts the other rules, so `candidates` length plus `confident_new_count` is the number of rules and a long list never prints one row per rule. The text form is the first line `outcome rule_id` (plus ` · ambiguous`, ` · conflict`), one line per answered candidate (confidence, label, id, `contradicts`), `N rules are confidently new`, and `? no answer: <id> (<reason>)` lines.
+
+Outcome rules, in this order (a confident relation is one whose confidence is known and at or above `--min_confidence`):
+
+0. Any rule with no valid answer (its relation or its contradiction question failed or was never sent): `uncertain`, `rule_id` null, the ids in `unanswered`. A rule nobody judged may be the duplicate, so a confident duplicate elsewhere is not reported.
+1. A confident `duplicate`: `duplicate`, `rule_id` the most confident one (the first on a tie).
+2. Else a confident `updated_version`: `updated_version`, `rule_id` the most confident; `ambiguous` is true when two or more qualify.
+3. Else every rule is a confident `new`: `new`.
+4. Else `uncertain`.
+
+`conflict` is true when any answered rule has a contradiction probability at or above `--conflict`, whatever its relation label, so a rule labelled `new` that the phrase contradicts does not hide behind a clean `new` (it stays a candidate and is not counted in `confident_new_count`). A run "needs attention" for `uncertain`, `ambiguous` or `conflict`; only `--strict_exit` turns that into exit 1.
+
+`stopped` and `degraded`: `degraded` is always `[]` in the envelope (no source fallback is built). `stopped` is `budget` or `timeout` when `--max_budget` or `--command_timeout` (or `--stop_on_errors`) ended the run before every request was sent. Checked in `l2/fan-out.ts` (lines 238-244, the per-item split) and tested through the real planner: a request that was not sent or that failed gives every question key of its rules a not-ok answer (reason `not_sent_budget`, `not_sent_timeout`, `aborted`, `invalid_response`, `not_sent_fatal`), so those rules arrive as unanswered. A stopped or partly failed run therefore always has outcome `uncertain` with the missing rules in `unanswered`, never `new`, and the decision is still printed. A run-wide failure (bad key, no credits, key limit, unknown model) prints no decision at all (`run-decision.ts` conclude).
+
+Exit codes (`run-decision.ts` ExitCode, `l2/attention.ts`, `l2/cost-cap.ts`, `l2/abort.ts`, `command-stop.ts`):
+
+| Code | Meaning |
+|---|---|
+| 0 | The run finished. Also when the result needs attention and `--strict_exit` is absent. |
+| 1 | Refused before any request: invalid input (schema, bad id, duplicate id), a threshold or `--max_questions_per_request` out of range, a plan over the profile limit (`llm-ext: the plan needs 25 requests, over the limit of 8`, measured), an estimate over `--max_budget`; this holds with or without `--strict_exit`. Also 1: the result needs attention and `--strict_exit` is given (checked on a clean duplicate run: exit 0 with the flag), and the `--max_budget` stop (the decision is printed with the unsent rules unanswered). |
+| 3 | The key is missing, rejected or out of credits (the most actionable class when several failures occurred: 3 over 4 over 5). |
+| 4 | A request or the model was rejected. |
+| 5 | A request failed after its retries (a failed request, not a run-wide one, still prints the decision with its rules unanswered). |
+| 6 | `--stop_on_errors` stopped the run. |
+| 124 | `--command_timeout` stopped the run (the decision is printed, rules not sent are unanswered). |
+| 130 | Ctrl-C. |
+
+Request counts (`--estimate`, measured with the default profile, whose limit is 8 requests per call): the 4 example rules with a context: 1 request, 1284 input tokens, 0.000054 USD; with `--max_questions_per_request 2`: 4 requests, 1716 tokens, 0.000072 USD; with 1: refused (exit 1). The 25 rules of the AI Maestro janitor PRRD (rule texts from `prrdgrep show`, metadata block removed): 1 request, 10905 tokens, 0.000458 USD; with 2: refused, `the plan needs 25 requests, over the limit of 8`; with 1: refused. A generated list of 100 short one-sentence rules: 2 requests, 26470 tokens, 0.001112 USD; with 2: refused, `the plan needs 100 requests, over the limit of 8`; with 1: refused. A cap of 2 therefore needs a profile with `max_requests_per_call` of at least the rule count (the field of the profile, see models-and-settings.md).
+
+Live example, the example request (`rule-check-example.json`, expected per pair: r1 duplicate, r2 updated_version, u1 new, u2 new; expected outcome duplicate, rule_id r1):
+
+```bash
+llm-ext classify rule-check --input ./rule-check-example.json --context ./rule-check-example-context.txt
+```
+
+Result (exit 0; `--json` run: same decision, `warnings` and `degraded` empty, no `answered_by`, usage 1204 input and 228 output tokens, 0.000051 USD):
+
+```
+duplicate r1
+0.68  duplicate  r1
+0.42  new  r2
+2 rules are confidently new
+```
+
+r1 matched the expectation (duplicate). r2 did NOT: it came back `new` (probabilities 0 / 0.40 / 0.60, confidence 0.40 in the `--json` run, 0.42 in the text run), not `updated_version`; u1 and u2 are the two confident news (they are counted, not listed). The outcome matches (duplicate r1). The expectation for r2 is a mismatch, reported and not changed.
+
+Second live check, a genuinely new phrase against the 25 PRRD rules (`the CLI must print its version with --version`): exit 0, `outcome` new, `confident_new_count` 25, `candidates` empty (0 below 0.6), `unanswered` empty, `conflict` false, 1 request, 8715 input and 1434 output tokens, 0.000366 USD. One run: it shows that a 25-rule list did not make this new phrase uncertain; it does not give a rate for longer lists, where every rule must be a confident new for the outcome to be `new`.
+
+Limits: a rule is compared one pair at a time, so two rules that together make the phrase a duplicate are not seen; confidences vary a little between runs of the same input (r2 above: 0.40 and 0.42 in two runs); the updated-version case was not reproduced for r2 in these n=2 runs, which is a sample and not a rate.
 
 ### Request JSON shapes (`--input` of `classify filter`, `label`, `find`)
 
