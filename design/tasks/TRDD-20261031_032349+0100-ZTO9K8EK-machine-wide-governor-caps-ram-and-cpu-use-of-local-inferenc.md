@@ -4,7 +4,7 @@ title: Machine-wide governor caps RAM and CPU use of local inference
 column: human_review
 status: tasked
 created: 2026-10-31T03:23:49+0100
-updated: 2026-11-16T20:16:02+0100
+updated: 2026-11-18T12:54:48+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -15,6 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-10-31T03:23:49+0100
+implementation-commits: [5a1658b5]
+release-via: publish
 ---
 
 # Machine-wide governor caps RAM and CPU use of local inference
@@ -64,3 +66,7 @@ implementation-commits: d0d7765e (D13 body), 4eaedcf5 (PRRD+BH1XNP06 card), bc4c
 2026-11-14T16:20+0100 from the review of TRDD-SWNIIFTF (archived, box (c) closed in 164fa021 on a held governor lease with max inferences 1): read by the main agent, the governor's decide() refuses for RAM at governor/controller.ts:357, :384 and :388 and for the inference window at :392-396; client.ts:275-279 treats every refusal the same (lease null, the caller keeps waiting), and a RAM refusal for a load also calls giveRamBack (client.ts:273). So a RAM wait takes the same waiter path as the tested window wait (read, not run: no test forces the RAM gate under --stop_on_errors). Not tested either: a governor acquire timeout under --stop_on_errors, which direct.ts:58 rethrows as local inference governor ... failed, request not sent; whether the stop-on-errors classifier counts that as a dead model is untraced. The 164fa021 fail-before injected stopCommand directly and bypassed that classifier.
 2026-11-14T16:21+0100 correction to the previous note (review of 81cea4ee): a RAM refusal that can fit later returns no lease, like the window refusal (client.ts:275-279); the loop that then keeps waiting was not read, so keeps waiting is inferred. Not every memory shortfall is a wait: a model load whose lower bound (weights plus headroom) exceeds the whole RAM limit even alone is an immediate error (neverFits, controller.ts:232-234; thrown at broker/server.ts:1130-1132 and calibration/runner.ts:241 with neverFitsMessage). A load whose upper bound alone does not fit runs only alone and otherwise waits (controller.ts:375-386). Whether --stop_on_errors fires on the neverFits error is untested, and whether a model too large for the machine counts as not enough memory under the 2026-10-28 ruling is a user question (asked on DS6OM3KX).
 2026-11-14T20:40:23+0100 Defaults 80/80 landed 51cbf755 (code, help, README, skill reference, spec, tests).
+
+## Progress
+
+2026-11-18T12:50:05+0100 main agent (written by worker): commit 5a1658b5 (CPU floor removed; a brokered CLI prints the governor wait reason). Committed-tree check of 5a1658b5 (export of the commit, node_modules linked): tsc exit 0; governor.test.ts 125 passed 1 skipped (most likely governor.test.ts:339, a Linux-only test run with it.runIf on linux, skipped on this darwin host; the run output does not name the skipped test); broker-governor.test.ts 17 passed; governor-load.test.ts failed 1 of 52 (the real-RAM reload-pause test, spawn count 2 instead of 1) in a run at host load average about 100, then passed 52 of 52 when rerun alone at load about 20; governor-burn.test.ts 12 passed on the working tree right before the commit. ubs gate: a rule-scoped ubs:ignore above the const SERVER template statement of governor-burn.test.ts covers its whole child script (lines 56-80). Spec D6 text still describes the floor (TRDD-ZZ2TKYCP). Ships in 14.7.2.

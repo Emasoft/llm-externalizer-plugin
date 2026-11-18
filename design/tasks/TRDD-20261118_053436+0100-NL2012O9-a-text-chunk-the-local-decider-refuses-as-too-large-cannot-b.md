@@ -4,7 +4,7 @@ title: A text chunk the local decider refuses as too large cannot be cut again a
 column: todo
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T10:24:03+0100
+updated: 2026-11-18T12:54:46+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T05:34:36+0100
+implementation-commits: [21699151]
+release-via: publish
 ---
 
 # A text chunk the local decider refuses as too large cannot be cut again and the 16384 clamp raises the remote request count
@@ -46,3 +48,7 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 2026-11-18T08:00:08+0100 From TRDD-4JLBB1YT (main agent): the planner fills a request up to the limit: budget = contextTokens - envelopeTokens (planner.ts:255) with ENVELOPE_TOKENS 64 (planner.ts:13), a request closes only when the next unit would pass the budget (planner.ts:313), and text units travel alone (planner.ts:311-312). After the estimator fix ceb16c5c, random hex and UUID text still comes out at up to 0.997 of the estimate (12 tokens of margin on one 4000-char list), so an under-count stays possible. Inferred, not measured: the decider fixed overhead is 105 input tokens for the state x and a one-line question; if that question costs 15 to 20 tokens, the decider own wrapper is about 85 to 90 tokens, above the 64 the planner reserves. Planner headroom is one more option for this card, next to re-cutting the chunk and max_requests_per_call.
 2026-11-18T10:11:51+0100 main agent: re-read at HEAD 54236bf8 (planner.ts:100-200, split-on-overflow.ts:20-60): replanRequest refuses a request with fewer than 2 units and re-expands with the original limits; answerWithSplit returns the first 422 when the re-plan refuses; so a refused lone text chunk is never cut smaller. Option 1 (re-cut with the scaled budget, merge the sub-answers under the original key) is agent-doable after red tests in split-on-overflow.test.ts, local-decision.test.ts and local-decider-remote-error.test.ts. USER decisions: Option 2 (packing, against D31), Option 3 (max_requests_per_call), removing the 16384 clamp (run-decision.ts:409-410), planner headroom.
 2026-11-18T10:24:01+0100 main agent decision under the USER delegation of 2026-11-18 ("solve all issues yourself. i need results."): Option 1 is to be implemented (a refused lone text chunk is re-cut with the scaled budget, down to CHUNK_CHARS_MIN, and the piece answers merge under the original key; a chunk still refused at CHUNK_CHARS_MIN returns the original 422). The 16384 clamp stays: removing it reverses the USER-quoted rationale in the comment above it in run-decision.ts. Option 2 is rejected: it contradicts D31 (plan ZB41KG62 line 167, no packing of independent items). Option 3 and a planner headroom margin are not taken. This supersedes the USER-decisions list in the 2026-11-18 note above.
+
+## Progress
+
+2026-11-18T12:50:01+0100 main agent (written by worker): commit 21699151 (l2/planner.ts recutTextRequest, split-on-overflow.ts defaultLabels and foldPieces, run-decision.ts). Committed-tree check at 848f2b9f, a descendant (reports_dev/commit-check/20261118_114436+0100-848f2b9f.md): tsc exit 0; split-on-overflow, local-decision and local-decider-remote-error tests passed. Ships in 14.7.2.

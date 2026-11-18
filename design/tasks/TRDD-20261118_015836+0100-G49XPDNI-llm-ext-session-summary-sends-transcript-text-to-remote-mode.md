@@ -4,7 +4,7 @@ title: llm-ext session-summary sends transcript text to remote models without re
 column: todo
 status: tasked
 created: 2026-11-18T01:58:36+0100
-updated: 2026-11-18T10:24:04+0100
+updated: 2026-11-18T12:54:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -15,6 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T01:58:36+0100
+implementation-commits: [b84e6dac]
+release-via: publish
 ---
 
 # llm-ext session-summary sends transcript text to remote models without redacting secrets
@@ -39,3 +41,4 @@ Measured 2026-11-18. llm-ext session_summary has no secret redaction; its only r
 2026-11-18T05:18:31+0100: janitor peer report (cross-session, not USER approval): its transcript lane runs the shield regexes over raw JSON lines without decoding strings. On 124 synthetic cases (12 secret kinds, up to 12 escape forms): 73 removed, 45 left whole, 3 partly left, 3 lines refused. Left whole: tokens right after a \n or \t escape, every NAME=value or password=value assignment, secrets with \uXXXX escapes or escaped slashes. Its output is best-effort, never sanitized; 3.9.9 alone will not fix it; the fix is a JSON-aware filter on janitor card TRDD-BAQB9SYO. Stance unchanged: no transcript goes to an outside model.
 2026-11-18T10:11:53+0100 main agent: triage 2026-11-18 at HEAD 54236bf8: no content redaction on the session-summary request path (provider/ has only sanitizeProviderError, which cleans error replies; verified by the main agent). llm-ext's own redactor (security_scan/intake.ts redactSecrets, safeRedact, fail closed) is not used by session_summary; the USER quote names the janitor secrets-shield, so using intake.ts instead is a USER decision. Fix site by the worker's reading: transcript.ts, on each raw string before the 80/160-char cuts (:526-:538), failing closed.
 2026-11-18T10:24:01+0100 main agent decision under the USER delegation of 2026-11-18 ("solve all issues yourself. i need results."): the product fix uses the llm-ext redactor safeRedact (security_scan/intake.ts), fail closed, run on each raw string in transcript.ts before the 80/160-char cuts; a turn that cannot be scanned stops the run with an error before anything is sent. Reason: the shipped CLI must protect every user and cannot depend on the janitor plugin being installed. Main agent reading, not a USER statement: the USER condition that names the janitor secrets-shield is read as governing the sending of this Claude session transcript out, which stays off; this reading picks a different scanner for the product than the one the quote names, and the USER is told so. This replaces, by the main agent under the delegation, the open USER decision recorded in the 2026-11-18 note above.
+2026-11-18T12:36:07+0100 main agent (written by worker): commit b84e6dac. transcript.ts scrubs every string sent to the model with safeRedact (security_scan/intake.ts) before any cut and fails closed with TranscriptRedactionError; ENV_SECRET, PEM and JWT patterns made linear in intake.ts and scan-pipeline.ts. Committed-tree check of b84e6dac (export of the commit, node_modules linked): tsc exit 0; security_scan 119, scan-pipeline 27, transcript 50, driver 81, l2 content-redact 28, l2 redact 22 tests passed. Known limits: ENV_SECRET misses 4 or more line breaks on one side of the separator (fuzz result, pinned by a DOCUMENTED LIMIT test, not proven exhaustive); the two 64 MB fail-closed tests need the redaction to exceed the 500 ms budget (5-9x on this machine) and could fail on a much faster one. The scanner deviation from the USER quote (intake.ts, not the janitor secrets-shield) was stated to the USER in the session on 2026-11-18. Ships in 14.7.2.
