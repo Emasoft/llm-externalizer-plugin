@@ -631,10 +631,11 @@ let activeResolved: ResolvedProfile | null = (() => {
   settingsValid = true;
   const profile = activeSettings.profiles[targetName];
   const resolved = resolveProfile(targetName, profile);
-  // Log auth status on startup so users can verify env vars are picked up
+  // Log auth status on startup so users can verify env vars are picked up.
+  // The token length is not printed: it is information about a secret and the user needs only to know one was found (TRDD-TN8OUZ50).
   if (resolved.authToken) {
     process.stderr.write(
-      `[llm-externalizer] Auth: token resolved (${resolved.authToken.length} chars)\n`,
+      `[llm-externalizer] Auth: token resolved\n`,
     );
   } else {
     const preset = API_PRESETS[profile.api];

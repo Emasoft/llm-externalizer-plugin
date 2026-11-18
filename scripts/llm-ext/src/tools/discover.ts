@@ -148,9 +148,8 @@ export async function handleDiscover(call: CaseCall, deps: Pick<CaseDeps, "FALLB
     if (!rawAuth) return "none required";
     if (rawAuth.startsWith("$")) {
       const envVal = process.env[rawAuth.slice(1)];
-      return envVal
-        ? `${rawAuth} (set, ${envVal.length} chars)`
-        : `${rawAuth} (NOT SET)`;
+      // The token length is not printed: it is information about a secret (TRDD-TN8OUZ50).
+      return envVal ? `${rawAuth} (set)` : `${rawAuth} (NOT SET)`;
     }
     return "direct value (set)";
   })();
