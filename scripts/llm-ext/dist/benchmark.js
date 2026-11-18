@@ -10243,15 +10243,29 @@ var init_intake = __esm({
       [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
       // F3: raw JWT (header.payload.signature). Each segment is its own bounded
       // class separated by a literal dot — disjoint classes, no backtracking.
-      [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "JWT"],
+      // TRDD-G49XPDNI: starts only at a run boundary `(?<![A-Za-z0-9_-])`, so each [A-Za-z0-9_-] run is scanned O(1) times. The old
+      // unanchored form re-scanned the whole run from every `eyJ` inside it (500000 x "eyJ" did not finish in 120 s; now ~20 ms). The `eyJ`
+      // may sit anywhere in the first segment, so a glued prefix (`xeyJ...`, `token-eyJ...`) is redacted with it (over-redaction accepted).
+      // Each segment is atomic via lookahead-capture `(?=(X+))\N` (no backtracking). Every old match is covered by a new match (fuzz, 300000 strings).
+      [
+        /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*eyJ[A-Za-z0-9_-])(?=([A-Za-z0-9_-]+))\1\.eyJ(?=([A-Za-z0-9_-]+))\2\.(?=([A-Za-z0-9_-]+))\3/g,
+        "JWT"
+      ],
       // F3: connection string with inline credentials (scheme://user:pass@host).
       // The `[^:@/\s]+` runs are disjoint from their `:`/`@` delimiters → linear.
       [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"],
-      // F1: ENV_SECRET — line-anchored via `[ \t]*` (intra-line horizontal
-      // whitespace only). NEVER `\s*` here: `\s` includes `\n`, which re-anchors at
+      // F1: ENV_SECRET — line-anchored via `[^\S\r\n]*` (intra-line whitespace
+      // only, VT/FF included). NEVER `\s*` across newlines here: `\s` includes `\n`, which re-anchors at
       // every newline and backtracks O(n²) over a hostile newline+whitespace blob.
       [
-        /(?:^|\n)[ \t]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[ \t]*[=:][ \t]*['"]?([^\s'"#\n]{8,})/gim,
+        // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
+        // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
+        // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
+        // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
+        // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
+        // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
+        // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
+        /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
         "ENV_SECRET"
       ],
       // F3: case-insensitive catch for lowercase / mixed-case secret assignments
@@ -10263,7 +10277,12 @@ var init_intake = __esm({
         "SECRET_ASSIGNMENT"
       ],
       [
-        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+        // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
+        // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
+        // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
+        // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
+        // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
+        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
         "PEM_BLOCK"
       ]
     ];
@@ -221136,7 +221155,7 @@ Additional information: BADCLIENT: Bad error code, ${badCode} not found in range
 });
 
 // src/project-root.ts
-import { existsSync as existsSync7 } from "node:fs";
+import { existsSync as existsSync7, mkdirSync as mkdirSync5, writeFileSync as writeFileSync5 } from "node:fs";
 import { join as join8, resolve as resolve3 } from "node:path";
 function resolveProjectMainRoot(override) {
   if (override && override.length > 0) return override;
@@ -221144,9 +221163,18 @@ function resolveProjectMainRoot(override) {
   if (projDir && projDir.length > 0 && existsSync7(projDir)) return projDir;
   return process.cwd();
 }
+function ensureSelfIgnoringDir(dir) {
+  mkdirSync5(dir, { recursive: true });
+  try {
+    writeFileSync5(join8(dir, ".gitignore"), "*\n", { flag: "wx" });
+  } catch (err) {
+    if (err.code !== "EEXIST") throw err;
+  }
+  return dir;
+}
 function defaultScratchDir(mainRootOverride) {
   if (mainRootOverride && mainRootOverride.length > 0) {
-    return join8(mainRootOverride, "reports_dev", "llm-externalizer");
+    return ensureSelfIgnoringDir(join8(mainRootOverride, "reports_dev", "llm-externalizer"));
   }
   if (_cachedDefaultScratchDir) return _cachedDefaultScratchDir;
   const scratchEnv = process.env.LLM_EXT_SCRATCH_DIR?.trim();
@@ -221156,7 +221184,9 @@ function defaultScratchDir(mainRootOverride) {
   } else if (outputEnv) {
     _cachedDefaultScratchDir = resolve3(outputEnv);
   } else {
-    _cachedDefaultScratchDir = join8(resolveProjectMainRoot(), "reports_dev", "llm-externalizer");
+    _cachedDefaultScratchDir = ensureSelfIgnoringDir(
+      join8(resolveProjectMainRoot(), "reports_dev", "llm-externalizer")
+    );
   }
   return _cachedDefaultScratchDir;
 }
@@ -221995,12 +222025,24 @@ var init_scan_pipeline = __esm({
         // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
         // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
         // per-vendor patches.
-        /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+        // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
+        // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
+        // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
+        // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
+        // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
+        // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
+        // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
+        /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
         "ENV_SECRET"
       ],
       // H7: Multi-line secret blocks (PEM private keys, certificates)
       [
-        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+        // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
+        // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
+        // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
+        // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
+        // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
+        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
         "PEM_BLOCK"
       ]
     ];
@@ -222681,7 +222723,7 @@ var init_concurrency = __esm({
 });
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync5, readFileSync as readFileSync12 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync12 } from "node:fs";
 import { join as join12 } from "node:path";
 function getModelEventsPath() {
   return join12(getConfigDir(), "model-events.log");
@@ -222699,7 +222741,7 @@ function appendModelEvent(model, kind, detail = "") {
     const timestamp = localIsoTimestamp();
     const line = `${timestamp} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
-    mkdirSync5(dir, { recursive: true });
+    mkdirSync6(dir, { recursive: true });
     appendFileSync2(getModelEventsPath(), line + "\n", { flag: "a" });
     return { timestamp, model: safeModel, kind, detail: safeDetail };
   } catch {
@@ -223801,7 +223843,7 @@ var init_score = __esm({
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash3 } from "node:crypto";
-import { existsSync as existsSync11, mkdirSync as mkdirSync6, readFileSync as readFileSync14, renameSync as renameSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { existsSync as existsSync11, mkdirSync as mkdirSync7, readFileSync as readFileSync14, renameSync as renameSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join14 } from "node:path";
 function cachePath() {
   return join14(getConfigDir(), "security-triage-results.json");
@@ -223824,10 +223866,10 @@ function loadCache() {
 }
 function saveCache(cache2) {
   const dir = getConfigDir();
-  mkdirSync6(dir, { recursive: true });
+  mkdirSync7(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync5(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync6(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync6(tmp, p);
 }
 function failedModelsFromCache(cache2) {
@@ -224147,7 +224189,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("security-triage-benchmark", opts.mainRoot);
-  mkdirSync6(reportDir, { recursive: true });
+  mkdirSync7(reportDir, { recursive: true });
   const stamp2 = reportStamp();
   const jsonReportPath = join14(reportDir, `${stamp2}-security-triage-benchmark.json`);
   const mdReportPath = join14(reportDir, `${stamp2}-security-triage-benchmark.md`);
@@ -224189,7 +224231,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync5(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync6(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
@@ -224204,7 +224246,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync5(mtmp, md, "utf-8");
+  writeFileSync6(mtmp, md, "utf-8");
   renameSync6(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -224348,7 +224390,7 @@ var init_free_failure_cause = __esm({
 });
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync7, readFileSync as readFileSync15, renameSync as renameSync7, writeFileSync as writeFileSync6 } from "node:fs";
+import { mkdirSync as mkdirSync8, readFileSync as readFileSync15, renameSync as renameSync7, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join15 } from "node:path";
 import { createHash as createHash4 } from "node:crypto";
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set(), benchmarkPassed) {
@@ -224484,6 +224526,14 @@ function clearGoneStrikes(store, modelId) {
   delete strikes[modelId];
   return { ...store, goneStrikes: strikes };
 }
+function goneEvictedModels(nowMs = Date.now()) {
+  const out = /* @__PURE__ */ new Set();
+  for (const [id, rec] of Object.entries(getCooldownStore(nowMs).goneStrikes ?? {})) {
+    if (nowMs - rec.lastAt >= GONE_EVICT_TTL_MS) continue;
+    if (rec.strikes >= GONE_EVICT_STRIKES) out.add(id);
+  }
+  return out;
+}
 function isCooling(store, modelId, nowMs) {
   const cd = store.models[modelId];
   return !!cd && cd.until > nowMs;
@@ -224526,9 +224576,9 @@ function readStoreFromDisk() {
 function writeStoreToDisk(store) {
   try {
     const path = cooldownFilePath();
-    mkdirSync7(getConfigDir(), { recursive: true });
+    mkdirSync8(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp`;
-    writeFileSync6(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    writeFileSync7(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
     renameSync7(tmp, path);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -224667,7 +224717,7 @@ function withFreeRotation(inner, hooks = {}) {
     return rotateOverFreeIds(inner, url, init, parsed, attemptOrder, store, now, onRotate);
   };
 }
-var FREE_FLOOR_MIN_CONTEXT_TOKENS, NO_CONTENT_STRIKE_TTL_MS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, GONE_EVICT_TTL_MS, runUnusable, POOL_403_QUORUM, generic403DistinctModels, RELOAD_INTERVAL_MS, cache, lastLoadMs, persistentRotationStore, modelsSent;
+var FREE_FLOOR_MIN_CONTEXT_TOKENS, NO_CONTENT_STRIKE_TTL_MS, TRANSIENT_BASE_MS, TRANSIENT_CAP_MS, GONE_MS, GONE_EVICT_STRIKES, GONE_EVICT_TTL_MS, runUnusable, POOL_403_QUORUM, generic403DistinctModels, RELOAD_INTERVAL_MS, cache, lastLoadMs, persistentRotationStore, modelsSent;
 var init_free_rotation = __esm({
   "src/free-rotation.ts"() {
     "use strict";
@@ -224684,6 +224734,7 @@ var init_free_rotation = __esm({
     TRANSIENT_BASE_MS = 3e4;
     TRANSIENT_CAP_MS = 3e5;
     GONE_MS = 36e5;
+    GONE_EVICT_STRIKES = 3;
     GONE_EVICT_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
     runUnusable = /* @__PURE__ */ new Map();
     POOL_403_QUORUM = 2;
@@ -225765,7 +225816,7 @@ var init_select2 = __esm({
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash5 } from "node:crypto";
-import { existsSync as existsSync12, mkdirSync as mkdirSync8, readFileSync as readFileSync16, renameSync as renameSync8, writeFileSync as writeFileSync7 } from "node:fs";
+import { existsSync as existsSync12, mkdirSync as mkdirSync9, readFileSync as readFileSync16, renameSync as renameSync8, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join16 } from "node:path";
 function cachePath2() {
   return join16(getConfigDir(), "code-task-results.json");
@@ -225787,10 +225838,10 @@ function loadCache2() {
   return {};
 }
 function saveCache2(cache2) {
-  mkdirSync8(getConfigDir(), { recursive: true });
+  mkdirSync9(getConfigDir(), { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync7(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync8(tmp, p);
 }
 function resolveApiKey2(override) {
@@ -226031,7 +226082,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("code-task-benchmark", opts.mainRoot);
-  mkdirSync8(reportDir, { recursive: true });
+  mkdirSync9(reportDir, { recursive: true });
   const stamp2 = reportStamp2();
   const jsonReportPath = join16(reportDir, `${stamp2}-code-task-benchmark.json`);
   const reportPath = join16(reportDir, `${stamp2}-code-task-benchmark.md`);
@@ -226076,7 +226127,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync8(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
@@ -226090,7 +226141,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync7(mtmp, md, "utf-8");
+  writeFileSync8(mtmp, md, "utf-8");
   renameSync8(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -227297,7 +227348,7 @@ var init_select3 = __esm({
 });
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync15, mkdirSync as mkdirSync9, readFileSync as readFileSync19, renameSync as renameSync9, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync15, mkdirSync as mkdirSync10, readFileSync as readFileSync19, renameSync as renameSync9, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join18 } from "node:path";
 function cachePath3() {
   return join18(getConfigDir(), "scan-folder-results.json");
@@ -227316,10 +227367,10 @@ function loadCache3() {
   return {};
 }
 function saveCache3(cache2) {
-  mkdirSync9(getConfigDir(), { recursive: true });
+  mkdirSync10(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync8(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync9(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync9(tmp, p);
 }
 function resolveApiKey3(override) {
@@ -227586,7 +227637,7 @@ async function runScanFolderBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("scan-folder-benchmark", opts.mainRoot);
-  mkdirSync9(reportDir, { recursive: true });
+  mkdirSync10(reportDir, { recursive: true });
   const stamp2 = reportStamp3();
   const jsonReportPath = join18(reportDir, `${stamp2}-scan-folder-benchmark.json`);
   const reportPath = join18(reportDir, `${stamp2}-scan-folder-benchmark.md`);
@@ -227629,7 +227680,7 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync9(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
@@ -227644,7 +227695,7 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync8(mtmp, md, "utf-8");
+  writeFileSync9(mtmp, md, "utf-8");
   renameSync9(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -228609,7 +228660,7 @@ var init_select4 = __esm({
 });
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync18, mkdirSync as mkdirSync10, readFileSync as readFileSync21, renameSync as renameSync10, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync18, mkdirSync as mkdirSync11, readFileSync as readFileSync21, renameSync as renameSync10, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join20 } from "node:path";
 function cachePath4() {
   return join20(getConfigDir(), "check-specs-results.json");
@@ -228628,10 +228679,10 @@ function loadCache4() {
   return {};
 }
 function saveCache4(cache2) {
-  mkdirSync10(getConfigDir(), { recursive: true });
+  mkdirSync11(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync9(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync10(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync10(tmp, p);
 }
 function resolveApiKey4(override) {
@@ -228917,7 +228968,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("check-specs-benchmark", opts.mainRoot);
-  mkdirSync10(reportDir, { recursive: true });
+  mkdirSync11(reportDir, { recursive: true });
   const stamp2 = reportStamp4();
   const jsonReportPath = join20(reportDir, `${stamp2}-check-specs-benchmark.json`);
   const reportPath = join20(reportDir, `${stamp2}-check-specs-benchmark.md`);
@@ -228961,7 +229012,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync10(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     fixtures,
@@ -228975,7 +229026,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync9(mtmp, md, "utf-8");
+  writeFileSync10(mtmp, md, "utf-8");
   renameSync10(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -229956,7 +230007,7 @@ var init_select5 = __esm({
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash8 } from "node:crypto";
-import { existsSync as existsSync21, mkdirSync as mkdirSync11, readFileSync as readFileSync22, renameSync as renameSync11, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync21, mkdirSync as mkdirSync12, readFileSync as readFileSync22, renameSync as renameSync11, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join22, resolve as resolve12 } from "node:path";
 function absFixturePath(root, rel) {
   return resolve12(root, rel);
@@ -230015,10 +230066,10 @@ function loadCache5() {
 }
 function saveCache5(cache2) {
   const dir = getConfigDir();
-  mkdirSync11(dir, { recursive: true });
+  mkdirSync12(dir, { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync10(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync11(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync11(tmp, p);
 }
 function resolveApiKey5(override) {
@@ -230255,7 +230306,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("search-existing-benchmark", opts.mainRoot);
-  mkdirSync11(reportDir, { recursive: true });
+  mkdirSync12(reportDir, { recursive: true });
   const stamp2 = reportStamp5();
   const jsonReportPath = join22(reportDir, `${stamp2}-search-existing-benchmark.json`);
   const reportPath = join22(reportDir, `${stamp2}-search-existing-benchmark.md`);
@@ -230293,7 +230344,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync11(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     cases,
@@ -230307,7 +230358,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync10(mtmp, md, "utf-8");
+  writeFileSync11(mtmp, md, "utf-8");
   renameSync11(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -230456,7 +230507,7 @@ var init_backfill_ledgers = __esm({
 });
 
 // src/benchmark/validated.ts
-import { mkdirSync as mkdirSync12, readFileSync as readFileSync23, writeFileSync as writeFileSync11 } from "node:fs";
+import { mkdirSync as mkdirSync13, readFileSync as readFileSync23, writeFileSync as writeFileSync12 } from "node:fs";
 import { dirname as dirname7, join as join23 } from "node:path";
 function latestEntriesFromKeyedLedger(fileName, admit = () => true) {
   let cache2;
@@ -230550,8 +230601,8 @@ function recordGeneralKeywordPasses(rows, when = (/* @__PURE__ */ new Date()).to
     };
   }
   try {
-    mkdirSync12(dirname7(path), { recursive: true });
-    writeFileSync11(path, `${JSON.stringify(cache2, null, 2)}
+    mkdirSync13(dirname7(path), { recursive: true });
+    writeFileSync12(path, `${JSON.stringify(cache2, null, 2)}
 `, "utf-8");
   } catch {
   }
@@ -230635,7 +230686,7 @@ var init_validated = __esm({
 });
 
 // src/benchmark/pick.ts
-import { readFileSync as readFileSync24, writeFileSync as writeFileSync12, renameSync as renameSyncCb, existsSync as existsSync22, mkdirSync as mkdirSync13, rmSync as rmSync3, statSync as statSync14, chmodSync as chmodSync3, readdirSync as readdirSync9, realpathSync as realpathSync4 } from "node:fs";
+import { readFileSync as readFileSync24, writeFileSync as writeFileSync13, renameSync as renameSyncCb, existsSync as existsSync22, mkdirSync as mkdirSync14, rmSync as rmSync3, statSync as statSync14, chmodSync as chmodSync3, readdirSync as readdirSync9, realpathSync as realpathSync4 } from "node:fs";
 import { join as join24 } from "node:path";
 function pickTopN(results, opts = DEFAULT_PICK_OPTIONS) {
   const survivors = [];
@@ -230748,7 +230799,7 @@ function writeSettingsAtomic(settingsPath, handle) {
   let newRaw = handle.doc.toString({ lineWidth: 0, flowCollectionPadding: false });
   if (crlf) newRaw = newRaw.replace(/\r?\n/g, "\r\n");
   const tmp = target + ".tmp." + process.pid;
-  writeFileSync12(tmp, newRaw, { encoding: "utf-8", mode });
+  writeFileSync13(tmp, newRaw, { encoding: "utf-8", mode });
   chmodSync3(tmp, mode);
   renameSyncCb(tmp, target);
 }
@@ -230943,7 +230994,7 @@ function acquireSettingsWriteLock(dir) {
   const deadline = Date.now() + SETTINGS_WRITE_LOCK_WAIT_MS;
   for (; ; ) {
     try {
-      mkdirSync13(dir);
+      mkdirSync14(dir);
     } catch {
       let holder;
       try {
@@ -230973,7 +231024,7 @@ function acquireSettingsWriteLock(dir) {
       continue;
     }
     try {
-      writeFileSync12(join24(dir, "pid"), String(process.pid));
+      writeFileSync13(join24(dir, "pid"), String(process.pid));
     } catch (err) {
       try {
         rmSync3(dir, { recursive: true, force: true });
@@ -231007,7 +231058,7 @@ function stableStringify(value) {
 function backupSettingsFile(settingsPath, prefix, name, opts = {}) {
   const backupsDir = join24(getConfigDir(), "backups");
   try {
-    mkdirSync13(backupsDir, { recursive: true });
+    mkdirSync14(backupsDir, { recursive: true });
     try {
       chmodSync3(backupsDir, 448);
     } catch {
@@ -231184,7 +231235,7 @@ var init_pick = __esm({
 });
 
 // src/dynamic-candidates.ts
-import { readFileSync as readFileSync25, writeFileSync as writeFileSync13, renameSync as renameSync12, existsSync as existsSync23, mkdirSync as mkdirSync14 } from "node:fs";
+import { readFileSync as readFileSync25, writeFileSync as writeFileSync14, renameSync as renameSync12, existsSync as existsSync23, mkdirSync as mkdirSync15 } from "node:fs";
 import { join as join25, dirname as dirname8 } from "node:path";
 function candidateQueuePath() {
   return join25(getConfigDir(), "dynamic-candidates.json");
@@ -231241,9 +231292,9 @@ function pruneUnroutedFreeCandidates(entries, routesFor) {
 }
 function writeQueueAtomic(queue) {
   const path = candidateQueuePath();
-  mkdirSync14(dirname8(path), { recursive: true });
+  mkdirSync15(dirname8(path), { recursive: true });
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync13(tmp, JSON.stringify(queue, null, 2), "utf-8");
+  writeFileSync14(tmp, JSON.stringify(queue, null, 2), "utf-8");
   renameSync12(tmp, path);
 }
 function queueLockPath() {
@@ -231290,7 +231341,7 @@ var init_dynamic_candidates = __esm({
 });
 
 // src/benchmark/daily-spend.ts
-import { readFileSync as readFileSync26, writeFileSync as writeFileSync14, renameSync as renameSync13, existsSync as existsSync24, mkdirSync as mkdirSync15 } from "node:fs";
+import { readFileSync as readFileSync26, writeFileSync as writeFileSync15, renameSync as renameSync13, existsSync as existsSync24, mkdirSync as mkdirSync16 } from "node:fs";
 import { join as join26, dirname as dirname9 } from "node:path";
 function dailySpendPath() {
   return join26(getConfigDir(), "paid-benchmark-spend.json");
@@ -231349,9 +231400,9 @@ function bookDailySpend(usd, nowMs = Date.now()) {
     const days = pruneOldDays(ledger.days, nowMs);
     days[key] = (days[key] ?? 0) + usd;
     const path = dailySpendPath();
-    mkdirSync15(dirname9(path), { recursive: true });
+    mkdirSync16(dirname9(path), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync14(tmp, JSON.stringify({ version: 1, days }, null, 2), "utf-8");
+    writeFileSync15(tmp, JSON.stringify({ version: 1, days }, null, 2), "utf-8");
     renameSync13(tmp, path);
   });
 }
@@ -231367,7 +231418,7 @@ var init_daily_spend = __esm({
 
 // src/benchmark/free-fitness-ledger.ts
 import { createHash as createHash13 } from "node:crypto";
-import { existsSync as existsSync28, mkdirSync as mkdirSync24, readFileSync as readFileSync42, renameSync as renameSync21, writeFileSync as writeFileSync23 } from "node:fs";
+import { existsSync as existsSync28, mkdirSync as mkdirSync25, readFileSync as readFileSync42, renameSync as renameSync21, writeFileSync as writeFileSync24 } from "node:fs";
 import { join as join43 } from "node:path";
 function fitnessHash(payload) {
   return createHash13("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 12);
@@ -231394,10 +231445,10 @@ function loadFitnessCache(tool) {
   return {};
 }
 function saveFitnessCache(tool, cache2) {
-  mkdirSync24(getConfigDir(), { recursive: true });
+  mkdirSync25(getConfigDir(), { recursive: true });
   const p = fitnessLedgerPath(tool);
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync23(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync24(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync21(tmp, p);
 }
 function today8() {
@@ -231673,7 +231724,7 @@ var init_default_profiles = __esm({
 });
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync27, readFileSync as readFileSync45, renameSync as renameSync24, writeFileSync as writeFileSync26 } from "node:fs";
+import { mkdirSync as mkdirSync28, readFileSync as readFileSync45, renameSync as renameSync24, writeFileSync as writeFileSync27 } from "node:fs";
 import { join as join46 } from "node:path";
 function toCatalogPriceSnapshot(cat) {
   return cat.map((m) => ({
@@ -231843,7 +231894,7 @@ var init_local_profile = __esm({
 });
 
 // src/catalog-cache.ts
-import { existsSync as existsSync29, mkdirSync as mkdirSync28, readFileSync as readFileSync46, renameSync as renameSync25, unlinkSync as unlinkSync4, writeFileSync as writeFileSync27, chmodSync as chmodSync4 } from "node:fs";
+import { existsSync as existsSync29, mkdirSync as mkdirSync29, readFileSync as readFileSync46, renameSync as renameSync25, unlinkSync as unlinkSync4, writeFileSync as writeFileSync28, chmodSync as chmodSync4 } from "node:fs";
 import { join as join47 } from "node:path";
 function parseCatalogTtlMs(raw) {
   if (raw === void 0 || raw.trim() === "") return DEFAULT_CATALOG_TTL_MS;
@@ -231871,8 +231922,8 @@ function readCacheFile(path) {
 function writeCacheFile(path, data) {
   const tmp = `${path}.tmp.${process.pid}`;
   try {
-    mkdirSync28(getConfigDir(), { recursive: true });
-    writeFileSync27(tmp, JSON.stringify(data, null, 2), "utf-8");
+    mkdirSync29(getConfigDir(), { recursive: true });
+    writeFileSync28(tmp, JSON.stringify(data, null, 2), "utf-8");
     try {
       chmodSync4(tmp, 384);
     } catch {
@@ -231929,7 +231980,7 @@ var init_catalog_cache = __esm({
 });
 
 // src/default-profiles-runner.ts
-import { readFileSync as readFileSync47, rmSync as rmSync6, writeFileSync as writeFileSync28 } from "node:fs";
+import { readFileSync as readFileSync47, rmSync as rmSync6, writeFileSync as writeFileSync29 } from "node:fs";
 import { join as join48 } from "node:path";
 function backgroundUpdateLockPathFor(profile) {
   return join48(getConfigDir(), `background-update-${profile}.lock`);
@@ -232444,7 +232495,7 @@ __export(profile_detector_exports, {
   claimDetectThrottle: () => claimDetectThrottle,
   detectProfileChanges: () => detectProfileChanges
 });
-import { existsSync as existsSync30, readFileSync as readFileSync49, renameSync as renameSync26, writeFileSync as writeFileSync29 } from "node:fs";
+import { existsSync as existsSync30, readFileSync as readFileSync49, renameSync as renameSync26, writeFileSync as writeFileSync30 } from "node:fs";
 import { join as join49 } from "node:path";
 function detectThrottleStatePath() {
   return join49(getConfigDir(), "profile-detect-throttle.json");
@@ -232470,7 +232521,7 @@ function readDetectThrottleState() {
 function writeDetectThrottleState(state) {
   const path = detectThrottleStatePath();
   const tmp = `${path}.tmp.${process.pid}`;
-  writeFileSync29(tmp, JSON.stringify(state), "utf-8");
+  writeFileSync30(tmp, JSON.stringify(state), "utf-8");
   renameSync26(tmp, path);
 }
 function claimDetectThrottle(name, nowMs = Date.now()) {
@@ -232639,7 +232690,7 @@ var init_profile_detector = __esm({
 // src/benchmark/index.ts
 init_usage_history();
 init_bench_lock();
-import { mkdirSync as mkdirSync29, writeFileSync as writeFileSync30, existsSync as existsSync31 } from "node:fs";
+import { mkdirSync as mkdirSync30, writeFileSync as writeFileSync31, existsSync as existsSync31 } from "node:fs";
 import { dirname as dirname16, join as join50 } from "node:path";
 import { fileURLToPath as fileURLToPath11, pathToFileURL } from "node:url";
 
@@ -233213,6 +233264,7 @@ init_pick();
 init_free_mode();
 init_registry();
 init_dynamic_candidates();
+init_free_rotation();
 init_daily_spend();
 
 // src/benchmark/update-all.ts
@@ -233227,7 +233279,7 @@ init_security_triage();
 init_search_existing();
 init_code_task();
 init_scan_folder();
-import { mkdirSync as mkdirSync21, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync22, writeFileSync as writeFileSync21 } from "node:fs";
 import { dirname as dirname15, join as join40 } from "node:path";
 
 // src/benchmark/check-imports/bench-runner.ts
@@ -233266,7 +233318,7 @@ import { cpus } from "node:os";
 // src/governor/state.ts
 init_local_llama_server();
 import { execFile as execFile4, execFileSync as execFileSync3 } from "node:child_process";
-import { lstatSync as lstatSync2, mkdirSync as mkdirSync16, readFileSync as readFileSync28, renameSync as renameSync14, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync15 } from "node:fs";
+import { lstatSync as lstatSync2, mkdirSync as mkdirSync17, readFileSync as readFileSync28, renameSync as renameSync14, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
 import { join as join27 } from "node:path";
 var PS_ENV = { ...process.env, LC_ALL: "C", TZ: "UTC" };
@@ -233911,18 +233963,18 @@ init_local_llama_server();
 
 // src/calibration/state.ts
 init_local_llama_server();
-import { mkdirSync as mkdirSync18, readFileSync as readFileSync32, renameSync as renameSync17, rmdirSync as rmdirSync5, statSync as statSync18, unlinkSync as unlinkSync3, writeFileSync as writeFileSync17 } from "node:fs";
+import { mkdirSync as mkdirSync19, readFileSync as readFileSync32, renameSync as renameSync17, rmdirSync as rmdirSync5, statSync as statSync18, unlinkSync as unlinkSync3, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join31 } from "node:path";
 
 // src/broker/protocol.ts
 init_local_llama_server();
 import { timingSafeEqual } from "node:crypto";
-import { readFileSync as readFileSync30, renameSync as renameSync15, rmSync as rmSync4, writeFileSync as writeFileSync16 } from "node:fs";
+import { readFileSync as readFileSync30, renameSync as renameSync15, rmSync as rmSync4, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join29 } from "node:path";
 
 // src/calibration/record.ts
 import { createHash as createHash9 } from "node:crypto";
-import { closeSync as closeSync5, fsyncSync, mkdirSync as mkdirSync17, openSync as openSync5, readFileSync as readFileSync31, renameSync as renameSync16, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync5, fsyncSync, mkdirSync as mkdirSync18, openSync as openSync5, readFileSync as readFileSync31, renameSync as renameSync16, writeSync as writeSync2 } from "node:fs";
 import { totalmem as totalmem4 } from "node:os";
 import { dirname as dirname11, join as join30 } from "node:path";
 
@@ -233965,7 +234017,7 @@ init_http();
 init_command_stop();
 init_local_llama_server();
 import { createHash as createHash10, randomUUID as randomUUID3 } from "node:crypto";
-import { mkdirSync as mkdirSync19 } from "node:fs";
+import { mkdirSync as mkdirSync20 } from "node:fs";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 var COMMAND_ID = `${process.pid}-${randomUUID3().slice(0, 8)}`;
 
@@ -234173,7 +234225,7 @@ init_config();
 init_cost_estimate();
 init_types();
 import { createHash as createHash11 } from "node:crypto";
-import { existsSync as existsSync26, mkdirSync as mkdirSync20, readFileSync as readFileSync40, renameSync as renameSync18, writeFileSync as writeFileSync19 } from "node:fs";
+import { existsSync as existsSync26, mkdirSync as mkdirSync21, readFileSync as readFileSync40, renameSync as renameSync18, writeFileSync as writeFileSync20 } from "node:fs";
 import { join as join39 } from "node:path";
 
 // src/text-tools/core.ts
@@ -234891,7 +234943,7 @@ var DESCRIBE_CASES = [
 
 // src/benchmark/text-tools/bench-runner.ts
 init_openrouter();
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync18 } from "node:fs";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync19 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join38 } from "node:path";
 
@@ -235196,7 +235248,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
             const dir = mkdtempSync2(join38(tmpdir3(), "llm-ext-describe-bench-"));
             try {
               const filePath = join38(dir, c.fileName);
-              writeFileSync18(filePath, c.content, "utf-8");
+              writeFileSync19(filePath, c.content, "utf-8");
               return await runDescribe({ input_file: filePath, max_chars: c.maxChars }, deps);
             } finally {
               rmSync5(dir, { recursive: true, force: true });
@@ -235309,10 +235361,10 @@ function loadCache6() {
   return {};
 }
 function saveCache6(cache2) {
-  mkdirSync20(getConfigDir(), { recursive: true });
+  mkdirSync21(getConfigDir(), { recursive: true });
   const p = cachePath6();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync19(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync20(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync18(tmp, p);
 }
 function resolveApiKey6(override) {
@@ -235592,7 +235644,7 @@ async function runTextToolBenchmark(tool, opts) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? join39(benchmarkSubReportDir("text-tools-benchmark", opts.mainRoot), tool);
-  mkdirSync20(reportDir, { recursive: true });
+  mkdirSync21(reportDir, { recursive: true });
   const stamp2 = reportStamp6();
   const jsonReportPath = join39(reportDir, `${stamp2}-${tool}-benchmark.json`);
   const reportPath = join39(reportDir, `${stamp2}-${tool}-benchmark.md`);
@@ -235632,7 +235684,7 @@ async function runTextToolBenchmark(tool, opts) {
     rejected: selection.rejected
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync19(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync20(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync18(jtmp, jsonReportPath);
   const md = buildReportMarkdown6({
     tool,
@@ -235647,7 +235699,7 @@ async function runTextToolBenchmark(tool, opts) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync19(mtmp, md, "utf-8");
+  writeFileSync20(mtmp, md, "utf-8");
   renameSync18(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -236283,8 +236335,8 @@ function updateAllReportDir(mainRoot) {
 }
 function writeReport(r, opts) {
   const path = join40(updateAllReportDir(opts.mainRoot), `${stamp()}-update-all.md`);
-  mkdirSync21(dirname15(path), { recursive: true });
-  writeFileSync20(path, renderUpdateAllReport(r, opts), "utf-8");
+  mkdirSync22(dirname15(path), { recursive: true });
+  writeFileSync21(path, renderUpdateAllReport(r, opts), "utf-8");
   return path;
 }
 
@@ -236300,14 +236352,14 @@ init_daily_spend();
 init_report_dir();
 init_config();
 init_budget();
-import { mkdirSync as mkdirSync23, renameSync as renameSync20, writeFileSync as writeFileSync22 } from "node:fs";
+import { mkdirSync as mkdirSync24, renameSync as renameSync20, writeFileSync as writeFileSync23 } from "node:fs";
 import { join as join42 } from "node:path";
 init_cost_estimate();
 
 // src/mass_scouting/scout-accuracy-ledger.ts
 init_config();
 import { createHash as createHash12 } from "node:crypto";
-import { existsSync as existsSync27, mkdirSync as mkdirSync22, readFileSync as readFileSync41, renameSync as renameSync19, writeFileSync as writeFileSync21 } from "node:fs";
+import { existsSync as existsSync27, mkdirSync as mkdirSync23, readFileSync as readFileSync41, renameSync as renameSync19, writeFileSync as writeFileSync22 } from "node:fs";
 import { join as join41 } from "node:path";
 function scoutAccuracyLedgerPath() {
   return join41(getConfigDir(), "scout-accuracy-results.json");
@@ -236331,15 +236383,15 @@ function loadCache7() {
   return {};
 }
 function loadOrInit() {
-  mkdirSync22(getConfigDir(), { recursive: true });
+  mkdirSync23(getConfigDir(), { recursive: true });
   return loadCache7();
 }
 function saveCache7(cache2) {
   const dir = getConfigDir();
-  mkdirSync22(dir, { recursive: true });
+  mkdirSync23(dir, { recursive: true });
   const p = scoutAccuracyLedgerPath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync21(tmp, JSON.stringify(cache2, null, 2), "utf-8");
+  writeFileSync22(tmp, JSON.stringify(cache2, null, 2), "utf-8");
   renameSync19(tmp, p);
 }
 function today7() {
@@ -236564,11 +236616,11 @@ async function runScoutAccuracyBenchmark(opts = {}) {
   let jsonReportPath;
   try {
     const reportDir = opts.outputDir ?? benchmarkSubReportDir("scout-accuracy-benchmark", opts.mainRoot);
-    mkdirSync23(reportDir, { recursive: true });
+    mkdirSync24(reportDir, { recursive: true });
     const stamp2 = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
     jsonReportPath = join42(reportDir, `${stamp2}-scout-accuracy.json`);
     const tmp = `${jsonReportPath}.tmp.${process.pid}`;
-    writeFileSync22(
+    writeFileSync23(
       tmp,
       JSON.stringify(
         {
@@ -237155,7 +237207,7 @@ init_discover();
 init_registry();
 init_usage_history();
 init_project_root();
-import { mkdirSync as mkdirSync25, readFileSync as readFileSync43, renameSync as renameSync22, writeFileSync as writeFileSync24 } from "node:fs";
+import { mkdirSync as mkdirSync26, readFileSync as readFileSync43, renameSync as renameSync22, writeFileSync as writeFileSync25 } from "node:fs";
 import { join as join44 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
@@ -237309,9 +237361,9 @@ function loadBaseline(path = getBaselinePath()) {
 }
 function saveBaseline(baseline, path = getBaselinePath()) {
   try {
-    mkdirSync25(getConfigDir(), { recursive: true });
+    mkdirSync26(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync24(tmp, JSON.stringify(baseline, null, 2));
+    writeFileSync25(tmp, JSON.stringify(baseline, null, 2));
     renameSync22(tmp, path);
   } catch {
   }
@@ -237387,9 +237439,9 @@ async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
   const dir = opts.outputDir ?? join44(defaultScratchDir(), "model-health");
-  mkdirSync25(dir, { recursive: true });
+  mkdirSync26(dir, { recursive: true });
   const reportPath = join44(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync24(reportPath, renderModelHealthMarkdown(report));
+  writeFileSync25(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -237412,7 +237464,7 @@ function renderModelHealthText(report) {
 // src/model-qualification/new-arrivals.ts
 init_config();
 init_discover();
-import { mkdirSync as mkdirSync26, readFileSync as readFileSync44, renameSync as renameSync23, writeFileSync as writeFileSync25 } from "node:fs";
+import { mkdirSync as mkdirSync27, readFileSync as readFileSync44, renameSync as renameSync23, writeFileSync as writeFileSync26 } from "node:fs";
 import { join as join45 } from "node:path";
 init_usage_history();
 init_project_root();
@@ -237479,9 +237531,9 @@ function loadSnapshot(path = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot, path = getCatalogSnapshotPath()) {
   try {
-    mkdirSync26(getConfigDir(), { recursive: true });
+    mkdirSync27(getConfigDir(), { recursive: true });
     const tmp = `${path}.tmp.${process.pid}`;
-    writeFileSync25(tmp, JSON.stringify(snapshot, null, 2));
+    writeFileSync26(tmp, JSON.stringify(snapshot, null, 2));
     renameSync23(tmp, path);
   } catch {
   }
@@ -237574,9 +237626,9 @@ function renderNewArrivalsText(report) {
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
   const dir = opts.outputDir ?? join45(defaultScratchDir(), "model-arrivals");
-  mkdirSync26(dir, { recursive: true });
+  mkdirSync27(dir, { recursive: true });
   const reportPath = join45(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync25(reportPath, renderNewArrivalsMarkdown(report));
+  writeFileSync26(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 
@@ -238671,17 +238723,17 @@ async function runKeywordSweep(opts, freeOnly, fetchImpl, ledger) {
     results
   };
   const markdown = renderReport(reportInput);
-  mkdirSync29(dirname16(reportPath), { recursive: true });
-  writeFileSync30(reportPath, markdown, "utf-8");
+  mkdirSync30(dirname16(reportPath), { recursive: true });
+  writeFileSync31(reportPath, markdown, "utf-8");
   console.error(`[benchmark] Report: ${reportPath}`);
   const json = renderJson(reportInput);
   const cacheJsonPath = benchmarkCachePath();
-  mkdirSync29(dirname16(cacheJsonPath), { recursive: true });
-  writeFileSync30(cacheJsonPath, json, "utf-8");
+  mkdirSync30(dirname16(cacheJsonPath), { recursive: true });
+  writeFileSync31(cacheJsonPath, json, "utf-8");
   console.error(`[benchmark] JSON cache: ${cacheJsonPath}`);
   if (opts.jsonPath) {
-    mkdirSync29(dirname16(opts.jsonPath), { recursive: true });
-    writeFileSync30(opts.jsonPath, json, "utf-8");
+    mkdirSync30(dirname16(opts.jsonPath), { recursive: true });
+    writeFileSync31(opts.jsonPath, json, "utf-8");
     console.error(`[benchmark] JSON (user-path): ${opts.jsonPath}`);
   }
   const passers = [...results.values()].filter((r) => r.score?.pass).length;
@@ -238905,7 +238957,8 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
   const queue = readCandidates(routesFor);
   const queuedIds = queue.free.map((e) => e.id);
   const configuredSet = new Set(configured);
-  const candidateIds = [...configured, ...queuedIds.filter((id) => !configuredSet.has(id))];
+  const goneEvicted = goneEvictedModels();
+  const candidateIds = [...configured, ...queuedIds.filter((id) => !configuredSet.has(id))].filter((id) => !goneEvicted.has(id));
   const routeServedFreeIds = /* @__PURE__ */ new Set();
   for (const id of candidateIds) {
     if (routesFor(id).some((r) => r.isFreeProvider)) routeServedFreeIds.add(id);
@@ -238923,7 +238976,7 @@ async function runPopulateFreeDefaultProfile(opts, settingsPath, deps) {
       summary: `--populate-default-profile free refuses to run: configured non-':free' id(s) ${JSON.stringify(rejected)} are NOT priced at $0 by the live catalog (they would cost money) or are absent from it \u2014 fix the 'free' profile's free_models list`
     };
   }
-  const freeIds = freeSuffixOnly(discoveredPool);
+  const freeIds = freeSuffixOnly(discoveredPool).filter((id) => !goneEvicted.has(id));
   if (freeIds.length === 0) {
     recordBenchmarkFailure("free", Date.now());
     return {
@@ -239464,8 +239517,8 @@ async function runAutoReplacePhase(opts, freeOnly) {
   const ensemble = planEnsembleRotation({ profileName: targetProfile });
   const fullReport = reportMarkdown + "\n" + renderEnsembleRotationSection(ensemble);
   const reportPath = join50(defaultScratchDir(), "auto-replace", `${compactStamp()}-auto-replace.md`);
-  mkdirSync29(dirname16(reportPath), { recursive: true });
-  writeFileSync30(reportPath, fullReport, "utf-8");
+  mkdirSync30(dirname16(reportPath), { recursive: true });
+  writeFileSync31(reportPath, fullReport, "utf-8");
   console.error("");
   for (const f of findings) {
     const verdict = !f.ranBenchmark ? "healthy \u2014 no benchmark" : f.changed ? `RECOMMEND ${f.incumbentModelId} -> ${f.recommendedModelId}` : `keep ${f.incumbentModelId}`;

@@ -1,6 +1,43 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.2] - 2026-11-18
+
+### Changed
+
+- Ci(windows): create the top-level /tmp the unit tests assume; CHANGELOG 14.7.1 matches the release notes (TRDD-61EINA10)
+
+
+### Documentation
+
+- Docs(trdd): NL2012O9, G49XPDNI, ZTO9K8EK to complete; TYSKX72I to todo (TRDD-FC2TX9VU)
+
+- Docs(trdd): record 21699151, 5a1658b5, b84e6dac and the TYSKX72I route; file three follow-up cards (TRDD-FC2TX9VU)
+
+- Docs(classifiers): record why test-output caps context at 100 and rounds severity (TRDD-O5NUD6IT)
+
+- Docs(trdd): 0W932B0H to testing (TRDD-0W932B0H)
+
+- Docs(trdd): record the 14.7.1 release, the 2026-11-18 triage and the USER delegation (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(session-summary): redact secrets before any transcript text reaches a model, fail closed (TRDD-G49XPDNI)
+
+- Fix(governor): no CPU floor, and a brokered CLI says why it waits (TRDD-ZTO9K8EK)
+
+- Fix(provider): breaker counts only outages, no same-model retry on 405/422, benchmark skips evicted models (GitHub #15, TRDD-FC2TX9VU)
+
+- Fix(classifiers): a text chunk the local decider refuses as too large is cut again (TRDD-NL2012O9)
+
+- Fix(reports): reports_dev/llm-externalizer ignores itself in any project (TRDD-PNU8XECB)
+
+- Fix(fix-found-bugs): intermediate run files go to reports_dev, summary stays in reports (TRDD-PNU8XECB)
+
+- Fix(classify): label, requirements and rule-check guard shared.context as data (TRDD-0W932B0H)
+
+
 ## [14.7.1] - 2026-11-18
 
 ### Added

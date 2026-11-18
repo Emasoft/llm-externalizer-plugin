@@ -9535,8 +9535,8 @@ function resolveConfig(env, section2, cores, where = "settings.yaml") {
   } else if (serverThreads2 > budget) {
     throw new GovernorConfigError(`local_governor.server_threads in ${where} must be ${threadsText2}, got ${serverThreads2}`);
   }
-  const [settleMs, cpuFloorWaitMs, loadYieldMs] = TIMING_SETTINGS.map(({ env: name, fallback }) => envInt(env, name, 1, Number.MAX_SAFE_INTEGER) ?? fallback);
-  return { enabled, limits, serverThreads: serverThreads2, settleMs, cpuFloorWaitMs, loadYieldMs };
+  const [settleMs, loadYieldMs] = TIMING_SETTINGS.map(({ env: name, fallback }) => envInt(env, name, 1, Number.MAX_SAFE_INTEGER) ?? fallback);
+  return { enabled, limits, serverThreads: serverThreads2, settleMs, loadYieldMs };
 }
 function headStopped(head, rank, now4) {
   return now4 - head.polledAt > STOPPED_HEAD_MS * rank;
@@ -9612,7 +9612,7 @@ function isOver(reading, limits) {
   return cpuOver(reading, limits) || reading.ramUsedPct >= limits.ramLimitPct;
 }
 function decide(view, request, now4, config2) {
-  const denied = (window2, denial, yields = false) => ({ window: window2, grant: false, floor: false, denial, yields });
+  const denied = (window2, denial, yields = false) => ({ window: window2, grant: false, denial, yields });
   const [head, ...behind] = view.waiters.filter((w) => w.kind === request.kind);
   if (head?.id !== request.id) return denied(view.window, "queued");
   const { cpuPct, freePct } = view.metrics;
@@ -9627,12 +9627,7 @@ function decide(view, request, now4, config2) {
     return denied(yields ? view.window : window, denial, yields);
   };
   if (reading.ramUsedPct >= limits.ramLimitPct) return blockedByOwn("ram", () => true);
-  let floor = false;
-  if (cpuOver(reading, limits)) {
-    const floorWaitMs = Math.min(config2.cpuFloorWaitMs, request.queueTimeoutMs ?? Infinity);
-    if (view.leases.length > 0 || now4 - request.since < floorWaitMs) return blockedByOwn("cpu", () => true);
-    floor = true;
-  }
+  if (cpuOver(reading, limits)) return blockedByOwn("cpu", () => true);
   if (request.kind === "load") {
     if (view.leases.some((l) => l.kind === "load")) return denied(window, "load");
     const mayYield = () => now4 - request.since < config2.loadYieldMs;
@@ -9643,10 +9638,10 @@ function decide(view, request, now4, config2) {
       const alone = !view.leases.some((l) => l.kind === "inference") && !view.servers.some((s) => s.ownerPid !== request.holder.pid);
       if (!alone) return blockedByOwn("alone", mayYield);
       if (!loadFits(reading.ramUsedPct, request.minBytes ?? upper, outgoing, limits, config2.totalBytes, booked)) return blockedByOwn("ram", mayYield);
-      return { window, grant: true, floor, denial: null, yields: false };
+      return { window, grant: true, denial: null, yields: false };
     }
     if (!loadFits(reading.ramUsedPct, upper, outgoing, limits, config2.totalBytes, booked)) return blockedByOwn("ram", mayYield);
-    return { window, grant: true, floor, denial: null, yields: false };
+    return { window, grant: true, denial: null, yields: false };
   }
   if (running > 0 && running + request.weight > Math.min(window.w, limits.maxInferences)) {
     if (limits.maxInferences > view.window.w) return denied(window, "window");
@@ -9656,7 +9651,7 @@ function decide(view, request, now4, config2) {
   const added = onRunningServer ? 0 : request.threads;
   const budget = threadBudget(config2.cores, limits.cpuLimitPct);
   if (added > 0 && threadsInUse(view.leases) + added > budget) return blockedByOwn("threads", (w) => threadBudget(config2.cores, w.limits.cpuLimitPct) > budget);
-  return { window, grant: true, floor, denial: null, yields: false };
+  return { window, grant: true, denial: null, yields: false };
 }
 function pollDelayMs(rank, random = Math.random) {
   return rank < FAST_POLL_MAX_RANKS ? FAST_POLL_MS + random() * FAST_POLL_JITTER_MS : SLOW_POLL_MS + random() * SLOW_POLL_MS;
@@ -9686,7 +9681,6 @@ var init_controller = __esm({
     OLD_FLOOR_ENV = "LLM_EXT_BROKER_MEMORY_FLOOR";
     TIMING_SETTINGS = [
       { env: "LLM_EXT_GOVERNOR_SETTLE_MS", fallback: 2e3 },
-      { env: "LLM_EXT_GOVERNOR_CPU_FLOOR_WAIT_MS", fallback: 3e4 },
       { env: "LLM_EXT_GOVERNOR_LOAD_YIELD_MS", fallback: 12e4 }
     ];
     GovernorConfigError = class extends Error {
@@ -15059,15 +15053,29 @@ var init_intake = __esm({
       [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"],
       // F3: raw JWT (header.payload.signature). Each segment is its own bounded
       // class separated by a literal dot — disjoint classes, no backtracking.
-      [/eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, "JWT"],
+      // TRDD-G49XPDNI: starts only at a run boundary `(?<![A-Za-z0-9_-])`, so each [A-Za-z0-9_-] run is scanned O(1) times. The old
+      // unanchored form re-scanned the whole run from every `eyJ` inside it (500000 x "eyJ" did not finish in 120 s; now ~20 ms). The `eyJ`
+      // may sit anywhere in the first segment, so a glued prefix (`xeyJ...`, `token-eyJ...`) is redacted with it (over-redaction accepted).
+      // Each segment is atomic via lookahead-capture `(?=(X+))\N` (no backtracking). Every old match is covered by a new match (fuzz, 300000 strings).
+      [
+        /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*eyJ[A-Za-z0-9_-])(?=([A-Za-z0-9_-]+))\1\.eyJ(?=([A-Za-z0-9_-]+))\2\.(?=([A-Za-z0-9_-]+))\3/g,
+        "JWT"
+      ],
       // F3: connection string with inline credentials (scheme://user:pass@host).
       // The `[^:@/\s]+` runs are disjoint from their `:`/`@` delimiters → linear.
       [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"],
-      // F1: ENV_SECRET — line-anchored via `[ \t]*` (intra-line horizontal
-      // whitespace only). NEVER `\s*` here: `\s` includes `\n`, which re-anchors at
+      // F1: ENV_SECRET — line-anchored via `[^\S\r\n]*` (intra-line whitespace
+      // only, VT/FF included). NEVER `\s*` across newlines here: `\s` includes `\n`, which re-anchors at
       // every newline and backtracks O(n²) over a hostile newline+whitespace blob.
       [
-        /(?:^|\n)[ \t]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[ \t]*[=:][ \t]*['"]?([^\s'"#\n]{8,})/gim,
+        // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
+        // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
+        // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
+        // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
+        // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
+        // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
+        // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
+        /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
         "ENV_SECRET"
       ],
       // F3: case-insensitive catch for lowercase / mixed-case secret assignments
@@ -15079,7 +15087,12 @@ var init_intake = __esm({
         "SECRET_ASSIGNMENT"
       ],
       [
-        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+        // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
+        // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
+        // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
+        // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
+        // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
+        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
         "PEM_BLOCK"
       ]
     ];
@@ -15452,7 +15465,7 @@ var init_usage_history = __esm({
 });
 
 // src/project-root.ts
-import { existsSync as existsSync9 } from "node:fs";
+import { existsSync as existsSync9, mkdirSync as mkdirSync6, writeFileSync as writeFileSync6 } from "node:fs";
 import { join as join10, resolve as resolve3 } from "node:path";
 function resolveProjectMainRoot(override) {
   if (override && override.length > 0) return override;
@@ -15473,9 +15486,18 @@ function defaultOutputDir(mainRootOverride) {
   _cachedDefaultOutputDir = join10(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
+function ensureSelfIgnoringDir(dir) {
+  mkdirSync6(dir, { recursive: true });
+  try {
+    writeFileSync6(join10(dir, ".gitignore"), "*\n", { flag: "wx" });
+  } catch (err3) {
+    if (err3.code !== "EEXIST") throw err3;
+  }
+  return dir;
+}
 function defaultScratchDir(mainRootOverride) {
   if (mainRootOverride && mainRootOverride.length > 0) {
-    return join10(mainRootOverride, "reports_dev", "llm-externalizer");
+    return ensureSelfIgnoringDir(join10(mainRootOverride, "reports_dev", "llm-externalizer"));
   }
   if (_cachedDefaultScratchDir) return _cachedDefaultScratchDir;
   const scratchEnv = process.env.LLM_EXT_SCRATCH_DIR?.trim();
@@ -15485,7 +15507,9 @@ function defaultScratchDir(mainRootOverride) {
   } else if (outputEnv) {
     _cachedDefaultScratchDir = resolve3(outputEnv);
   } else {
-    _cachedDefaultScratchDir = join10(resolveProjectMainRoot(), "reports_dev", "llm-externalizer");
+    _cachedDefaultScratchDir = ensureSelfIgnoringDir(
+      join10(resolveProjectMainRoot(), "reports_dev", "llm-externalizer")
+    );
   }
   return _cachedDefaultScratchDir;
 }
@@ -16376,12 +16400,24 @@ var init_scan_pipeline = __esm({
         // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
         // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
         // per-vendor patches.
-        /(?:^|\n)\s*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))\s*[=:]\s*['"]?([^\s'"#\n]{8,})/gim,
+        // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
+        // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
+        // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
+        // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
+        // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
+        // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
+        // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
+        /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
         "ENV_SECRET"
       ],
       // H7: Multi-line secret blocks (PEM private keys, certificates)
       [
-        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----[\s\S]*?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----/g,
+        // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
+        // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
+        // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
+        // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
+        // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
+        /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
         "PEM_BLOCK"
       ]
     ];
@@ -227810,7 +227846,7 @@ var init_concurrency = __esm({
 });
 
 // src/model-events.ts
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync6, readFileSync as readFileSync14 } from "node:fs";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync7, readFileSync as readFileSync14 } from "node:fs";
 import { join as join14 } from "node:path";
 function getModelEventsPath() {
   return join14(getConfigDir(), "model-events.log");
@@ -227828,7 +227864,7 @@ function appendModelEvent(model, kind, detail = "") {
     const timestamp2 = localIsoTimestamp();
     const line = `${timestamp2} - ${safeModel} - ${kind} - ${safeDetail}`;
     const dir = getConfigDir();
-    mkdirSync6(dir, { recursive: true });
+    mkdirSync7(dir, { recursive: true });
     appendFileSync2(getModelEventsPath(), line + "\n", { flag: "a" });
     return { timestamp: timestamp2, model: safeModel, kind, detail: safeDetail };
   } catch {
@@ -228763,7 +228799,7 @@ var init_score = __esm({
 
 // src/benchmark/security-triage/index.ts
 import { createHash as createHash4 } from "node:crypto";
-import { existsSync as existsSync13, mkdirSync as mkdirSync7, readFileSync as readFileSync16, renameSync as renameSync7, writeFileSync as writeFileSync6 } from "node:fs";
+import { existsSync as existsSync13, mkdirSync as mkdirSync8, readFileSync as readFileSync16, renameSync as renameSync7, writeFileSync as writeFileSync7 } from "node:fs";
 import { join as join16 } from "node:path";
 function cachePath() {
   return join16(getConfigDir(), "security-triage-results.json");
@@ -228786,10 +228822,10 @@ function loadCache() {
 }
 function saveCache(cache3) {
   const dir = getConfigDir();
-  mkdirSync7(dir, { recursive: true });
+  mkdirSync8(dir, { recursive: true });
   const p = cachePath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync6(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync7(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync7(tmp, p);
 }
 function failedModelsFromCache(cache3) {
@@ -229091,7 +229127,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("security-triage-benchmark", opts.mainRoot);
-  mkdirSync7(reportDir, { recursive: true });
+  mkdirSync8(reportDir, { recursive: true });
   const stamp = reportStamp();
   const jsonReportPath = join16(reportDir, `${stamp}-security-triage-benchmark.json`);
   const mdReportPath = join16(reportDir, `${stamp}-security-triage-benchmark.md`);
@@ -229133,7 +229169,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     perCase: Object.fromEntries(scores.map((s) => [s.modelId, s.perCase]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync6(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync7(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync7(jtmp, jsonReportPath);
   const md = buildReportMarkdown({
     cases,
@@ -229148,7 +229184,7 @@ async function runSecurityTriageBenchmark(opts = {}) {
     freeOnlySkipped
   });
   const mtmp = `${mdReportPath}.tmp.${process.pid}`;
-  writeFileSync6(mtmp, md, "utf-8");
+  writeFileSync7(mtmp, md, "utf-8");
   renameSync7(mtmp, mdReportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -229297,7 +229333,7 @@ var init_free_failure_cause = __esm({
 });
 
 // src/free-rotation.ts
-import { mkdirSync as mkdirSync8, readFileSync as readFileSync17, renameSync as renameSync8, writeFileSync as writeFileSync7 } from "node:fs";
+import { mkdirSync as mkdirSync9, readFileSync as readFileSync17, renameSync as renameSync8, writeFileSync as writeFileSync8 } from "node:fs";
 import { join as join17 } from "node:path";
 import { createHash as createHash5 } from "node:crypto";
 function filterFreeModels(freeModels, catalogById, benchmarkFailed = /* @__PURE__ */ new Set(), benchmarkPassed) {
@@ -229378,9 +229414,9 @@ function loadStrikes() {
 }
 function saveStrikes(s) {
   try {
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = strikesFilePath() + ".tmp";
-    writeFileSync7(tmp, JSON.stringify(s));
+    writeFileSync8(tmp, JSON.stringify(s));
     renameSync8(tmp, strikesFilePath());
   } catch {
   }
@@ -229648,9 +229684,9 @@ function readStoreFromDisk() {
 function writeStoreToDisk(store) {
   try {
     const path2 = cooldownFilePath();
-    mkdirSync8(getConfigDir(), { recursive: true });
+    mkdirSync9(getConfigDir(), { recursive: true });
     const tmp = `${path2}.tmp`;
-    writeFileSync7(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
+    writeFileSync8(tmp, JSON.stringify(store), { encoding: "utf-8", mode: 384 });
     renameSync8(tmp, path2);
   } catch (err3) {
     const msg = err3 instanceof Error ? err3.message : String(err3);
@@ -231008,7 +231044,7 @@ var init_select2 = __esm({
 
 // src/benchmark/code-task/index.ts
 import { createHash as createHash6 } from "node:crypto";
-import { existsSync as existsSync14, mkdirSync as mkdirSync9, readFileSync as readFileSync18, renameSync as renameSync9, writeFileSync as writeFileSync8 } from "node:fs";
+import { existsSync as existsSync14, mkdirSync as mkdirSync10, readFileSync as readFileSync18, renameSync as renameSync9, writeFileSync as writeFileSync9 } from "node:fs";
 import { join as join18 } from "node:path";
 function cachePath2() {
   return join18(getConfigDir(), "code-task-results.json");
@@ -231030,10 +231066,10 @@ function loadCache2() {
   return {};
 }
 function saveCache2(cache3) {
-  mkdirSync9(getConfigDir(), { recursive: true });
+  mkdirSync10(getConfigDir(), { recursive: true });
   const p = cachePath2();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync8(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync9(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync9(tmp, p);
 }
 function resolveApiKey2(override) {
@@ -231274,7 +231310,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("code-task-benchmark", opts.mainRoot);
-  mkdirSync9(reportDir, { recursive: true });
+  mkdirSync10(reportDir, { recursive: true });
   const stamp = reportStamp2();
   const jsonReportPath = join18(reportDir, `${stamp}-code-task-benchmark.json`);
   const reportPath = join18(reportDir, `${stamp}-code-task-benchmark.md`);
@@ -231319,7 +231355,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync8(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync9(jtmp, jsonReportPath);
   const md = buildReportMarkdown2({
     cases,
@@ -231333,7 +231369,7 @@ async function runCodeAuditBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync8(mtmp, md, "utf-8");
+  writeFileSync9(mtmp, md, "utf-8");
   renameSync9(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -232525,7 +232561,7 @@ var init_select3 = __esm({
 });
 
 // src/benchmark/scan-folder/index.ts
-import { existsSync as existsSync17, mkdirSync as mkdirSync10, readFileSync as readFileSync21, renameSync as renameSync10, writeFileSync as writeFileSync9 } from "node:fs";
+import { existsSync as existsSync17, mkdirSync as mkdirSync11, readFileSync as readFileSync21, renameSync as renameSync10, writeFileSync as writeFileSync10 } from "node:fs";
 import { join as join20 } from "node:path";
 function cachePath3() {
   return join20(getConfigDir(), "scan-folder-results.json");
@@ -232544,10 +232580,10 @@ function loadCache3() {
   return {};
 }
 function saveCache3(cache3) {
-  mkdirSync10(getConfigDir(), { recursive: true });
+  mkdirSync11(getConfigDir(), { recursive: true });
   const p = cachePath3();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync9(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync10(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync10(tmp, p);
 }
 function resolveApiKey3(override) {
@@ -232787,7 +232823,7 @@ async function runScanFolderBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("scan-folder-benchmark", opts.mainRoot);
-  mkdirSync10(reportDir, { recursive: true });
+  mkdirSync11(reportDir, { recursive: true });
   const stamp = reportStamp3();
   const jsonReportPath = join20(reportDir, `${stamp}-scan-folder-benchmark.json`);
   const reportPath = join20(reportDir, `${stamp}-scan-folder-benchmark.md`);
@@ -232830,7 +232866,7 @@ async function runScanFolderBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync9(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync10(jtmp, jsonReportPath);
   const md = buildReportMarkdown3({
     cases,
@@ -232845,7 +232881,7 @@ async function runScanFolderBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync9(mtmp, md, "utf-8");
+  writeFileSync10(mtmp, md, "utf-8");
   renameSync10(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -233810,7 +233846,7 @@ var init_select4 = __esm({
 });
 
 // src/benchmark/check-specs/index.ts
-import { existsSync as existsSync20, mkdirSync as mkdirSync11, readFileSync as readFileSync23, renameSync as renameSync11, writeFileSync as writeFileSync10 } from "node:fs";
+import { existsSync as existsSync20, mkdirSync as mkdirSync12, readFileSync as readFileSync23, renameSync as renameSync11, writeFileSync as writeFileSync11 } from "node:fs";
 import { join as join22 } from "node:path";
 function cachePath4() {
   return join22(getConfigDir(), "check-specs-results.json");
@@ -233829,10 +233865,10 @@ function loadCache4() {
   return {};
 }
 function saveCache4(cache3) {
-  mkdirSync11(getConfigDir(), { recursive: true });
+  mkdirSync12(getConfigDir(), { recursive: true });
   const p = cachePath4();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync10(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync11(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync11(tmp, p);
 }
 function resolveApiKey4(override) {
@@ -234083,7 +234119,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("check-specs-benchmark", opts.mainRoot);
-  mkdirSync11(reportDir, { recursive: true });
+  mkdirSync12(reportDir, { recursive: true });
   const stamp = reportStamp4();
   const jsonReportPath = join22(reportDir, `${stamp}-check-specs-benchmark.json`);
   const reportPath = join22(reportDir, `${stamp}-check-specs-benchmark.md`);
@@ -234127,7 +234163,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync10(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync11(jtmp, jsonReportPath);
   const md = buildReportMarkdown4({
     fixtures,
@@ -234141,7 +234177,7 @@ async function runCheckSpecsBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync10(mtmp, md, "utf-8");
+  writeFileSync11(mtmp, md, "utf-8");
   renameSync11(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -235122,7 +235158,7 @@ var init_select5 = __esm({
 
 // src/benchmark/search-existing/index.ts
 import { createHash as createHash9 } from "node:crypto";
-import { existsSync as existsSync23, mkdirSync as mkdirSync12, readFileSync as readFileSync24, renameSync as renameSync12, writeFileSync as writeFileSync11 } from "node:fs";
+import { existsSync as existsSync23, mkdirSync as mkdirSync13, readFileSync as readFileSync24, renameSync as renameSync12, writeFileSync as writeFileSync12 } from "node:fs";
 import { join as join24, resolve as resolve12 } from "node:path";
 function cachePath5() {
   return join24(getConfigDir(), "search-existing-results.json");
@@ -235145,10 +235181,10 @@ function loadCache5() {
 }
 function saveCache5(cache3) {
   const dir = getConfigDir();
-  mkdirSync12(dir, { recursive: true });
+  mkdirSync13(dir, { recursive: true });
   const p = cachePath5();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync11(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync12(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync12(tmp, p);
 }
 function resolveApiKey5(override) {
@@ -235385,7 +235421,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? benchmarkSubReportDir("search-existing-benchmark", opts.mainRoot);
-  mkdirSync12(reportDir, { recursive: true });
+  mkdirSync13(reportDir, { recursive: true });
   const stamp = reportStamp5();
   const jsonReportPath = join24(reportDir, `${stamp}-search-existing-benchmark.json`);
   const reportPath = join24(reportDir, `${stamp}-search-existing-benchmark.md`);
@@ -235423,7 +235459,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     perCase: Object.fromEntries(assessments.map((a) => [a.modelId, a.score.cases]))
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync11(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync12(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync12(jtmp, jsonReportPath);
   const md = buildReportMarkdown5({
     cases,
@@ -235437,7 +235473,7 @@ async function runSearchExistingBenchmark(opts = {}) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync11(mtmp, md, "utf-8");
+  writeFileSync12(mtmp, md, "utf-8");
   renameSync12(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -235585,7 +235621,7 @@ var init_backfill_ledgers = __esm({
 });
 
 // src/benchmark/validated.ts
-import { mkdirSync as mkdirSync13, readFileSync as readFileSync25, writeFileSync as writeFileSync12 } from "node:fs";
+import { mkdirSync as mkdirSync14, readFileSync as readFileSync25, writeFileSync as writeFileSync13 } from "node:fs";
 import { dirname as dirname8, join as join25 } from "node:path";
 function latestEntriesFromKeyedLedger(fileName, admit = () => true) {
   let cache3;
@@ -236587,7 +236623,7 @@ var init_search = __esm({
 });
 
 // src/mass_scouting/reports.ts
-import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync14 } from "node:fs";
+import { appendFileSync as appendFileSync3, mkdirSync as mkdirSync15 } from "node:fs";
 import { dirname as dirname9 } from "node:path";
 function tallyValues(values, cap = 25) {
   const counts = /* @__PURE__ */ new Map();
@@ -236789,7 +236825,7 @@ var init_reports = __esm({
 });
 
 // src/security_scan/report.ts
-import { mkdirSync as mkdirSync15, writeFileSync as writeFileSync13 } from "node:fs";
+import { mkdirSync as mkdirSync16, writeFileSync as writeFileSync14 } from "node:fs";
 import { isAbsolute as isAbsolute4, join as join26, resolve as resolve13 } from "node:path";
 function resolveReportDir(outputDir, mainRoot) {
   if (outputDir && outputDir.length > 0) {
@@ -236941,13 +236977,13 @@ function mdCell(s) {
   return s.replace(/\|/g, "\\|").replace(/\n/g, " ").slice(0, 400);
 }
 function writeReport(report, reportDir) {
-  mkdirSync15(reportDir, { recursive: true });
+  mkdirSync16(reportDir, { recursive: true });
   const stamp = isoTimestampLocal();
   const base = `${stamp}-security-scan-${slugify(report.job_id)}`;
   const jsonPath = join26(reportDir, `${base}.json`);
   const mdPath = join26(reportDir, `${base}.md`);
-  writeFileSync13(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
-  writeFileSync13(mdPath, renderMarkdown(report), "utf-8");
+  writeFileSync14(jsonPath, JSON.stringify(report, null, 2) + "\n", "utf-8");
+  writeFileSync14(mdPath, renderMarkdown(report), "utf-8");
   return { jsonPath, mdPath };
 }
 var init_report = __esm({
@@ -237779,7 +237815,7 @@ var init_scout_accuracy_fixture = __esm({
 
 // src/mass_scouting/scout-accuracy-ledger.ts
 import { createHash as createHash10 } from "node:crypto";
-import { existsSync as existsSync24, mkdirSync as mkdirSync16, readFileSync as readFileSync26, renameSync as renameSync13, writeFileSync as writeFileSync14 } from "node:fs";
+import { existsSync as existsSync24, mkdirSync as mkdirSync17, readFileSync as readFileSync26, renameSync as renameSync13, writeFileSync as writeFileSync15 } from "node:fs";
 import { join as join27 } from "node:path";
 function scoutAccuracyLedgerPath() {
   return join27(getConfigDir(), "scout-accuracy-results.json");
@@ -237806,15 +237842,15 @@ function loadCache6() {
   return {};
 }
 function loadOrInit() {
-  mkdirSync16(getConfigDir(), { recursive: true });
+  mkdirSync17(getConfigDir(), { recursive: true });
   return loadCache6();
 }
 function saveCache6(cache3) {
   const dir = getConfigDir();
-  mkdirSync16(dir, { recursive: true });
+  mkdirSync17(dir, { recursive: true });
   const p = scoutAccuracyLedgerPath();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync14(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync15(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync13(tmp, p);
 }
 function today6() {
@@ -237954,7 +237990,7 @@ var init_settings = __esm({
 
 // src/calibration/record.ts
 import { createHash as createHash11 } from "node:crypto";
-import { closeSync as closeSync4, fsyncSync, mkdirSync as mkdirSync17, openSync as openSync4, readFileSync as readFileSync28, renameSync as renameSync14, writeSync as writeSync2 } from "node:fs";
+import { closeSync as closeSync4, fsyncSync, mkdirSync as mkdirSync18, openSync as openSync4, readFileSync as readFileSync28, renameSync as renameSync14, writeSync as writeSync2 } from "node:fs";
 import { totalmem as totalmem2 } from "node:os";
 import { dirname as dirname10, join as join28 } from "node:path";
 function recordSlug(model) {
@@ -238097,7 +238133,7 @@ function writeRecord(dir, record2) {
   const errors = recordSchemaErrors(record2);
   if (errors.length > 0) throw new Error(`refusing to write an invalid calibration record for '${record2.model}': ${errors.join("; ")}`);
   const p = recordPath(dir, record2.engine, record2.model);
-  mkdirSync17(dirname10(p), { recursive: true });
+  mkdirSync18(dirname10(p), { recursive: true });
   const tmp = `${p}.${process.pid}.tmp`;
   const fd = openSync4(tmp, "w", 384);
   try {
@@ -238362,7 +238398,7 @@ var init_memory = __esm({
 
 // src/governor/state.ts
 import { execFile as execFile4, execFileSync as execFileSync3 } from "node:child_process";
-import { lstatSync as lstatSync2, mkdirSync as mkdirSync18, readFileSync as readFileSync30, renameSync as renameSync15, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync15 } from "node:fs";
+import { lstatSync as lstatSync2, mkdirSync as mkdirSync19, readFileSync as readFileSync30, renameSync as renameSync15, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync16 } from "node:fs";
 import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
 import { join as join30 } from "node:path";
 function governorDirFor(env, platform3, user, tmp) {
@@ -238401,7 +238437,7 @@ function ensureGovernorDir(dir) {
       st = lstatSync2(dir);
     } catch (err3) {
       if (errnoOf(err3) !== "ENOENT") throw err3;
-      mkdirSync18(dir, { recursive: true, mode: 448 });
+      mkdirSync19(dir, { recursive: true, mode: 448 });
       st = lstatSync2(dir);
     }
     checkOwned(dir, st);
@@ -238453,7 +238489,7 @@ function readState(dir) {
 }
 function tryMkdirLock(lock, dir) {
   try {
-    mkdirSync18(lock);
+    mkdirSync19(lock);
     return true;
   } catch (err3) {
     if (errnoOf(err3) === "EEXIST") return false;
@@ -238482,7 +238518,7 @@ function writeState(dir, state) {
   const file2 = join30(dir, STATE_FILE);
   const temp = `${file2}.${process.pid}.tmp`;
   try {
-    writeFileSync15(temp, JSON.stringify(state), { mode: 384 });
+    writeFileSync16(temp, JSON.stringify(state), { mode: 384 });
     renameSync15(temp, file2);
   } catch (err3) {
     throw dirError(dir, err3.message, err3);
@@ -238587,7 +238623,7 @@ function waiterId(kind) {
   return `${process.pid}:${kind}`;
 }
 function controllerConfig(config2) {
-  return { cores: coreCount(), totalBytes: totalmem4(), settleMs: config2.settleMs, cpuFloorWaitMs: config2.cpuFloorWaitMs, loadYieldMs: config2.loadYieldMs };
+  return { cores: coreCount(), totalBytes: totalmem4(), settleMs: config2.settleMs, loadYieldMs: config2.loadYieldMs };
 }
 function headsOf(state) {
   const heads = [];
@@ -238670,7 +238706,7 @@ function attempt(dir, req, config2, keepPlace = false) {
   if (!config2.enabled) {
     const kind2 = req.kind ?? "inference";
     if (placed.has(`${dir}\0${kind2}`)) withdrawFrom(dir, kind2);
-    return { lease: unrecordedLease(req), denial: null };
+    return { lease: unrecordedLease(req), denial: null, reason: null };
   }
   const failure2 = failures.get(dir);
   if (failure2 !== void 0) {
@@ -238706,8 +238742,9 @@ function attempt(dir, req, config2, keepPlace = false) {
     giveRamBack(state, kind === "load" && (decision.denial === "ram" || decision.denial === "alone") ? request : null, config2, now4);
     if (decision.yields) toTail(state, waiter);
     if (!decision.grant) {
-      if (decision.denial !== null && decision.denial !== "stale" && decision.denial !== "queued") state.lastDenial = { kind, reason: blockedBy(decision.denial, state, config2, kind), pid: process.pid, at: now4 };
-      return { lease: null, denial: decision.denial, reading };
+      const reason2 = decision.denial === null || decision.denial === "stale" ? null : blockedBy(decision.denial, state, config2, kind);
+      if (reason2 !== null && decision.denial !== "queued") state.lastDenial = { kind, reason: reason2, pid: process.pid, at: now4 };
+      return { lease: null, denial: decision.denial, reason: reason2, reading };
     }
     if (keepPlace) {
       waiter.since = now4;
@@ -238732,9 +238769,9 @@ function attempt(dir, req, config2, keepPlace = false) {
     touchServerIn(state, lease.serverPid, now4);
     const served = lease.kind === "inference" ? state.servers.find((s) => s.pid === lease.serverPid) : void 0;
     if (served) served.wantUnload = false;
-    return { lease, denial: null, reading };
+    return { lease, denial: null, reason: null, reading };
   });
-  if (!result.locked) return { lease: null, denial: null };
+  if (!result.locked) return { lease: null, denial: null, reason: null };
   if (result.value.reading.due) startSampling(dir, result.value.reading.pids);
   return result.value;
 }
@@ -238758,8 +238795,8 @@ function giveRamBack(state, load, config2, now4) {
   state.lastUnloadAt = now4;
 }
 function attemptLease(req) {
-  const { lease, denial } = attempt(governorDir(), req, governorConfig());
-  return { lease, denial };
+  const { lease, denial, reason: reason2 } = attempt(governorDir(), req, governorConfig());
+  return { lease, denial, reason: reason2 };
 }
 function loadVerdict(req) {
   const config2 = governorConfig();
@@ -240048,7 +240085,7 @@ var init_phase_b_fixtures = __esm({
 
 // src/broker/protocol.ts
 import { timingSafeEqual } from "node:crypto";
-import { readFileSync as readFileSync31, renameSync as renameSync16, rmSync as rmSync3, writeFileSync as writeFileSync16 } from "node:fs";
+import { readFileSync as readFileSync31, renameSync as renameSync16, rmSync as rmSync3, writeFileSync as writeFileSync17 } from "node:fs";
 import { join as join31 } from "node:path";
 function brokerTokenMatches(sent, expected) {
   return typeof sent === "string" && Buffer.byteLength(sent) === expected.length && timingSafeEqual(Buffer.from(sent), expected);
@@ -240077,7 +240114,7 @@ function parseBrokerState(file2) {
 function writeBrokerState(dir, state) {
   const target = brokerStatePath(dir);
   const tmp = `${target}.${process.pid}.tmp`;
-  writeFileSync16(tmp, `${JSON.stringify(state, null, 2)}
+  writeFileSync17(tmp, `${JSON.stringify(state, null, 2)}
 `, { mode: 384 });
   renameSync16(tmp, target);
 }
@@ -240103,7 +240140,7 @@ function readCalibratorState(dir) {
 async function isRunnerOf(dir, pid) {
   return readCalibratorState(dir)?.pid === pid && await isCalibratorProcess(pid);
 }
-var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, NO_HOLD_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath;
+var BROKER_ENGINES, TOKEN_HEADER, COMMAND_HEADER, CTX_HEADER, ENGINE_HEADER, TIMEOUT_HEADER, QUEUE_TIMEOUT_HEADER, NO_HOLD_HEADER, STATE_HEADER, DISPATCHED_HEADER, HELD_HEADER, GOVERNOR_WAIT_HEADER, BROKER_ARGV, CALIBRATE_ARGV, calibratorStatePath;
 var init_protocol = __esm({
   "src/broker/protocol.ts"() {
     "use strict";
@@ -240119,6 +240156,7 @@ var init_protocol = __esm({
     STATE_HEADER = "x-llm-ext-job-state";
     DISPATCHED_HEADER = "x-llm-ext-dispatched-at";
     HELD_HEADER = "x-llm-ext-held";
+    GOVERNOR_WAIT_HEADER = "x-llm-ext-governor-wait";
     BROKER_ARGV = "__broker";
     CALIBRATE_ARGV = "__calibrate";
     calibratorStatePath = (dir) => join31(dir, "calibrator-local.json");
@@ -240126,11 +240164,11 @@ var init_protocol = __esm({
 });
 
 // src/calibration/state.ts
-import { mkdirSync as mkdirSync19, readFileSync as readFileSync32, renameSync as renameSync17, rmdirSync as rmdirSync5, statSync as statSync17, unlinkSync as unlinkSync4, writeFileSync as writeFileSync17 } from "node:fs";
+import { mkdirSync as mkdirSync20, readFileSync as readFileSync32, renameSync as renameSync17, rmdirSync as rmdirSync5, statSync as statSync17, unlinkSync as unlinkSync4, writeFileSync as writeFileSync18 } from "node:fs";
 import { join as join32 } from "node:path";
 function writeJsonAtomic(path2, value) {
   const tmp = `${path2}.${process.pid}.tmp`;
-  writeFileSync17(tmp, `${JSON.stringify(value, null, 2)}
+  writeFileSync18(tmp, `${JSON.stringify(value, null, 2)}
 `, { mode: 384 });
   renameSync17(tmp, path2);
 }
@@ -240157,14 +240195,14 @@ function takeAway(lock) {
   rmdirSync5(gone);
 }
 function withStateLock2(dir, waitMs, fn) {
-  mkdirSync19(root(dir), { recursive: true });
+  mkdirSync20(root(dir), { recursive: true });
   const lock = stateLockPath(dir);
   const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const deadline = Date.now() + waitMs;
   for (; ; ) {
     try {
-      mkdirSync19(lock);
-      writeFileSync17(join32(lock, "owner"), token);
+      mkdirSync20(lock);
+      writeFileSync18(join32(lock, "owner"), token);
       break;
     } catch (err3) {
       if (err3.code !== "EEXIST") throw err3;
@@ -240223,12 +240261,12 @@ function writeSeenModelsUnlocked(dir, seen) {
 }
 async function acquireModelLock(dir, engine, model, self = (pid) => isRunnerOf(dir, pid)) {
   const lock = modelLockPath(dir, engine, model);
-  mkdirSync19(calibrationDir(dir, engine), { recursive: true });
+  mkdirSync20(calibrationDir(dir, engine), { recursive: true });
   for (let attempt2 = 0; attempt2 < 3; attempt2++) {
     try {
-      mkdirSync19(lock);
+      mkdirSync20(lock);
       const tmp = join32(lock, `pid.${process.pid}.tmp`);
-      writeFileSync17(tmp, String(process.pid));
+      writeFileSync18(tmp, String(process.pid));
       renameSync17(tmp, join32(lock, "pid"));
       return true;
     } catch (err3) {
@@ -240285,7 +240323,7 @@ function loadProgress(dir, engine, model, fingerprint, harness = null) {
   };
 }
 function saveProgress(dir, engine, model, p) {
-  mkdirSync19(calibrationDir(dir, engine), { recursive: true });
+  mkdirSync20(calibrationDir(dir, engine), { recursive: true });
   writeJsonAtomic(progressPath(dir, engine, model), p);
 }
 var root, queuePath, seenModelsPath, stateLockPath, STATE_LOCK_STALE_MS, modelLockPath, MODEL_LOCK_CREATING_MS, progressPath, emptyProgress;
@@ -241171,7 +241209,7 @@ Describe the document above in about 200 words.` }], {
 
 // src/broker/client.ts
 import { createHash as createHash12, randomUUID as randomUUID3 } from "node:crypto";
-import { mkdirSync as mkdirSync20 } from "node:fs";
+import { mkdirSync as mkdirSync21 } from "node:fs";
 import { fileURLToPath as fileURLToPath7 } from "node:url";
 function setBrokerClientVersion(version2) {
   clientVersion = version2;
@@ -241234,7 +241272,7 @@ async function ensureBroker(o) {
     }
     return endpointOf(s);
   };
-  mkdirSync20(o.dir, { recursive: true });
+  mkdirSync21(o.dir, { recursive: true });
   const ep = await usable() ?? await withAsyncLock(brokerSpawnLockPath(o.dir), async () => {
     const again = await usable();
     if (again) return again;
@@ -241266,6 +241304,12 @@ function printHeld(model, engine) {
   if (Date.now() - last < HELD_PRINT_MS) return;
   heldPrintedAt.set(model, Date.now());
   process.stderr.write(`llm-ext: waiting for the calibration of '${model}' (${engine}); llm-ext models calibration-status shows its progress
+`);
+}
+function printGovernorWait(reason2) {
+  if (Date.now() - governorWaitPrintedAt < HELD_PRINT_MS) return;
+  governorWaitPrintedAt = Date.now();
+  process.stderr.write(`llm-ext: local inference waiting: ${reason2}; requests queue, nothing fails; bound the wait with --command_timeout
 `);
 }
 async function cancelAllBrokerJobs(reason2) {
@@ -241343,6 +241387,8 @@ async function brokerExchange(ep, req, opts = {}) {
         const at = res.headers.get(DISPATCHED_HEADER);
         const state = res.headers.get(STATE_HEADER);
         if (at !== null && state === "running") opts.onDispatched?.(Number(at));
+        const governorWait = res.headers.get(GOVERNOR_WAIT_HEADER);
+        if (state === "queued" && governorWait !== null) printGovernorWait(governorWait);
         if (state === "held" && res.headers.get(HELD_HEADER) !== null) noteHeld();
         else heldOn = null;
         continue;
@@ -241399,7 +241445,7 @@ async function brokerExchange(ep, req, opts = {}) {
     }
   }
 }
-var START_WAIT_MS, POLL_WAIT_S, HEALTH_TRIES, HEALTH_RETRY_MS, COMMAND_ID, clientVersion, queueTimeoutMs, BrokerJobError, BrokerUnavailableError, known, pendingByScope, active, submitting, SUBMIT_DRAIN_MS, MAX_REQUEUES, HELD_PRINT_MS, heldPrintedAt, selfCancels, uncancelled;
+var START_WAIT_MS, POLL_WAIT_S, HEALTH_TRIES, HEALTH_RETRY_MS, COMMAND_ID, clientVersion, queueTimeoutMs, BrokerJobError, BrokerUnavailableError, known, pendingByScope, active, submitting, SUBMIT_DRAIN_MS, MAX_REQUEUES, HELD_PRINT_MS, heldPrintedAt, governorWaitPrintedAt, selfCancels, uncancelled;
 var init_client2 = __esm({
   "src/broker/client.ts"() {
     "use strict";
@@ -241435,6 +241481,7 @@ var init_client2 = __esm({
     MAX_REQUEUES = 10;
     HELD_PRINT_MS = 6e4;
     heldPrintedAt = /* @__PURE__ */ new Map();
+    governorWaitPrintedAt = 0;
     selfCancels = /* @__PURE__ */ new Set();
     uncancelled = [];
   }
@@ -241595,11 +241642,11 @@ var init_scout_local = __esm({
 import { execSync as execSync2 } from "node:child_process";
 import {
   appendFileSync as appendFileSync4,
-  mkdirSync as mkdirSync21,
+  mkdirSync as mkdirSync22,
   readFileSync as readFileSync33,
   readdirSync as readdirSync8,
   statSync as statSync18,
-  writeFileSync as writeFileSync18
+  writeFileSync as writeFileSync19
 } from "node:fs";
 import { dirname as dirname12, extname as extname4, isAbsolute as isAbsolute5, join as join33, resolve as resolve14 } from "node:path";
 import { fileURLToPath as fileURLToPath8 } from "node:url";
@@ -242285,10 +242332,10 @@ async function runScout(args, opts) {
   const md = renderMarkdownReport(summary);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync21(reportDir, { recursive: true });
+  mkdirSync22(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const reportPath = join33(reportDir, `${stamp}-scout-${slugify2(jobId)}.md`);
-  writeFileSync18(reportPath, md, "utf-8");
+  writeFileSync19(reportPath, md, "utf-8");
   return ok(
     [
       `job_id=${jobId}`,
@@ -242463,7 +242510,7 @@ function runBuildFieldset(args) {
   const json2 = JSON.stringify(fieldset, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync18(outPath, json2 + "\n", "utf-8");
+    writeFileSync19(outPath, json2 + "\n", "utf-8");
     return ok(`fieldset_name=${name}
 fields=${fields.length}
 path=${outPath}`);
@@ -242627,7 +242674,7 @@ ${content.slice(0, 400)}`
   const json2 = JSON.stringify(candidate, null, 2);
   const outPath = flags["out"];
   if (outPath) {
-    writeFileSync18(outPath, json2 + "\n", "utf-8");
+    writeFileSync19(outPath, json2 + "\n", "utf-8");
     return ok(
       `fieldset_name=${candidate.fieldset_name}
 fields=${candidate.fields.length}
@@ -243030,11 +243077,11 @@ function runExport(args, opts) {
   const rows = reg.listResultsByJob(jobId);
   reg.close();
   const reportDir = resolveReportDir2(flags["output-dir"], opts);
-  mkdirSync21(reportDir, { recursive: true });
+  mkdirSync22(reportDir, { recursive: true });
   const stamp = isoTimestampLocal2();
   const filename = `${stamp}-export-${slugify2(jobId)}.${format}`;
   const path2 = join33(reportDir, filename);
-  writeFileSync18(path2, "", "utf-8");
+  writeFileSync19(path2, "", "utf-8");
   if (format === "jsonl") {
     for (const r of rows) {
       appendFileSync4(path2, JSON.stringify(r) + "\n", "utf-8");
@@ -243424,7 +243471,7 @@ var init_assess = __esm({
 });
 
 // src/model-qualification/drift.ts
-import { mkdirSync as mkdirSync22, readFileSync as readFileSync34, renameSync as renameSync18, writeFileSync as writeFileSync19 } from "node:fs";
+import { mkdirSync as mkdirSync23, readFileSync as readFileSync34, renameSync as renameSync18, writeFileSync as writeFileSync20 } from "node:fs";
 import { join as join34 } from "node:path";
 function perMillion(s) {
   if (s == null) return null;
@@ -243578,9 +243625,9 @@ function loadBaseline(path2 = getBaselinePath()) {
 }
 function saveBaseline(baseline, path2 = getBaselinePath()) {
   try {
-    mkdirSync22(getConfigDir(), { recursive: true });
+    mkdirSync23(getConfigDir(), { recursive: true });
     const tmp = `${path2}.tmp.${process.pid}`;
-    writeFileSync19(tmp, JSON.stringify(baseline, null, 2));
+    writeFileSync20(tmp, JSON.stringify(baseline, null, 2));
     renameSync18(tmp, path2);
   } catch {
   }
@@ -243656,9 +243703,9 @@ async function runCheckModelHealth(opts = {}) {
   const profile = opts.profile ?? resolveActiveProfile();
   const report = await checkModelHealth(profile, opts);
   const dir = opts.outputDir ?? join34(defaultScratchDir(), "model-health");
-  mkdirSync22(dir, { recursive: true });
+  mkdirSync23(dir, { recursive: true });
   const reportPath = join34(dir, `${compactStamp()}-model-health-${profile.name}.md`);
-  writeFileSync19(reportPath, renderModelHealthMarkdown(report));
+  writeFileSync20(reportPath, renderModelHealthMarkdown(report));
   return { report, reportPath };
 }
 function renderModelHealthText(report) {
@@ -243689,7 +243736,7 @@ var init_drift = __esm({
 });
 
 // src/model-qualification/new-arrivals.ts
-import { mkdirSync as mkdirSync23, readFileSync as readFileSync35, renameSync as renameSync19, writeFileSync as writeFileSync20 } from "node:fs";
+import { mkdirSync as mkdirSync24, readFileSync as readFileSync35, renameSync as renameSync19, writeFileSync as writeFileSync21 } from "node:fs";
 import { join as join35 } from "node:path";
 function createdToIso(created) {
   if (created === null || !Number.isFinite(created) || created <= 0) return null;
@@ -243754,9 +243801,9 @@ function loadSnapshot(path2 = getCatalogSnapshotPath()) {
 }
 function saveSnapshot(snapshot2, path2 = getCatalogSnapshotPath()) {
   try {
-    mkdirSync23(getConfigDir(), { recursive: true });
+    mkdirSync24(getConfigDir(), { recursive: true });
     const tmp = `${path2}.tmp.${process.pid}`;
-    writeFileSync20(tmp, JSON.stringify(snapshot2, null, 2));
+    writeFileSync21(tmp, JSON.stringify(snapshot2, null, 2));
     renameSync19(tmp, path2);
   } catch {
   }
@@ -243848,9 +243895,9 @@ function renderNewArrivalsText(report) {
 async function runDiscoverNewArrivals(opts = {}) {
   const report = await discoverNewArrivals(opts);
   const dir = opts.outputDir ?? join35(defaultScratchDir(), "model-arrivals");
-  mkdirSync23(dir, { recursive: true });
+  mkdirSync24(dir, { recursive: true });
   const reportPath = join35(dir, `${compactStamp()}-new-arrivals.md`);
-  writeFileSync20(reportPath, renderNewArrivalsMarkdown(report));
+  writeFileSync21(reportPath, renderNewArrivalsMarkdown(report));
   return { report, reportPath };
 }
 var TEXT_ARRIVALS_CAP;
@@ -243868,7 +243915,7 @@ var init_new_arrivals = __esm({
 });
 
 // src/benchmark/pick.ts
-import { readFileSync as readFileSync36, writeFileSync as writeFileSync21, renameSync as renameSyncCb, existsSync as existsSync26, mkdirSync as mkdirSync24, rmSync as rmSync4, statSync as statSync19, chmodSync as chmodSync4, readdirSync as readdirSync9, realpathSync as realpathSync4 } from "node:fs";
+import { readFileSync as readFileSync36, writeFileSync as writeFileSync22, renameSync as renameSyncCb, existsSync as existsSync26, mkdirSync as mkdirSync25, rmSync as rmSync4, statSync as statSync19, chmodSync as chmodSync4, readdirSync as readdirSync9, realpathSync as realpathSync4 } from "node:fs";
 import { join as join36 } from "node:path";
 function loadSettingsRoot(settingsPath) {
   if (!existsSync26(settingsPath)) {
@@ -243916,7 +243963,7 @@ function writeSettingsAtomic(settingsPath, handle) {
   let newRaw = handle.doc.toString({ lineWidth: 0, flowCollectionPadding: false });
   if (crlf) newRaw = newRaw.replace(/\r?\n/g, "\r\n");
   const tmp = target + ".tmp." + process.pid;
-  writeFileSync21(tmp, newRaw, { encoding: "utf-8", mode });
+  writeFileSync22(tmp, newRaw, { encoding: "utf-8", mode });
   chmodSync4(tmp, mode);
   renameSyncCb(tmp, target);
 }
@@ -243985,7 +244032,7 @@ function acquireSettingsWriteLock(dir) {
   const deadline = Date.now() + SETTINGS_WRITE_LOCK_WAIT_MS;
   for (; ; ) {
     try {
-      mkdirSync24(dir);
+      mkdirSync25(dir);
     } catch {
       let holder2;
       try {
@@ -244015,7 +244062,7 @@ function acquireSettingsWriteLock(dir) {
       continue;
     }
     try {
-      writeFileSync21(join36(dir, "pid"), String(process.pid));
+      writeFileSync22(join36(dir, "pid"), String(process.pid));
     } catch (err3) {
       try {
         rmSync4(dir, { recursive: true, force: true });
@@ -244049,7 +244096,7 @@ function stableStringify(value) {
 function backupSettingsFile(settingsPath, prefix, name, opts = {}) {
   const backupsDir = join36(getConfigDir(), "backups");
   try {
-    mkdirSync24(backupsDir, { recursive: true });
+    mkdirSync25(backupsDir, { recursive: true });
     try {
       chmodSync4(backupsDir, 448);
     } catch {
@@ -245676,7 +245723,7 @@ var init_score6 = __esm({
 });
 
 // src/benchmark/text-tools/bench-runner.ts
-import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync22 } from "node:fs";
+import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync23 } from "node:fs";
 import { tmpdir as tmpdir3 } from "node:os";
 import { join as join37 } from "node:path";
 function emptyResult2(modelId) {
@@ -245865,7 +245912,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
             const dir = mkdtempSync2(join37(tmpdir3(), "llm-ext-describe-bench-"));
             try {
               const filePath = join37(dir, c.fileName);
-              writeFileSync22(filePath, c.content, "utf-8");
+              writeFileSync23(filePath, c.content, "utf-8");
               return await runDescribe({ input_file: filePath, max_chars: c.maxChars }, deps);
             } finally {
               rmSync5(dir, { recursive: true, force: true });
@@ -245959,7 +246006,7 @@ var init_select6 = __esm({
 
 // src/benchmark/text-tools/index.ts
 import { createHash as createHash13 } from "node:crypto";
-import { existsSync as existsSync27, mkdirSync as mkdirSync25, readFileSync as readFileSync38, renameSync as renameSync20, writeFileSync as writeFileSync23 } from "node:fs";
+import { existsSync as existsSync27, mkdirSync as mkdirSync26, readFileSync as readFileSync38, renameSync as renameSync20, writeFileSync as writeFileSync24 } from "node:fs";
 import { join as join38 } from "node:path";
 function caseCountFor(tool) {
   if (tool === "summarize") return SUMMARIZE_CASES.length;
@@ -245988,10 +246035,10 @@ function loadCache7() {
   return {};
 }
 function saveCache7(cache3) {
-  mkdirSync25(getConfigDir(), { recursive: true });
+  mkdirSync26(getConfigDir(), { recursive: true });
   const p = cachePath6();
   const tmp = `${p}.tmp.${process.pid}`;
-  writeFileSync23(tmp, JSON.stringify(cache3, null, 2), "utf-8");
+  writeFileSync24(tmp, JSON.stringify(cache3, null, 2), "utf-8");
   renameSync20(tmp, p);
 }
 function resolveApiKey6(override) {
@@ -246234,7 +246281,7 @@ async function runTextToolBenchmark(tool, opts) {
     incumbentOutputDollarsPerMillion: incumbentOut
   });
   const reportDir = opts.outputDir ?? join38(benchmarkSubReportDir("text-tools-benchmark", opts.mainRoot), tool);
-  mkdirSync25(reportDir, { recursive: true });
+  mkdirSync26(reportDir, { recursive: true });
   const stamp = reportStamp6();
   const jsonReportPath = join38(reportDir, `${stamp}-${tool}-benchmark.json`);
   const reportPath = join38(reportDir, `${stamp}-${tool}-benchmark.md`);
@@ -246274,7 +246321,7 @@ async function runTextToolBenchmark(tool, opts) {
     rejected: selection.rejected
   };
   const jtmp = `${jsonReportPath}.tmp.${process.pid}`;
-  writeFileSync23(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
+  writeFileSync24(jtmp, JSON.stringify(jsonPayload, null, 2), "utf-8");
   renameSync20(jtmp, jsonReportPath);
   const md = buildReportMarkdown6({
     tool,
@@ -246289,7 +246336,7 @@ async function runTextToolBenchmark(tool, opts) {
     totalCost
   });
   const mtmp = `${reportPath}.tmp.${process.pid}`;
-  writeFileSync23(mtmp, md, "utf-8");
+  writeFileSync24(mtmp, md, "utf-8");
   renameSync20(mtmp, reportPath);
   const summaryLine = selection.changed ? `RECOMMEND switch: ${incumbentId} -> ${selection.recommendedModelId} (best same-or-cheaper passer).` : `KEEP ${selection.recommendedModelId} (no eligible same-or-cheaper model scored higher).`;
   return {
@@ -246675,7 +246722,7 @@ var init_auto_replace = __esm({
 });
 
 // src/broker/registry.ts
-import { mkdirSync as mkdirSync26, readFileSync as readFileSync39, renameSync as renameSync21, writeFileSync as writeFileSync24 } from "node:fs";
+import { mkdirSync as mkdirSync27, readFileSync as readFileSync39, renameSync as renameSync21, writeFileSync as writeFileSync25 } from "node:fs";
 import { join as join39 } from "node:path";
 function registryPath(dir, engine) {
   return join39(dir, `servers-${engine}.json`);
@@ -246711,7 +246758,7 @@ function readRegistry(dir, engine) {
 function writeRegistry(dir, engine, entries2) {
   const target = registryPath(dir, engine);
   const tmp = `${target}.${process.pid}.tmp`;
-  writeFileSync24(tmp, `${JSON.stringify({ entries: entries2 }, null, 2)}
+  writeFileSync25(tmp, `${JSON.stringify({ entries: entries2 }, null, 2)}
 `, { mode: 384 });
   renameSync21(tmp, target);
 }
@@ -246724,7 +246771,7 @@ async function entryLive(e) {
   return live !== null && sameArgv(live, e.argv.join(" ").split(/\s+/));
 }
 async function claimAndSpawn(o) {
-  mkdirSync26(o.dir, { recursive: true });
+  mkdirSync27(o.dir, { recursive: true });
   return withAsyncLock(registryLockPath(o.dir, o.engine), async () => {
     const kept = await sweepUnlocked(o.dir, o.engine, o.role, o.log);
     const label2 = serverLabel(o.engine);
@@ -246743,7 +246790,7 @@ async function claimAndSpawn(o) {
   });
 }
 async function sweepEngine(dir, engine, role, log) {
-  mkdirSync26(dir, { recursive: true });
+  mkdirSync27(dir, { recursive: true });
   return withAsyncLock(registryLockPath(dir, engine), async () => {
     const kept = await sweepUnlocked(dir, engine, role, log);
     writeRegistry(dir, engine, kept);
@@ -247000,7 +247047,7 @@ var init_load = __esm({
 
 // src/calibration/fingerprint.ts
 import { createHash as createHash14 } from "node:crypto";
-import { createReadStream, existsSync as existsSync29, mkdirSync as mkdirSync27, readdirSync as readdirSync11, readFileSync as readFileSync41, realpathSync as realpathSync6, renameSync as renameSync22, statSync as statSync20, writeFileSync as writeFileSync25 } from "node:fs";
+import { createReadStream, existsSync as existsSync29, mkdirSync as mkdirSync28, readdirSync as readdirSync11, readFileSync as readFileSync41, realpathSync as realpathSync6, renameSync as renameSync22, statSync as statSync20, writeFileSync as writeFileSync26 } from "node:fs";
 import { totalmem as totalmem8 } from "node:os";
 import { basename as basename9, dirname as dirname13, join as join41 } from "node:path";
 function readDigests(dir) {
@@ -247024,9 +247071,9 @@ async function blobSha256(file2, dir) {
   if (dir !== void 0) {
     const all = readDigests(dir);
     all[real] = { dev: st.dev, ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, sha256 };
-    mkdirSync27(dirname13(digestCachePath(dir)), { recursive: true });
+    mkdirSync28(dirname13(digestCachePath(dir)), { recursive: true });
     const tmp = `${digestCachePath(dir)}.${process.pid}.tmp`;
-    writeFileSync25(tmp, JSON.stringify(all), { mode: 384 });
+    writeFileSync26(tmp, JSON.stringify(all), { mode: 384 });
     renameSync22(tmp, digestCachePath(dir));
   }
   return sha256;
@@ -247115,7 +247162,7 @@ __export(runner_exports, {
   waitForTurn: () => waitForTurn
 });
 import { createHash as createHash15, randomBytes as randomBytes3 } from "node:crypto";
-import { existsSync as existsSync30, mkdirSync as mkdirSync28, readFileSync as readFileSync42, renameSync as renameSync23, rmdirSync as rmdirSync6, unlinkSync as unlinkSync5, writeFileSync as writeFileSync26 } from "node:fs";
+import { existsSync as existsSync30, mkdirSync as mkdirSync29, readFileSync as readFileSync42, renameSync as renameSync23, rmdirSync as rmdirSync6, unlinkSync as unlinkSync5, writeFileSync as writeFileSync27 } from "node:fs";
 import { join as join42 } from "node:path";
 import { totalmem as totalmem9 } from "node:os";
 function harnessFromEnv(env) {
@@ -247144,10 +247191,10 @@ async function ensureCalibrator(o) {
   const live = await liveCalibrator(o.dir);
   if (live && live.version === o.version) return "running";
   if (live) {
-    writeFileSync26(handoverPath(o.dir), JSON.stringify({ version: o.version, at: (/* @__PURE__ */ new Date()).toISOString() }));
+    writeFileSync27(handoverPath(o.dir), JSON.stringify({ version: o.version, at: (/* @__PURE__ */ new Date()).toISOString() }));
     return "handover-requested";
   }
-  mkdirSync28(o.dir, { recursive: true });
+  mkdirSync29(o.dir, { recursive: true });
   spawnDetachedChild({
     command: process.execPath,
     args: [o.entry, CALIBRATE_ARGV],
@@ -247280,7 +247327,7 @@ async function runCalibrator(o) {
     const live = await liveCalibrator(o.dir);
     if (live && live.pid !== process.pid) return false;
     const tmp = `${calibratorStatePath(o.dir)}.${process.pid}.tmp`;
-    writeFileSync26(tmp, JSON.stringify({ pid: process.pid, version: o.version, startedAt: (/* @__PURE__ */ new Date()).toISOString() }), { mode: 384 });
+    writeFileSync27(tmp, JSON.stringify({ pid: process.pid, version: o.version, startedAt: (/* @__PURE__ */ new Date()).toISOString() }), { mode: 384 });
     renameSync23(tmp, calibratorStatePath(o.dir));
     return true;
   });
@@ -247851,7 +247898,7 @@ var init_commands = __esm({
 });
 
 // src/mass_scouting/mcp-tools.ts
-import { mkdirSync as mkdirSync29, writeFileSync as writeFileSync27 } from "node:fs";
+import { mkdirSync as mkdirSync30, writeFileSync as writeFileSync28 } from "node:fs";
 import { join as join43 } from "node:path";
 function buildArgv(sub, flags) {
   const out = [sub];
@@ -248287,9 +248334,9 @@ Report: ${reportPath}`;
           })
         );
         const dir = str(args.output_dir) ?? join43(defaultScratchDir(opts.mainRoot), "auto-replace");
-        mkdirSync29(dir, { recursive: true });
+        mkdirSync30(dir, { recursive: true });
         const reportPath = join43(dir, `${compactStamp()}-auto-replace.md`);
-        writeFileSync27(reportPath, reportMarkdown);
+        writeFileSync28(reportPath, reportMarkdown);
         const degraded = findings.filter((f) => f.degraded).length;
         const recommended = findings.filter((f) => f.changed).length;
         const summary = `${findings.length} tool(s) checked, ${degraded} degraded, ${recommended} replacement(s) recommended (advisory \u2014 apply via the CLI \`llm-ext-benchmark --auto-replace --apply\`).`;
@@ -270513,6 +270560,7 @@ var init_label = __esm({
         const ids2 = itemIds(i);
         const criteria2 = Object.fromEntries(i.classes.map((c) => [c.id, null]));
         const background = [i.purpose === void 0 ? "" : " Use `shared.purpose` as the reason for the classification.", i.context === void 0 ? "" : " Use `shared.context` as background."].join("");
+        const contextSubject = i.context === void 0 ? "" : "`shared.context` and ";
         const units = i.items.map((it, k) => ({
           kind: i.mode === "files" ? "text" : "atomic",
           // Why a bare string for text: the planner chunks a string state by lines; an object state would be split by entries and refuse a long `text`.
@@ -270520,7 +270568,7 @@ var init_label = __esm({
           // D5, D14: the question names the unit by position and the key is built from the index; no item text and no caller id reach the instructions.
           questions: {
             [indexKey(KEY, k)]: choice(
-              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`the content of \`units[${k}]\``, "classify")}${background}`,
+              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
               criteria2
             )
           }
@@ -271284,6 +271332,10 @@ function unitName(index, unit) {
 function questionTokens(questions) {
   return Object.entries(questions).reduce((n, [k, q]) => n + tok({ [k]: q }) + 1, 0);
 }
+function chunkFits(job, budget) {
+  const base = tok({ state: { shared: job.sharedState, units: [] }, questions: {} });
+  return (state, questions) => base + tok(state) + questionTokens(questions) + 1 <= budget;
+}
 function assertUniqueKeys(job) {
   const owner = /* @__PURE__ */ new Map();
   const claim3 = (key, who) => {
@@ -271312,8 +271364,7 @@ function expandTextUnits(job, limits) {
     if (RESERVED_KEY.test(key)) return { ok: false, kind: "reserved-question-key", key, message: `question key "${key}" contains the reserved suffix "#c<digits>" that the planner uses for chunk keys; rename it` };
   }
   const budget = limits.contextTokens - limits.envelopeTokens;
-  const base = tok({ state: { shared: job.sharedState, units: [] }, questions: {} });
-  const fits = (state, questions) => base + tok(state) + questionTokens(questions) + 1 <= budget;
+  const fits = chunkFits(job, budget);
   const units = [];
   for (const [source, unit] of job.units.entries()) {
     const splittable = unit.kind === "text" && unit.state !== null && (typeof unit.state === "string" || typeof unit.state === "object");
@@ -271345,16 +271396,51 @@ function planRequests(job, limits) {
   const expanded = expandTextUnits(job, limits);
   return "job" in expanded ? planExpanded(expanded.job, limits) : expanded;
 }
+function scaledContext(limits, request, overflow) {
+  const contextTokens = Math.min(limits.contextTokens, Math.floor(overflow.limitTokens * (request.tokens / overflow.neededTokens) * REPLAN_MARGIN));
+  if (contextTokens <= limits.envelopeTokens) return { ok: false, kind: "request-unsplittable", message: `the scaled budget of ${contextTokens} tokens leaves no room after the ${limits.envelopeTokens} token envelope` };
+  return contextTokens;
+}
+function recutTextRequest(job, request, limits, contextTokens) {
+  const unit = request.units[0];
+  const text2 = unit.state;
+  if (text2.length <= CHUNK_CHARS_MIN) return { ok: false, kind: "request-unsplittable", message: `the text chunk has ${text2.length} chars, which cannot be cut below the ${CHUNK_CHARS_MIN} char floor` };
+  const pieceKey = (key, i) => `${key.replace(/#c(\d+)/g, "#r$1")}.${i + 1}`;
+  const keyed = (i) => Object.fromEntries(Object.entries(unit.questions).map(([k, q]) => [pieceKey(k, i), q]));
+  const fits = chunkFits(job, contextTokens - limits.envelopeTokens);
+  let pieces;
+  for (let size = Math.min(CHUNK_CHARS_MAX, Math.max(CHUNK_CHARS_MIN, Math.floor(text2.length / 2))); ; size = Math.max(CHUNK_CHARS_MIN, Math.floor(size / 2))) {
+    pieces = chunkText(text2, size).map((c) => c.text);
+    if (pieces.every((p, i) => fits(p, keyed(i)))) break;
+    if (size === CHUNK_CHARS_MIN) return { ok: false, kind: "unit-too-large", unitIndex: request.offset, message: `the text chunk does not fit the scaled budget of ${contextTokens} tokens even in pieces of ${CHUNK_CHARS_MIN} chars` };
+  }
+  const taken = /* @__PURE__ */ new Set([...job.units.flatMap((u) => Object.keys(u.questions)), ...Object.keys(job.unsplittable)]);
+  const recutKeys = {};
+  for (let i = 0; i < pieces.length; i++) {
+    for (const key of Object.keys(unit.questions)) {
+      const k = pieceKey(key, i);
+      if (taken.has(k)) return { ok: false, kind: "reserved-question-key", key: k, message: `question key "${k}" of a re-cut text piece is already a question key of the job; rename that question` };
+      recutKeys[k] = key;
+    }
+  }
+  const units = pieces.map((state, i) => ({ kind: unit.kind, state, questions: keyed(i) }));
+  const sub = planExpanded({ sharedState: job.sharedState, units, unsplittable: {} }, { ...limits, contextTokens, maxRequests: units.length }, request.offset);
+  return sub.ok ? { ok: true, requests: sub.requests, recutKeys } : sub;
+}
 function replanRequest(job, request, limits, overflow) {
   if (!(overflow.neededTokens > 0) || !(overflow.limitTokens > 0)) throw new Error(`the overflow counts must be positive, got needed ${overflow.neededTokens} and limit ${overflow.limitTokens}`);
   if (Object.keys(job.unsplittable).length > 0) return { ok: false, kind: "request-unsplittable", message: "the request carries unsplittable questions that travel with every unit, so it cannot be split" };
+  if (request.units.length === 1 && typeof request.units[0].state === "string" && request.units[0].kind === "text") {
+    const cut3 = scaledContext(limits, request, overflow);
+    return typeof cut3 === "number" ? recutTextRequest(job, request, limits, cut3) : cut3;
+  }
   if (request.units.length < 2) return { ok: false, kind: "request-unsplittable", message: "the request holds 1 unit, which cannot be split" };
   const expanded = expandTextUnits(job, limits);
   if (!("job" in expanded)) return expanded;
   const slice = expanded.job.units.slice(request.offset, request.offset + request.units.length);
   if (slice.length !== request.units.length) throw new Error(`request.offset ${request.offset} with ${request.units.length} units is outside the ${expanded.job.units.length} expanded units; limits must be the ones the job was planned with`);
-  const contextTokens = Math.min(limits.contextTokens, Math.floor(overflow.limitTokens * (request.tokens / overflow.neededTokens) * REPLAN_MARGIN));
-  if (contextTokens <= limits.envelopeTokens) return { ok: false, kind: "request-unsplittable", message: `the scaled budget of ${contextTokens} tokens leaves no room after the ${limits.envelopeTokens} token envelope` };
+  const contextTokens = scaledContext(limits, request, overflow);
+  if (typeof contextTokens !== "number") return contextTokens;
   const scaled = { ...limits, contextTokens, maxRequests: slice.length };
   const planSlice = (units, base) => {
     if (units.length === 0) return [];
@@ -272401,6 +272487,11 @@ var init_test_output = __esm({
       // 1-based numbers of the lines that show a failure, found by the caller with its own pattern in the isolated regex worker (SP-22). Absent: the built-in pattern decides. Empty: nothing matched.
       matches: external_exports.array(external_exports.number().int().min(1)).optional(),
       // Lines kept on each side of a failing line.
+      // Why max 100 and default 5 (TRDD-O5NUD6IT): no reason for these two numbers is recorded in the plan (§9),
+      // the card or the git history, so this states only what the code guarantees. Failing lines, each with
+      // `context` lines on both sides, form the failing blocks sent first; windows that touch merge into one
+      // block; every other line goes into the "rest" part, so the whole log is read for any value (E74). 100
+      // limits the window of a single failing line to 201 lines; findings.ts caps its `window` at the same 100.
       context: external_exports.number().int().min(0).max(100).default(5)
     }).superRefine((v, ctx) => {
       if (v.matches === void 0) return;
@@ -272474,6 +272565,11 @@ ${l.lines.slice(r.from - 1, r.to).join("\n")}`).join("\n");
             part,
             failure_class: val(0).choice,
             regression: val(1).noul,
+            // Why Math.round (TRDD-O5NUD6IT): SCORE_POLICY is in expected-value mode, so the score is a float in
+            // [0, 3] (validateScore rejects anything outside), while SEVERITY is indexed by whole levels. The nearest
+            // level is the one the answer is centred on; a half-way score takes the more severe level (Math.round
+            // rounds .5 up); `score` keeps the unrounded value. findings.ts (SP-14) uses the same mapping.
+            // No older recorded reason was found in the plan, the card or the git history.
             severity: { score: sev, level: SEVERITY2[Math.round(sev)] },
             evidence_sufficient: val(3).noul,
             invalid: null,
@@ -272640,13 +272736,14 @@ var init_requirements = __esm({
       build(i) {
         const background = i.context === void 0 ? "" : " Use `shared.context` as background.";
         const criteria2 = Object.fromEntries(CLASSES.map((c) => [c.id, null]));
+        const contextSubject = i.context === void 0 ? "" : "`shared.context` and ";
         const units = textSentences(i.prompt).map((s, k) => ({
           kind: "atomic",
           state: { id: s.id, text: s.text },
           // WHY the wording of `classify label`: the scoring gate was measured through `classify label` in json mode, so the shipped question is that question byte for byte. The sentence text never reaches the instructions (D5): the question names the unit by position.
           questions: {
             [indexKey(KEY4, k)]: choice(
-              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`the content of \`units[${k}]\``, "classify")}${background}`,
+              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
               criteria2
             )
           }
@@ -272796,8 +272893,9 @@ var init_rule_check = __esm({
       validation: DEFAULT_POLICY,
       build(i) {
         const background = i.context === void 0 ? "" : " Use `shared.context` as background.";
+        const subjectNames = i.context === void 0 ? "`shared.phrase`" : "`shared.phrase`, `shared.context`";
         const units = i.rules.map((r, k) => {
-          const subject = `\`shared.phrase\` and the rule in \`units[${k}]\``;
+          const subject = `${subjectNames} and the rule in \`units[${k}]\``;
           return {
             kind: "atomic",
             state: { id: r.id, text: r.text },
@@ -274710,7 +274808,7 @@ var init_fan_out = __esm({
 });
 
 // src/classifiers/system-one-fallback.ts
-import { existsSync as existsSync32, readFileSync as readFileSync43, renameSync as renameSync24, writeFileSync as writeFileSync28 } from "node:fs";
+import { existsSync as existsSync32, readFileSync as readFileSync43, renameSync as renameSync24, writeFileSync as writeFileSync29 } from "node:fs";
 import { join as join44 } from "node:path";
 function isModelNotWorking(e) {
   return e instanceof ClassifierError && !(e instanceof BilledClassifierError) && MODEL_NOT_WORKING.has(e.class);
@@ -274734,7 +274832,7 @@ function readState2() {
 function writeState2(s) {
   try {
     const tmp = `${statePath()}.${process.pid}.tmp`;
-    writeFileSync28(tmp, JSON.stringify(s));
+    writeFileSync29(tmp, JSON.stringify(s));
     renameSync24(tmp, statePath());
   } catch {
   }
@@ -274886,27 +274984,73 @@ async function answerWithSplit(opts) {
   if (e === void 0 || e.status !== 422 || e.needed_tokens === void 0 || e.limit_tokens === void 0) return first;
   const plan = replanRequest(opts.job, opts.request, opts.limits, { neededTokens: e.needed_tokens, limitTokens: e.limit_tokens });
   if (!plan.ok) return first;
+  const baseOf = (key) => opts.baseKeys?.[key] ?? chunkOf(opts.request.units[0])?.keys[key] ?? key;
+  const recutKeys = plan.recutKeys;
   const pieces = [];
   for (const piece of plan.requests) {
     if (opts.stop.aborted) break;
-    pieces.push({ request: piece, result: await answerWithSplit({ ...opts, request: piece }) });
+    const baseKeys = recutKeys === void 0 ? opts.baseKeys : Object.fromEntries(Object.keys(piece.questions).map((k) => [k, baseOf(recutKeys[k])]));
+    pieces.push({ request: piece, result: await answerWithSplit({ ...opts, request: piece, ...baseKeys === void 0 ? {} : { baseKeys } }) });
   }
   const answered = pieces.map((p) => p.result).filter((p) => p.ok);
   if (answered.length === 0) return pieces.find((p) => !p.result.ok)?.result ?? first;
-  const answers = {};
   const usage = { input_tokens: 0, output_tokens: 0 };
   for (const p of answered) {
-    Object.assign(answers, p.reply.answers);
     usage.input_tokens += p.reply.usage.input_tokens;
     usage.output_tokens += p.reply.usage.output_tokens;
   }
+  const answers = {};
+  if (recutKeys === void 0) for (const p of answered) Object.assign(answers, p.reply.answers);
+  else Object.assign(answers, foldPieces(opts.request.questions, recutKeys, answered.map((p) => p.reply.answers), (key) => opts.defaultLabels[baseOf(key)]));
   const failedPieces = pieces.flatMap((p) => p.result.ok ? p.result.failedPieces ?? [] : [{ reason: p.result.reason, questions: Object.keys(p.request.questions).length }]);
   const head = answered[0];
   return { ok: true, reply: { model: head.reply.model, usage, cost: { costUsd: 0, cost_estimated: false }, answers }, notice: head.notice, ...failedPieces.length === 0 ? {} : { failedPieces } };
 }
+function rankable(raw, q) {
+  if (typeof raw !== "object" || raw === null) return void 0;
+  const r = raw;
+  const num3 = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
+  const confidence = num3(r.confidence);
+  const conf2 = confidence === void 0 ? {} : { confidence };
+  if (q.type === "noul") {
+    const noul2 = num3(r.noul);
+    return noul2 === void 0 ? void 0 : { type: "noul", noul: noul2, ...conf2 };
+  }
+  if (q.type === "score") {
+    const score2 = num3(r.score);
+    return score2 === void 0 ? void 0 : { type: "score", score: score2, ...conf2 };
+  }
+  return typeof r.choice === "string" && Object.hasOwn(q.criteria, r.choice) ? { type: "choice", choice: r.choice, tie: false, ...conf2 } : void 0;
+}
+function foldPieces(questions, pieceKeys, replies, defaultOf) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const reply of replies) {
+    for (const [pieceKey, raw] of Object.entries(reply)) {
+      if (!Object.hasOwn(pieceKeys, pieceKey)) continue;
+      const key = pieceKeys[pieceKey];
+      byKey.set(key, [...byKey.get(key) ?? [], raw]);
+    }
+  }
+  const out = {};
+  for (const [key, raws] of byKey) {
+    const q = questions[key];
+    const ranked = raws.flatMap((raw) => {
+      const answer = rankable(raw, q);
+      return answer === void 0 ? [] : [{ part: { answer }, raw }];
+    });
+    if (ranked.length === 0) {
+      out[key] = raws[0];
+      continue;
+    }
+    const best2 = mergeChunks(ranked.map((x) => x.part), q.type === "choice" ? defaultLabel(Object.keys(q.criteria), defaultOf(key)) : void 0);
+    out[key] = ranked[best2.best_chunk - 1].raw;
+  }
+  return out;
+}
 var init_split_on_overflow = __esm({
   "src/classifiers/l2/split-on-overflow.ts"() {
     "use strict";
+    init_chunker();
     init_planner();
   }
 });
@@ -275353,7 +275497,7 @@ var init_redact = __esm({
 });
 
 // src/classifiers/l2/report.ts
-import { accessSync, constants, mkdirSync as mkdirSync30, renameSync as renameSync25, rmSync as rmSync6, writeFileSync as writeFileSync29 } from "node:fs";
+import { accessSync, constants, mkdirSync as mkdirSync31, renameSync as renameSync25, rmSync as rmSync6, writeFileSync as writeFileSync30 } from "node:fs";
 import { randomUUID as randomUUID4 } from "node:crypto";
 import { join as join46 } from "node:path";
 function timestamp(d) {
@@ -275364,7 +275508,7 @@ function timestamp(d) {
 function prepareReportDir(outputDir) {
   const dir = outputDir || defaultOutputDir();
   try {
-    mkdirSync30(dir, { recursive: true });
+    mkdirSync31(dir, { recursive: true });
     accessSync(dir, constants.W_OK);
   } catch (e) {
     throw new Error(`cannot write report directory ${dir}: ${e.message}`, { cause: e });
@@ -275373,7 +275517,7 @@ function prepareReportDir(outputDir) {
 }
 function writeAtomic(path2, text2) {
   const tmp = `${path2}.tmp.${process.pid}`;
-  writeFileSync29(tmp, text2, "utf-8");
+  writeFileSync30(tmp, text2, "utf-8");
   try {
     renameSync25(tmp, path2);
   } catch (e) {
@@ -276226,7 +276370,7 @@ __export(run_decision_exports, {
   runDecision: () => runDecision,
   runDecisionArgv: () => runDecisionArgv
 });
-import { writeFileSync as writeFileSync30 } from "node:fs";
+import { writeFileSync as writeFileSync31 } from "node:fs";
 import { dirname as dirname15, resolve as resolve17 } from "node:path";
 function refusing(code2, f) {
   try {
@@ -276313,7 +276457,7 @@ async function run(spec17, req, deps, redactor, safe) {
     let saveFailed = false;
     for (const f of rendered?.files ?? []) {
       try {
-        writeFileSync30(f.path, safe(f.content));
+        writeFileSync31(f.path, safe(f.content));
         saved.push(f.path);
       } catch (e) {
         saveFailed = true;
@@ -276355,6 +276499,7 @@ async function run(spec17, req, deps, redactor, safe) {
       const answered = await answerWithSplit({
         job: built,
         limits: localPlanLimits,
+        defaultLabels,
         request,
         stop,
         ask: (r) => answerWithLocalDecider({
@@ -276542,6 +276687,7 @@ async function run(spec17, req, deps, redactor, safe) {
       const local = await answerWithSplit({
         job: built,
         limits: remotePlanLimits,
+        defaultLabels,
         request,
         stop,
         ask: (r) => answerWithLocalDecider({
@@ -277389,7 +277535,7 @@ import {
   fchmodSync,
   fstatSync as fstatSync3,
   lstatSync as lstatSync4,
-  mkdirSync as mkdirSync31,
+  mkdirSync as mkdirSync32,
   openSync as openSync7,
   renameSync as renameSync26,
   writeSync as writeSync3
@@ -277397,7 +277543,7 @@ import {
 import { join as join49 } from "node:path";
 function writeStatsJsonGuarded(dir, fileName, json2) {
   if (process.platform === "win32") {
-    mkdirSync31(dir, { recursive: true });
+    mkdirSync32(dir, { recursive: true });
     const tmp2 = join49(dir, fileName + ".tmp");
     const fd2 = openSync7(tmp2, "w", 384);
     try {
@@ -277417,7 +277563,7 @@ function writeStatsJsonGuarded(dir, fileName, json2) {
   if (lst?.isSymbolicLink()) {
     throw new Error(`Stats directory ${dir} is a symlink; refusing to follow.`);
   }
-  mkdirSync31(dir, { recursive: true, mode: 448 });
+  mkdirSync32(dir, { recursive: true, mode: 448 });
   const dirFd = openSync7(dir, constants3.O_RDONLY | constants3.O_DIRECTORY | constants3.O_NOFOLLOW);
   try {
     const uid = process.getuid();
@@ -277879,7 +278025,7 @@ var init_unionfind = __esm({
 // src/cluster/checkpoint.ts
 import Database2 from "better-sqlite3";
 import { dirname as dirname16 } from "node:path";
-import { mkdirSync as mkdirSync32 } from "node:fs";
+import { mkdirSync as mkdirSync33 } from "node:fs";
 var SCHEMA, CheckpointDB;
 var init_checkpoint = __esm({
   "src/cluster/checkpoint.ts"() {
@@ -277911,7 +278057,7 @@ CREATE INDEX IF NOT EXISTS llm_calls_batch_hash ON llm_calls(batch_hash);
         this.db = db;
       }
       static open(path2) {
-        mkdirSync32(dirname16(path2), { recursive: true });
+        mkdirSync33(dirname16(path2), { recursive: true });
         const db = new Database2(path2);
         db.pragma("journal_mode = WAL");
         db.pragma("synchronous = NORMAL");
@@ -278004,9 +278150,9 @@ CREATE INDEX IF NOT EXISTS llm_calls_batch_hash ON llm_calls(batch_hash);
 import { spawnSync as spawnSync3 } from "node:child_process";
 import {
   existsSync as existsSync37,
-  mkdirSync as mkdirSync33,
+  mkdirSync as mkdirSync34,
   readFileSync as readFileSync48,
-  writeFileSync as writeFileSync31,
+  writeFileSync as writeFileSync32,
   statSync as statSync23
 } from "node:fs";
 import { dirname as dirname17, join as join52 } from "node:path";
@@ -278063,11 +278209,11 @@ function computeEmbeddings(items, opts) {
   if (!existsSync37(opts.scriptPath)) {
     throw new Error(`compute_embeddings.py not found: ${opts.scriptPath}`);
   }
-  mkdirSync33(opts.outDir, { recursive: true });
+  mkdirSync34(opts.outDir, { recursive: true });
   const inputPath = join52(opts.outDir, "_embedding_sentences.txt");
   const outputPath = join52(opts.outDir, "embeddings.f32");
   const clean = opts.sentenceClean ?? defaultSentenceClean;
-  writeFileSync31(
+  writeFileSync32(
     inputPath,
     items.map((it) => clean(it.sentence)).join("\n") + "\n",
     { encoding: "utf-8" }
@@ -279058,10 +279204,10 @@ var init_policy = __esm({
 
 // src/cluster/cluster_synonyms_main.ts
 import {
-  mkdirSync as mkdirSync34,
+  mkdirSync as mkdirSync35,
   readFileSync as readFileSync49,
   readdirSync as readdirSync15,
-  writeFileSync as writeFileSync32,
+  writeFileSync as writeFileSync33,
   existsSync as existsSync38,
   renameSync as renameSync27
 } from "node:fs";
@@ -279088,7 +279234,7 @@ function loadPolicy(policyFile) {
   return resolvePolicy(valid);
 }
 function gateOutputDir(outputDir, policy, resuming) {
-  mkdirSync34(outputDir, { recursive: true });
+  mkdirSync35(outputDir, { recursive: true });
   if (resuming) return;
   const existing = readdirSync15(outputDir).filter((n) => !n.startsWith("."));
   const collisions = existing.filter(
@@ -279145,7 +279291,7 @@ function reductionPct(itemsIn, clustersOut) {
 }
 function writeJsonAtomic2(path2, value) {
   const tmp = path2 + ".tmp";
-  writeFileSync32(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
+  writeFileSync33(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf-8" });
   renameSync27(tmp, path2);
 }
 function writeClustersJsonl(path2, itemsById, partition) {
@@ -279160,7 +279306,7 @@ function writeClustersJsonl(path2, itemsById, partition) {
       lines.push(JSON.stringify({ id: it.id, cluster_id: clusterId, sentence: it.sentence }));
     }
   }
-  writeFileSync32(path2, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
+  writeFileSync33(path2, lines.join("\n") + (lines.length ? "\n" : ""), { encoding: "utf-8" });
 }
 function buildSummary(itemsById, partition, profileName, canonicalsOverride) {
   const clusters = [];
@@ -279389,7 +279535,7 @@ var init_cluster_synonyms_main = __esm({
 
 // src/cluster/preflight_benchmark.ts
 import { createHash as createHash16 } from "node:crypto";
-import { mkdirSync as mkdirSync35, readFileSync as readFileSync50, writeFileSync as writeFileSync33, existsSync as existsSync39, renameSync as renameSync28 } from "node:fs";
+import { mkdirSync as mkdirSync36, readFileSync as readFileSync50, writeFileSync as writeFileSync34, existsSync as existsSync39, renameSync as renameSync28 } from "node:fs";
 import { join as join54, dirname as dirname18 } from "node:path";
 function profileHash(profileFingerprint) {
   return createHash16("sha256").update(profileFingerprint).digest("hex").slice(0, 16);
@@ -279420,9 +279566,9 @@ function readCache(path2) {
   }
 }
 function writeCache(path2, rec) {
-  mkdirSync35(dirname18(path2), { recursive: true });
+  mkdirSync36(dirname18(path2), { recursive: true });
   const tmp = `${path2}.tmp.${process.pid}`;
-  writeFileSync33(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
+  writeFileSync34(tmp, JSON.stringify(rec, null, 2) + "\n", "utf8");
   renameSync28(tmp, path2);
 }
 function validatePreflightResponse(raw) {
@@ -279555,6 +279701,14 @@ function stripInlineImageData(text2) {
   if (!text2.includes("data:image")) return text2;
   return text2.replace(DATA_URI_IMAGE_RE, IMAGE_OMITTED_MARKER);
 }
+function redactOrThrow(text2) {
+  const r = safeRedact(text2);
+  if (!r.ok) throw new TranscriptRedactionError(r.reason ?? "redactor reported failure");
+  return r.redacted;
+}
+function scrubText(text2) {
+  return redactOrThrow(stripInlineImageData(text2));
+}
 function isMachineGeneratedUserTurn(text2) {
   const trimmed = text2.trim();
   if (trimmed === "") return false;
@@ -279600,7 +279754,13 @@ async function readTranscript(filePath, options = {}) {
         linesSkippedMalformed++;
         continue;
       }
-      const turn = extractTurn(parsed, pruneLevel, truncateLines);
+      let turn;
+      try {
+        turn = extractTurn(parsed, pruneLevel, truncateLines);
+      } catch (e) {
+        if (e instanceof TranscriptRedactionError) throw new TranscriptRedactionError(e.reason, turns.length, linesRead);
+        throw e;
+      }
       if (turn === null) continue;
       turns.push(turn);
       const serialized = JSON.stringify(turn);
@@ -279613,6 +279773,7 @@ async function readTranscript(filePath, options = {}) {
       }
     }
   } finally {
+    stream.destroy();
     if (strippedOut) {
       strippedOut.end();
       await once(strippedOut, "finish");
@@ -279649,7 +279810,7 @@ function extractQueueOperationTurn(d) {
   if (d.operation !== "enqueue") return null;
   const content = d.content;
   if (typeof content !== "string" || content.trim() === "") return null;
-  const text2 = stripInlineImageData(content);
+  const text2 = scrubText(content);
   if (isMachineGeneratedUserTurn(text2)) return null;
   return {
     role: "user",
@@ -279670,7 +279831,7 @@ function extractMessageTurn(d, role, pruneLevel, truncateLines) {
   const toolCalls = [];
   const errors = [];
   if (typeof content === "string") {
-    if (content.trim() !== "") textParts.push(stripInlineImageData(content));
+    if (content.trim() !== "") textParts.push(scrubText(content));
   } else if (Array.isArray(content)) {
     for (const block of content) {
       extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, errors);
@@ -279697,7 +279858,7 @@ function extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, er
   if (block === null || typeof block !== "object") return;
   const b = block;
   if (b.type === "text") {
-    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(stripInlineImageData(b.text));
+    if (typeof b.text === "string" && b.text.trim() !== "") textParts.push(scrubText(b.text));
     return;
   }
   if (b.type === "image") {
@@ -279707,21 +279868,23 @@ function extractBlock(block, pruneLevel, truncateLines, textParts, toolCalls, er
   if (b.type === "thinking") {
     if (pruneLevel === "aggressive") return;
     if (typeof b.thinking === "string" && b.thinking.trim() !== "") {
-      textParts.push(`[thinking] ${stripInlineImageData(b.thinking)}`);
+      textParts.push(`[thinking] ${scrubText(b.thinking)}`);
     }
     return;
   }
   if (b.type === "tool_use") {
-    const name = typeof b.name === "string" ? b.name : "unknown_tool";
+    const name = typeof b.name === "string" ? scrubText(b.name) : "unknown_tool";
     toolCalls.push({ name, argSummary: summarizeToolInput(b.input) });
     return;
   }
   if (b.type === "tool_result") {
-    const resultText = toolResultText(b.content);
     const isError = b.is_error === true;
+    if (pruneLevel === "aggressive" && !isError) return;
+    const resultText = toolResultText(b.content);
     if (isError) {
       errors.push(
-        resultText.trim() !== "" ? resultText : `(tool_use_id ${String(b.tool_use_id ?? "unknown")} reported an error with no message)`
+        resultText.trim() !== "" ? resultText : `(tool_use_id ${scrubText(String(b.tool_use_id ?? "unknown"))} reported an error with no message)`
+        // TRDD-G49XPDNI: sent to the model, so scrubbed
       );
     }
     if (pruneLevel === "aggressive") {
@@ -279742,13 +279905,13 @@ function extractSystemTurn(d) {
     const err3 = d.error;
     if (err3 !== null && typeof err3 === "object") {
       const msg = err3.message;
-      if (typeof msg === "string" && msg.trim() !== "") errors.push(stripInlineImageData(msg));
+      if (typeof msg === "string" && msg.trim() !== "") errors.push(scrubText(msg));
     }
   }
   const hookErrors = d.hookErrors;
   if (Array.isArray(hookErrors)) {
     for (const e of hookErrors) {
-      if (typeof e === "string" && e.trim() !== "") errors.push(stripInlineImageData(e));
+      if (typeof e === "string" && e.trim() !== "") errors.push(scrubText(e));
     }
   }
   if (errors.length === 0) return null;
@@ -279763,14 +279926,14 @@ function extractSystemTurn(d) {
   };
 }
 function toolResultText(content) {
-  if (typeof content === "string") return stripInlineImageData(content);
+  if (typeof content === "string") return scrubText(content);
   if (Array.isArray(content)) {
     return content.map((item3) => {
       if (item3 === null || typeof item3 !== "object") return "";
       const it = item3;
       if (it.type === "text") {
         const t = it.text;
-        return typeof t === "string" ? stripInlineImageData(t) : "";
+        return typeof t === "string" ? scrubText(t) : "";
       }
       if (it.type === "image") return IMAGE_OMITTED_MARKER;
       return "";
@@ -279789,17 +279952,16 @@ function headTailTruncate(text2, n) {
 function summarizeToolInput(input8) {
   if (input8 === void 0) return "";
   if (input8 === null || typeof input8 !== "object") {
-    return truncateOneLine(String(input8), ARG_SUMMARY_MAX_LEN);
+    return truncateOneLine(scrubText(String(input8)), ARG_SUMMARY_MAX_LEN);
   }
   const entries2 = Object.entries(input8).map(([key, value]) => {
     let rendered;
     if (typeof value === "string" && value.length > ARG_VALUE_TRUNCATE_AT) {
-      const stripped = stripInlineImageData(value);
-      rendered = `"${stripped.slice(0, ARG_VALUE_TRUNCATE_AT)}\u2026(${value.length} chars)"`;
+      rendered = `"${scrubText(value).slice(0, ARG_VALUE_TRUNCATE_AT)}\u2026(${value.length} chars)"`;
     } else {
-      rendered = JSON.stringify(typeof value === "string" ? stripInlineImageData(value) : value);
+      rendered = JSON.stringify(value, (_k, v) => typeof v === "string" ? scrubText(v) : v);
     }
-    return `${key}=${rendered}`;
+    return redactOrThrow(`${key}=${rendered}`);
   });
   return truncateOneLine(entries2.join(", "), ARG_SUMMARY_MAX_LEN);
 }
@@ -279807,15 +279969,25 @@ function truncateOneLine(s, max) {
   const oneLine = s.replace(/\s+/g, " ").trim();
   return oneLine.length > max ? `${oneLine.slice(0, max - 1)}\u2026` : oneLine;
 }
-var DEFAULT_MODERATE_TRUNCATE_LINES, ARG_SUMMARY_MAX_LEN, ARG_VALUE_TRUNCATE_AT, IMAGE_OMITTED_MARKER, DATA_URI_IMAGE_RE, JANITOR_HEARTBEAT_FIRST_LINE, NO_VISIBLE_OUTPUT_MARKER, SKILL_LOAD_FIRST_LINE_PREFIX, WHOLLY_MACHINE_TAG_PAIRS;
+var DEFAULT_MODERATE_TRUNCATE_LINES, ARG_SUMMARY_MAX_LEN, ARG_VALUE_TRUNCATE_AT, IMAGE_OMITTED_MARKER, DATA_URI_IMAGE_RE, TranscriptRedactionError, JANITOR_HEARTBEAT_FIRST_LINE, NO_VISIBLE_OUTPUT_MARKER, SKILL_LOAD_FIRST_LINE_PREFIX, WHOLLY_MACHINE_TAG_PAIRS;
 var init_transcript = __esm({
   "src/session_summary/transcript.ts"() {
     "use strict";
+    init_intake();
     DEFAULT_MODERATE_TRUNCATE_LINES = 20;
     ARG_SUMMARY_MAX_LEN = 160;
     ARG_VALUE_TRUNCATE_AT = 80;
     IMAGE_OMITTED_MARKER = "[image omitted]";
     DATA_URI_IMAGE_RE = /data:image\/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+/g;
+    TranscriptRedactionError = class extends Error {
+      constructor(reason2, turnIndex, line) {
+        super(
+          `secret redaction failed${turnIndex === void 0 ? "" : ` at turn index ${turnIndex} (transcript line ${line})`}: ${reason2}. Nothing was sent to any model; the transcript is not summarized.`
+        );
+        this.reason = reason2;
+        this.name = "TranscriptRedactionError";
+      }
+    };
     JANITOR_HEARTBEAT_FIRST_LINE = "[janitor-heartbeat]";
     NO_VISIBLE_OUTPUT_MARKER = "[Your previous response had no visible output. Please continue and produce a user-visible response.]";
     SKILL_LOAD_FIRST_LINE_PREFIX = "Base directory for this skill: ";
@@ -281353,7 +281525,7 @@ var init_chunker2 = __esm({
 });
 
 // src/session_summary/driver.ts
-import { statSync as statSync24, readFileSync as readFileSync51, writeFileSync as writeFileSync34, mkdirSync as mkdirSync36, renameSync as renameSync29, createReadStream as createReadStream4 } from "node:fs";
+import { statSync as statSync24, readFileSync as readFileSync51, writeFileSync as writeFileSync35, mkdirSync as mkdirSync37, renameSync as renameSync29, createReadStream as createReadStream4 } from "node:fs";
 import { createHash as createHash17 } from "node:crypto";
 import { dirname as dirname19, resolve as resolve19 } from "node:path";
 function hedgeAfterMs() {
@@ -281456,9 +281628,9 @@ async function loadCheckpoint(path2, identity, currentBytes) {
   return { checkpoint: parsed, grew: currentBytes > storedBytes };
 }
 function saveCheckpoint(path2, checkpoint) {
-  mkdirSync36(dirname19(path2), { recursive: true });
+  mkdirSync37(dirname19(path2), { recursive: true });
   const tmp = `${path2}.tmp`;
-  writeFileSync34(tmp, JSON.stringify(checkpoint, null, 2), "utf-8");
+  writeFileSync35(tmp, JSON.stringify(checkpoint, null, 2), "utf-8");
   renameSync29(tmp, path2);
 }
 function shrinkBudgetOnOverflow(current) {
@@ -283969,8 +284141,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
       const isPriceCeilingRefusal = errMsg.startsWith(PRICE_CEILING_REFUSAL_PREFIX);
       const isIronRuleRefusal = errMsg.startsWith(IRON_RULE_REFUSAL_PREFIX);
       const deterministic4xx = /\bAPI error (402|403|404|410)\b/.test(errMsg);
-      const requestOrAuth4xx = callStatus === 400 || callStatus === 401;
-      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !requestOrAuth4xx && failureOf(err3)?.final !== "stop" && options.localFallback !== true)
+      const nonOutage4xx = callStatus !== void 0 && callStatus >= 400 && callStatus < 500 && callStatus !== 408 && callStatus !== 429;
+      if (payment === null && !isPriceCeilingRefusal && !isIronRuleRefusal && !deterministic4xx && !nonOutage4xx && failureOf(err3)?.final !== "stop" && options.localFallback !== true)
         recordServiceFailure();
       genericAttempts++;
       const currentModelId = options.model || backend.model || "unknown";
@@ -284009,7 +284181,8 @@ async function chatCompletionWithRetry(messages, options, deps) {
         continue;
       }
       if (payment === null && genericAttempts <= MAX_TRUNCATION_RETRIES && // YG72CYY7: a verdict stamped at the first failure (TLS, spent ECONNREFUSED/504 budget) is read, never re-derived; retrying here is the multiplier it ends.
-      failureOf(err3)?.final === void 0 && !stopped() && !deterministic4xx && callStatus !== 401 && !isPriceCeilingRefusal && !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
+      failureOf(err3)?.final === void 0 && !stopped() && !deterministic4xx && callStatus !== 401 && // GitHub-15 item 2 (issue #15): no same-model retry for 405 and 422, the statuses the issue observed repeating as permanent refusals. Deliberately NOT every 4xx: a default request pins no provider (body.provider is set only from options.provider, the high-quality-scan path), so a same-model retry can be load-balanced to another upstream provider; for every other 4xx (409, 413, ...) there is no evidence either way, so today's retries stay. 400 keeps its owner-ruled retries (TRDD-YG72CYY7); 408/429 are outages and retry; 401 and 402/403/404/410 are gated separately.
+      callStatus !== 405 && callStatus !== 422 && !isPriceCeilingRefusal && !isIronRuleRefusal && // TRDD-VAORGKVF: same model, same refusal
       unavailableKind !== "daily-quota") {
         const retryModel = options.model || backend.model;
         process.stderr.write(
@@ -284753,7 +284926,7 @@ var init_server_commands = __esm({
 });
 
 // src/model-reconcile.ts
-import { mkdirSync as mkdirSync37, readFileSync as readFileSync52, renameSync as renameSync30, writeFileSync as writeFileSync35 } from "node:fs";
+import { mkdirSync as mkdirSync38, readFileSync as readFileSync52, renameSync as renameSync30, writeFileSync as writeFileSync36 } from "node:fs";
 import { join as join56 } from "node:path";
 function computeReconcile(input8) {
   const {
@@ -284832,9 +285005,9 @@ function readLastReconcileMs() {
 function writeLastReconcileMs(nowMs) {
   try {
     const path2 = reconcileStateFilePath();
-    mkdirSync37(getConfigDir(), { recursive: true });
+    mkdirSync38(getConfigDir(), { recursive: true });
     const tmp = `${path2}.tmp`;
-    writeFileSync35(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
+    writeFileSync36(tmp, JSON.stringify({ lastRunMs: nowMs }), { encoding: "utf-8", mode: 384 });
     renameSync30(tmp, path2);
   } catch {
   }
@@ -284920,7 +285093,7 @@ var init_model_reconcile = __esm({
 
 // src/benchmark/free-fitness-ledger.ts
 import { createHash as createHash19 } from "node:crypto";
-import { existsSync as existsSync41, mkdirSync as mkdirSync38, readFileSync as readFileSync53, renameSync as renameSync31, writeFileSync as writeFileSync36 } from "node:fs";
+import { existsSync as existsSync41, mkdirSync as mkdirSync39, readFileSync as readFileSync53, renameSync as renameSync31, writeFileSync as writeFileSync37 } from "node:fs";
 import { join as join57 } from "node:path";
 function fitnessHash(payload) {
   return createHash19("sha256").update(JSON.stringify(payload)).digest("hex").slice(0, 12);
@@ -285058,7 +285231,7 @@ var init_default_profiles = __esm({
 });
 
 // src/dynamic-candidates.ts
-import { readFileSync as readFileSync54, writeFileSync as writeFileSync37, renameSync as renameSync32, existsSync as existsSync42, mkdirSync as mkdirSync39 } from "node:fs";
+import { readFileSync as readFileSync54, writeFileSync as writeFileSync38, renameSync as renameSync32, existsSync as existsSync42, mkdirSync as mkdirSync40 } from "node:fs";
 import { join as join58, dirname as dirname20 } from "node:path";
 function candidateQueuePath() {
   return join58(getConfigDir(), "dynamic-candidates.json");
@@ -285122,7 +285295,7 @@ var init_dynamic_candidates = __esm({
 });
 
 // src/benchmark/daily-spend.ts
-import { readFileSync as readFileSync55, writeFileSync as writeFileSync38, renameSync as renameSync33, existsSync as existsSync43, mkdirSync as mkdirSync40 } from "node:fs";
+import { readFileSync as readFileSync55, writeFileSync as writeFileSync39, renameSync as renameSync33, existsSync as existsSync43, mkdirSync as mkdirSync41 } from "node:fs";
 import { join as join59, dirname as dirname21 } from "node:path";
 function dailySpendPath() {
   return join59(getConfigDir(), "paid-benchmark-spend.json");
@@ -285167,7 +285340,7 @@ var init_daily_spend = __esm({
 });
 
 // src/default-profiles-runner.ts
-import { readFileSync as readFileSync56, rmSync as rmSync7, writeFileSync as writeFileSync39 } from "node:fs";
+import { readFileSync as readFileSync56, rmSync as rmSync7, writeFileSync as writeFileSync40 } from "node:fs";
 import { join as join60 } from "node:path";
 function backgroundUpdateLockPathFor(profile) {
   return join60(getConfigDir(), `background-update-${profile}.lock`);
@@ -285204,7 +285377,7 @@ function lastUpdateFinishedMs(profile) {
   return Math.max(record2?.lastBenchmarkAt ?? 0, record2?.lastMaintainedAt ?? 0);
 }
 function markProfileUpdateRequested(profile, nowMs) {
-  writeFileSync39(backgroundUpdateRequestPathFor(profile), String(nowMs), "utf-8");
+  writeFileSync40(backgroundUpdateRequestPathFor(profile), String(nowMs), "utf-8");
 }
 function profileUpdateRequestPending(profile) {
   let raw;
@@ -285567,9 +285740,9 @@ var init_foreground_repair = __esm({
 // src/rule-install.ts
 import {
   existsSync as existsSync44,
-  mkdirSync as mkdirSync41,
+  mkdirSync as mkdirSync42,
   readFileSync as readFileSync58,
-  writeFileSync as writeFileSync40,
+  writeFileSync as writeFileSync41,
   renameSync as renameSync34,
   realpathSync as realpathSync9,
   unlinkSync as unlinkSync6
@@ -285674,8 +285847,8 @@ function installUsageRule(opts = {}) {
   }
   const tmp = dest + ".tmp." + process.pid + "." + randomBytes4(4).toString("hex");
   try {
-    mkdirSync41(rulesDir, { recursive: true });
-    writeFileSync40(tmp, desired, "utf-8");
+    mkdirSync42(rulesDir, { recursive: true });
+    writeFileSync41(tmp, desired, "utf-8");
     renameSync34(tmp, dest);
   } catch (e) {
     try {
@@ -286495,8 +286668,8 @@ __export(index_exports, {
 });
 import {
   readFileSync as readFileSync59,
-  writeFileSync as writeFileSync41,
-  mkdirSync as mkdirSync42,
+  writeFileSync as writeFileSync42,
+  mkdirSync as mkdirSync43,
   existsSync as existsSync45,
   renameSync as renameSync35,
   statSync as statSync27,
@@ -286955,7 +287128,7 @@ function waitForRequestsDrained(timeoutMs = 12e4) {
 }
 function writeLogEntry(entry) {
   try {
-    mkdirSync42(LOG_DIR, { recursive: true });
+    mkdirSync43(LOG_DIR, { recursive: true });
     appendFileSync6(LOG_FILE, JSON.stringify(entry) + "\n");
   } catch {
     process.stderr.write(`[llm-externalizer] Failed to write log entry
@@ -287192,7 +287365,7 @@ function canonicalTimestamp(date5 = /* @__PURE__ */ new Date()) {
 }
 function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir) {
   const dir = outputDir || defaultOutputDir();
-  mkdirSync42(dir, { recursive: true });
+  mkdirSync43(dir, { recursive: true });
   const now4 = /* @__PURE__ */ new Date();
   const ts2 = canonicalTimestamp(now4);
   const shortId = randomUUID5().slice(0, 6);
@@ -287213,7 +287386,7 @@ function saveResponse(toolName, responseText, meta3, overrideFilename, outputDir
   lines.push("", "---", "", responseText);
   const tmpPath = filepath + ".tmp";
   try {
-    writeFileSync41(tmpPath, lines.join("\n"), "utf-8");
+    writeFileSync42(tmpPath, lines.join("\n"), "utf-8");
     renameSync35(tmpPath, filepath);
   } catch (err3) {
     try {
@@ -289394,7 +289567,7 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
                 };
               }
               try {
-                writeFileSync41(absPath, jsonText, "utf-8");
+                writeFileSync42(absPath, jsonText, "utf-8");
               } catch (err3) {
                 return {
                   content: [
@@ -289467,9 +289640,9 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
           try {
             const raw = readFileSync59(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultScratchDir();
-            mkdirSync42(targetDir, { recursive: true });
+            mkdirSync43(targetDir, { recursive: true });
             const copyPath = join62(targetDir, "settings_edit.yaml");
-            writeFileSync41(copyPath, raw, "utf-8");
+            writeFileSync42(copyPath, raw, "utf-8");
             return {
               content: [{ type: "text", text: `${summary}
 
@@ -291579,7 +291752,7 @@ __export(server_exports, {
 });
 import { randomBytes as randomBytes5, randomUUID as randomUUID6 } from "node:crypto";
 import { totalmem as totalmem11 } from "node:os";
-import { existsSync as existsSync46, mkdirSync as mkdirSync43, readFileSync as readFileSync60, rmdirSync as rmdirSync7, statSync as statSync28 } from "node:fs";
+import { existsSync as existsSync46, mkdirSync as mkdirSync44, readFileSync as readFileSync60, rmdirSync as rmdirSync7, statSync as statSync28 } from "node:fs";
 import { createServer as createServer2, request as httpRequest } from "node:http";
 function readBody(req) {
   return new Promise((resolve23, reject) => {
@@ -291642,6 +291815,18 @@ async function runBroker(o) {
   let loading = null;
   const govLeases = /* @__PURE__ */ new Set();
   const govWaiting = /* @__PURE__ */ new Set();
+  const govWait = /* @__PURE__ */ new Map();
+  const freshGovWait = (job) => {
+    const w = job.state === "queued" ? govWait.get(job.key) : void 0;
+    return w !== void 0 && Date.now() - w.at <= GOV_WAIT_FRESH_MS ? w.reason : void 0;
+  };
+  const govTold = /* @__PURE__ */ new WeakSet();
+  const noteGovWait = (key, reason2) => {
+    const prev = govWait.get(key);
+    const first = prev === void 0 || Date.now() - prev.at > GOV_WAIT_FRESH_MS;
+    govWait.set(key, { reason: reason2.replace(/[^\x20-\x7e]/g, "?"), at: Date.now() });
+    if (first) for (const j of sched.allQueued(key)) for (const wake of [...waiters.get(j.id) ?? []]) wake();
+  };
   let govTimer = null;
   let deniedSince = null;
   const govRetry = (rank) => {
@@ -291672,22 +291857,25 @@ async function runBroker(o) {
       const same = snapshot().waiters.filter((w) => w.kind === req.kind);
       rank = Math.max(same.findIndex((w) => w.holder.pid === process.pid), 0);
       if (waitBehindHead(same, rank, Date.now())) {
+        noteGovWait(key, "requests of other llm-ext processes are queued ahead of this one");
         govRetry(rank);
         return null;
       }
     }
-    const { lease, denial } = attemptLease(req);
+    const { lease, denial, reason: reason2 } = attemptLease(req);
     if (!lease) {
       if (req.kind === "load" && denial !== null && denial !== "stale") {
         const why = `${key.split("\0")[0]}: ${denial}`;
         if (why !== loadDenial) o.log(`model '${key.split("\0")[0]}' waits for a load grant (${denialText(denial, req.alone === true ? req.minBytes ?? 0 : req.bytes ?? 0)}); the loaded server keeps serving its queue`);
         loadDenial = why;
       }
+      if (reason2 !== null) noteGovWait(key, reason2);
       govWaiting.add(req.kind);
       govRetry(rank);
       return null;
     }
     if (req.kind === "load") loadDenial = null;
+    govWait.delete(key);
     govWaiting.delete(req.kind);
     govLeases.add(lease);
     return lease;
@@ -291781,7 +291969,7 @@ async function runBroker(o) {
   };
   const token = randomBytes5(24).toString("hex");
   const tokenBuf = Buffer.from(token);
-  mkdirSync43(o.dir, { recursive: true });
+  mkdirSync44(o.dir, { recursive: true });
   const notify = (job) => {
     for (const w of waiters.get(job.id) ?? []) w();
     waiters.delete(job.id);
@@ -292446,7 +292634,8 @@ async function runBroker(o) {
       job.pollers++;
       job.lastPolledAt = Date.now();
       try {
-        if (job.state === "queued" || job.state === "held" || job.state === "running") {
+        const toldAtOnce = freshGovWait(job) !== void 0 && !govTold.has(job);
+        if (!toldAtOnce && (job.state === "queued" || job.state === "held" || job.state === "running")) {
           await new Promise((resolve23) => {
             const timer = setTimeout(done, waitMs);
             function done() {
@@ -292469,6 +292658,11 @@ async function runBroker(o) {
         const h = { [STATE_HEADER]: job.state };
         if (job.dispatchedAt !== void 0) h[DISPATCHED_HEADER] = String(job.dispatchedAt);
         if (job.state === "held") h[HELD_HEADER] = "1";
+        const waitReason = freshGovWait(job);
+        if (waitReason !== void 0) {
+          h[GOVERNOR_WAIT_HEADER] = waitReason;
+          govTold.add(job);
+        }
         return reply(res, 204, void 0, h);
       }
       res.once("finish", () => jobs.delete(job.id));
@@ -292591,7 +292785,7 @@ function slotSizing(argv, logFile) {
   const threads = /n_threads = \d+/.exec(log)?.[0] ?? "llama.cpp thread line not in the log";
   return `-np ${flag("-np")} -c ${flag("-c")} -t ${flag("-t")}; ${slots}; ${threads}; ${kv}`;
 }
-var DEFAULT_EXEC_TIMEOUT_MS, TICK_MS, DIR_MISSING_EXIT_MS, HELD_CHECK_MS, FINISHED_KEEP_MS, MAX_BODY_BYTES;
+var DEFAULT_EXEC_TIMEOUT_MS, TICK_MS, DIR_MISSING_EXIT_MS, HELD_CHECK_MS, GOV_WAIT_FRESH_MS, FINISHED_KEEP_MS, MAX_BODY_BYTES;
 var init_server = __esm({
   "src/broker/server.ts"() {
     "use strict";
@@ -292616,6 +292810,7 @@ var init_server = __esm({
     TICK_MS = 1e3;
     DIR_MISSING_EXIT_MS = 1e4;
     HELD_CHECK_MS = 5e3;
+    GOV_WAIT_FRESH_MS = 5e3;
     FINISHED_KEEP_MS = 6e5;
     MAX_BODY_BYTES = 64 * 1024 * 1024;
   }
@@ -293296,7 +293491,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.7.1";
+var VERSION = "14.7.2";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
