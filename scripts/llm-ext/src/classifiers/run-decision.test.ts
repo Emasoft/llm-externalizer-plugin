@@ -11,6 +11,7 @@ import { VERIFY_POLICY } from "./l1/validate.js";
 import { spec as filterSpec } from "./catalog/filter.js";
 import { spec as labelSpec } from "./catalog/label.js";
 import { spec as rankSpec } from "./catalog/rank.js";
+import { spec as ruleCheckSpec } from "./catalog/rule-check.js";
 import type { AnySpec, ProjectCtx } from "./catalog/spec.js";
 import { replayFixture, syntheticResponse, type RecordedReply } from "./l0/test-fetch.js";
 import type { GlobalFetch } from "./l0/transport.js";
@@ -64,7 +65,7 @@ function unpriced(): Served {
   return { ...s, fetch };
 }
 
-const profileDoc = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C401_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over });
+const profileDoc = (over: Record<string, unknown> = {}): Record<string, unknown> => ({ "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$C401_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2, ...over }); // ubs:ignore env-var reference, not a secret
 
 let tmp: string;
 let prev: Record<string, string | undefined>;
@@ -825,5 +826,57 @@ describe("spec.prepare (XZZ2NSWY)", () => {
   it("a prepare that fails for another reason is a bug that surfaces, not a tidy exit code", async () => {
     const boom = withPrepare([], () => Promise.reject(new Error("worker could not start")));
     await expect(runDecision(boom, filterReq(1), depsOf(serve((_n, q) => relabeled(q)).fetch))).rejects.toThrow("worker could not start");
+  });
+});
+
+// TRDD-LFTQCFUX Part 2: --max-questions-per-request reaches the planner through the real parser and runner.
+// WHY label (json mode): each item is one atomic unit with one question, so the cap decides how many units share a request; the replies are not label answers and the exit code is not asserted, only what was planned and sent.
+describe("TRDD-LFTQCFUX --max-questions-per-request", () => {
+  const labelInput = JSON.stringify({ items: [{ id: "a", text: "x" }, { id: "b", text: "y" }, { id: "c", text: "z" }], classes: [{ id: "p" }, { id: "q" }] });
+  const ruleInput = JSON.stringify({ phrase: "make it blue", rules: [{ id: "r1", text: "a" }, { id: "r2", text: "b" }, { id: "r3", text: "c" }] });
+  const argv = async (spec: AnySpec, input: string, extra: string[]) => {
+    const s = serve((_n, q) => relabeled(q));
+    const out: string[] = [];
+    const err: string[] = [];
+    const deps = { ...depsOf(s.fetch), readFile: (p: string) => readFileSync(p, "utf8"), readStdin: stdinBytes(input), stdout: (t: string) => out.push(t), stderr: (l: string) => err.push(l) };
+    const code = await runDecisionArgv(spec, ["--profile", "c", ...extra], deps);
+    return { code, out, err, s };
+  };
+  const planned = async (extra: string[]): Promise<number> => {
+    const r = await argv(labelSpec, labelInput, ["--estimate", "--json", ...extra]);
+    expect(r.code).toBe(0);
+    expect(r.s.decisions).toHaveLength(0);
+    return (JSON.parse(r.out[0]!) as { estimate: { requests: number } }).estimate.requests;
+  };
+  it("without the flag the three units share one request; a cap of 1 gives three, a cap of 2 gives two", async () => {
+    expect(await planned([])).toBe(1);
+    expect(await planned(["--max-questions-per-request", "1"])).toBe(3);
+    expect(await planned(["--max-questions-per-request=2"])).toBe(2);
+  });
+  it("a real run sends one unit per request and the flag does not touch the chunk size", async () => {
+    const s = serve((_n, q) => relabeled(q));
+    await runDecision(labelSpec, { input: JSON.parse(labelInput) as unknown, maxQuestionsPerRequest: 1 }, depsOf(s.fetch, { concurrency: 1 }));
+    expect(s.decisions.map((d) => Object.keys(d.questions))).toEqual([["label_i0"], ["label_i1"], ["label_i2"]]);
+  });
+  it.each([["0"], ["1.5"], ["-1"]])("the value %s is refused as exit 1 naming the flag, with nothing sent", async (v) => {
+    const r = await argv(labelSpec, labelInput, ["--max-questions-per-request", v]);
+    expect(r.code).toBe(1);
+    expect(r.err.join("\n")).toContain("--max-questions-per-request must be a whole number of 1 or more");
+    expect(r.s.decisions).toHaveLength(0);
+  });
+  it("a non-number is refused by the parser before the input is read", async () => {
+    const r = await argv(labelSpec, labelInput, ["--max-questions-per-request", "abc"]);
+    expect(r.code).toBe(1);
+    expect(r.err).toEqual([`llm-ext: --max-questions-per-request needs a number, got "abc"`]);
+  });
+  // WHY rule-check: it asks 2 questions per rule, so a cap of 1 is below the questions of one unit and the planner refuses every unit (planner.ts unit-too-many-questions).
+  it("a cap below the questions of one unit is a refusal with exit 1 and nothing sent; a cap of 2 sends one rule per request", async () => {
+    const refused = await argv(ruleCheckSpec as AnySpec, ruleInput, ["--max-questions-per-request", "1"]);
+    expect(refused.code).toBe(1);
+    expect(refused.err.join("\n")).toMatch(/has 2 questions, over the limit of 1 per request/);
+    expect(refused.s.decisions).toHaveLength(0);
+    const two = await argv(ruleCheckSpec as AnySpec, ruleInput, ["--estimate", "--json", "--max-questions-per-request", "2"]);
+    expect(two.code).toBe(0);
+    expect((JSON.parse(two.out[0]!) as { estimate: { requests: number } }).estimate.requests).toBe(3);
   });
 });

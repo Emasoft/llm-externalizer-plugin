@@ -58,6 +58,8 @@ export interface RunRequest {
   /** --max-budget in USD (D2): the only spend cap; absent means no cap. */
   maxBudgetUsd?: number;
   chunkChars?: number;
+  /** `--max-questions-per-request` (TRDD-LFTQCFUX): the most questions one request may carry, a whole number of 1 or more; absent means the planner packs as many as fit. A lower cap multiplies the request count: a command that asks Q questions per item needs at least Q (rule-check asks 2 per rule, so a cap of 2 sends one rule per request and a cap of 1 is refused). */
+  maxQuestionsPerRequest?: number;
   /** `--default <label>`: the default label of every choice question over text; wins over the spec's chunkDefaults for all its keys (plan §5 "--default, else the last label"). */
   defaultLabel?: string;
   /** Internal, per question key (users cannot know the keys); applied after defaultLabel. */
@@ -67,7 +69,7 @@ export interface RunRequest {
   strictExit?: boolean;
   /** `--json` (IN-07, Q4): print the JSON envelope instead of the spec text form. The -o report is always the JSON envelope. */
   json?: boolean;
-  /** `--estimate` (C4-08): plan the requests, send none, and print the estimated input tokens and cost (estimate-output.ts). WHY in SHARED_FLAGS (TRDD-58CFBQHN): it is parsed from that list like --json, and the same entry is the help row of the 15 decision commands, so the help and the parser read one declaration. */
+  /** `--estimate` (C4-08): plan the requests, send none, and print the estimated input tokens and cost (estimate-output.ts). WHY in SHARED_FLAGS (TRDD-58CFBQHN): it is parsed from that list like --json, and the same entry is the help row of every decision command, so the help and the parser read one declaration. */
   estimate?: boolean;
   /** The spec flags declared `render: true` (filter --no-collapse, --save), by field; handed to the spec renderText, never to its input schema. */
   renderOptions?: RenderOptions;
@@ -192,6 +194,10 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const warnings: Warning[] = (req.inputWarnings ?? []).map(inputWarning);
   const t = resolveThresholds(spec.thresholds, req.thresholdFlags ?? {});
   if (req.chunkChars !== undefined) refusing(1, () => assertChunkChars(req.chunkChars!));
+  // TRDD-LFTQCFUX: planExpanded throws a plain Error on a cap that is not a whole number of 1 or more, which would surface as a bug; refused here as a user error, once, for the CLI flag and for a programmatic caller alike.
+  if (req.maxQuestionsPerRequest !== undefined && (!Number.isInteger(req.maxQuestionsPerRequest) || req.maxQuestionsPerRequest < 1)) throw new Refusal(`--max-questions-per-request must be a whole number of 1 or more, got ${req.maxQuestionsPerRequest}`);
+  // WHY one object for both planners: the remote path (modelLimits) and the local-only path (limits built by hand) must cap questions the same way, or the flag would work on one profile kind only.
+  const questionCap = req.maxQuestionsPerRequest === undefined ? {} : { maxQuestionsPerRequest: req.maxQuestionsPerRequest };
   const budget = req.maxBudgetUsd === undefined ? undefined : refusing(1, () => new BudgetTracker(req.maxBudgetUsd));
   // WHY before the first request (E52): a bad -o must cost nothing. WHY before prepare (XZZ2NSWY): a refused invocation must not start a worker either.
   const reportDir = req.outputDir === undefined ? undefined : refusing(1, () => prepareReportDir(req.outputDir));
@@ -279,7 +285,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
     // one named constant measured from that reply (config.ts) is the source when the profile does not set its own value; the
     // remote path plans under the same constant while the fallback is on, so the two can never disagree.
     const contextTokens = local.limits.context_tokens ?? LOCAL_DECISION_CONTEXT_TOKENS;
-    const limits = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency };
+    const limits = { contextTokens, envelopeTokens: ENVELOPE_TOKENS, maxRequests: local.limits.max_requests_per_call, concurrency: local.limits.concurrency, ...questionCap };
     // WHY kept: a decider 422 re-plans the refused request (answerWithSplit) and needs the limits the job was planned with, chunkChars included.
     const localPlanLimits = { ...limits, ...(req.chunkChars === undefined ? {} : { chunkChars: req.chunkChars }) };
     const plan = planRequests(built, localPlanLimits);
@@ -388,7 +394,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
       ? `the endpoint prompt limit of ${resolved.effective.id} could not be read; planned with the catalog context length, the API may still refuse a request over its own limit`
       : `the model id ${JSON.stringify(resolved.effective.id)} from the catalog is malformed (${malformed}), so its endpoint prompt limit was not looked up; planned with the catalog context length, the API may still refuse a request over its own limit`));
   }
-  const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits }));
+  const limits = refusing(1, () => modelLimits({ resolved, endpointPromptLimit: promptLimit, profile: profile.limits, ...questionCap }));
   // WHY "ok" in: modelLimits returns ModelLimits or a LimitsRefusal ({ ok: false, message }); only the refusal has an ok key.
   if ("ok" in limits) throw new Refusal(limits.message);
   // TRDD-1L9VMEY7 (USER: "ensure reliability and fallbacks"): while the local decider fallback is on, every request is planned to
@@ -708,9 +714,11 @@ export async function runDecisionArgv<I, R>(spec: DecisionSpec<I, R>, argv: stri
     } else {
       const n = number(flag, value);
       if (n === undefined) return 1;
-      // WHY else is --chunk-chars: the branches above handle every other value flag (VALUE_FLAGS), so only --max-budget and --chunk-chars reach here.
+      // WHY one branch per flag (TRDD-LFTQCFUX): a trailing else made the one remaining number flag set --chunk-chars, so --max-questions-per-request would have silently changed the chunk size; a number flag with no branch now stops the parser.
       if (flag === "--max-budget") req.maxBudgetUsd = n;
-      else req.chunkChars = n;
+      else if (flag === "--chunk-chars") req.chunkChars = n;
+      else if (flag === "--max-questions-per-request") req.maxQuestionsPerRequest = n;
+      else throw new Error(`internal error: the value flag ${flag} has no branch in runDecisionArgv`);
     }
   }
   // IN-02: field -> {flag, value}. WHY two flags of one field are refused: --labels and --labels-json both fill `classes`, and giving both leaves it unclear which one ran.
