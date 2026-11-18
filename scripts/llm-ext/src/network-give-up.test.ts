@@ -270,21 +270,29 @@ describe("readyLocalTarget (no process, no download: files and the PATH only)", 
     expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
   });
 
-  // TRDD-4W3Q2B4S: an unreadable subdirectory is "no model there", never a throw out of readyLocalTarget (the give-up path). chmod 000 does not bind root or Windows.
+  // TRDD-4W3Q2B4S: an unreadable subdirectory makes the WHOLE model not ready (llama-server get_cached_files, hf-cache.cpp:428, throws on it), never a throw out of readyLocalTarget (the give-up path), and one stderr line says why, naming the folder relative to the snapshot. chmod 000 does not bind root or Windows. Only EACCES is produced here; ENOENT (a folder removed between the listing and its read) and the rethrow of other codes need a race or a mocked fs, so they are not tested.
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
-    ["only the unreadable subdirectory holds the model", ["locked/lk-Q4_0.gguf"], false],
-    ["a readable file beside the unreadable subdirectory holds the model", ["lk-Q4_0.gguf", "locked/other.bin"], true],
-  ])("an unreadable snapshot subdirectory: %s", (_label, files, ready) => {
+    ["only the unreadable subdirectory holds the model", ["locked/lk-Q4_0.gguf"], "locked"],
+    ["a readable file beside the unreadable subdirectory holds the model, yet the model is not ready", ["lk-Q4_0.gguf", "locked/other.bin"], "locked"],
+    ["an unreadable folder two levels down is named by its path relative to the snapshot", ["lk-Q4_0.gguf", "a/x.bin"], "a/locked"],
+  ])("an unreadable snapshot subdirectory: %s", (_label, files, lockedRel) => {
     const id = "acme/lk-GGUF:Q4_0";
     const f = readyFixture({ id, files });
-    const locked = join(f.env.LLAMA_CACHE as string, "models--acme--lk-GGUF", "snapshots", "rev1", "locked");
+    const locked = join(f.env.LLAMA_CACHE as string, "models--acme--lk-GGUF", "snapshots", "rev1", ...lockedRel.split("/"));
     mkdirSync(locked, { recursive: true });
     chmodSync(locked, 0o000);
+    const lines: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      lines.push(String(chunk));
+      return true;
+    });
     try {
-      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
+      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toBeUndefined();
     } finally {
+      spy.mockRestore();
       chmodSync(locked, 0o755);
     }
+    expect(lines).toEqual([`[llm-externalizer] local model ${id} is not ready: its snapshot folder ${lockedRel} is unreadable (EACCES); llama-server cannot list a snapshot with an unreadable folder\n`]);
   });
   // TRDD-4W3Q2B4S: a hub-layout snapshot entry is a symlink to a blob, and a snapshot may hold a directory symlink. Skipped on Windows, where a symlink needs a privilege.
   describe.skipIf(process.platform === "win32")("snapshot symlinks", () => {

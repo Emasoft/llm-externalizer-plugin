@@ -112,6 +112,16 @@ function cachedSnapshot(cacheDir: string, repo: string): string | undefined {
   return existsSync(snap) ? snap : undefined;
 }
 
+/** A nested snapshot folder that could not be listed (EACCES, EPERM or ENOENT): carries the code and the folder path relative to the snapshot, for the stderr line of llamaModelOnDisk. */
+class UnreadableSnapshotFolder extends Error {
+  constructor(
+    readonly code: string,
+    readonly relativeDir: string,
+  ) {
+    super(`snapshot folder ${relativeDir} is unreadable (${code})`);
+  }
+}
+
 /**
  * The repo-relative paths, with "/" separators on every OS, of every non-directory entry under a snapshot folder, subdirectories included.
  * WHY recursive: llama.cpp find_best_model (download.cpp at 8642541b2) matches the quant against the repo-relative path of the online listing, so a
@@ -120,6 +130,11 @@ function cachedSnapshot(cacheDir: string, repo: string): string | undefined {
  * listed to the OS depth limit), so one looping link in a snapshot made the walk huge. Here only a real directory (Dirent.isDirectory is lstat based,
  * false for a symlink) is entered, so the walk is a finite tree. Every other entry, a symlink to a blob included (the normal hub layout), is listed.
  * A directory symlink is therefore listed as an entry and not entered: llama.cpp get_cached_files (hf-cache.cpp:428 recursive_directory_iterator, no follow) agrees.
+ * WHY an unreadable or vanished nested folder fails the WHOLE model and is not skipped: with the network down, llama-server plans through
+ * common_download_get_hf_plan (download.cpp:795-801), which calls get_cached_files with no catch, and that walks the snapshot with
+ * recursive_directory_iterator (hf-cache.cpp:428) without skip_permission_denied or an error_code, so such a folder anywhere in the snapshot makes
+ * llama-server throw. Skipping the folder would read a readable model beside it as ready, a false ready in exactly the network-down case the
+ * fallback exists for. It throws UnreadableSnapshotFolder, which llamaModelOnDisk turns into "not ready" plus one stderr line.
  */
 function snapshotRelativePaths(dir: string, prefix = ""): string[] {
   const out: string[] = [];
@@ -128,14 +143,16 @@ function snapshotRelativePaths(dir: string, prefix = ""): string[] {
       out.push(`${prefix}${e.name}`);
       continue;
     }
-    // WHY a catch here and not at the top level: the old top-level-only read never touched a subdirectory, so an unreadable or just-removed
-    // one would now throw out of readyLocalTarget inside the network-give-up path. Only those three codes are an answer ("these files are
-    // not usable"); the model then reads as not ready, the safe side. Any other error still throws.
+    // WHY the catch is here and not at the top level: only a NESTED folder gets the typed error, so an error on the snapshot itself (the
+    // root call has no enclosing catch) and any code other than these three still throw the raw error, as before. The innermost failing
+    // folder names itself; an already typed error from deeper down passes through unchanged.
     try {
       out.push(...snapshotRelativePaths(join(dir, e.name), `${prefix}${e.name}/`));
     } catch (err) {
+      if (err instanceof UnreadableSnapshotFolder) throw err;
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== "EACCES" && code !== "EPERM" && code !== "ENOENT") throw err;
+      throw new UnreadableSnapshotFolder(code, `${prefix}${e.name}`);
     }
   }
   return out;
@@ -180,7 +197,23 @@ function llamaModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
   }
   const [repo, quant] = model.split(":");
   const snap = cachedSnapshot(hfCacheDir(env), repo);
-  return snap !== undefined && ggufQuantWeightsOnDisk(snapshotRelativePaths(snap), quant);
+  if (snap === undefined) return false;
+  try {
+    return ggufQuantWeightsOnDisk(snapshotRelativePaths(snap), quant);
+  } catch (err) {
+    if (!(err instanceof UnreadableSnapshotFolder)) throw err;
+    // WHY the whole model is not ready, and WHY one line and not silence: the user cannot see the reason otherwise. Chain read in the llama.cpp
+    // sources at 8642541b2: common_models_handler_init (arg.cpp:404) calls common_download_get_hf_plan, which with the network down falls through
+    // to hf_cache::get_cached_files (download.cpp:795-801), and that walks the snapshot with recursive_directory_iterator (hf-cache.cpp:428). Then
+    // server_run (tools/server/server.cpp:735; for -hf with resolve_model, the default, line 739) catches the std::exception from
+    // common_models_handler_init at 741-748, logs "failed to fetch model metadata" and returns 1, so llama-server exits. The throw itself is the C++
+    // standard behaviour of recursive_directory_iterator without skip_permission_denied or an error_code; it was read in the source, nobody ran it.
+    // The cost, accepted on purpose: with the network UP, llama-server lists the files online and never walks the cache (download.cpp:795-799),
+    // so "not ready" here is then a false not-ready in a partial outage. That is the safe side: the local fallback stays unarmed, it never loads a model that may fail.
+    // Same stderr channel as the other [llm-externalizer] diagnostics.
+    process.stderr.write(`[llm-externalizer] local model ${model} is not ready: its snapshot folder ${err.relativeDir} is unreadable (${err.code}); llama-server cannot list a snapshot with an unreadable folder\n`);
+    return false;
+  }
 }
 
 /** Whether the MLX snapshot of a Locals model id is on disk. snapshotWeightFiles throws for a missing repo, which is the "not on disk" answer here. */
