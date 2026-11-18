@@ -22,7 +22,7 @@ implementation-commits: [028ad703, fcdd58c6, 994bfbce]
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-18
 
-- Status: re-landed in 994bfbce with the V3 wording (labelled shared.context block, never judged) after live check 3 passed (Notes 2026-11-18); docs step 5 is in the same commit, marked "needs a release". History: code landed in 028ad703 and was reverted in fcdd58c6. Live check 1 case (c) failed; live check 2 (2026-11-18) failed bar (c) for both unrelated contexts (Notes). HEAD has no classify filter --context. The card stays active on USER request (Notes, USER lines of 2026-11-18).
+- Status: re-landed in 994bfbce with the V3 wording (labelled shared.context block, never judged) after live check 3 passed (Notes 2026-11-18); docs step 5 is in the same commit, marked "needs a release". History: code landed in 028ad703 and was reverted in fcdd58c6. Live check 1 case (c) failed; live check 2 (2026-11-18) failed bar (c) for both unrelated contexts (Notes); from fcdd58c6 until 994bfbce the branch had no classify filter --context. The card stays active on USER request (Notes, USER lines of 2026-11-18).
 - NEXT ACTION: ship 994bfbce in the next release (14.7.3, publish.py full-suite gate), then tick the boxes and move the card on. The same wording for classify label is TRDD-WYY3SPDX work with its own pre-registered check. Spike 3 (done): the failure comes with context content under the bare-string wording; V3, the USER design, changes no verdict in any arm.
 - Decided: find and compare get no context input (Notes 2026-11-18T08:22:59).
 
