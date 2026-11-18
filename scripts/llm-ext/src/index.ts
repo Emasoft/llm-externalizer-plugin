@@ -19,7 +19,7 @@ import {
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createInterface } from "node:readline/promises";
-import { extname, join, basename, dirname, resolve, isAbsolute } from "node:path";
+import { join, basename, dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { writeStatsJsonGuarded } from "./stats-file.js";
 import { buildReviewPlan } from "./review-plan.js";
@@ -33,9 +33,6 @@ import { gateFailureMessage, gateLLMResponse } from "./response-gate.js";
 import {
   GROUP_HEADER_RE,
   GROUP_FOOTER_RE,
-  parseFileGroups,
-  hasNamedGroups,
-  autoGroupByHeuristic,
 } from "./grouping.js";
 
 import {
@@ -56,25 +53,17 @@ import { makePreflightHook } from "./cluster/preflight_benchmark.js";
 // it to a real model call + real filesystem paths. resolveTranscriptPath /
 // defaultCheckpointPath are CLI-surface plumbing, kept OUT of session_summary/
 // on purpose (see session-summary-resolve.ts's own header).
-import { summarizeSession, DEFAULT_CHUNK_TIMEOUT_MS, type CallModelFn, type ChunkEvent } from "./session_summary/driver.js";
-import { untilDoneBackoffMs, looksQuotaCapped } from "./session_summary/until-done.js";
-import { formatSizeReport } from "./session_summary/size-report.js";
 import { classifyContextOverflow } from "./session_summary/chunker.js";
-import { selectModels } from "./session_summary/model-select.js";
-import { resolveSessionSummaryChain } from "./session_summary/local-model.js";
-import { resolveTranscriptPath, defaultCheckpointPath } from "./session-summary-resolve.js";
 // Provider layer (B1 Phase 5a/5b, TRDD-63314265). These modules import NOTHING
 // from index.ts — the mutable backend/profile state they need is handed to them
 // through the `providerDeps` seam object built below.
 import { fetchWithTimeout, RetryDeadlineError, failureText, failureOf, hostOf, isOpenRouterHost, OUTAGE_NETWORK_CODES, stoppedError, stopIfStopOnErrors } from "./provider/http.js";
 import {
-  detectLMStudio,
   clearLMStudioProbeCache,
 } from "./provider/lmstudio.js";
 import {
   chatCompletionJSON,
   chatCompletionWithRetry,
-  EXTRACT_PATHS_SCHEMA,
   type JSONCompletionResult,
   type SimpleCompletionOptions,
 } from "./provider/completion.js";
@@ -113,19 +102,13 @@ import {
   fenceBackticks,
   sanitizeInputPath,
   readFileAsCodeBlock,
-  scanForSecrets,
   scanFilesForSecrets,
   redactSecrets,
-  type RegexRedactOpts,
-  parseRedactRegex,
   isCalibratedBudget,
   registerCalibratedBudget,
   buildPreInstructions,
   resolvePrompt,
-  readAndGroupFiles,
-  resolveAnswerMode,
   walkDir,
-  extractLocalImports,
   BREVITY_RULES,
   FILE_FORMAT_EXAMPLE,
   codeTaskSystemPrompt,
@@ -142,7 +125,7 @@ import {
   runScanFolder,
   type ScanFolderDeps,
 } from "./scan-folder/core.js";
-import { formatUsageTotals, type FileUsage } from "./usage-totals.js";
+import { type FileUsage } from "./usage-totals.js";
 import {
   runCodeTask,
   type CodeTaskDeps,
@@ -160,9 +143,28 @@ import { brokerClientVersion, brokerQueueTimeoutMs, defaultBrokerEntry, endpoint
 import { checkModelChanges, markProfileUsed } from "./calibration/triggers.js";
 import { enqueueUnlocked, withStateLock } from "./calibration/state.js";
 import { ensureCalibrator } from "./calibration/runner.js";
-import { abortReasonText, CommandStoppedError, commandStopReason, failedHeader, isCommandStopped, runOutcome, stoppableSleep, unfinishedFileLines } from "./command-stop.js";
+import { CommandStoppedError, commandStopReason, stoppableSleep } from "./command-stop.js";
 import { timingsFromEnv } from "./broker/scheduler.js";
 import { serverStatusText, serverStopText } from "./broker/server-commands.js";
+
+import { handleBatchCheck } from "./tools/batch-check.js";
+import { handleChat } from "./tools/chat.js";
+import { handleCheckReferences } from "./tools/check-references.js";
+import { handleDiscover } from "./tools/discover.js";
+import { handleOrModelInfoJson } from "./tools/or-model-info-json.js";
+import { handleCheckImports } from "./check-imports/handler.js";
+import { handleSessionSummary } from "./session_summary/handler.js";
+import type {
+  ErrorClassification,
+  FileProcessResult,
+  FolderResolveResult,
+  OpenRouterModelInfo,
+  ProcessOptions,
+  RateLimitConfig,
+  RobustPerFileOpts,
+  RobustPerFileResult,
+  ToolResult,
+} from "./tools/dispatch-deps.js";
 
 /**
  * Resolve max output tokens for the current model.
@@ -348,7 +350,6 @@ import {
   HIGH_QUALITY_MODEL_DEFAULTS,
   buildHighQualityProvider,
   highQualityScanRefusal,
-  type HighQualityRequest,
   formatResolvedProfileLines,
   formatActiveProfileSummary,
   formatProfilesList,
@@ -360,7 +361,6 @@ import {
   PLACEHOLDER_MODEL_ID,
   billableForRoute,
   getEnsemblePriceCeiling,
-  resolveGroups,
   hasNoTextProfile,
   builtinLocalProfiles,
   PROVISIONAL_LOCAL_CTX,
@@ -401,7 +401,6 @@ import {
 import { installUsageRule } from "./rule-install.js";
 import { resolveEnsembleModelLimits, type ModelLimits } from "./ensemble-limits.js";
 import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/security-triage/index.js";
-import { buildCheckImportsExtractMessages } from "./check-imports/prompt.js";
 import { compareFilesSystemPrompt } from "./compare-files/prompt.js";
 import { isFreeSuffixModelId, paymentErrorCertainty } from "./benchmark/free-mode.js";
 import { IRON_RULE_REFUSAL_PREFIX, profileUpdateCanValidate } from "./benchmark/validated.js";
@@ -428,9 +427,7 @@ import {
 import { getActiveBillableForModel } from "./config.js";
 import { makeNetworkGiveUp, PROBE_TIMEOUT_MS, readyLocalTarget, remoteFallbackApplies } from "./network-give-up.js";
 import { fallbackVerdict, fallbackWarning, type FallbackFacts } from "./remote-fallback.js";
-import { getDynamicProfileRecord } from "./default-profiles-state.js";
 import { freeFailureCauseToError, FreeRotationNetworkError } from "./free-failure-cause.js";
-import { readCandidates } from "./dynamic-candidates.js";
 import {
   AllFreeModelsExhaustedError,
   approvedFreePoolFromSettings,
@@ -446,12 +443,6 @@ import {
   type RotationCandidate,
   type RotationHooks,
 } from "./free-rotation.js";
-import {
-  fetchOpenRouterModelInfo,
-  formatModelInfoMarkdown,
-  formatModelInfoTable,
-  formatModelInfoJson,
-} from "./or-model-info.js";
 
 import { clearEndpointFlavorCache } from "./provider/endpoint-flavor.js";
 import { OUTPUT_LIMIT_PREFIX, resolveRequestOptions } from "./provider/request-options.js";
@@ -1203,13 +1194,6 @@ export function overrideActiveProfile(
 
 // ── OpenRouter model list cache ──────────────────────────────────────
 
-interface OpenRouterModelInfo {
-  id: string;
-  name: string;
-  context_length?: number;
-  pricing?: { prompt: string; completion: string };
-  top_provider?: { max_completion_tokens?: number; context_length?: number };
-}
 
 let openRouterModelCache: OpenRouterModelInfo[] = [];
 let openRouterCacheTime = 0; // epoch ms when cache was last populated
@@ -1252,10 +1236,6 @@ async function fetchOpenRouterModels(): Promise<OpenRouterModelInfo[]> {
 //   4. /api/v1/credits → derive from total_credits - total_usage (needs mgmt key)
 //   5. Conservative default (DEFAULT_OPENROUTER_RPS)
 
-interface RateLimitConfig {
-  rps: number;       // max new requests per second
-  maxInFlight: number; // max concurrent requests (safety cap)
-}
 
 let cachedRateLimitConfig: RateLimitConfig | null = null;
 let rateLimitCacheTime = 0;
@@ -1860,17 +1840,6 @@ export function __activeFreePoolForTests(): string[] {
 export function __buildFreeRotationPoolForTests(fileLineCount?: number): string[] {
   return buildFreeRotationPool(fileLineCount).map((m) => m.id);
 }
-/** The verdict classifyError gives a per-file failure. */
-interface ErrorClassification {
-  unrecoverable: boolean;
-  serviceLevel: boolean;
-  reason: string;
-  /** Final for this file (never retried) yet still a FAILED outcome: the
-   *  per-file loops must feed it to the "3 of the last 3 completions failed"
-   *  window, which only the retried-then-exhausted path used to do. Set for a
-   *  closed retry window (RetryDeadlineError). */
-  countsAsFailure?: boolean;
-}
 
 /** Record one failed file outcome in the sliding window the per-file loops
  *  keep; true when the last three completions all failed. */
@@ -2146,7 +2115,7 @@ function formatFooter(
 // the argument the override silently disappears (Issue #5 — fixed by
 // threading the param through every callsite).
 
-import { defaultOutputDir, defaultScratchDir, mergePieceDir } from "./project-root.js";
+import { defaultOutputDir, defaultScratchDir } from "./project-root.js";
 
 /** Test-only: reset the cached default so a test that sets
  *  CLAUDE_PROJECT_DIR / LLM_EXT_OUTPUT_DIR mid-run gets the recomputed value. */
@@ -2701,15 +2670,6 @@ function classifyError(error: unknown): ErrorClassification {
 
 // ── Batch helpers ───────────────────────────────────────────────────
 
-interface FileProcessResult {
-  filePath: string;
-  success: boolean;
-  reportPath?: string;
-  backupPath?: string;
-  error?: string;
-  noChange?: boolean;
-  usage?: FileUsage;
-}
 
 function sanitizeFilename(filePath: string): string {
   const base = basename(filePath);
@@ -2725,29 +2685,6 @@ function sanitizeFilename(filePath: string): string {
 // - Progress reporting
 // Used by all content tools when answer_mode=0 and max_retries > 1.
 
-interface RobustPerFileOpts {
-  task: string;
-  maxRetries: number;
-  redact?: boolean;
-  regexRedact?: RegexRedactOpts | null;
-  onProgress?: ProgressFn;
-  ensemble: boolean;
-  budgetBytes: number;
-  language?: string;
-  toolName: string;
-  batchId?: string;
-  modelOverride?: string;
-  outputDir?: string;
-}
-
-interface RobustPerFileResult {
-  results: FileProcessResult[];
-  succeeded: FileProcessResult[];
-  failed: FileProcessResult[];
-  skipped: FileProcessResult[];
-  aborted: boolean;
-  abortReason: string;
-}
 
 async function robustPerFileProcess(
   files: string[],
@@ -2845,10 +2782,6 @@ function normalizePaths(raw: string | string[] | undefined | null): string[] {
 // Shared logic for resolving folder_path to file paths. Used by tools
 // that accept folder_path as an alternative to input_files_paths.
 
-interface FolderResolveResult {
-  files: string[];
-  error?: string;
-}
 
 function resolveFolderPath(
   folderPath: string,
@@ -4218,20 +4151,6 @@ async function ensembleStreaming(
 // ── Core file processing functions ──────────────────────────────────
 // Reusable logic shared by single-file tools and batch operations.
 
-interface ProcessOptions {
-  language?: string;
-  maxTokens?: number;
-  batchId?: string; // if set, uses batch-style report filenames
-  fileIndex?: number; // disambiguates files with same basename in a batch
-  redact?: boolean; // redact secrets before sending to LLM
-  regexRedact?: RegexRedactOpts | null; // user-defined regex redaction
-  onProgress?: ProgressFn; // MCP progress notifications to keep client alive
-  ensemble?: boolean; // run on multiple models and combine results (default true)
-  maxBytes?: number; // max file size in bytes (default: DEFAULT_MAX_PAYLOAD_BYTES)
-  modelOverride?: string; // skip ensemble, use this specific model (e.g. free mode)
-  outputDir?: string; // custom output directory for reports
-  hqRequest?: HighQualityRequest; // high_quality_scan provider/reasoning/cache (TRDD-DBUSM55E)
-}
 
 async function processFileCheck(
   filePath: string,
@@ -4783,17 +4702,7 @@ function getEnsembleModels(): Array<{
   return all;
 }
 
-/**
- * What every tool returns. The `content` envelope is OUR OWN shape — a local
- * interface, never an SDK type — so it survives the MCP removal untouched.
- * Keeping it means 40 return sites stay as they are; the CLI flattens it to
- * stdout + an exit code in exactly ONE place instead.
- */
-export interface ToolResult {
-  content: { type: "text"; text: string }[];
-  isError?: boolean;
-  [k: string]: unknown;
-}
+export type { ToolResult };
 
 export interface DispatchOptions {
   /**
@@ -5290,340 +5199,32 @@ async function dispatchCallToolInner(
     }
 
     try {
+    // WHY (TRDD-TYSKX72I): the cases that call a handler from tools/, session_summary/ or check-imports/ hand it, inline
+    // in the case, exactly the index.ts functions and state its old body read. Inline and per case, not one shared
+    // object: free-forbidden-tools.test.ts derives which tools reach chat/completions from the identifiers of each
+    // case text, and a shared object would make every handler case look like a sender. The getters keep reading the
+    // live module bindings, which settings reloads reassign.
     switch (name) {
-      case "chat": {
-        const {
-          instructions,
-          instructions_files_paths,
-          input_files_paths: chatInputPathsRaw,
-          input_files_content,
-          system,
-          answer_mode: rawAnswerMode,
-          scan_secrets: chatScan,
-          redact_secrets: chatRedact,
-          max_payload_kb: chatMaxPayloadKb,
-          max_retries: chatMaxRetries,
-          redact_regex: chatRedactRegexRaw,
-          folder_path: chatFolderPath,
-          extensions: chatExtensions,
-          exclude_dirs: chatExcludeDirs,
-          use_gitignore: chatUseGitignore,
-          recursive: chatRecursive,
-          follow_symlinks: chatFollowSymlinks,
-          max_files: chatMaxFiles,
-        } = args as {
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          input_files_paths?: string | string[];
-          input_files_content?: string;
-          system?: string;
-          answer_mode?: number;
-          scan_secrets?: boolean;
-          redact_secrets?: boolean;
-          max_retries?: number;
-          max_payload_kb?: number;
-          redact_regex?: string;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          recursive?: boolean;
-          follow_symlinks?: boolean;
-          max_files?: number;
-        };
-        // Ensemble ON for the openrouter backend and for a mode-local profile with two or more members (P8, ensembleAllowed)
-        const useEnsemble = ensembleAllowed(backend, activeResolved);
-        const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
-
-        // Validate redact_regex upfront — fail fast on invalid patterns
-        let chatRegexRedact: RegexRedactOpts | null = null;
-        try {
-          chatRegexRedact = parseRedactRegex(chatRedactRegexRaw);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-        const chatPrompt = resolvePrompt(
-          instructions,
-          instructions_files_paths,
+      case "chat":
+        return await handleChat(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            DEFAULT_TEMPERATURE,
+            ensembleAllowed,
+            ensembleModelLabel,
+            ensembleStreaming,
+            formatFooter,
+            normalizePaths,
+            processFileCheck,
+            resolveDefaultMaxTokens,
+            resolveFolderPath,
+            robustPerFileProcess,
+            saveResponse,
+            get activeResolved() {
+              return activeResolved;
+            },
+          },
         );
-        if (!chatPrompt.trim() && !input_files_content) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: Either instructions or instructions_files_paths must be provided.",
-              },
-            ],
-            isError: true,
-          };
-        }
-        // Resolve file paths: folder_path OR input_files_paths (or both)
-        let chatFilePaths = normalizePaths(chatInputPathsRaw);
-        if (chatFolderPath) {
-          const folderResult = resolveFolderPath(chatFolderPath, {
-            extensions: chatExtensions,
-            excludeDirs: chatExcludeDirs,
-            useGitignore: chatUseGitignore,
-            recursive: chatRecursive,
-            followSymlinks: chatFollowSymlinks,
-            maxFiles: chatMaxFiles,
-          });
-          if (folderResult.error && folderResult.files.length === 0 && chatFilePaths.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-          }
-          chatFilePaths = [...chatFilePaths, ...folderResult.files];
-        }
-
-        // scan_secrets: abort if any secrets are found in input files or inline content.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (chatScan && !chatRedact) {
-          // Filter out group markers before scanning — they are delimiters, not file paths
-          const chatRealFiles = chatFilePaths.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          if (chatRealFiles.length > 0) {
-            const scanResult = scanFilesForSecrets(chatRealFiles);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true,
-              };
-          }
-          if (input_files_content) {
-            const inlineScan = scanForSecrets(input_files_content);
-            if (inlineScan.found) {
-              const details = inlineScan.details
-                .map((d) => `  - ${d.label}: ${d.count} occurrence(s)`)
-                .join("\n");
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `ABORTED: Secrets detected in input_files_content:\n${details}\n\nRemove secrets before sending to remote LLM.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-          }
-        }
-
-        // Always use model's maximum output capacity — no user override
-        const maxTokens = resolveDefaultMaxTokens();
-        const chatMode = resolveAnswerMode(rawAnswerMode, 0);
-
-        // Build prompt base: pre-instructions + unfenced instructions + optional fenced inline content
-        const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
-        let promptBase =
-          buildPreInstructions(chatHasFiles, "read") + chatPrompt;
-        if (input_files_content) {
-          let inlineContent = input_files_content;
-          if (chatRedact) inlineContent = redactSecrets(inlineContent).redacted;
-          const fence = fenceBackticks(inlineContent);
-          promptBase += `\n\n${fence}\n${inlineContent}\n${fence}`;
-        }
-
-        // If no input_files_paths, just send the prompt (answer_mode irrelevant)
-        if (chatFilePaths.length === 0) {
-          const messages: ChatMessage[] = [];
-          messages.push({ role: "system", content: (system || "") + FILE_FORMAT_EXAMPLE + BREVITY_RULES });
-          messages.push({ role: "user", content: promptBase });
-          const resp = await ensembleStreaming(
-            messages,
-            { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
-            useEnsemble,
-          );
-          const footer = formatFooter(resp, "chat");
-          // Shared response gate (TRDD-P4ULUV1R): empty AND echoed responses
-          // are failures — "the model printed something" is not success.
-          const chatVerdict = gateLLMResponse(resp.content, promptBase);
-          if (chatVerdict !== null) {
-            return {
-              content: [
-                { type: "text", text: `FAILED: ${gateFailureMessage(chatVerdict)}.` },
-              ],
-              isError: true,
-            };
-          }
-          const savedPath = saveResponse(
-            "chat",
-            resp.content + footer,
-            { model: resp.model, task: chatPrompt },
-            undefined,
-            outputDir,
-          );
-          return { content: [{ type: "text", text: savedPath }] };
-        }
-
-        // ── Group-aware processing ──
-        // answer_mode=1 means "one report per group". Groups come from either:
-        //   • explicit ---GROUP:id--- markers in input_files_paths, or
-        //   • auto-grouping by subfolder/extension/basename when no markers
-        //     were supplied (see autoGroupByHeuristic).
-        // answer_mode=0 is per-file, answer_mode=2 is a single merged report.
-        let chatFileGroups = parseFileGroups(chatFilePaths);
-        let chatEffectivelyGrouped = hasNamedGroups(chatFileGroups);
-        if (chatMode === 1 && !chatEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(chatFilePaths);
-          if (autoGroups.length > 0) {
-            chatFileGroups = autoGroups;
-            chatEffectivelyGrouped = true;
-          }
-        }
-
-        // Process each group (or single unnamed group for backward compat)
-        const allGroupReports: string[] = [];
-        /** Follow-up review M2: files of batches whose call threw, as "FAILED: <file> — <reason>" lines. */
-        const chatFailedLines: string[] = [];
-        for (const fg of chatFileGroups) {
-          const fgPaths = fg.files;
-          if (fgPaths.length === 0) continue;
-          const fgId = fg.id; // empty string for unnamed/backward-compat
-
-          // ── Mode 0: one output file per input file (separate LLM calls) ──
-          if (chatMode === 0 && !chatEffectivelyGrouped) {
-            const chatRetries = chatMaxRetries ?? 1;
-            if (chatRetries > 1) {
-              // Robust path: parallel + retry + circuit breaker
-              const rpResult = await robustPerFileProcess(fgPaths, {
-                task: chatPrompt, maxRetries: chatRetries,
-                redact: chatRedact, regexRedact: chatRegexRedact,
-                onProgress, ensemble: useEnsemble,
-                budgetBytes: chatBudgetBytes, toolName: "chat",
-                modelOverride, outputDir,
-              });
-              const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
-              // Follow-up review M1/m2: once stopped, every non-success file (skipped ones too) is listed, and the abort reason is the stop.
-              if (rpResult.failed.length > 0 && !isCommandStopped()) lines.push("", failedHeader(rpResult.failed.length, fgPaths.length), ...rpResult.failed.map((r) => `  ${r.filePath}: ${r.error}`));
-              lines.push(...unfinishedFileLines(rpResult.results));
-              if (rpResult.aborted) lines.push("", `ABORTED: ${abortReasonText(rpResult.abortReason)}`);
-              return { content: [{ type: "text", text: lines.join("\n") }], ...runOutcome(rpResult.aborted, rpResult.failed.length, rpResult.succeeded.length) };
-            }
-            // Simple sequential path (max_retries=1, no retry)
-            // Follow-up review M2: a file whose call THROWS (a --command_timeout stop
-            // above all) is recorded as "FAILED: <file> — <reason>" and the loop goes
-            // on; before, the first throw dropped every finished report path.
-            const perFileResults: string[] = [];
-            let failedFiles = 0;
-            for (const fp of fgPaths) {
-              let result: Awaited<ReturnType<typeof processFileCheck>>;
-              try {
-                result = await processFileCheck(fp, chatPrompt, {
-                  maxTokens,
-                  redact: chatRedact,
-                  regexRedact: chatRegexRedact,
-                  onProgress,
-                  ensemble: useEnsemble,
-                  maxBytes: chatBudgetBytes,
-                  modelOverride, outputDir,
-                });
-              } catch (err) {
-                failedFiles++;
-                perFileResults.push(`FAILED: ${fp} — ${(err as Error).message}`);
-                continue;
-              }
-              if (!(result.success && result.reportPath)) failedFiles++;
-              perFileResults.push(
-                result.success && result.reportPath
-                  ? result.reportPath
-                  : `FAILED: ${fp} — ${result.error}`,
-              );
-            }
-            // Any failed file (a thrown call or a failed result) is an error with the finished paths listed (TRDD-PN84WC1L: a failed result used to exit 0).
-            return {
-              content: [{ type: "text", text: perFileResults.join("\n") }],
-              ...runOutcome(false, failedFiles, perFileResults.length - failedFiles),
-            };
-          }
-
-          // Group files by configurable payload budget for auto-batching.
-          // A single user/auto group may still exceed the LLM context window,
-          // in which case FFD splits it across multiple LLM calls; the
-          // per-group merge path below stitches them back into one report.
-          const chatPromptBytes =
-            Buffer.byteLength(promptBase, "utf-8") +
-            (system ? Buffer.byteLength(system, "utf-8") : 0);
-          const { groups, autoBatched, skipped: chatSkipped } = readAndGroupFiles(
-            fgPaths,
-            chatPromptBytes,
-            chatRedact,
-            chatBudgetBytes,
-            chatRegexRedact,
-          );
-
-          // Collect results for this file group (merged-per-group output)
-          const batchResults: string[] = [];
-          if (chatSkipped.length > 0) {
-            const skipNote = `SKIPPED (exceeds ${chatBudgetBytes / 1024} KB payload budget): ${chatSkipped.length} file(s)\n${chatSkipped.map((f) => `  - ${f}`).join("\n")}`;
-            batchResults.push(skipNote);
-          }
-          for (let gi = 0; gi < groups.length; gi++) {
-            const group = groups[gi];
-            let userContent = promptBase;
-            for (const fd of group) {
-              userContent += `\n\n${fd.block}`;
-            }
-            const messages: ChatMessage[] = [];
-            messages.push({ role: "system", content: (system || "") + FILE_FORMAT_EXAMPLE + BREVITY_RULES });
-            messages.push({ role: "user", content: userContent });
-            // Follow-up review M2: a failed batch (a --command_timeout stop above all)
-            // is recorded per file and the loop goes on, so the batches and
-            // groups already answered are still written and reported.
-            let resp: Awaited<ReturnType<typeof ensembleStreaming>>;
-            try {
-              resp = await ensembleStreaming(
-                messages,
-                { temperature: DEFAULT_TEMPERATURE, maxTokens, onProgress, modelOverride },
-                useEnsemble,
-              );
-            } catch (err) {
-              for (const fd of group) chatFailedLines.push(`FAILED: ${fd.path} — ${(err as Error).message}`);
-              continue;
-            }
-            const footer = formatFooter(resp, "chat", group[0]?.path);
-            // Shared response gate (TRDD-P4ULUV1R): an echoed group answer is
-            // dropped exactly like an empty one — including it would present
-            // the input back as if it were analysis.
-            if (gateLLMResponse(resp.content, userContent) === null) {
-              if (autoBatched) {
-                const fileList = group.map((fd) => fd.path).join(", ");
-                batchResults.push(
-                  `## Batch ${gi + 1}/${groups.length}\n\nFiles: ${fileList}\n\n${resp.content}${footer}`,
-                );
-              } else {
-                batchResults.push(resp.content + footer);
-              }
-            }
-          }
-
-          // Merge batch results into one report for this group.
-          if (batchResults.length === 0) continue; // skip empty groups
-          const finalContent = batchResults.join("\n\n---\n\n");
-          const chatMergedModel = ensembleModelLabel(useEnsemble);
-          const savedPath = saveResponse(
-            "chat",
-            finalContent,
-            { model: chatMergedModel, task: chatPrompt, inputFile: fgPaths[0], groupId: fgId || undefined },
-            undefined,
-            outputDir,
-          );
-
-          if (chatEffectivelyGrouped) {
-            const labelId = fgId || "auto";
-            allGroupReports.push(`[group:${labelId}] ${savedPath}`);
-          } else {
-            // Single unnamed group — return directly (mode 0/2 backward compat)
-            return { content: [{ type: "text", text: [savedPath, ...chatFailedLines].join("\n") }], ...runOutcome(false, chatFailedLines.length, 1) };
-          }
-        }
-
-        // Grouped mode: return all per-group report paths
-        if (allGroupReports.length === 0) {
-          return {
-            content: [{ type: "text", text: chatFailedLines.length > 0 ? chatFailedLines.join("\n") : "FAILED: LLM returned empty response for all groups." }],
-            isError: true,
-          };
-        }
-        return { content: [{ type: "text", text: [...allGroupReports, ...chatFailedLines].join("\n") }], ...runOutcome(false, chatFailedLines.length, allGroupReports.length) };
-      }
 
       case "code_task": {
         // Pipeline body extracted to code-task/core.ts (B1 Phase 3,
@@ -5761,228 +5362,42 @@ async function dispatchCallToolInner(
         return { content: [{ type: "text", text: plan }] };
       }
 
-      case "discover": {
-        const parts: string[] = [];
-
-        // If settings are not configured, show the error prominently
-        if (!settingsValid || !activeResolved) {
-          parts.push("⚠ NOT CONFIGURED\n");
-          parts.push(settingsError);
-          parts.push(`\nSettings file: ${SETTINGS_FILE}`);
-          parts.push(`Session log: ${LOG_FILE}`);
-          // Show available profiles even when not configured
-          const profileNames = Object.keys(activeSettings.profiles);
-          if (profileNames.length > 0) {
-            parts.push(`\nAvailable profiles: ${profileNames.join(", ")}`);
-          }
-          // Show available API presets
-          parts.push(`\nAPI presets: ${Object.keys(API_PRESETS).join(", ")}`);
-          return {
-            content: [{ type: "text", text: parts.join("\n") }],
-            isError: true,
-          };
-        }
-
-        // WHY (TRDD-G6XT3AY9): `active:` is a live selector again -- the
-        // deprecation notice this used to print here is gone; the source
-        // label below already says whether the flag, the `active:` key, or
-        // the built-in default decided.
-        parts.push(
-          `Effective profile: ${activeResolved.name} (source: ${
-            getProfileSelectionSource() === "flag"
-              ? "--profile"
-              : activeSettings.active !== undefined
-                ? "active:"
-                : "built-in default"
-          })`,
+      case "discover":
+        return await handleDiscover(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            LOG_FILE,
+            SETTINGS_FILE,
+            activeFreePool,
+            fetchOpenRouterModels,
+            getContextLength,
+            getProfileSelectionSource,
+            getRateLimitConfig,
+            isFreeModeActive,
+            listModelsRaw,
+            providerDeps,
+            resolveDefaultMaxTokens,
+            session,
+            get FALLBACK_CONTEXT_LENGTH() {
+              return FALLBACK_CONTEXT_LENGTH;
+            },
+            get SOFT_TIMEOUT_MS() {
+              return SOFT_TIMEOUT_MS;
+            },
+            get activeResolved() {
+              return activeResolved;
+            },
+            get activeSettings() {
+              return activeSettings;
+            },
+            get settingsError() {
+              return settingsError;
+            },
+            get settingsValid() {
+              return settingsValid;
+            },
+          },
         );
-        // Addendum K: dynamic-profile maintainer state is labelled "as of
-        // <time>" because `discover` is itself in RECONCILE_SKIP_TOOLS — this
-        // read-only status command never triggers a fresh maintain pass (a
-        // status query must not rewrite settings first), so the timestamp may
-        // be stale and the label says so honestly rather than implying "live".
-        if (isDynamicProfileName(activeResolved.name)) {
-          const dynRecord = getDynamicProfileRecord(activeResolved.name);
-          // P6b-fix S5: renders lastMaintainedAt — the MAINTAINER's own clock,
-          // which is what "maintained as of" claims. It used to render
-          // lastBenchmarkAt, a different event entirely, and because
-          // recordBenchmarkFailure preserves `lastBenchmarkAt: 0` on a profile
-          // that never succeeded, a record created by a first FAILED attempt
-          // printed "maintained as of 1970-01-01T00:00:00.000Z" instead of
-          // "not yet maintained". Falsy (absent or 0) is the honest
-          // never-maintained case.
-          const maintainedAt = dynRecord?.lastMaintainedAt;
-          parts.push(
-            maintainedAt
-              ? `Dynamic profile '${activeResolved.name}' maintained as of ${new Date(maintainedAt).toISOString()}`
-              : `Dynamic profile '${activeResolved.name}' not yet maintained`,
-          );
-        }
-        parts.push(`Mode: ${activeResolved.mode}`);
-        // fix-queue 89: PLACEHOLDER_MODEL_ID is an internal sentinel for
-        // "profile never populated" (config.ts) -- this `settings status`
-        // "Model:" line printed it verbatim for an unpopulated dynamic
-        // section (the "Dynamic profile '<x>' not yet maintained" line
-        // above already says so, but this SEPARATE line still leaked the
-        // raw sentinel string right under it). Same population-state
-        // wording writeBootBanner uses, so the two surfaces agree.
-        parts.push(
-          `Model: ${
-            activeResolved.model === PLACEHOLDER_MODEL_ID
-              ? `${activeResolved.name}: not benchmarked yet`
-              : activeResolved.model
-          }`,
-        );
-        if (activeResolved.secondModel) {
-          parts.push(`Second model: ${activeResolved.secondModel}`);
-        }
-        if (activeResolved.thirdModel) {
-          parts.push(`Third model: ${activeResolved.thirdModel}`);
-        }
-        // Free-mode reporting. Under forced-free (allow_paid_models=false),
-        // profile free_only, the Model/second/third lines
-        // above are the CONFIGURED values but are NOT what runs — the ensemble
-        // draws from the free pool. Say so explicitly, and show the actual pool,
-        // so the user is never misled into thinking a paid model is being billed.
-        if (isFreeModeActive()) {
-          const pool = activeFreePool();
-          // The auto-free ("low balance / 402") arm is gone (addendum 4): with paid allowed
-          // forceFreeByMasterSwitch is false, so free mode can only come from free_only.
-          const reason = !getAllowPaidModels()
-            ? "allow_paid_models=false — set it true to use paid models"
-            : "profile free_only";
-          const shown = pool.slice(0, 6).join(", ");
-          // OE27RD7I row 18 + review: "benchmark-vetted" is a population-state claim, and the
-          // only record/queue that state comes from is the built-in dynamic `free` profile's.
-          // Any other active profile (a static free_only list, hand-listed, exempt from
-          // benchmarks by design) must not borrow that unrelated record's verdict.
-          let poolVetting = "as listed in the profile, not benchmarked by design";
-          if (activeResolved.name === "free") {
-            const freeProfile = activeSettings.profiles.free;
-            const freeQueued = readCandidates(
-              freeProfile ? resolveGroups(freeProfile).routesFor : (): ResolvedRoute[] => [],
-            ).free.length;
-            // A queued COUNT, not "pending": it stays true when maintenance is backed off or disabled.
-            poolVetting =
-              (getDynamicProfileRecord("free")?.lastBenchmarkAt ?? 0) <= 0
-                ? "not yet benchmarked"
-                : freeQueued > 0
-                  ? `${freeQueued} candidate${freeQueued === 1 ? "" : "s"} awaiting benchmark`
-                  : "benchmark-vetted";
-          }
-          parts.push(`Free mode: ON (${reason})`);
-          parts.push(
-            `Free pool (${pool.length}, ${poolVetting}, rotates on rate-limit): ` +
-              `${shown}${pool.length > 6 ? ", …" : ""}`,
-          );
-          if (!getAllowPaidModels()) {
-            parts.push(
-              `↑ The configured Model line(s) are ignored while paid is off; the ensemble runs the free pool above.`,
-            );
-          }
-        }
-        // Show auth status so agents can verify the token is available
-        const authSource = (() => {
-          const authProfileName = effectiveProfileName(activeSettings);
-          const preset =
-            API_PRESETS[activeSettings.profiles[authProfileName]?.api];
-          const profile = activeSettings.profiles[authProfileName];
-          if (!preset) return "unknown";
-          const rawAuth = preset.isLocal
-            ? profile?.api_token || preset.defaultAuthEnv
-            : profile?.api_key || preset.defaultAuthEnv;
-          if (!rawAuth) return "none required";
-          if (rawAuth.startsWith("$")) {
-            const envVal = process.env[rawAuth.slice(1)];
-            return envVal
-              ? `${rawAuth} (set, ${envVal.length} chars)`
-              : `${rawAuth} (NOT SET)`;
-          }
-          return "direct value (set)";
-        })();
-        parts.push(`Auth: ${authSource}`);
-
-        // Probe the service to check availability and get context window
-        const start = Date.now();
-        try {
-          let contextWindow = FALLBACK_CONTEXT_LENGTH;
-
-          if (backend.type === "openrouter" && backend.model) {
-            const models = await fetchOpenRouterModels();
-            const match = models.find((m) => m.id === backend.model);
-            if (match?.context_length) contextWindow = match.context_length;
-            const ms = Date.now() - start;
-            parts.push(`Status: ONLINE (${ms}ms)`);
-          } else {
-            const models = await listModelsRaw();
-            const isLMS = await detectLMStudio(providerDeps);
-            const ms = Date.now() - start;
-            const backendLabel = isLMS ? "LM Studio" : "Local";
-            if (models.length > 0) {
-              contextWindow = getContextLength(models[0]);
-              parts.push(`Status: ONLINE — ${backendLabel} (${ms}ms)`);
-            } else {
-              parts.push(
-                `Status: ONLINE — ${backendLabel} (${ms}ms) — no model loaded, ask the user to load one`,
-              );
-            }
-          }
-
-          parts.push(
-            `Context window: ${contextWindow.toLocaleString()} tokens (input + output combined)`,
-          );
-          parts.push(
-            `Max output tokens per call: model maximum (${resolveDefaultMaxTokens().toLocaleString()}). Auto-managed, not user-configurable.`,
-          );
-
-          const rlCfg = await getRateLimitConfig();
-          if (rlCfg.rps > 1) {
-            parts.push(
-              `Rate limit: ${rlCfg.rps} RPS (requests/second), up to ${rlCfg.maxInFlight} in-flight. Spawn parallel tool calls for throughput.`,
-            );
-          } else {
-            parts.push(
-              "Concurrency: SEQUENTIAL — one request at a time. Wait for each call to complete before sending the next.",
-            );
-          }
-
-          parts.push(`Timeout: ${SOFT_TIMEOUT_MS / 1000}s per call.`);
-        } catch (err) {
-          const ms = Date.now() - start;
-          const reason =
-            err instanceof Error && err.name === "AbortError"
-              ? `timed out after ${ms}ms`
-              : err instanceof Error
-                ? err.message
-                : String(err);
-          parts.push(`Status: OFFLINE — ${reason}`);
-          parts.push(
-            "The service is not available. Do not attempt to delegate tasks.",
-          );
-        }
-
-        if (session.calls > 0) {
-          const total = session.promptTokens + session.completionTokens;
-          const costStr =
-            session.totalCost > 0
-              ? ` | Cost: $${session.totalCost.toFixed(6)}`
-              : "";
-          parts.push(
-            `\nSession usage: ${total.toLocaleString()} tokens across ${session.calls} call${session.calls === 1 ? "" : "s"}${costStr}`,
-          );
-        }
-
-        // Show profiles and presets for editing guidance
-        const profileNames = Object.keys(activeSettings.profiles);
-        parts.push(`\nProfiles: ${profileNames.join(", ")}`);
-        parts.push(`API presets: ${Object.keys(API_PRESETS).join(", ")}`);
-        parts.push(`Settings: ${SETTINGS_FILE}`);
-        parts.push(`Session log: ${LOG_FILE}`);
-
-        return {
-          content: [{ type: "text", text: parts.join("\n") }],
-        };
-      }
 
       case "scan_local_llm_services": {
         const services = await discoverLocalLlmServices();
@@ -6093,151 +5508,15 @@ async function dispatchCallToolInner(
 
       case "or_model_info":
       case "or_model_info_table":
-      case "or_model_info_json": {
-        const { model: infoModel, file_path: infoFilePath } = args as {
-          model?: string;
-          file_path?: string;
-        };
-        if (!infoModel || typeof infoModel !== "string") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `FAILED: \`model\` parameter is required. Pass the exact OpenRouter model id, e.g. 'nvidia/nemotron-3-super-120b-a12b:free'.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-        if (backend.type !== "openrouter") {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${name} only works with OpenRouter backends. Active profile is '${activeResolved?.name}' (${activeResolved?.mode}). Switch to a remote profile to query model metadata.`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        const result = await fetchOpenRouterModelInfo(
-          infoModel,
-          backend.baseUrl,
-          backend.apiKey,
+      case "or_model_info_json":
+        return await handleOrModelInfoJson(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            get activeResolved() {
+              return activeResolved;
+            },
+          },
         );
-        if (!result.ok) {
-          // Friendly error messages per status code. OpenRouter uses
-          // the standard HTTP error code set — see
-          // docs/openrouter/errors-and-debugging.md.
-          let msg: string;
-          switch (result.status) {
-            case 400:
-              msg = `FAILED: OpenRouter rejected the request for '${infoModel}' (400 Bad Request). ${result.error}`;
-              break;
-            case 401:
-              msg = `FAILED: OpenRouter authentication failed (401). Check that $OPENROUTER_API_KEY is set and valid — run 'discover' to verify.`;
-              break;
-            case 402:
-              msg = `FAILED: OpenRouter credit exhausted (402). Add credits at https://openrouter.ai/credits or fall back to a :free model.`;
-              break;
-            case 403:
-              msg = `FAILED: OpenRouter blocked the request for '${infoModel}' (403 Forbidden). The model may require moderation approval or be unavailable in your region.`;
-              break;
-            case 404:
-              msg = `FAILED: OpenRouter returned 404 for model '${infoModel}'. Check the id — case-sensitive, requires vendor prefix and any ':free' / ':thinking' suffix.`;
-              break;
-            case 408:
-              msg = `FAILED: OpenRouter request timed out (408). Retry in a moment.`;
-              break;
-            case 429:
-              msg = `FAILED: OpenRouter rate limit hit (429). Wait a few seconds before retrying.`;
-              break;
-            case 502:
-            case 503:
-            case 504:
-              msg = `FAILED: OpenRouter upstream error (${result.status}). The provider is down or unreachable — retry later.`;
-              break;
-            default:
-              msg = `FAILED: ${result.error}${result.status ? ` (status ${result.status})` : ""}`;
-          }
-          return {
-            content: [{ type: "text", text: msg }],
-            isError: true,
-          };
-        }
-
-        // JSON branch: optionally write to a file, returning only the
-        // absolute path so the caller's context isn't flooded.
-        if (name === "or_model_info_json") {
-          const jsonText = formatModelInfoJson(result.data, infoModel);
-          if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
-            const rawPath = infoFilePath.trim();
-            // Enforce absolute paths — relative paths silently resolve
-            // against process.cwd() which may surprise the caller and
-            // opens a small path-confusion window.
-            if (!isAbsolute(rawPath)) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: file_path must be an absolute path (e.g. /tmp/model-info.json). Got '${rawPath}'.`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-            let absPath: string;
-            try {
-              // Run the path through the same traversal guard as every other
-              // file-writing surface in this server. Without this an LLM that
-              // controls the tool call could overwrite arbitrary user-writable
-              // files outside the project / home / tmp roots.
-              absPath = sanitizeInputPath(rawPath);
-            } catch (err) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: refusing to write JSON to ${rawPath}: ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-            try {
-              writeFileSync(absPath, jsonText, "utf-8");
-            } catch (err) {
-              return {
-                content: [
-                  {
-                    type: "text",
-                    text: `FAILED: could not write JSON to '${absPath}': ${err instanceof Error ? err.message : String(err)}`,
-                  },
-                ],
-                isError: true,
-              };
-            }
-            return {
-              content: [
-                { type: "text", text: `JSON written to ${absPath}` },
-              ],
-            };
-          }
-          return {
-            content: [{ type: "text", text: jsonText }],
-          };
-        }
-
-        const text =
-          name === "or_model_info_table"
-            ? formatModelInfoTable(result.data, infoModel, true)
-            : formatModelInfoMarkdown(result.data, infoModel);
-
-        return {
-          content: [{ type: "text", text }],
-        };
-      }
 
       case "reset": {
         // Wait for any in-flight LLM requests to finish before resetting
@@ -6433,755 +5712,46 @@ async function dispatchCallToolInner(
         };
       }
 
-      case "session_summary": {
-        const {
-          transcript: ssTranscript,
-          session_id: ssSessionId,
-          prune: ssPruneRaw,
-          min_context: ssMinContext,
-          resume: ssResume,
-          checkpoint: ssCheckpointRaw,
-          output: ssOutputRaw,
-          stdout: ssStdoutRaw,
-          max_chunk_tokens: ssMaxChunkTokens,
-          concurrency: ssConcurrencyRaw,
-          chunk_timeout_s: ssChunkTimeoutSecRaw,
-          max_retries_per_chunk: ssMaxRetriesRaw,
-          until_done: ssUntilDoneRaw,
-        } = args as {
-          transcript?: string;
-          session_id?: string;
-          prune?: string;
-          min_context?: number;
-          resume?: boolean;
-          checkpoint?: string;
-          output?: string;
-          stdout?: boolean;
-          max_chunk_tokens?: number;
-          concurrency?: number;
-          chunk_timeout_s?: number;
-          max_retries_per_chunk?: number;
-          until_done?: boolean;
-        };
-
-        // Per-chunk deadline. An explicit value is honored verbatim (including a
-        // very large one — the caller, not this code, decides how long they are
-        // willing to wait); omitted, it defaults to a value well under the
-        // global soft timeout because a concurrent run's wall-clock is its
-        // SLOWEST chunk.
-        const ssPerChunkTimeoutMs =
-          typeof ssChunkTimeoutSecRaw === "number" && ssChunkTimeoutSecRaw > 0
-            ? Math.round(ssChunkTimeoutSecRaw * 1000)
-            : DEFAULT_CHUNK_TIMEOUT_MS;
-
-        const VALID_PRUNE_LEVELS = new Set(["aggressive", "moderate", "none"]);
-        const prune = ssPruneRaw ?? "aggressive";
-        if (!VALID_PRUNE_LEVELS.has(prune)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `FAILED: --prune must be one of aggressive, moderate, none (got '${prune}')`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        let transcriptPath: string;
-        try {
-          transcriptPath = resolveTranscriptPath({
-            transcriptPath: ssTranscript,
-            sessionId: ssSessionId,
-          });
-        } catch (err) {
-          return {
-            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
-            isError: true,
-          };
-        }
-
-        // Cost-safety + eligibility: catalog-only, $0. selectModels() itself
-        // routes every candidate id through assertFreeOnlyModel — this call
-        // can never hand back a paid model (see model-select.ts's own header).
-        // Biggest-context-first, no implicit floor: "the biggest free model
-        // with the biggest context memory" available today. The whole
-        // ordered list (minus whatever lacks a usable completion ceiling)
-        // is handed to the driver as a fallback chain — see driver.ts.
-        // TRDD-TYHKAKCB: the selection (remote free models first, the first fit managed local model last, local-only
-        // under a local profile) lives in session_summary/local-model.ts; index.ts only injects what lives here.
-        let eligible;
-        let ssLocal;
-        try {
-          ({ models: eligible, local: ssLocal } = await resolveSessionSummaryChain({
-            active: activeResolved, profiles: activeSettings.profiles, minContext: ssMinContext, dir: getConfigDir(), slotCtx: brokerSlotCtx,
-            selectRemote: (minContext) => selectModels({ minContext }),
-            depsFor: (p) => makeProviderDeps(p, makeBackendFromProfile(p)),
-            startCalibrationRunner: () => ensureCalibrator({ dir: getConfigDir(), version: brokerClientVersion(), entry: defaultBrokerEntry() }),
-            waitForCalibration: (models, head) => waitForCalibration({ dir: getConfigDir(), models, head, start: () => startCalibration(models), sleep: stoppableSleep, stopReason: commandStopReason, write: (l) => process.stderr.write(l) }),
-          }));
-        } catch (err) {
-          return {
-            content: [{ type: "text", text: `FAILED: ${err instanceof Error ? err.message : String(err)}` }],
-            isError: true,
-          };
-        }
-        const model = eligible[0];
-        const fallbackModels = eligible.slice(1);
-
-        const checkpointPath = ssCheckpointRaw
-          ? resolve(ssCheckpointRaw)
-          : defaultCheckpointPath(transcriptPath, getConfigDir());
-
-        if (ssResume === true && !existsSync(checkpointPath)) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  `FAILED: --resume was given but no checkpoint exists at ${checkpointPath} for ` +
-                  `this transcript. Re-run without --resume to start a fresh run (it will create one).`,
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // The injected model-call seam driver.ts requires (see its own header):
-        // pure core + thin IO shell. This is the only place session-summary
-        // touches the network — driver.ts and its tests never do.
-        const callModel: CallModelFn = async (prompt, modelId, maxOutputTokens, signal) => {
-          const resp = await chatCompletionWithRetry(
-            [{ role: "user", content: prompt }],
-            {
-              model: modelId,
-              maxTokens: maxOutputTokens,
-              temperature: DEFAULT_TEMPERATURE,
-              onProgress,
-              // A per-chunk deadline TIGHTER than the global soft timeout.
-              // Under concurrency the map phase's wall-clock is the SLOWEST
-              // chunk, so one straggler allowed to run the full global 300s
-              // drags the entire run out even though every sibling finished
-              // minutes earlier. Measured spread on same-sized chunks was 4.4x
-              // (90s to 400s), so the tail — not the median — is the cost.
-              // Exceeding this aborts the chunk, which then rotates/retries
-              // like any other transient rather than hanging (TRDD-0H5N1V9W
-              // made the deadline actually cover generation; before that fix
-              // this value would have bounded only time-to-first-byte).
-              // Round C item 5 (TRDD-YG72CYY7): ssPerChunkTimeoutMs is a
-              // WHOLE-CHUNK wall-clock budget (driver.ts races the entire
-              // chunk call against it), so the retry window must end with it —
-              // without deadlineAt each chunk gets a private default 300s
-              // retry window and can run 5 minutes past its own timeout.
-              deadlineAt: Date.now() + ssPerChunkTimeoutMs,
-              timeoutMs: ssPerChunkTimeoutMs,
-              // Issue 19 / TRDD-3SNQAGIC: the driver cancels a losing racer through this signal once its
-              // chunk is committed, so the request, its deadline timer and its retry backoff stop at once
-              // instead of keeping the process alive to the 600 s chunk deadline.
-              signal,
+      case "session_summary":
+        return await handleSessionSummary(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            DEFAULT_TEMPERATURE,
+            brokerSlotCtx,
+            makeBackendFromProfile,
+            makeProviderDeps,
+            providerDeps,
+            saveResponse,
+            startCalibration,
+            get activeResolved() {
+              return activeResolved;
             },
-            // TRDD-TYHKAKCB: the local model goes through its own profile deps (its broker, which holds the governor lease).
-            ssLocal !== null && ssLocal.modelId === modelId ? ssLocal.deps : providerDeps,
-          );
-          if (resp.finishReason === "error") {
-            throw new Error(`model call to '${modelId}' failed (finishReason=error): ${resp.content || "no detail"}`);
-          }
-          // An empty/whitespace-only completion is deliberately NOT thrown
-          // here as a generic error — it is returned as-is so driver.ts's
-          // own "no-text" runtime evidence check (its permissive modality
-          // selection needs this backstop) can classify it as a
-          // fallback-eligible model failure and demote the model, instead
-          // of it being misread as a retryable schema bug.
-          return resp.content;
-        };
-
-        // Concurrency: an explicit --concurrency (including 1, to force the
-        // original sequential behavior) is honored verbatim; omitted, the
-        // CLI opts every real invocation into "auto" — see driver.ts's own
-        // header for why the LIBRARY default stays 1.
-        // Omitted => "auto": the driver sizes the pool to the chunk count
-        // (min(chunks, MAX_AUTO_CONCURRENCY)) so the map phase stays SINGLE-WAVE.
-        // A fixed 12 forced e.g. 27 chunks into three waves and roughly tripled
-        // wall-clock for nothing — the account admits far more than 12 at once.
-        const concurrency: number | "auto" =
-          typeof ssConcurrencyRaw === "number" ? ssConcurrencyRaw : "auto";
-
-        // Per-chunk progress lines labeled by chunk index, so N chunks in
-        // flight at once still read clearly instead of interleaving
-        // anonymous "Processing… Ns elapsed" lines (each chunk is its own
-        // named line; a "done" line always carries the SAME chunk index and
-        // its own elapsed time, however many other chunks completed first).
-        const onChunkEvent = (event: ChunkEvent) => {
-          const label = `[chunk ${event.chunkIndex + 1}/${event.totalChunks}]`;
-          if (event.phase === "start") {
-            process.stderr.write(`${label} started\n`);
-          } else {
-            const secs = ((event.elapsedMs ?? 0) / 1000).toFixed(1);
-            // Say WHICH racer won when the single-chunk race decided this
-            // chunk. Without it a "done in 84.2s" line is unattributable: it
-            // reads identically whether the race won in 84s or whether every
-            // racer failed after minutes and the sequential fallback then
-            // took 84s. Those are opposite outcomes and the fix for each is
-            // different, so the line must distinguish them.
-            const race =
-              event.raceWinnerModel !== undefined
-                ? ` (race of ${event.raceSize ?? "?"} won by ${event.raceWinnerModel})`
-                : "";
-            process.stderr.write(`${label} done in ${secs}s${race}\n`);
-          }
-        };
-
-        // --until-done: keep going until the summary exists.
-        //
-        // The driver is deliberately checkpoint-and-stop: a chunk gets
-        // maxRetriesPerChunk attempts on a model, a dead/quota-capped model is
-        // demoted to the next ranked free one, and when those run out the run
-        // THROWS with a resumable checkpoint. That is the right default — a
-        // command that reports a problem beats one that silently sits on it.
-        //
-        // It is the wrong default for an unattended compaction that must
-        // eventually produce a summary. Retrying is cheap and correct here
-        // BECAUSE of the checkpoint: each pass re-reads the checkpoint, keeps
-        // every chunk that landed, and only redoes what did not. Re-entering
-        // summarizeSession (rather than looping inside it) also re-resolves the
-        // model list, so a model that was quota-capped last pass is picked up
-        // again once its quota resets.
-        const untilDone = ssUntilDoneRaw === true;
-
-        let result;
-        for (let attempt = 1; ; attempt++) {
-          try {
-            result = await summarizeSession({
-              transcriptPath,
-              checkpointPath,
-              modelId: model.id,
-              modelMaxContext: model.contextLength,
-              modelMaxCompletionTokens: model.maxCompletionTokens,
-              // TRDD-TYHKAKCB: a local-only chain (remote selection failed, or a local profile) starts on the local model.
-              modelLocal: model.local,
-              fallbackModels,
-              callModel,
-              pruneLevel: prune as "aggressive" | "moderate" | "none",
-              maxChunkTokens: typeof ssMaxChunkTokens === "number" ? ssMaxChunkTokens : undefined,
-              maxRetriesPerChunk:
-                typeof ssMaxRetriesRaw === "number" && ssMaxRetriesRaw >= 0
-                  ? Math.floor(ssMaxRetriesRaw)
-                  : undefined,
-              concurrency,
-              onChunkEvent,
-            });
-            break;
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            // WHY: --until-done retries every failure, so without this a command stopped by --command_timeout would keep
-            // retrying (and sleeping) a request that can no longer start; a stopped command fails once, with the stop reason.
-            if (!untilDone || commandStopReason() !== null) {
-              return {
-                content: [{ type: "text", text: `FAILED: ${msg}` }],
-                isError: true,
-              };
-            }
-            const backoffMs = untilDoneBackoffMs(attempt, looksQuotaCapped(msg));
-            process.stderr.write(
-              `[llm-externalizer] session-summary attempt ${attempt} failed: ${msg}\n` +
-                `[llm-externalizer] --until-done: retrying in ${Math.round(backoffMs / 1000)}s ` +
-                `(resumes from the checkpoint; completed chunks are not recomputed)\n`,
-            );
-            // WHY stoppableSleep: this backoff can be minutes; a stop must end it at once (the next pass fails with the stop reason).
-            await stoppableSleep(backoffMs);
-          }
-        }
-
-        // The outcome, not the inputs. Chunk counts, lines read and the prune
-        // ratio all describe how the work was done; this is the one number the
-        // command exists to produce, and until now a reader had to stat two
-        // files by hand to get it. Printed to stderr as well as embedded in the
-        // report, because the command's stdout is a PATH — a caller who never
-        // opens the report would otherwise never see it.
-        const summaryBytes = Buffer.byteLength(result.summary, "utf8");
-        const sizeLine = formatSizeReport(
-          result.transcriptStats.bytesIn,
-          summaryBytes,
-          result.transcriptStats.bytesOut,
+            get activeSettings() {
+              return activeSettings;
+            },
+          },
         );
-        process.stderr.write(`[llm-externalizer] ${sizeLine}\n`);
-
-        const fallbackLines = result.fallbackEvents.map(
-          (e) => `  ${e.atUnit}: '${e.fromModel}' -> '${e.toModel}' (${e.reason}: ${e.detail})`,
-        );
-        const header =
-          `Model: ${result.modelId} (context ${eligible.find((m) => m.id === result.modelId)?.contextLength.toLocaleString() ?? "?"})\n` +
-          (result.fallbackEvents.length > 0
-            ? `Model fallbacks (started on '${model.id}'):\n${fallbackLines.join("\n")}\n`
-            : "") +
-          `Transcript: ${transcriptPath}\n` +
-          `Chunks: ${result.totalChunks}\n` +
-          `Lines read: ${result.transcriptStats.linesRead}, prune ratio: ` +
-          `${result.transcriptStats.pruneRatio.toFixed(3)} (level: ${prune})\n` +
-          `${sizeLine}\n` +
-          (result.resumedFromCheckpoint
-            ? `Resumed from checkpoint: ${result.checkpointPath}\n`
-            : `Checkpoint: ${result.checkpointPath}\n`);
-
-        // Final-assembly gate (TRDD-P4ULUV1R; reported by the janitor's
-        // handoff composer 2026-08-18): a run whose ASSEMBLED summary is
-        // empty must not exit 0 — with --stdout that shipped literally
-        // nothing at a zero exit, 14 consecutive times on one host, and the
-        // caller had no honest way to classify it. The per-response no-text
-        // gate upstream cannot cover this: it judges one model reply, not
-        // the reduce result. Wording deliberately avoids availability
-        // vocabulary (quota/404/etc.) — classifyUnavailable substring-
-        // matches, and this verdict must never sideline a model (same
-        // reason as the (nonconforming) path, v13.5.5).
-        if (result.summary.trim().length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  "FAILED: session-summary assembled an empty summary " +
-                  `(${result.totalChunks} chunk(s) mapped; transcript ${transcriptPath}). ` +
-                  "Retry is reasonable; the checkpoint is preserved.",
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // --stdout (opt-in, caller-selected): return the summary TEXT
-        // directly instead of writing a report file and returning its path.
-        // Deliberately skips saveResponse entirely in this mode — "stdout
-        // carries ONLY the summary text" (definitions.ts) means no header,
-        // no file, no path line; a caller that wants both the direct text
-        // AND a persisted report should omit --stdout and read the file.
-        if (ssStdoutRaw === true) {
-          return { content: [{ type: "text", text: result.summary }] };
-        }
-
-        const ssOutputDir =
-          typeof ssOutputRaw === "string" && ssOutputRaw.trim() ? resolve(ssOutputRaw.trim()) : undefined;
-        const savedPath = saveResponse(
-          "session_summary",
-          `${header}\n---\n\n${result.summary}`,
-          { model: result.modelId, task: `session-summary of ${transcriptPath}` },
-          undefined,
-          ssOutputDir,
-        );
-        return { content: [{ type: "text", text: savedPath }] };
-      }
 
       // ── Batch Operations ──────────────────────────────────────────────
 
-      case "batch_check": {
-        const {
-          instructions: bcInstructions,
-          instructions_files_paths: bcInstructionsFilesPaths,
-          input_files_paths: bcInputPaths,
-          answer_mode: bcRawMode,
-          scan_secrets: bcScan,
-          redact_secrets: bcRedact,
-          redact_regex: bcRedactRegexRaw,
-          max_payload_kb: bcMaxPayloadKb,
-          folder_path: bcFolderPath,
-          extensions: bcExtensions,
-          exclude_dirs: bcExcludeDirs,
-          use_gitignore: bcUseGitignore,
-          recursive: bcRecursive,
-          follow_symlinks: bcFollowSymlinks,
-          max_files: bcMaxFiles,
-        } = args as {
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          input_files_paths: string[];
-          answer_mode?: number;
-          scan_secrets?: boolean;
-          redact_secrets?: boolean;
-          redact_regex?: string;
-          max_payload_kb?: number;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          recursive?: boolean;
-          follow_symlinks?: boolean;
-          max_files?: number;
-        };
-        const bcUseEnsemble = ensembleAllowed(backend, activeResolved); // P8: one predicate (see ensembleAllowed)
-        const bcBudgetBytes = (bcMaxPayloadKb ?? 400) * 1024;
-        const bcMode = resolveAnswerMode(bcRawMode, 0);
-
-        // Validate redact_regex
-        let bcRegexRedact: RegexRedactOpts | null = null;
-        try {
-          bcRegexRedact = parseRedactRegex(bcRedactRegexRaw);
-        } catch (err) {
-          return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true };
-        }
-
-        let bcNormalizedPaths = normalizePaths(bcInputPaths);
-        if (bcFolderPath) {
-          const folderResult = resolveFolderPath(bcFolderPath, {
-            extensions: bcExtensions, excludeDirs: bcExcludeDirs,
-            useGitignore: bcUseGitignore, recursive: bcRecursive,
-            followSymlinks: bcFollowSymlinks, maxFiles: bcMaxFiles,
-          });
-          if (folderResult.error && folderResult.files.length === 0 && bcNormalizedPaths.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-          }
-          bcNormalizedPaths = [...bcNormalizedPaths, ...folderResult.files];
-        }
-        if (bcNormalizedPaths.length === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "FAILED: input_files_paths or folder_path is required.",
-              },
-            ],
-            isError: true,
-          };
-        }
-
-        // Deduplicate file paths to avoid redundant LLM calls
-        const uniqueFiles = [...new Set(bcNormalizedPaths)];
-
-        // scan_secrets: abort if any secrets are found in input files.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (bcScan && !bcRedact) {
-          // Filter out group markers before scanning
-          const realFiles = uniqueFiles.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          if (realFiles.length > 0) {
-            const scanResult = scanFilesForSecrets(realFiles);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true,
-              };
-          }
-        }
-
-        // ── Group-aware: if groups present (or mode 1 auto-groups),
-        // process each group independently. answer_mode=1 uses the
-        // heuristic auto-grouper when no ---GROUP:id--- markers are given.
-        let bcFileGroups = parseFileGroups(uniqueFiles);
-        let bcEffectivelyGrouped = hasNamedGroups(bcFileGroups);
-        if (bcMode === 1 && !bcEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(uniqueFiles);
-          if (autoGroups.length > 0) {
-            bcFileGroups = autoGroups;
-            bcEffectivelyGrouped = true;
-          }
-        }
-        if (bcEffectivelyGrouped) {
-          const bcGroupReports: string[] = [];
-          for (const fg of bcFileGroups) {
-            if (fg.files.length === 0) continue;
-            const gid = fg.id || "auto";
-            const gBatchId = randomUUID();
-            const gTask = resolvePrompt(bcInstructions, bcInstructionsFilesPaths).trim() ||
-              "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures.";
-            const gRl = await getRateLimitConfig();
-            // Circuit-breaker + retry, mirroring the non-grouped branch below. The tool's
-            // documented contract ("3 attempts for recoverable errors; aborts on 3+
-            // consecutive failures") must apply equally to grouped runs — without this
-            // the grouped path would retry zero times and keep hammering a dead backend.
-            const gRecentOutcomes: boolean[] = [];
-            let gAborted = false;
-            let gAbortReason = "";
-            let gTotalAttempts = 0;
-            const gMaxTotalAttempts = fg.files.length * 2;
-            const gTasks = fg.files.map((filePath, idx) => async () => {
-              if (gAborted) {
-                return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
-              }
-              for (let attempt = 1; attempt <= 3; attempt++) {
-                if (++gTotalAttempts > gMaxTotalAttempts) {
-                  gAborted = true;
-                  gAbortReason = `Global retry budget exhausted (${gMaxTotalAttempts} total attempts)`;
-                }
-                if (gAborted) {
-                  return { filePath, success: false, error: "Batch aborted" } as FileProcessResult;
-                }
-                try {
-                  const result = await processFileCheck(filePath, gTask, {
-                    maxTokens: resolveDefaultMaxTokens(),
-                    batchId: gBatchId, fileIndex: idx,
-                    redact: bcRedact, regexRedact: bcRegexRedact, onProgress, ensemble: bcUseEnsemble, maxBytes: bcBudgetBytes, modelOverride,
-                    // TRDD-PNU8XECB: a grouped run always merges these per-file pieces into one report per group,
-                    // so the pieces are intermediate (reports_dev) and only the merged report lands in reports/.
-                    outputDir: mergePieceDir(outputDir, true),
-                  });
-                  gRecentOutcomes.push(result.success);
-                  return result;
-                } catch (err) {
-                  const classified = classifyError(err);
-                  if (classified.unrecoverable) {
-                    if (classified.serviceLevel) {
-                      gAborted = true;
-                      gAbortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
-                    }
-                    // A closed retry window is final for this file but still a failed
-                    // outcome (see the batch_check loop below).
-                    if (classified.countsAsFailure && recordFailedOutcome(gRecentOutcomes)) {
-                      gAborted = true;
-                      gAbortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
-                    }
-                    return { filePath, success: false, error: classified.reason } as FileProcessResult;
-                  }
-                  if (attempt < 3) {
-                    const delayMs = Math.pow(3, attempt - 1) * 1000;
-                    await new Promise((r) => setTimeout(r, delayMs));
-                    continue;
-                  }
-                  gRecentOutcomes.push(false);
-                  if (
-                    gRecentOutcomes.length >= 3 &&
-                    gRecentOutcomes.slice(-3).every((v) => !v)
-                  ) {
-                    gAborted = true;
-                    gAbortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
-                  }
-                  return { filePath, success: false, error: `Failed after 3 retries: ${classified.reason}` } as FileProcessResult;
-                }
-              }
-              return { filePath, success: false, error: "Unexpected retry loop exit" } as FileProcessResult;
-            });
-            const gAll = await rateLimitedParallel(gTasks, gRl.rps, gRl.maxInFlight, onProgress);
-            const gSucceeded = gAll.filter((r) => r.success);
-            // Merge into one report per group
-            const reportSections: string[] = [];
-            for (const r of gSucceeded) {
-              const content = r.reportPath && existsSync(r.reportPath)
-                ? readFileSync(r.reportPath, "utf-8") : "";
-              reportSections.push(`## File: ${r.filePath}\n\n${content}`);
-            }
-            const gFailed: FileProcessResult[] = gAll.filter((r) => !r.success);
-            if (gFailed.length > 0) {
-              reportSections.push(`## FAILED (${gFailed.length})\n\n${gFailed.map((r) => `- ${r.filePath}: ${r.error}`).join("\n")}`);
-            }
-            if (gAborted) {
-              reportSections.push(`## BATCH ABORTED\n\n${gAbortReason}`);
-            }
-            if (reportSections.length > 0) {
-              const mergedContent = reportSections.join("\n\n---\n\n");
-              const mergedPath = saveResponse(
-                "batch_check",
-                mergedContent,
-                { model: backend.model, task: gTask, inputFile: fg.files[0], groupId: gid },
-                undefined,
-                outputDir,
-              );
-              bcGroupReports.push(`[group:${gid}] ${mergedPath}`);
-            }
-          }
-          if (bcGroupReports.length === 0) {
-            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
-          }
-          return { content: [{ type: "text", text: bcGroupReports.join("\n") }] };
-        }
-
-        const batchId = randomUUID();
-        const defaultTask =
-          "Find all bugs, type errors, logic errors, security vulnerabilities, and potential runtime failures. Be specific — reference line numbers and function names.";
-        // Resolve prompt from instructions + instructions_files_paths
-        const bcPrompt = resolvePrompt(
-          bcInstructions,
-          bcInstructionsFilesPaths,
+      case "batch_check":
+        return await handleBatchCheck(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            classifyError,
+            ensembleAllowed,
+            getRateLimitConfig,
+            normalizePaths,
+            processFileCheck,
+            recordFailedOutcome,
+            resolveDefaultMaxTokens,
+            resolveFolderPath,
+            saveResponse,
+            get activeResolved() {
+              return activeResolved;
+            },
+          },
         );
-        const resolvedTask = bcPrompt.trim() || defaultTask;
-        const bcRl = await getRateLimitConfig();
-
-        // Sliding window of recent completion outcomes for circuit breaker.
-        // Under parallel execution, "consecutive" is meaningless — instead we track
-        // the last N completions and abort if the tail is all failures.
-        const recentOutcomes: boolean[] = [];
-        let aborted = false;
-        let abortReason = "";
-        // H3: Global retry cap — max 2× file count total attempts to prevent quota exhaustion
-        let totalAttempts = 0;
-        const maxTotalAttempts = uniqueFiles.length * 2;
-
-        const tasks = uniqueFiles.map((filePath, idx) => async () => {
-          // If batch was aborted by a prior task, skip remaining files
-          if (aborted) {
-            return {
-              filePath,
-              success: false,
-              error: "Batch aborted",
-            } as FileProcessResult;
-          }
-
-          // Retry loop — up to 3 attempts for recoverable errors
-          for (let attempt = 1; attempt <= 3; attempt++) {
-            // H3: Check global retry budget before each attempt
-            if (++totalAttempts > maxTotalAttempts) {
-              aborted = true;
-              abortReason = `Global retry budget exhausted (${maxTotalAttempts} total attempts)`;
-            }
-            // Re-check abort flag before each retry to avoid wasting calls after abort
-            if (aborted) {
-              return {
-                filePath,
-                success: false,
-                error: "Batch aborted",
-              } as FileProcessResult;
-            }
-            try {
-              const result = await processFileCheck(filePath, resolvedTask, {
-                maxTokens: resolveDefaultMaxTokens(),
-                batchId,
-                fileIndex: idx,
-                redact: bcRedact,
-                regexRedact: bcRegexRedact,
-                onProgress,
-                ensemble: bcUseEnsemble,
-                maxBytes: bcBudgetBytes,
-                modelOverride,
-                // TRDD-PNU8XECB: modes 1/2 merge these per-file pieces into one final report, so the
-                // pieces are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
-                outputDir: mergePieceDir(outputDir, bcMode === 1 || bcMode === 2),
-              });
-              recentOutcomes.push(result.success);
-              // Report per-file batch progress
-              if (onProgress) {
-                const completed = recentOutcomes.length;
-                onProgress(
-                  completed,
-                  uniqueFiles.length,
-                  `batch_check: ${completed}/${uniqueFiles.length} files done`,
-                );
-              }
-              return result;
-            } catch (err) {
-              const classified = classifyError(err);
-              if (classified.unrecoverable) {
-                if (classified.serviceLevel) {
-                  // Service-level error (auth/payment) — abort the entire batch
-                  aborted = true;
-                  abortReason = `Unrecoverable service error on ${filePath}: ${classified.reason}`;
-                }
-                // A closed retry window is final for this file but still a failed
-                // outcome: without this the "3 of the last 3 failed" abort never
-                // saw it (only the retried-then-exhausted path below pushed false).
-                if (classified.countsAsFailure && recordFailedOutcome(recentOutcomes)) {
-                  aborted = true;
-                  abortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
-                }
-                // File-level error (not found) — fail this file only, don't abort batch
-                return {
-                  filePath,
-                  success: false,
-                  error: classified.reason,
-                } as FileProcessResult;
-              }
-              // Recoverable — retry with exponential backoff (1s, 3s)
-              if (attempt < 3) {
-                const delayMs = Math.pow(3, attempt - 1) * 1000;
-                await new Promise((r) => setTimeout(r, delayMs));
-                continue;
-              }
-              // All retries exhausted — record failure in sliding window
-              // Check if last 3 completions are all failures
-              if (recordFailedOutcome(recentOutcomes)) {
-                aborted = true;
-                abortReason = `3 of the last 3 completions failed — possible connectivity or service issue. Last error: ${classified.reason}`;
-              }
-              return {
-                filePath,
-                success: false,
-                error: `Failed after 3 retries: ${classified.reason}`,
-              } as FileProcessResult;
-            }
-          }
-          return {
-            filePath,
-            success: false,
-            error: "Unexpected retry loop exit",
-          } as FileProcessResult;
-        });
-
-        const batchResults = await rateLimitedParallel(tasks, bcRl.rps, bcRl.maxInFlight, onProgress);
-
-        // Categorize results
-        const succeeded = batchResults.filter((r) => r.success);
-        const failed = batchResults.filter(
-          (r) => !r.success && r.error !== "Batch aborted",
-        );
-        const skipped = batchResults.filter((r) => r.error === "Batch aborted");
-
-        // For modes 1/2: merge individual report files into one output
-        // BUT: skip merge if any files failed — incomplete merge is misleading
-        if ((bcMode === 1 || bcMode === 2) && succeeded.length > 0) {
-          if (failed.length > 0 || aborted) {
-            // Some files failed — skip merge, fall through to mode-0 per-file listing
-            // so the agent sees exactly which files succeeded and which failed
-          } else {
-            // All files succeeded — safe to merge reports
-            const reportSections: string[] = [];
-            for (const r of succeeded) {
-              const content =
-                r.reportPath && existsSync(r.reportPath)
-                  ? readFileSync(r.reportPath, "utf-8")
-                  : "";
-              reportSections.push(`## File: ${r.filePath}\n\n${content}`);
-            }
-            const mergedContent = reportSections.join("\n\n---\n\n");
-            const mergedPath = saveResponse(
-              "batch_check",
-              mergedContent,
-              { model: backend.model, task: resolvedTask, inputFile: uniqueFiles[0] },
-              undefined,
-              outputDir,
-            );
-            const bcSummary: string[] = [
-              `BATCH CHECK COMPLETE — ${succeeded.length} succeeded (${uniqueFiles.length} total) — ${formatUsageTotals(batchResults)}`,
-              `Batch UUID: ${batchId}`,
-              `MERGED REPORT: ${mergedPath}`,
-            ];
-            return { content: [{ type: "text", text: bcSummary.join("\n") }] };
-          }
-        }
-
-        // Mode 0 (default): list individual report paths
-        const summaryLines: string[] = [
-          `BATCH CHECK COMPLETE — ${succeeded.length} succeeded, ${failed.length} failed, ${skipped.length} skipped (${uniqueFiles.length} total) — ${formatUsageTotals(batchResults)}`,
-          `Batch UUID: ${batchId}`,
-          "",
-        ];
-        if (uniqueFiles.length < bcNormalizedPaths.length) {
-          summaryLines.push(
-            `Note: ${bcNormalizedPaths.length - uniqueFiles.length} duplicate path(s) removed.`,
-          );
-        }
-
-        if (succeeded.length > 0) {
-          summaryLines.push("REPORTS:");
-          for (const r of succeeded) {
-            summaryLines.push(`  ${r.reportPath}`);
-          }
-        }
-        // Follow-up review M1/m2: once stopped, every non-success file is named (skipped ones too), instead of FAILED and a SKIPPED count.
-        if (failed.length > 0 && !isCommandStopped()) {
-          summaryLines.push("", failedHeader(failed.length, uniqueFiles.length));
-          for (const r of failed) {
-            summaryLines.push(`  ${r.filePath}: ${r.error}`);
-          }
-        }
-        if (skipped.length > 0 && !isCommandStopped()) {
-          summaryLines.push(
-            "",
-            `SKIPPED (batch aborted): ${skipped.length} file(s)`,
-          );
-        }
-        summaryLines.push(...unfinishedFileLines(batchResults));
-        if (aborted) {
-          summaryLines.push("", `BATCH ABORTED: ${abortReasonText(abortReason)}`);
-        }
-        return {
-          content: [{ type: "text", text: summaryLines.join("\n") }],
-          ...runOutcome(aborted, failed.length, succeeded.length),
-        };
-      }
 
       // ── Specialized Operations ──────────────────────────────────────
 
@@ -7674,615 +6244,38 @@ async function dispatchCallToolInner(
         return { content: [{ type: "text", text: cfReportPath }] };
       }
 
-      case "check_references": {
-        const {
-          input_files_paths: crInputPathsRaw,
-          instructions: crInstructions,
-          instructions_files_paths: crInstructionsFilesPaths,
-          redact_secrets: crRedact,
-          answer_mode: crRawMode,
-          scan_secrets: crScan,
-          max_payload_kb: crMaxPayloadKb,
-          redact_regex: crRedactRegexRaw,
-          folder_path: crFolderPath,
-          extensions: crExtensions,
-          exclude_dirs: crExcludeDirs,
-          use_gitignore: crUseGitignore,
-          recursive: crRecursive,
-          follow_symlinks: crFollowSymlinks,
-          max_files: crMaxFiles,
-        } = args as {
-          input_files_paths: string | string[];
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          redact_secrets?: boolean;
-          answer_mode?: number;
-          scan_secrets?: boolean;
-          max_payload_kb?: number;
-          redact_regex?: string;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          recursive?: boolean;
-          follow_symlinks?: boolean;
-          max_files?: number;
-        };
-        const crUseEnsemble = ensembleAllowed(backend, activeResolved); // P8: one predicate (see ensembleAllowed)
-        const crBudgetBytes = (crMaxPayloadKb ?? 400) * 1024;
-
-        let crRegexRedact: RegexRedactOpts | null = null;
-        try { crRegexRedact = parseRedactRegex(crRedactRegexRaw); }
-        catch (err) { return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true }; }
-
-        let crFilePathsAll = [...new Set(normalizePaths(crInputPathsRaw))];
-        if (crFolderPath) {
-          const folderResult = resolveFolderPath(crFolderPath, {
-            extensions: crExtensions, excludeDirs: crExcludeDirs,
-            useGitignore: crUseGitignore, recursive: crRecursive,
-            followSymlinks: crFollowSymlinks, maxFiles: crMaxFiles,
-          });
-          if (folderResult.error && folderResult.files.length === 0 && crFilePathsAll.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-          }
-          crFilePathsAll = [...new Set([...crFilePathsAll, ...folderResult.files])];
-        }
-        if (crFilePathsAll.length === 0) {
-          return {
-            content: [
-              { type: "text", text: "FAILED: input_files_paths or folder_path is required." },
-            ],
-            isError: true,
-          };
-        }
-
-        // scan_secrets: abort if any secrets are found.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (crScan && !crRedact) {
-          const crRealFiles = crFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          if (crRealFiles.length > 0) {
-            const scanResult = scanFilesForSecrets(crRealFiles);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true,
-              };
-          }
-        }
-
-        const crPrompt = resolvePrompt(
-          crInstructions,
-          crInstructionsFilesPaths,
-        );
-        const crMode = resolveAnswerMode(crRawMode, 0);
-
-        // ── Group-aware processing ──
-        // answer_mode=1 means "one report per group". If the caller did not
-        // supply ---GROUP:id--- markers, auto-group files by heuristic so
-        // the grouped-output path below can run unchanged.
-        let crFileGroups = parseFileGroups(crFilePathsAll);
-        let crEffectivelyGrouped = hasNamedGroups(crFileGroups);
-        if (crMode === 1 && !crEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(crFilePathsAll);
-          if (autoGroups.length > 0) {
-            crFileGroups = autoGroups;
-            crEffectivelyGrouped = true;
-          }
-        }
-
-        if (crEffectivelyGrouped) {
-          const crGroupReports: string[] = [];
-          for (const fg of crFileGroups) {
-            if (fg.files.length === 0) continue;
-            const gid = fg.id || "auto";
-            const gReports: string[] = [];
-            for (const filePath of fg.files) {
-              if (!existsSync(filePath)) { gReports.push(`## ${filePath}\n\nFAILED: File not found.`); continue; }
-              const src = readFileSync(filePath, "utf-8");
-              const lang = detectLang(filePath);
-              const deps = extractLocalImports(filePath, src);
-              const depBlocks: string[] = [];
-              for (const dp of deps) { try { depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact)); } catch { /* skip */ } }
-              const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
-              // P7 round 3 (M4): one request carries the source AND every dependency, so under a calibrated budget the total is capped.
-              depBlocks.splice(0, depBlocks.length, ...capDependencyBlocks(filePath, srcBlock, depBlocks, crBudgetBytes));
-              const msgs: ChatMessage[] = [
-                { role: "system", content: `Expert ${lang} developer. Check the source file for broken or outdated references to functions, variables, constants, types, and classes. Cross-reference all symbols against the dependency files provided. Report each broken reference with: the symbol name, the function/class/method where it is used (never by line number), and what is wrong. Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES },
-                { role: "user", content: `${crPrompt ? crPrompt + "\n\n" : ""}Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n${depBlocks.length > 0 ? `## Local Dependencies (${deps.length} files)\n\n${depBlocks.join("\n\n")}` : "## No local dependencies resolved."}` },
-              ];
-              const resp = await ensembleStreaming(msgs, { temperature: DEFAULT_TEMPERATURE, maxTokens: resolveDefaultMaxTokens(), onProgress, modelOverride }, crUseEnsemble, src.split("\n").length);
-              const footer = formatFooter(resp, "check_references", filePath);
-              // Shared response gate (TRDD-P4ULUV1R): an echoed reply (the
-              // source file returned verbatim) is dropped like an empty one.
-              if (gateLLMResponse(resp.content, String(msgs[1].content)) === null) {
-                const depInfo = deps.length > 0 ? `\n\nDependencies checked: ${deps.map((p) => `\`${p}\``).join(", ")}` : "";
-                gReports.push(`## File: ${filePath}${depInfo}\n\n${resp.content}${footer}`);
-              }
-            }
-            if (gReports.length > 0) {
-              const mergedPath = saveResponse(
-                "check_references",
-                gReports.join("\n\n---\n\n"),
-                { model: backend.model, task: "Check references", inputFile: fg.files[0], groupId: gid },
-                undefined,
-                outputDir,
-              );
-              crGroupReports.push(`[group:${gid}] ${mergedPath}`);
-            }
-          }
-          if (crGroupReports.length === 0) {
-            return { content: [{ type: "text", text: "FAILED: No results for any group." }], isError: true };
-          }
-          return { content: [{ type: "text", text: crGroupReports.join("\n") }] };
-        }
-
-        // Non-grouped: existing behavior
-        const crFilePaths = crFilePathsAll;
-        const crReports: string[] = [];
-        const crReportPaths: string[] = [];
-
-        for (const filePath of crFilePaths) {
-          if (!existsSync(filePath)) {
-            crReports.push(`## ${filePath}\n\nFAILED: File not found.`);
-            crReportPaths.push("(skipped — file not found)");
-            continue;
-          }
-          const crSourceCode = readFileSync(filePath, "utf-8");
-          const crLang = detectLang(filePath);
-
-          // Auto-resolve local imports and read dependency files
-          const depPaths = extractLocalImports(filePath, crSourceCode);
-          const depBlocks: string[] = [];
-          for (const dp of depPaths) {
-            try {
-              depBlocks.push(readFileAsCodeBlock(dp, undefined, crRedact, crBudgetBytes, crRegexRedact));
-            } catch {
-              /* skip unreadable */
-            }
-          }
-
-          const srcBlock = readFileAsCodeBlock(filePath, undefined, crRedact, crBudgetBytes, crRegexRedact);
-          // P7 round 3 (M4): one request carries the source AND every dependency, so under a calibrated budget the total is capped.
-          depBlocks.splice(0, depBlocks.length, ...capDependencyBlocks(filePath, srcBlock, depBlocks, crBudgetBytes));
-          const crMessages: ChatMessage[] = [
-            {
-              role: "system",
-              content:
-                `Expert ${crLang} developer. Check the source file for broken or outdated references to ` +
-                "functions, variables, constants, types, and classes. Cross-reference all symbols against the " +
-                "dependency files provided. Report each broken reference with: the symbol name, the function/class/method " +
-                "where it is used (never by line number), and what is wrong (missing, renamed, wrong signature, deprecated). " +
-                "Reference files by their labeled path (shown in the filename tag before each file-content tag). If all references are valid, say so." +
-                FILE_FORMAT_EXAMPLE + BREVITY_RULES,
+      case "check_references":
+        return await handleCheckReferences(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            DEFAULT_TEMPERATURE,
+            capDependencyBlocks,
+            ensembleAllowed,
+            ensembleStreaming,
+            formatFooter,
+            normalizePaths,
+            resolveDefaultMaxTokens,
+            resolveFolderPath,
+            saveResponse,
+            get activeResolved() {
+              return activeResolved;
             },
-            {
-              role: "user",
-              content:
-                `${crPrompt ? crPrompt + "\n\n" : ""}` +
-                `Check this file for broken code references:\n\n## Source File\n\n${srcBlock}\n\n` +
-                (depBlocks.length > 0
-                  ? `## Local Dependencies (${depPaths.length} files)\n\n${depBlocks.join("\n\n")}`
-                  : "## No local dependencies resolved — check for external import issues."),
-            },
-          ];
-
-          const crLineCount = crSourceCode.split("\n").length;
-          const crResp = await ensembleStreaming(
-            crMessages,
-            {
-              temperature: DEFAULT_TEMPERATURE,
-              maxTokens: resolveDefaultMaxTokens(),
-              onProgress,
-              modelOverride,
-            },
-            crUseEnsemble,
-            crLineCount,
-          );
-          const crFooter = formatFooter(crResp, "check_references", filePath);
-
-          // Shared response gate (TRDD-P4ULUV1R): echo dropped like empty.
-          if (gateLLMResponse(crResp.content, String(crMessages[1].content)) === null) {
-            const depInfo =
-              depPaths.length > 0
-                ? `\n\nDependencies checked: ${depPaths.map((p) => `\`${p}\``).join(", ")}`
-                : "";
-            if (crMode === 0) {
-              const rp = saveResponse(
-                "check_references",
-                crResp.content + crFooter + depInfo,
-                { model: crResp.model, task: "Check references", inputFile: filePath },
-                undefined,
-                outputDir,
-              );
-              crReportPaths.push(rp);
-            } else {
-              crReports.push(
-                `## File: ${filePath}${depInfo}\n\n${crResp.content}${crFooter}`,
-              );
-            }
-          }
-        }
-
-        if (crMode === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  crReportPaths.length > 0
-                    ? crReportPaths.join("\n")
-                    : "FAILED: LLM returned empty response.",
-              },
-            ],
-            isError: crReportPaths.length === 0,
-          };
-        }
-        if (crReports.length === 0) {
-          return {
-            content: [
-              { type: "text", text: "FAILED: LLM returned empty response." },
-            ],
-            isError: true,
-          };
-        }
-        const crMergedPath = saveResponse(
-          "check_references",
-          crReports.join("\n\n---\n\n"),
-          { model: backend.model, task: "Check references", inputFile: crFilePaths[0] },
-          undefined,
-          outputDir,
+          },
         );
-        return { content: [{ type: "text", text: crMergedPath }] };
-      }
 
-      case "check_imports": {
-        const {
-          input_files_paths: ciInputPathsRaw,
-          project_root,
-          instructions: ciInstructions,
-          instructions_files_paths: ciInstructionsFilesPaths,
-          redact_secrets: ciRedact,
-          answer_mode: ciRawMode,
-          scan_secrets: ciScan,
-          max_payload_kb: ciMaxPayloadKb,
-          redact_regex: ciRedactRegexRaw,
-          folder_path: ciFolderPath,
-          extensions: ciExtensions,
-          exclude_dirs: ciExcludeDirs,
-          use_gitignore: ciUseGitignore,
-          recursive: ciRecursive,
-          follow_symlinks: ciFollowSymlinks,
-          max_files: ciMaxFiles,
-        } = args as {
-          input_files_paths: string | string[];
-          project_root?: string;
-          instructions?: string;
-          instructions_files_paths?: string | string[];
-          redact_secrets?: boolean;
-          answer_mode?: number;
-          scan_secrets?: boolean;
-          max_payload_kb?: number;
-          redact_regex?: string;
-          folder_path?: string;
-          extensions?: string[];
-          exclude_dirs?: string[];
-          use_gitignore?: boolean;
-          recursive?: boolean;
-          follow_symlinks?: boolean;
-          max_files?: number;
-        };
-        // check_imports uses chatCompletionJSON directly (not ensembleStreaming),
-        // so the backend type is not referenced in this case body (other than
-        // via the shared snapshot for the saveResponse() metadata).
-        const ciBudgetBytes = (ciMaxPayloadKb ?? 400) * 1024;
-
-        let ciRegexRedact: RegexRedactOpts | null = null;
-        try { ciRegexRedact = parseRedactRegex(ciRedactRegexRaw); }
-        catch (err) { return { content: [{ type: "text", text: `FAILED: ${(err as Error).message}` }], isError: true }; }
-
-        let ciFilePathsAll = [...new Set(normalizePaths(ciInputPathsRaw))];
-        if (ciFolderPath) {
-          const folderResult = resolveFolderPath(ciFolderPath, {
-            extensions: ciExtensions, excludeDirs: ciExcludeDirs,
-            useGitignore: ciUseGitignore, recursive: ciRecursive,
-            followSymlinks: ciFollowSymlinks, maxFiles: ciMaxFiles,
-          });
-          if (folderResult.error && folderResult.files.length === 0 && ciFilePathsAll.length === 0) {
-            return { content: [{ type: "text", text: `FAILED: ${folderResult.error}` }], isError: true };
-          }
-          ciFilePathsAll = [...new Set([...ciFilePathsAll, ...folderResult.files])];
-        }
-        if (ciFilePathsAll.length === 0) {
-          return {
-            content: [
-              { type: "text", text: "FAILED: input_files_paths or folder_path is required." },
-            ],
-            isError: true,
-          };
-        }
-
-        // scan_secrets: abort if any secrets are found.
-        // When redact_secrets is also true, skip the abort — downstream redaction handles it.
-        if (ciScan && !ciRedact) {
-          const ciRealFiles = ciFilePathsAll.filter((f) => !GROUP_HEADER_RE.test(f) && !GROUP_FOOTER_RE.test(f));
-          if (ciRealFiles.length > 0) {
-            const scanResult = scanFilesForSecrets(ciRealFiles);
-            if (scanResult.found)
-              return {
-                content: [{ type: "text", text: scanResult.report }],
-                isError: true,
-              };
-          }
-        }
-
-        const ciPrompt = resolvePrompt(
-          ciInstructions,
-          ciInstructionsFilesPaths,
+      case "check_imports":
+        return await handleCheckImports(
+          { args, backend, onProgress, modelOverride, outputDir, name },
+          {
+            chatCompletionJSONWithFreeRotation,
+            logRequest,
+            normalizePaths,
+            recordUsage,
+            resolveDefaultMaxTokens,
+            resolveFolderPath,
+            saveResponse,
+          },
         );
-        const ciMode = resolveAnswerMode(ciRawMode, 0);
-
-        // ── Group-aware processing ──
-        // answer_mode=1 means "one report per group". Auto-group the files
-        // when the caller did not supply ---GROUP:id--- markers.
-        let ciFileGroups = parseFileGroups(ciFilePathsAll);
-        let ciEffectivelyGrouped = hasNamedGroups(ciFileGroups);
-        if (ciMode === 1 && !ciEffectivelyGrouped) {
-          const autoGroups = autoGroupByHeuristic(ciFilePathsAll);
-          if (autoGroups.length > 0) {
-            ciFileGroups = autoGroups;
-            ciEffectivelyGrouped = true;
-          }
-        }
-        if (ciEffectivelyGrouped) {
-          const ciGroupReports: string[] = [];
-          for (const fg of ciFileGroups) {
-            if (fg.files.length === 0) continue;
-            const gid = fg.id || "auto";
-            const gReports: string[] = [];
-            for (const filePath of fg.files) {
-              if (!existsSync(filePath)) { gReports.push(`## ${filePath}\n\nFAILED: File not found.`); continue; }
-              const ciLang = detectLang(filePath);
-              const fileDir = dirname(filePath);
-              const ciResolveBase = project_root || fileDir;
-              // Prompt built by the SHARED seam (TRDD-f45eeaa0). It used to be
-              // inline here AND on the ungrouped path below — two copies of one
-              // prompt, which drift the day one is edited. The benchmark drives
-              // this same function, so it scores the real tool.
-              const extractMessages: ChatMessage[] = buildCheckImportsExtractMessages({
-                lang: ciLang,
-                userPrompt: ciPrompt,
-                fileBlock: readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
-                fileFormatExample: FILE_FORMAT_EXAMPLE,
-              });
-              const extractResp = await chatCompletionJSONWithFreeRotation(extractMessages, { temperature: 0, maxTokens: resolveDefaultMaxTokens(), jsonSchema: EXTRACT_PATHS_SCHEMA, onProgress });
-              recordUsage(extractResp.usage);
-              logRequest({ tool: "check_imports", model: extractResp.model, status: "success", usage: extractResp.usage, filePath });
-              const rawPaths = extractResp.parsed.paths;
-              const extractedPaths: string[] = Array.isArray(rawPaths) ? rawPaths.filter((p): p is string => typeof p === "string") : [];
-              const validPaths: string[] = []; const brokenPaths: string[] = []; const packageImports: string[] = [];
-              for (const importPath of extractedPaths) {
-                if (!importPath.startsWith(".") && !importPath.startsWith("/")) { packageImports.push(importPath); continue; }
-                const resolveDir = importPath.startsWith(".") ? fileDir : ciResolveBase;
-                const resolvedBase = importPath.startsWith("/") ? resolve(importPath) : join(resolveDir, importPath);
-                if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) { packageImports.push(importPath); continue; }
-                let found = existsSync(resolvedBase) && statSync(resolvedBase).isFile();
-                if (!found && !extname(resolvedBase)) {
-                  for (const ext of [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".json"]) { if (existsSync(resolvedBase + ext)) { found = true; break; } }
-                  if (!found) { for (const ext of [".ts", ".tsx", ".js", ".jsx"]) { if (existsSync(join(resolvedBase, `index${ext}`))) { found = true; break; } } }
-                }
-                (found ? validPaths : brokenPaths).push(importPath);
-              }
-              const lines = [`# Import Check: ${filePath}`, "", `**Total**: ${extractedPaths.length}, **Valid**: ${validPaths.length}, **BROKEN**: ${brokenPaths.length}, **Packages**: ${packageImports.length}`, ""];
-              if (brokenPaths.length > 0) lines.push("## BROKEN IMPORTS", "", ...brokenPaths.map((p) => `- \`${p}\``), "");
-              if (validPaths.length > 0) lines.push("## Valid", "", ...validPaths.map((p) => `- \`${p}\``), "");
-              gReports.push(lines.join("\n"));
-            }
-            if (gReports.length > 0) {
-              const mergedPath = saveResponse(
-                "check_imports",
-                gReports.join("\n\n---\n\n"),
-                { model: backend.model, task: "Check imports", inputFile: fg.files[0], groupId: gid },
-                undefined,
-                outputDir,
-              );
-              ciGroupReports.push(`[group:${gid}] ${mergedPath}`);
-            }
-          }
-          if (ciGroupReports.length === 0) {
-            return { content: [{ type: "text", text: "No reports generated." }], isError: true };
-          }
-          return { content: [{ type: "text", text: ciGroupReports.join("\n") }] };
-        }
-
-        // Non-grouped: existing behavior
-        const ciFilePaths = ciFilePathsAll;
-        const ciReports: string[] = [];
-        const ciReportPaths: string[] = [];
-
-        for (const filePath of ciFilePaths) {
-          if (!existsSync(filePath)) {
-            ciReports.push(`## ${filePath}\n\nFAILED: File not found.`);
-            ciReportPaths.push("(skipped — file not found)");
-            continue;
-          }
-          const ciLang = detectLang(filePath);
-          const fileDir = dirname(filePath);
-          // Use project_root for resolving imports if provided, fall back to file's directory
-          const ciResolveBase = project_root || fileDir;
-
-          // Phase 1: Ask LLM to extract all file/import references
-          const extractMessages: ChatMessage[] = buildCheckImportsExtractMessages({
-            lang: ciLang,
-            userPrompt: ciPrompt,
-            fileBlock: readFileAsCodeBlock(filePath, undefined, ciRedact, ciBudgetBytes, ciRegexRedact),
-            fileFormatExample: FILE_FORMAT_EXAMPLE,
-          });
-
-          const extractResp = await chatCompletionJSONWithFreeRotation(
-            extractMessages,
-            {
-              temperature: 0,
-              maxTokens: resolveDefaultMaxTokens(),
-              jsonSchema: EXTRACT_PATHS_SCHEMA,
-              onProgress,
-            },
-          );
-          recordUsage(extractResp.usage);
-          logRequest({
-            tool: "check_imports",
-            model: extractResp.model,
-            status: "success",
-            usage: extractResp.usage,
-            filePath,
-          });
-
-          const rawPaths = extractResp.parsed.paths;
-          const extractedPaths: string[] = Array.isArray(rawPaths)
-            ? rawPaths.filter((p): p is string => typeof p === "string")
-            : [];
-
-          // Phase 2: Validate each path on disk
-          const validPaths: string[] = [];
-          const brokenPaths: string[] = [];
-          const packageImports: string[] = [];
-
-          for (const importPath of extractedPaths) {
-            // Skip package/module imports (not relative paths)
-            if (!importPath.startsWith(".") && !importPath.startsWith("/")) {
-              packageImports.push(importPath);
-              continue;
-            }
-            // Dot-relative imports (./foo, ../bar) resolve against the file's own directory,
-            // NOT project_root. Only absolute paths use ciResolveBase.
-            const resolveDir = importPath.startsWith(".")
-              ? fileDir
-              : ciResolveBase;
-            const resolvedBase = importPath.startsWith("/")
-              ? resolve(importPath)
-              : join(resolveDir, importPath);
-            // Reject paths resolving outside allowed project directories to prevent filesystem oracle attacks.
-            if (!resolvedBase.startsWith(ciResolveBase) && !resolvedBase.startsWith(fileDir)) {
-              packageImports.push(importPath);
-              continue;
-            }
-            let found = false;
-
-            if (existsSync(resolvedBase) && statSync(resolvedBase).isFile()) {
-              found = true;
-            }
-            if (!found && !extname(resolvedBase)) {
-              for (const ext of [
-                ".ts",
-                ".tsx",
-                ".js",
-                ".jsx",
-                ".mjs",
-                ".cjs",
-                ".py",
-                ".go",
-                ".rs",
-                ".json",
-              ]) {
-                if (existsSync(resolvedBase + ext)) {
-                  found = true;
-                  break;
-                }
-              }
-              if (!found) {
-                for (const ext of [".ts", ".tsx", ".js", ".jsx"]) {
-                  if (existsSync(join(resolvedBase, `index${ext}`))) {
-                    found = true;
-                    break;
-                  }
-                }
-              }
-            }
-
-            if (found) {
-              validPaths.push(importPath);
-            } else {
-              brokenPaths.push(importPath);
-            }
-          }
-
-          // Build report
-          const ciReportLines: string[] = [
-            `# Import Check: ${filePath}`,
-            "",
-            `**Total references extracted**: ${extractedPaths.length}`,
-            `**Local valid**: ${validPaths.length}`,
-            `**Local BROKEN**: ${brokenPaths.length}`,
-            `**Package imports** (not checked): ${packageImports.length}`,
-            "",
-          ];
-          if (brokenPaths.length > 0) {
-            ciReportLines.push(
-              "## BROKEN IMPORTS",
-              "",
-              ...brokenPaths.map((p) => `- \`${p}\``),
-              "",
-            );
-          }
-          if (validPaths.length > 0) {
-            ciReportLines.push(
-              "## Valid Imports",
-              "",
-              ...validPaths.map((p) => `- \`${p}\``),
-              "",
-            );
-          }
-          if (packageImports.length > 0) {
-            ciReportLines.push(
-              "## Package Imports (not checked)",
-              "",
-              ...packageImports.map((p) => `- \`${p}\``),
-              "",
-            );
-          }
-
-          const ciReportText = ciReportLines.join("\n");
-          if (ciMode === 0) {
-            const rp = saveResponse(
-              "check_imports",
-              ciReportText,
-              { model: extractResp.model, task: "Check imports", inputFile: filePath },
-              undefined,
-              outputDir,
-            );
-            ciReportPaths.push(rp);
-          } else {
-            ciReports.push(ciReportText);
-          }
-        }
-
-        if (ciMode === 0) {
-          return {
-            content: [
-              {
-                type: "text",
-                text:
-                  ciReportPaths.length > 0
-                    ? ciReportPaths.join("\n")
-                    : "No reports generated.",
-              },
-            ],
-          };
-        }
-        if (ciReports.length === 0) {
-          return {
-            content: [{ type: "text", text: "No reports generated." }],
-            isError: true,
-          };
-        }
-        const ciMergedPath = saveResponse(
-          "check_imports",
-          ciReports.join("\n\n---\n\n"),
-          { model: backend.model, task: "Check imports", inputFile: ciFilePaths[0] },
-          undefined,
-          outputDir,
-        );
-        return { content: [{ type: "text", text: ciMergedPath }] };
-      }
 
       case "check_against_specs": {
         // Pipeline body extracted to check-specs/core.ts (P2a, zero-token model
