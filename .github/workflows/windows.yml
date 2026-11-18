@@ -92,6 +92,18 @@ jobs:
           node bin/llm-ext --help
           if ($LASTEXITCODE -ne 0) { throw "node bin/llm-ext --help exited with $LASTEXITCODE" }
 
+      # Stopgap (TRDD-61EINA10): the unit tests and their globalSetup assume a top-level
+      # /tmp (test-tmpdir-guard.ts LOCK_PATH, test-hermetic-config.ts), which Windows
+      # runners lack, so the first run stopped with ENOENT on D:\tmp before any test ran.
+      # node, not a shell mkdir, creates it: node resolves "/tmp" against the drive of its
+      # working directory, the same way the tests do. This is test-environment setup, not a
+      # product fix; the repo fix that makes this step unnecessary is TRDD-OSNHW0W9.
+      - name: Create the top-level /tmp the unit tests assume
+        if: ${{ !cancelled() }}
+        working-directory: scripts/llm-ext
+        run: |
+          node -e "require('node:fs').mkdirSync('/tmp', { recursive: true })"
+
       # Stage 1 only (`test:unit`). The other stages (`test:broker`, `test:burn`, `test:e2e`)
       # drive a real llama-server, and ci.yml pins only the Linux llama-server asset (and its
       # SHA-256); there is no pinned Windows asset or model cache yet, so those stages are

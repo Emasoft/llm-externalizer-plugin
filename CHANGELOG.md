@@ -5,14 +5,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- Feat(classify): classify filter takes --context FILE for earlier messages (TRDD-7ZA3EE6Z)
-
 - Feat(local-models): a catalog of the local models llm-ext knows, checked against the built-in profiles and the docs (TRDD-R7NKAJ5B)
 
 
 ### Changed
 
-- Revert(classify): hold classify filter --context out of the release (TRDD-7ZA3EE6Z)
+- Not in this release: classify filter --context (TRDD-7ZA3EE6Z). Its commit was reverted before the release.
 
 - Ci(windows): Windows build, CLI smoke and unit-test workflow; LF checkout; shell-neutral npm test stages (TRDD-61EINA10)
 
