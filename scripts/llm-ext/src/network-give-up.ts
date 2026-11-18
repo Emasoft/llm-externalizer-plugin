@@ -112,6 +112,33 @@ function cachedSnapshot(cacheDir: string, repo: string): string | undefined {
   return existsSync(snap) ? snap : undefined;
 }
 
+/**
+ * Whether `files` (the names in a cached snapshot) hold the LLM weights llama-server -hf would load for `quant`, so that it never has to download.
+ * Mirrors download.cpp find_best_model at llama.cpp commit 8642541b2 (the installed build): a file counts when it ends in .gguf, its basename is
+ * neither a sidecar (mmproj, mtp-) nor an imatrix, and the quant matches as a token; a split model counts only when ALL its shards are cached,
+ * because the plan takes every shard of the repo listing as a download task (download.cpp:842 get_split_files, arg.cpp:529-541 add_tasks).
+ * WHY not the old name.includes(quant): an mmproj-X-Q8_0.gguf or mmproj-X-F16.gguf projector stood in for absent weights, and Q4_K matched Q4_K_M
+ * and Q4_K_S, so an absent model read as ready and llama-server then downloaded it (TRDD-GNKO7WZS).
+ * WHY the left boundary (^|[-_./]) is stricter than 8642541b2, whose regex is just `QUANT[.-]`: that build lets any text precede the quant (tag K_M
+ * inside Q4_K_M, tag Q4_0 inside IQ4_0), llama.cpp master has since added a left boundary, and an unknown tag must never read as ready. The cost is
+ * only a false "not ready" for a quant glued to a letter prefix, which leaves the local fallback unarmed (the safe side).
+ */
+function ggufQuantWeightsOnDisk(files: string[], quant: string): boolean {
+  const names = new Set(files);
+  const pattern = new RegExp(`(^|[-_./])${quant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[.-]`, "i");
+  return files.some((f) => {
+    const base = f.slice(f.lastIndexOf("/") + 1);
+    // endsWith, not an /i regex: upstream gguf_filename_is_model uses the case-sensitive string_ends_with(".gguf"), so X.GGUF is no weight file for llama-server.
+    if (!f.endsWith(".gguf") || base.includes("mmproj") || base.includes("mtp-") || base.includes("imatrix") || !pattern.test(f)) return false;
+    const shard = /^(.+)-(\d{5})-of-(\d{5})\.gguf$/i.exec(f);
+    if (shard === null || Number(shard[3]) <= 1) return true;
+    if (Number(shard[2]) !== 1) return false;
+    const count = Number(shard[3]);
+    for (let i = 2; i <= count; i++) if (!names.has(`${shard[1]}-${String(i).padStart(5, "0")}-of-${shard[3]}${f.slice(-5)}`)) return false;
+    return true;
+  });
+}
+
 /** Whether the weights of a managed llama.cpp model id are on disk (never downloads: that is llama-server -hf, which this module never runs). */
 function llamaModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
   const parsed = parseManagedModel(model);
@@ -124,7 +151,7 @@ function llamaModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
   }
   const [repo, quant] = model.split(":");
   const snap = cachedSnapshot(hfCacheDir(env), repo);
-  return snap !== undefined && readdirSync(snap).some((f) => /\.gguf$/i.test(f) && f.toLowerCase().includes(quant.toLowerCase()));
+  return snap !== undefined && ggufQuantWeightsOnDisk(readdirSync(snap), quant);
 }
 
 /** Whether the MLX snapshot of a Locals model id is on disk. snapshotWeightFiles throws for a missing repo, which is the "not on disk" answer here. */

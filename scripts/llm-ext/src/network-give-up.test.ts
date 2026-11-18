@@ -99,14 +99,15 @@ interface ReadyFixture {
   env: NodeJS.ProcessEnv;
 }
 
-/** A local_llama profile on the tiny-llamas model, with the three readiness parts present unless switched off. */
-function readyFixture(o: { binary?: boolean; model?: boolean; record?: "ok" | "failed" | "none" } = {}): ReadyFixture {
+/** A local_llama profile on the tiny-llamas model (or on `id` plus the snapshot file names `files`, for a repo:quant id), with the three readiness parts present unless switched off. */
+function readyFixture(o: { binary?: boolean; model?: boolean; record?: "ok" | "failed" | "none"; id?: string; files?: string[] } = {}): ReadyFixture {
   const cfgDir = tempDir("cfg");
   const binDir = tempDir("bin");
   const cache = tempDir("cache");
+  const id = o.id ?? MODEL;
   writeFileSync(
     join(cfgDir, "settings.yaml"),
-    ["active: local_llama", "profiles:", "  local_llama:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:8181", "    server: managed", `    model: ${MODEL}`, ""].join("\n"),
+    ["active: local_llama", "profiles:", "  local_llama:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:8181", "    server: managed", `    model: ${id}`, ""].join("\n"),
     "utf-8",
   );
   if (o.binary !== false) {
@@ -114,14 +115,15 @@ function readyFixture(o: { binary?: boolean; model?: boolean; record?: "ok" | "f
     chmodSync(join(binDir, "llama-server"), 0o755);
   }
   if (o.model !== false) {
-    const snap = join(cache, "models--ggml-org--tiny-llamas", "snapshots", "rev1");
-    mkdirSync(join(cache, "models--ggml-org--tiny-llamas", "refs"), { recursive: true });
-    writeFileSync(join(cache, "models--ggml-org--tiny-llamas", "refs", "main"), "rev1", "utf-8");
+    const repoDir = join(cache, `models--${(o.id === undefined ? "ggml-org/tiny-llamas" : id.split(":")[0]).replace("/", "--")}`);
+    const snap = join(repoDir, "snapshots", "rev1");
+    mkdirSync(join(repoDir, "refs"), { recursive: true });
+    writeFileSync(join(repoDir, "refs", "main"), "rev1", "utf-8");
     mkdirSync(snap, { recursive: true });
-    writeFileSync(join(snap, "stories15M-q4_0.gguf"), "not real weights: readiness only checks that the file exists", "utf-8");
+    for (const name of o.files ?? ["stories15M-q4_0.gguf"]) writeFileSync(join(snap, name), "not real weights: readiness only checks that the file exists", "utf-8");
   }
-  if (o.record === "failed") writeRecord(cfgDir, recordFixture("llama", MODEL, { step: "phase-a/thinking-off", message: "thinking cannot be turned off" }));
-  else if (o.record !== "none") writeRecord(cfgDir, recordFixture("llama", MODEL));
+  if (o.record === "failed") writeRecord(cfgDir, recordFixture("llama", id, { step: "phase-a/thinking-off", message: "thinking cannot be turned off" }));
+  else if (o.record !== "none") writeRecord(cfgDir, recordFixture("llama", id));
   vi.stubEnv("LLM_EXT_CONFIG_DIR", cfgDir);
   const settings = loadSettings();
   if (settings === null) throw new Error("fixture settings.yaml did not load");
@@ -233,6 +235,28 @@ describe("readyLocalTarget (no process, no download: files and the PATH only)", 
     const f = readyFixture();
     const unmanaged = { ...f.settings, profiles: { local_llama: { ...f.settings.profiles.local_llama, server: undefined } } } as Settings;
     expect(readyLocalTarget(unmanaged, f.cfgDir, { ...LINUX, env: f.env })).toBeUndefined();
+  });
+
+  // TRDD-GNKO7WZS: a repo:quant id is on disk only when llama-server -hf would load a LLM weight file for that quant from the cache
+  // (common/download.cpp find_best_model): not an mmproj/imatrix sidecar, and the quant as a whole token, not a prefix of another quant.
+  it.each([
+    ["the head model AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K", "AtomicChat/LFM3-1.7B-Uncensored-GGUF:AD-Q6_K", ["LFM3-1.7B-Uncensored-AD-Q4_K_M.gguf", "LFM3-1.7B-Uncensored-AD-Q6_K.gguf"], true],
+    ["a sharded model (first shard present)", "acme/big-GGUF:Q4_K_M", ["big-Q4_K_M-00001-of-00002.gguf", "big-Q4_K_M-00002-of-00002.gguf"], true],
+    ["a sharded model with only a later shard present (llama.cpp counts a split only at shard 1)", "acme/big-GGUF:Q4_K_M", ["big-Q4_K_M-00002-of-00002.gguf"], false],
+    ["a sharded model with shard 1 of 2 present and shard 2 missing (llama-server -hf downloads the missing shard: download.cpp:842, arg.cpp:529-541)", "acme/big-GGUF:Q4_K_M", ["big-Q4_K_M-00001-of-00002.gguf"], false],
+    ["the quant in lower case in the file name", "acme/small-GGUF:Q8_0", ["small-q8_0.gguf"], true],
+    ["the quant preceded by an underscore", "acme/small-GGUF:Q4_K_M", ["small_Q4_K_M.gguf"], true],
+    ["Q4_0 asked, only IQ4_0 present (the quant is glued to a letter, not a token)", "acme/small-GGUF:Q4_0", ["small-IQ4_0.gguf"], false],
+    ["only mmproj files carry the quant (Q8_0 and F16 projectors, no weights)", "acme/vl-GGUF:Q8_0", ["mmproj-vl-Q8_0.gguf", "mmproj-vl-F16.gguf"], false],
+    ["only an mmproj file carries the quant F16", "acme/vl-GGUF:F16", ["mmproj-vl-F16.gguf", "vl-Q4_K_M.gguf"], false],
+    ["Q4_K asked, only Q4_K_M present (a shorter quant is not a longer one)", "acme/small-GGUF:Q4_K", ["small-Q4_K_M.gguf"], false],
+    ["Q4_K asked, only Q4_K_S and a sharded Q4_K_M present", "acme/small-GGUF:Q4_K", ["small-Q4_K_S.gguf", "small-Q4_K_M-00001-of-00002.gguf"], false],
+    ["an imatrix file named after the quant is not the weights", "acme/small-GGUF:Q2_K", ["small-Q2_K.imatrix.gguf"], false],
+    ["a non-gguf file named after the quant is not the weights", "acme/small-GGUF:Q8_0", ["small-Q8_0.gguf.part"], false],
+    ["an upper-case .GGUF extension (llama.cpp string_ends_with is case-sensitive)", "acme/small-GGUF:Q8_0", ["small-Q8_0.GGUF"], false],
+  ])("a repo:quant model: %s", (_label, id, files, ready) => {
+    const f = readyFixture({ id, files });
+    expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
   });
 });
 
