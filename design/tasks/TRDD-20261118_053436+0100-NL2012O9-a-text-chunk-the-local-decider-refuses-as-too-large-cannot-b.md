@@ -4,7 +4,7 @@ title: A text chunk the local decider refuses as too large cannot be cut again a
 column: publish
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T14:14:05+0100
+updated: 2026-11-18T14:15:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -35,8 +35,8 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 2. Keep the clamp for the chunk size but let adjacent chunks of one source share a remote request (relax planner.ts:312). Against D31: an owner decision.
 3. Raise max_requests_per_call in the user settings (16 to 32). A USER setting; 32 covers only the one recorded run.
 ## Acceptance
-- [ ] A red test first: a single text chunk the fake decider refuses with a 422 fails today, on the local-only path and on the remote escalation.
-- [ ] The chosen option, with that test green, tsc and eslint 0.
+- [x] A red test first: a single text chunk the fake decider refuses with a 422 fails today, on the local-only path and on the remote escalation.
+- [x] The chosen option, with that test green, tsc and eslint 0.
 - [ ] or-jev test-output re-run on the same input is not refused for its request count, or the refusal is the limit the USER chose.
 
 ## Approval log
@@ -54,3 +54,9 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 ## Progress
 
 2026-11-18T12:50:01+0100 main agent (written by worker): commit 21699151 (l2/planner.ts recutTextRequest, split-on-overflow.ts defaultLabels and foldPieces, run-decision.ts). Committed-tree check at 848f2b9f, a descendant (reports_dev/commit-check/20261118_114436+0100-848f2b9f.md): tsc exit 0; split-on-overflow, local-decision and local-decider-remote-error tests passed. Ships in 14.7.2.
+
+## Acceptance evidence
+
+box 1: 21699151 split-on-overflow.test.ts (6 new tests), local-decision.test.ts (text item 422, local-only path), local-decider-remote-error.test.ts (text item 422, remote escalation) — added by the commit; red before the fix per reports_dev/nl2012o9-fix/scratch/red-local.txt (FAIL, 'needs 19817 tokens; the limit is 16384') and red-remote.txt (FAIL, exit 3, API error 402 stands). Red outputs are the worker's scratch, read by me, not re-run.
+box 2: 21699151 implements Option 1 (planner.ts recutTextRequest, split-on-overflow.ts foldPieces). tsc --noEmit exit 0 and split-on-overflow 17, local-decision 34, local-decider-remote-error 5, run-decision 72, fan-out 37 tests passed at descendant 848f2b9f (reports_dev/commit-check/20261118_114436+0100-848f2b9f.md). eslint exit 0 on the 6 files of 21699151, run by me 2026-11-18 in scripts/llm-ext of the dev-after-14.3.0 worktree (the six files are unmodified there). Source lines in reports_dev/commit-check/20261118_114436+0100-848f2b9f.md: line 5 (Outcome: PASS, tsc --noEmit exit 0) and table lines 25-29 (the five files); git log 21699151..HEAD on the six files of 21699151 is empty, so nothing later touched them.
+box 3: NOT proven, left unticked. No or-jev test-output re-run on the same input exists; reports_dev/nl2012o9-fix/20261118_103600+0100-report.md open risk 6 says the re-run was not done and is for the USER. 21699151 does not change the planned request count (re-cut only after a 422) and the 16384 clamp stays, so the 'plan needs 19 requests, over the limit of 16' refusal may still occur; not shown either way.
