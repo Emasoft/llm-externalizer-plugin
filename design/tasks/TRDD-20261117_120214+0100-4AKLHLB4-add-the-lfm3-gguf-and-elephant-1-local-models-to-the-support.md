@@ -4,7 +4,7 @@ title: Add the LFM3 GGUF and elephant-1 local models to the supported list and t
 column: todo
 status: tasked
 created: 2026-11-17T12:02:14+0100
-updated: 2026-11-18T05:49:06+0100
+updated: 2026-11-18T06:02:12+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -65,7 +65,7 @@ Decisions (main agent, under the USER delegation of 2026-11-15; the USER may vet
 2. Listing a model never downloads or calibrates it. An entry is eligible for any fallback only when it is on disk and calibrated; an explicit `llm-ext models calibrate --model <id>` makes it eligible. This settles the download and calibrate-all-at-once derived tasks.
 3. Fallback chains by role reuse the unwired seam of the profile contract, profiles/resolve-chain.ts and profiles/route-for-tier.ts (TRDD-SZ7TO9FW, USER-ordered), instead of a second chain mechanism.
 4. Three of the eight repos cannot join a chat chain: baselabs/elephant-1 (CUDA-only safetensors with a vendor engine), sergolsub/mlx-elephant-v1-9B (vendor loader onejev_mlx.py; a decider, not a chat model), AtomicChat/LFM3-Audio-2B-GGUF (speech, ASR and TTS). They are listed with the reason.
-5. Runtime support of the VL and Omni GGUFs and of the AD quants on stock llama.cpp rests on the model cards only (llama.cpp PRs 31252 and 31257). No source was found for an earlier claim here that the current local_llama head is proven on this machine (the code-map and model-card reports hold none), so none of these models counts as verified; the catalog of TRDD-R7NKAJ5B records verified as null for them. Verifying the others needs downloads.
+5. Runtime support of the VL and Omni GGUFs and of the AD quants on stock llama.cpp rests on the model cards only (llama.cpp PRs 31252 and 31257). The current local_llama head was smoke-tested on 2026-10-28 (TRDD-1OOAH3LD: llama-cli -hf on llama.cpp b11960-8642541b2 loaded it and answered); commit 68ea6820 wrongly called that claim unsourced; its message names the design spec and the code-map and model-card reports as its sources, not the 1OOAH3LD card. The catalog of TRDD-R7NKAJ5B records that check; the other models are not verified, and verifying them needs downloads.
 6. Context length is not taken from GGUF headers: calibration owns it.
 Split (each its own card, listed in this card eht so this card completes when they are terminal):
 - C1 catalog (todo): the catalog with entries for the six current built-in models and the eight repos, its metadata, a test that the built-in profiles use only catalog chat entries of the right runtime, and the docs table in skills/llm-externalizer-cli-reference/references/models-and-settings.md checked against it. No fallback behaviour changes.
