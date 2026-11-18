@@ -115,7 +115,7 @@ Classify decision "filter" (catalog spec; flags, defaults and ranges are generat
 Example:
 ```bash
 llm-ext classify filter "Does this line report a failure (not a warning)?" --items ./items.jsonl
-llm-ext classify filter "Does this line report a failure (not a warning)?" --items ./items.jsonl --context ./context.txt   # needs a release that includes TRDD-7ZA3EE6Z; the context is background, never scored
+llm-ext classify filter "Does this text ask to cancel the subscription?" ./a.txt ./b.txt --context ./context.txt   # needs a release that includes TRDD-7ZA3EE6Z; the context is background, never scored; live check 3 ran this form (file inputs), not --items or --lines
 ```
 
 ### `llm-ext classify label`
