@@ -4,7 +4,7 @@ title: llamaModelOnDisk accepts an mmproj file or another quant as the model wei
 column: todo
 status: tasked
 created: 2026-11-18T05:18:17+0100
-updated: 2026-11-18T05:18:17+0100
+updated: 2026-11-18T05:40:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T05:18:17+0100
+implementation-commits: [8e093733]
 ---
 
 # llamaModelOnDisk accepts an mmproj file or another quant as the model weights

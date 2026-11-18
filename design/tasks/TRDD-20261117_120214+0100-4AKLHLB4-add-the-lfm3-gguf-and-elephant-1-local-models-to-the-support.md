@@ -20,9 +20,9 @@ eht: [R7NKAJ5B, C7ACDK79, GLK56Q6F, RS2MTVP7, GNKO7WZS]
 
 # Add the LFM3 GGUF and elephant-1 local models to the supported list and to every profile fallback chain
 
-## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-17
+## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-18
 - DONE 2026-11-18 (reports_dev/local-models/20261118_050033+0100-model-cards.md and 20261118_050018+0100-code-map.md): NEXT ACTION: two read-only research reports, then a design section here: (a) model cards of the 8 repos -> reports_dev/local-models/20261117-model-cards.md; (b) where llm-ext keeps its supported local model list, the per-profile fallback chains and the classifier (decider) model -> reports_dev/local-models/20261117-code-map.md.
-- Related: TRDD-7CFPEDUK (local image classifier). The elephant-1 MLX quant with image input changes its model choice; decide after report (a).
+- Related: TRDD-7CFPEDUK (local image classifier). Decided after report (a): image input belongs to C4 (TRDD-RS2MTVP7), with TRDD-7CFPEDUK as its first consumer; which weights the decider singleton serves is asked under C3 (TRDD-GLK56Q6F).
 - 2026-11-18T05:18:31+0100 NEXT ACTION: work C1 and C5; C2 waits on TRDD-SZ7TO9FW; Q1-Q4 are with the USER.
 
 ## Why
