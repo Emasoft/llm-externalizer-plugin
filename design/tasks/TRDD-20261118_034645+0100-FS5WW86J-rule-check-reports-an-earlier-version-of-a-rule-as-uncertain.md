@@ -1,10 +1,10 @@
 ---
 trdd-id: FS5WW86J
 title: rule-check reports an earlier version of a rule as uncertain, not updated_version
-column: todo
+column: human_review
 status: tasked
 created: 2026-11-18T03:46:45+0100
-updated: 2026-11-18T07:31:14+0100
+updated: 2026-11-18T07:38:24+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -24,6 +24,7 @@ Follow-up of TRDD-LFTQCFUX. On the build that ships rule-check, an earlier versi
 ## Approval log
 
 - 2026-11-18T03:46:45+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T07:38:24+0100 — column → human_review by main-agent@llm-externalizer-plugin. measurements and decision recorded; the packing default and the contradicting-phrase merge are USER decisions
 
 ## Notes
 

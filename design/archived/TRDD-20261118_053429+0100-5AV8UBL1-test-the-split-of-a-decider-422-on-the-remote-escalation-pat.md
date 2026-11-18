@@ -1,10 +1,10 @@
 ---
 trdd-id: 5AV8UBL1
 title: Test the split of a decider 422 on the remote escalation path
-column: todo
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T05:34:29+0100
-updated: 2026-11-18T07:31:19+0100
+updated: 2026-11-18T07:38:23+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -30,6 +30,7 @@ TRDD-1L9VMEY7 commit a473a6b0 splits a request the local decider refuses as over
 ## Approval log
 
 - 2026-11-18T05:34:29+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T07:38:23+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all three Acceptance boxes ticked on tests 52e605b5 and 4841f953.
 
 ## Notes
 
