@@ -67,7 +67,7 @@ export const LOCAL_MODEL_CATALOG: readonly LocalModelEntry[] = [
     inputs: ["text"],
     abliterated: false,
     sizeBytes: { weights: 973083386 },
-    verified: { how: "the Locals server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29; a full calibration finished 2026-11-15 with fill tokens 0 for every kind (TRDD-R7NKAJ5B)" },
+    verified: { how: "the Locals server loaded it and answered in the six-model smoke outside llm-ext, 2026-10-28; llm-ext models calibrate Phase A PASS, 2026-10-29; a full calibration finished 2026-11-15 and found it unfit for every task kind (fill tokens 0) (TRDD-R7NKAJ5B)" },
   },
   {
     id: "mlx-community/Nanbeige4.2-3B-OptiQ-4bit",
