@@ -9,8 +9,8 @@
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { createServer, type Server } from "node:http";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
 import { loadSettings, networkGiveUpErrors, type Settings } from "./config.js";
@@ -120,7 +120,11 @@ function readyFixture(o: { binary?: boolean; model?: boolean; record?: "ok" | "f
     mkdirSync(join(repoDir, "refs"), { recursive: true });
     writeFileSync(join(repoDir, "refs", "main"), "rev1", "utf-8");
     mkdirSync(snap, { recursive: true });
-    for (const name of o.files ?? ["stories15M-q4_0.gguf"]) writeFileSync(join(snap, name), "not real weights: readiness only checks that the file exists", "utf-8");
+    for (const name of o.files ?? ["stories15M-q4_0.gguf"]) {
+      // A name may carry a subdirectory ("sub/model-Q4_0.gguf"): TRDD-4W3Q2B4S.
+      mkdirSync(dirname(join(snap, name)), { recursive: true });
+      writeFileSync(join(snap, name), "not real weights: readiness only checks that the file exists", "utf-8");
+    }
   }
   if (o.record === "failed") writeRecord(cfgDir, recordFixture("llama", id, { step: "phase-a/thinking-off", message: "thinking cannot be turned off" }));
   else if (o.record !== "none") writeRecord(cfgDir, recordFixture("llama", id));
@@ -254,9 +258,69 @@ describe("readyLocalTarget (no process, no download: files and the PATH only)", 
     ["an imatrix file named after the quant is not the weights", "acme/small-GGUF:Q2_K", ["small-Q2_K.imatrix.gguf"], false],
     ["a non-gguf file named after the quant is not the weights", "acme/small-GGUF:Q8_0", ["small-Q8_0.gguf.part"], false],
     ["an upper-case .GGUF extension (llama.cpp string_ends_with is case-sensitive)", "acme/small-GGUF:Q8_0", ["small-Q8_0.GGUF"], false],
+    // TRDD-4W3Q2B4S: llama.cpp matches the quant on the repo-relative path, so a GGUF in a snapshot subdirectory is a model on disk.
+    ["a model in a snapshot subdirectory", "acme/sub-GGUF:Q4_0", ["sub/sub-Q4_0.gguf"], true],
+    ["a model two subdirectories deep", "acme/sub-GGUF:Q4_0", ["a/b/sub-Q4_0.gguf"], true],
+    ["only an mmproj file in a subdirectory carries the quant", "acme/sub-GGUF:Q8_0", ["vision/mmproj-sub-Q8_0.gguf"], false],
+    ["a sharded model in a subdirectory with every shard present", "acme/big-GGUF:Q4_K_M", ["q4/big-Q4_K_M-00001-of-00002.gguf", "q4/big-Q4_K_M-00002-of-00002.gguf"], true],
+    ["a sharded model in a subdirectory with shard 2 missing", "acme/big-GGUF:Q4_K_M", ["q4/big-Q4_K_M-00001-of-00002.gguf"], false],
+    ["a sharded model whose shards sit in different subdirectories", "acme/big-GGUF:Q4_K_M", ["a/big-Q4_K_M-00001-of-00002.gguf", "b/big-Q4_K_M-00002-of-00002.gguf"], false],
   ])("a repo:quant model: %s", (_label, id, files, ready) => {
     const f = readyFixture({ id, files });
     expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
+  });
+
+  // TRDD-4W3Q2B4S: an unreadable subdirectory is "no model there", never a throw out of readyLocalTarget (the give-up path). chmod 000 does not bind root or Windows.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([
+    ["only the unreadable subdirectory holds the model", ["locked/lk-Q4_0.gguf"], false],
+    ["a readable file beside the unreadable subdirectory holds the model", ["lk-Q4_0.gguf", "locked/other.bin"], true],
+  ])("an unreadable snapshot subdirectory: %s", (_label, files, ready) => {
+    const id = "acme/lk-GGUF:Q4_0";
+    const f = readyFixture({ id, files });
+    const locked = join(f.env.LLAMA_CACHE as string, "models--acme--lk-GGUF", "snapshots", "rev1", "locked");
+    mkdirSync(locked, { recursive: true });
+    chmodSync(locked, 0o000);
+    try {
+      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+  // TRDD-4W3Q2B4S: a hub-layout snapshot entry is a symlink to a blob, and a snapshot may hold a directory symlink. Skipped on Windows, where a symlink needs a privilege.
+  describe.skipIf(process.platform === "win32")("snapshot symlinks", () => {
+    it("a repo:quant model whose snapshot file is a symlink to a blob in a subdirectory is on disk", () => {
+      const id = "acme/link-GGUF:Q4_0";
+      const f = readyFixture({ id, files: [] });
+      const sub = join(f.env.LLAMA_CACHE as string, "models--acme--link-GGUF", "snapshots", "rev1", "sub");
+      mkdirSync(sub, { recursive: true });
+      const blob = join(tempDir("blob"), "sha256-deadbeef");
+      writeFileSync(blob, "not real weights", "utf-8");
+      symlinkSync(blob, join(sub, "link-Q4_0.gguf"));
+      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual({ profile: "local_llama", engine: "llama", model: id });
+    });
+
+    it.each([
+      ["a model sits beside the loop", ["sub/loop-Q4_0.gguf"], true],
+      ["no model sits beside the loop", [], false],
+    ])("a directory symlink loop in the snapshot ends the walk: %s", (_label, files, ready) => {
+      const id = "acme/loop-GGUF:Q4_0";
+      const f = readyFixture({ id, files });
+      const snap = join(f.env.LLAMA_CACHE as string, "models--acme--loop-GGUF", "snapshots", "rev1");
+      mkdirSync(join(snap, "sub"), { recursive: true });
+      symlinkSync(snap, join(snap, "sub", "back"));
+      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toEqual(ready ? { profile: "local_llama", engine: "llama", model: id } : undefined);
+    });
+
+    // llama.cpp get_cached_files (hf-cache.cpp:428, recursive_directory_iterator) does not enter a directory symlink either, so a GGUF behind one is not in its cached listing.
+    it("a GGUF behind a directory symlink is not on disk", () => {
+      const id = "acme/dirlink-GGUF:Q4_0";
+      const f = readyFixture({ id, files: [] });
+      const snap = join(f.env.LLAMA_CACHE as string, "models--acme--dirlink-GGUF", "snapshots", "rev1");
+      const target = tempDir("realdir");
+      writeFileSync(join(target, "dirlink-Q4_0.gguf"), "not real weights", "utf-8");
+      symlinkSync(target, join(snap, "linked"));
+      expect(readyLocalTarget(f.settings, f.cfgDir, { ...LINUX, env: f.env })).toBeUndefined();
+    });
   });
 });
 

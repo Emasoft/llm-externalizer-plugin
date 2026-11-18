@@ -113,6 +113,35 @@ function cachedSnapshot(cacheDir: string, repo: string): string | undefined {
 }
 
 /**
+ * The repo-relative paths, with "/" separators on every OS, of every non-directory entry under a snapshot folder, subdirectories included.
+ * WHY recursive: llama.cpp find_best_model (download.cpp at 8642541b2) matches the quant against the repo-relative path of the online listing, so a
+ * repo that keeps its GGUF in a subdirectory loads fine; the old top-level readdirSync read such a cached model as absent (TRDD-4W3Q2B4S).
+ * WHY a hand walk and not readdirSync({ recursive: true }): that option follows directory symlinks (probed on Node 26: a link back to a parent was
+ * listed to the OS depth limit), so one looping link in a snapshot made the walk huge. Here only a real directory (Dirent.isDirectory is lstat based,
+ * false for a symlink) is entered, so the walk is a finite tree. Every other entry, a symlink to a blob included (the normal hub layout), is listed.
+ * A directory symlink is therefore listed as an entry and not entered: llama.cpp get_cached_files (hf-cache.cpp:428 recursive_directory_iterator, no follow) agrees.
+ */
+function snapshotRelativePaths(dir: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) {
+      out.push(`${prefix}${e.name}`);
+      continue;
+    }
+    // WHY a catch here and not at the top level: the old top-level-only read never touched a subdirectory, so an unreadable or just-removed
+    // one would now throw out of readyLocalTarget inside the network-give-up path. Only those three codes are an answer ("these files are
+    // not usable"); the model then reads as not ready, the safe side. Any other error still throws.
+    try {
+      out.push(...snapshotRelativePaths(join(dir, e.name), `${prefix}${e.name}/`));
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "EACCES" && code !== "EPERM" && code !== "ENOENT") throw err;
+    }
+  }
+  return out;
+}
+
+/**
  * Whether `files` (the names in a cached snapshot) hold the LLM weights llama-server -hf would load for `quant`, so that it never has to download.
  * Mirrors download.cpp find_best_model at llama.cpp commit 8642541b2 (the installed build): a file counts when it ends in .gguf, its basename is
  * neither a sidecar (mmproj, mtp-) nor an imatrix, and the quant matches as a token; a split model counts only when ALL its shards are cached,
@@ -151,7 +180,7 @@ function llamaModelOnDisk(model: string, env: NodeJS.ProcessEnv): boolean {
   }
   const [repo, quant] = model.split(":");
   const snap = cachedSnapshot(hfCacheDir(env), repo);
-  return snap !== undefined && ggufQuantWeightsOnDisk(readdirSync(snap), quant);
+  return snap !== undefined && ggufQuantWeightsOnDisk(snapshotRelativePaths(snap), quant);
 }
 
 /** Whether the MLX snapshot of a Locals model id is on disk. snapshotWeightFiles throws for a missing repo, which is the "not on disk" answer here. */
