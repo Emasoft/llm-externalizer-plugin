@@ -4,7 +4,7 @@ title: ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
 column: human_review
 status: tasked
 created: 2026-11-17T22:19:20+0100
-updated: 2026-11-17T22:48:01+0100
+updated: 2026-11-18T10:11:09+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -31,6 +31,7 @@ USER 2026-11-17 verbatim: 'fix. and ubs hook must be stricter. update homebrew v
 USER 2026-11-17, Q1 (hook strictness): Block on all (Recommended).
 USER 2026-11-17, partial runs: first Let finished checks decide (Recommended), then reversed, verbatim: why partial runs? we cannot risk to commit bugged code. Final: partial runs block.
 Unanswered 2026-11-17 (defaults kept): warnings do not block (critical only); docs-only commits pass; tap romankurnovskii/homebrew-awesome-brew not reset.
+2026-11-18T10:11:09+0100 main agent: the awesome-brew update-reset item is moot: the romankurnovskii/awesome-brew and romankurnovskii/cask taps were removed on 2026-11-18 at 09:08 on USER order, after the BrewMate cask was uninstalled at 09:08:06.
 
 ## Evidence
 

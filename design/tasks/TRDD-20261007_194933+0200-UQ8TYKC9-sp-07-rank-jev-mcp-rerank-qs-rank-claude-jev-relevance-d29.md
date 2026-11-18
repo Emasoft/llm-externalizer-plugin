@@ -4,7 +4,7 @@ title: SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
 column: testing
 status: tasked
 created: 2026-10-07T19:49:33+0200
-updated: 2026-11-17T14:14:09+0100
+updated: 2026-11-18T10:11:50+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -96,3 +96,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-11-04: definition of done not met: WHY comments thin (rank.ts has one WHY comment, line 86; the per-file best-chunk merge and SCORE_POLICY sites carry none). The other clauses were verified met that day.
 2026-11-15T17:21:34+0100 blocker O4MSZIG5 is complete; all capability boxes ticked; only the pre-push full run and the DoD box remain.
 2026-11-17T14:14:09+0100 REOPENED by git revert f3b6cde4 of the 59f1730a closure (harness review). Its own test files (catalog filter, find, index, label, rank, screen, verify) hold no vi.mock, vi.spyOn, vi.doMock or vi.stubGlobal call, but non-vi doubles in them were not judged and rank.ts was judged on a WHY count (13) plus the named sites :116 and :160, not a full read. Stays in testing until both are judged.
+2026-11-18T10:11:50+0100 main agent: triage 2026-11-18 at HEAD 54236bf8 (local report reports_dev/triage-20261118/testing-b/, gitignored): the DoD test clause D21 (plan ZB41KG62 line 44, DoD line 584) is not met: rank.test.ts:27 sc builds score answers by hand; partial-failure.testkit.ts answerFor() generates the 200 replies; the one-failed 500 is synthetic but its test name lacks "synthetic:". Verified by the main agent. 16 test files reference the testkit, so conforming is a cross-card change: a new card, or a USER amendment of D21 (USER decision). Agent-doable: a WHY at rank.ts:166 for the inclusive keep-at boundary; move the rank.ts:72 comment to the renumber site.

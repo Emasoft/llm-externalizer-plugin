@@ -4,7 +4,7 @@ title: classify label takes a context flag for earlier messages
 column: dev
 status: tasked
 created: 2026-11-04T10:29:25+0100
-updated: 2026-11-17T15:13:51+0100
+updated: 2026-11-18T10:20:13+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -18,7 +18,7 @@ approval-datetime: 2026-11-04T10:29:25+0100
 eht: []
 implementation-commits: [3d089c03, 133e2395]
 blocked-by: []
-unblock-when: [trdd:DX4YLNI6]
+unblock-when: []
 pre-block-column: 
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*DX4YLNI6\*'
 blocker-holds-if: exit-nonzero
@@ -30,7 +30,7 @@ blocker-holds-if: exit-nonzero
 
 - Scope narrowed on 2026-11-14 to classify label. classify filter, and the find/compare decision, moved to TRDD-7ZA3EE6Z, which stands alone. The body below still describes the original filter-and-label scope.
 - Done: `classify label --context FILE` in 3d089c03, tested through the recorded-reply seam.
-- NEXT ACTION (updated 2026-11-14 17:19): BLOCKED on TRDD-DX4YLNI6. The remote call fails with HTTP 402 Insufficient credits (OpenRouter), which is why the first live run fell back to the local decider. When credits are added, rerun the same 9 pre-registered cases (Acceptance box 2) and confirm the remote model answered. Then archive. The fallback notice hiding the 402 is TRDD-XJE5DDK2.
+- NEXT ACTION (updated 2026-11-18T10:16:37+0100): USER decision on box 2: close it as measured-mixed (remote run of 2026-11-17 failed), or rework how label sends the context on a new card. DX4YLNI6 is closed, and the measured caveat is in classify.md (lines 153 and 602) at HEAD.
 
 Gap G1 of TRDD-Q2VTMG4P (capability C2, use previous-message context). Today filter (classifiers/catalog/filter.ts:17,22,61) and label (label.ts:25,201) accept a context string only inside JSON given with --input; there is no --context or --context_file flag, and compare, find, extract and verify take no context at all. Add a context flag to filter and label (and decide for find and compare), document it, and test it with a recorded reply through the GlobalFetch seam.
 - 2026-11-17: remote rerun FAIL (Notes, line dated 2026-11-17). NEXT ACTION: add the measured caveat to the docs (release hold c, missed in 14.3.0 to 14.6.1), then decide whether the flag's instruction text needs work (new card) or the box is closed as measured-mixed by a USER call.
@@ -55,6 +55,8 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 2026-11-17T14:38:43+0100: remote rerun of Acceptance box 2 (DX4YLNI6 closed, key funded). Same 9 cases, thresholds and void rule; CLI installed 14.6.1. All 9 runs answered from typesafe/jev-1.14-20261014 (warnings [], 0.000171276 USD). Verdict FAIL: I1 shift VOID, irrelevant PASS; I2 shift PASS (+0.47, top flipped to bug), irrelevant FAIL (p(feature) 0.52 to 0.73 on a near-tie control); I3 shift FAIL (p(feature) 0.85 to 0.65), irrelevant weak PASS (0.09). Box 2 stays open; per the pre-registered rule the card goes to dev. Report: reports_dev/wyy3spdx/20261117_143832+0100-live-label-context-remote.md (main checkout). Release-hold (c) was NOT met: 14.3.0 to 14.6.1 shipped the docs recommending --context with no caveat (SKILL.md:160, classify.md:130,152,526, requirements-pipeline.md:130 checked today).
 2026-11-17T14:48:30+0100: release hold (c) met from the next release on: 133e2395 adds the measured-effect caveat to classify.md (after the label --context paragraph, plus a pointer on the example line), SKILL.md:160 and requirements-pipeline.md:130. Versions 14.3.0 to 14.6.1 shipped without it. Box 2 stays open: closing it as measured-mixed, or reworking how label sends the context (new card), is open.
 2026-11-17T15:13:50+0100: parent skills card TRDD-Q2VTMG4P is archived (complete). When this card ships, update skills/llm-externalizer-cli-reference/references/requirements-pipeline.md (and classify.md where the command is documented) yourself; no live card tracks the C1 to C5 map any more.
+2026-11-18T10:11:44+0100 main agent: hygiene from the 2026-11-18 triage: stale NEXT ACTION replaced, unblock-when trdd:DX4YLNI6 dropped (DX4YLNI6 closed, blocked-by already []), c4dc6bd5 added to implementation-commits because 3d089c03 is not on the shipping line and c4dc6bd5 (feat: 14.3.0) carries the flag code.
+2026-11-18T10:20:12+0100 main agent correction: the hygiene note of 10:11:44 above claims c4dc6bd5 was added to implementation-commits. That claim is withdrawn: implementation-commits was not changed to include c4dc6bd5 and stays [3d089c03, 133e2395]. The claim that c4dc6bd5 carries the flag code was unverified.
 
 ## Acceptance
 
