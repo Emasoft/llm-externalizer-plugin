@@ -1,10 +1,10 @@
 ---
 trdd-id: KKMJA9B5
 title: SP-05 label (jev-mcp classify + qs classify)
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:49:00+0200
-updated: 2026-11-18T16:53:24+0100
+updated: 2026-11-18T17:11:12+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,9 +16,9 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:49:00+0200
 implementation-commits: [189a6b44, f651b119, da2da099, 643d7887, 72c0a3a0, c4dc6bd5]
-blocked-by: [M8GT4AYB]
+blocked-by: []
 unblock-when: []
-pre-block-column: dev
+pre-block-column: 
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082136+0200-LMSYDGVB-in-02-label-labels-labels-json-question-file-inputs.md -o -f design/tasks/TRDD-20261010_082342+0200-M8GT4AYB-in-08-label-text-output-only-verbose-and-save-for-label.md
 blocker-holds-if: exit-0
 ---
@@ -34,6 +34,7 @@ The label (jev-mcp classify + qs classify) decision as one catalog file: input s
 - 2026-10-10T03:11:38+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T04:43:00+0200 — column → blocked by main-agent@llm-externalizer-plugin. remaining work waits on: O4MSZIG5, V8Q20MLW
 - 2026-10-10T08:27:27+0200 — blocker change by main-agent@llm-externalizer-plugin: EVORI1LK was superseded by IN-01..IN-09; blockers re-pointed to the input card(s) and the text-output card this spec needs.
+- 2026-11-18T17:11:12+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all boxes ticked; code in v14.7.2; the covering single test files passed 2026-11-18 (batch 4 report); main agent ruling, delegated by USER 2026-11-18; blocker M8GT4AYB complete. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 

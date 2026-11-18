@@ -1,10 +1,10 @@
 ---
 trdd-id: M8GT4AYB
 title: IN-08 label text output (--only, --verbose) and --save for label
-column: backburner
-status: tasked
+column: complete
+status: archived
 created: 2026-10-10T08:23:42+0200
-updated: 2026-11-18T16:53:11+0100
+updated: 2026-11-18T17:11:11+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -46,6 +46,7 @@ Plan 281; qs:1013-1052.
 
 - 2026-10-10T08:23:42+0200 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-10T08:28:29+0200 — column → backburner. depends on IN-07 (LWDKZO2A), which waits on open question Q4
+- 2026-11-18T17:11:11+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all boxes ticked; code in v14.7.2; the covering single test files passed 2026-11-18 (batch 4 report); main agent ruling, delegated by USER 2026-11-18.
 
 ## Notes
 

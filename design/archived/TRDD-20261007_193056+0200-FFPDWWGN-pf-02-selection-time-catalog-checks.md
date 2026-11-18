@@ -1,10 +1,10 @@
 ---
 trdd-id: FFPDWWGN
 title: PF-02 Selection-time catalog checks
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:30:56+0200
-updated: 2026-11-18T16:53:25+0100
+updated: 2026-11-18T17:11:12+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,8 +16,8 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:30:56+0200
 implementation-commits: [97847fe3, e8d7d255, 0421472e, bf6bdbbd, 21875b8b]
-blocked-by: [3ZVURQ58]
-pre-block-column: dev
+blocked-by: []
+pre-block-column: 
 blocker-probe: test -f design/tasks/TRDD-20261007_193121+0200-3ZVURQ58-pf-06-settings-commands-for-classifier-profiles.md
 blocker-holds-if: exit-0
 unblock-when: []
@@ -34,6 +34,7 @@ Run the checks that need the decisions catalog when a profile is selected for a 
 - 2026-10-10T00:54:05+0200 — column → todo by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan
 - 2026-10-10T00:54:07+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan
 - 2026-10-10T15:06:23+0200 — column → blocked. audit 2026-10-10: selection path committed; step 4 and box E19 need settings validate, which is PF-06 (TRDD-3ZVURQ58, backburner); nobody working it
+- 2026-11-18T17:11:12+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all boxes ticked; code in v14.7.2; the covering single test files passed 2026-11-18 (batch 4 report); main agent ruling, delegated by USER 2026-11-18; 3ZVURQ58 ruled not a blocker in its Notes of 2026-11-18. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 

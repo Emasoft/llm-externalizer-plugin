@@ -1,10 +1,10 @@
 ---
 trdd-id: LWDKZO2A
 title: IN-07 Text output, --json, and the filter flags (--no-collapse, --save)
-column: backburner
-status: tasked
+column: complete
+status: archived
 created: 2026-10-10T08:23:09+0200
-updated: 2026-11-18T16:52:55+0100
+updated: 2026-11-18T17:11:10+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -49,3 +49,4 @@ Plan 279, 296, 461 (E128); qs:898-906 (emit), 921-958 (renderRows, save), 960-98
 ## Approval log
 
 - 2026-10-10T08:23:09+0200 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T17:11:10+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all boxes ticked; code in v14.7.2; the covering single test files passed 2026-11-18 (batch 4 report); main agent ruling, delegated by USER 2026-11-18.

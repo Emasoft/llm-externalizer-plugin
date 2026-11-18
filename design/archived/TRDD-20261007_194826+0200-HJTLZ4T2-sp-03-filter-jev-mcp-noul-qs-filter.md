@@ -1,10 +1,10 @@
 ---
 trdd-id: HJTLZ4T2
 title: SP-03 filter (jev-mcp noul + qs filter)
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:48:26+0200
-updated: 2026-11-18T16:53:13+0100
+updated: 2026-11-18T17:11:11+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,9 +16,9 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:48:26+0200
 implementation-commits: [189a6b44, f651b119, da2da099, 9b95e567, c4dc6bd5]
-blocked-by: [LWDKZO2A]
+blocked-by: []
 unblock-when: []
-pre-block-column: dev
+pre-block-column: 
 blocker-probe: test -f design/tasks/TRDD-20261010_044154+0200-O4MSZIG5-live-reply-capture-for-the-14-decision-specs.md -o -f design/tasks/TRDD-20261010_082128+0200-XHHH0N1E-in-01-shared-input-modes-through-collectinputs-filter-rank-f.md -o -f design/tasks/TRDD-20261010_082309+0200-LWDKZO2A-in-07-text-output-json-and-the-filter-flags-no-collapse-save.md
 blocker-holds-if: exit-0
 ---
@@ -34,6 +34,7 @@ The filter (jev-mcp noul + qs filter) decision as one catalog file: input schema
 - 2026-10-10T03:11:32+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T04:43:02+0200 — column → blocked by main-agent@llm-externalizer-plugin. remaining work waits on: O4MSZIG5, V8Q20MLW
 - 2026-10-10T08:27:27+0200 — blocker change by main-agent@llm-externalizer-plugin: EVORI1LK was superseded by IN-01..IN-09; blockers re-pointed to the input card(s) and the text-output card this spec needs.
+- 2026-11-18T17:11:11+0100 — COMPLETE by main-agent@llm-externalizer-plugin. all boxes ticked; code in v14.7.2; the covering single test files passed 2026-11-18 (batch 4 report); main agent ruling, delegated by USER 2026-11-18; blocker LWDKZO2A complete. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 
