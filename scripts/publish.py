@@ -71,6 +71,7 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
     # Centered HTML badge block — auto-regenerated on every publish run.
     # Keep this format in sync with the initial block in README.md so the
     # visual layout (center-aligned, one <a><img> per badge) doesn't drift.
+    # Windows is experimental (TRDD-YHGYWPHQ, failures tracked in TRDD-61EINA10); keep this badge and the badge block at the top of README.md in sync.
     badges = f"""{start_marker}
 <p align="center">
 <a href="#"><img alt="version" src="https://img.shields.io/badge/version-{version}-blue"></a>
@@ -79,7 +80,7 @@ def update_readme_badges(readme_path: Path, version: str, build_ok: bool) -> boo
 <a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
 <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
 <a href="https://github.com/Emasoft/emasoft-plugins"><img alt="marketplace" src="https://img.shields.io/badge/marketplace-emasoft--plugins-purple"></a>
-<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey"></a>
+<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%28experimental%29-lightgrey"></a>
 </p>
 {end_marker}"""
     new_content = content[:start_idx] + badges + content[end_idx + len(end_marker) :]

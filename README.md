@@ -12,7 +12,7 @@
 <a href="#"><img alt="node" src="https://img.shields.io/badge/node-%3E%3D18-brightgreen"></a>
 <a href="#"><img alt="license" src="https://img.shields.io/badge/license-MIT-green"></a>
 <a href="https://github.com/Emasoft/emasoft-plugins"><img alt="marketplace" src="https://img.shields.io/badge/marketplace-emasoft--plugins-purple"></a>
-<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey"></a>
+<a href="#"><img alt="platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Linux%20%7C%20Windows%20%28experimental%29-lightgrey"></a>
 </p>
 <!--BADGES-END-->
 
@@ -124,9 +124,9 @@ Keeping the fix half local means the expensive model only touches code when it a
 - **8 backend presets** — LM Studio, Ollama, vLLM, llama.cpp, Locals (MLX, macOS), generic local, OpenRouter, chat.b.ai.
 - **Auto-batching** — First-Fit-Decreasing bin-packing packs 1–5 files per LLM request (~400 KB per batch). The LLM never sees the whole codebase at once.
 - **File grouping** — `---GROUP:<id>---` markers in a file list pack related files into one request and produce one report per group.
-- **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's `SECRET_PATTERNS` set now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
+- **Secret handling** — every file is run through the pre-scan secret detector (`scan_secrets: true`) before it leaves your machine, and any hit is rewritten to `[REDACTED:LABEL]` (`redact_secrets: true`) so the scan still completes on partially-dirty inputs. The detector's pattern set (`scripts/llm-ext/src/secret-patterns.ts`) now includes wildcard variants for the common API-key shapes (`sk-…`, `gho_…`, `aws_…`, etc.) and prefix-bearing tokens, so accidental leaks via `.env`, fixtures, or stale comments are caught and silently masked instead of being shipped to the remote LLM. Opt out per run with `--no-secrets` only after you have moved secrets to a gitignored `.env`.
 - **File-based output** — every final report (a complete or merged result) lands in `./reports/llm-externalizer/`; intermediate output (the per-file pieces of a merged run, partial runs, llm-ext's own model-pool benchmark and health reports) lands in `./reports_dev/llm-externalizer/`. Only paths flow through the orchestrator context (≤ 200 bytes per report). `reports/` is git tracked and sanitized of secrets before committing; `reports_dev/` is gitignored. llm-ext creates `./reports_dev/llm-externalizer/` with a `.gitignore` of `*` so its intermediate files are never committed, even in a project with no `reports_dev` ignore rule.
-- **Cross-platform** — macOS, Linux, Windows. `llm-ext` is a bundled Node executable; the helper scripts are pure Python 3.12+.
+- **Cross-platform** — macOS and Linux are supported; Windows is experimental (the test suite runs on Windows in CI and known failures are tracked in TRDD-61EINA10). `llm-ext` is a bundled Node executable; the helper scripts are pure Python 3.12+.
 
 ---
 
