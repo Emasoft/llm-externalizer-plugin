@@ -4,7 +4,7 @@ title: Split scripts/llm-ext/src/index.ts so the ubs taint analysis finishes on 
 column: backburner
 status: tasked
 created: 2026-11-17T22:41:08+0100
-updated: 2026-11-17T22:48:06+0100
+updated: 2026-11-18T02:53:53+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -29,3 +29,7 @@ USER 2026-11-17 verbatim: 'why partial runs? we cannot risk to commit bugged cod
 
 Each split step must pass ubs --staged with no partial run and no critical finding before its commit; --no-verify is not allowed for this work.
 Scope: only the 22 src .ts files over 60 KB were scanned, each alone; a staged combination of smaller files can still run partial (seen 2026-11-17 with ubs 5.4.17 elsewhere: two files timed out together while each passed alone).
+
+## Progress
+
+2026-11-18T02:53:52+0100 Split measured in a scratch copy (reports/sonnet-worker/20261118_024512+0100-tyskx72i-split.md in the main checkout): index.ts alone with a one-line comment edit ends partial (js.taint.command work limit, 0 critical). Moving the spawnSync and execFileSync calls of index.ts and config.ts into a small module spawn-sync.ts passes the hook only when spawn-sync.ts is committed first on its own and left out of the commit that stages index.ts and config.ts; staging spawn-sync.ts together with index.ts is partial again. That passes by hiding the sinks from the scanner for that commit, so it is a USER decision of the same kind as D1, not taken. index.ts has 0 matches of the ubs request-source patterns but 2 occurrences of the word params, which the ubs source-free test also counts (taint_js.py near line 3059), so the hidden calls could still carry findings. Measured once per case, comment-level edits only.
