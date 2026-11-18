@@ -1,10 +1,10 @@
 ---
 trdd-id: NL2012O9
 title: A text chunk the local decider refuses as too large cannot be cut again and the 16384 clamp raises the remote request count
-column: todo
+column: complete
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T12:54:46+0100
+updated: 2026-11-18T13:01:43+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -42,6 +42,7 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 ## Approval log
 
 - 2026-11-18T05:34:36+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T13:01:43+0100 — column → complete by main-agent@llm-externalizer-plugin. code committed and verified on the exported commit (tsc and card tests); ships in 14.7.2; approved by the main agent under the USER delegation of 2026-11-18
 
 ## Notes
 

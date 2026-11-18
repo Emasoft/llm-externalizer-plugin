@@ -1,10 +1,10 @@
 ---
 trdd-id: TYSKX72I
 title: Split scripts/llm-ext/src/index.ts so the ubs taint analysis finishes on every part
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-17T22:41:08+0100
-updated: 2026-11-18T12:37:26+0100
+updated: 2026-11-18T13:01:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -24,6 +24,7 @@ USER 2026-11-17 verbatim: 'why partial runs? we cannot risk to commit bugged cod
 ## Approval log
 
 - 2026-11-17T22:41:08+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T13:01:44+0100 — column → todo by main-agent@llm-externalizer-plugin. route decided 2026-11-18 (five case handlers out of dispatchCallToolInner); work starts after the 14.7.2 publish
 
 ## Constraints
 

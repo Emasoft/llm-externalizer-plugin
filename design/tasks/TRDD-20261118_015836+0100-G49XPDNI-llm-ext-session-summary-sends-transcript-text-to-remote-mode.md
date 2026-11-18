@@ -1,10 +1,10 @@
 ---
 trdd-id: G49XPDNI
 title: llm-ext session-summary sends transcript text to remote models without redacting secrets
-column: todo
+column: complete
 status: tasked
 created: 2026-11-18T01:58:36+0100
-updated: 2026-11-18T12:54:47+0100
+updated: 2026-11-18T13:01:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -24,6 +24,7 @@ release-via: publish
 ## Approval log
 
 - 2026-11-18T01:58:36+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T13:01:44+0100 — column → complete by main-agent@llm-externalizer-plugin. code committed and verified on the exported commit (tsc and card tests); ships in 14.7.2; approved by the main agent under the USER delegation of 2026-11-18
 
 ## USER decision
 
