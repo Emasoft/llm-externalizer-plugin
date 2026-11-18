@@ -133,6 +133,7 @@ async function refusingAsync<T>(code: ExitCode, f: () => Promise<T>): Promise<T>
 
 // WHY one function for every path out: the code is decided from the failures the fan-out recorded, so a partial result and a failed one cannot disagree.
 function failureCode(m: MergedReply): ExitCode | undefined {
+  // WHY this order, aborted then budget then timeout: fan-out.ts sets `aborted` from signal.aborted independently of `stopped`, so a run can carry both; Ctrl-C is an explicit user act and wins over a stop the run caused itself.
   if (m.aborted) return CTRL_C_EXIT_CODE;
   if (m.stopped === "budget") return BUDGET_EXIT_CODE as ExitCode;
   // Review of 4856f009, finding 4: a stopped run exits with the code of the stop that ended it (124 for --command_timeout, 6 for --stop_on_errors) like every other stopped command, with the answers it has. The envelope value "timeout" is the schema name for any stop.
@@ -188,6 +189,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const startedAt = Date.now();
   const command = req.command ?? `classify ${spec.id}`;
   const parsed = spec.input.safeParse(req.input);
+  // WHY the first 5 issues only (inferred; no recorded reason found): a schema with many bad fields would otherwise print an unbounded refusal line; the first few name the fault, the user fixes them and reruns.
   if (!parsed.success) throw new Refusal(`invalid input: ${parsed.error.issues.slice(0, 5).map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; ")}`);
   const parsedInput = parsed.data;
   // WHY before any request: a conversion that threw after runPlan would lose a paid run's result.
@@ -213,6 +215,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   // WHY a closure over the run's state: the empty plan (E65) and the planned run end the same way (project, envelope, report, exit code); two copies could drift.
   const conclude = (merged: MergedReply): RunOutcome<R> => {
     // WHY a refusal with the transport's own message and remedy: a fatal failure is run-wide and reported once, and its error maps straight to an exit code (FatalFailure in l2/fan-out.ts).
+    // WHY nothing is projected on a fatal failure (inferred): a fatal class (FATAL_CLASSES in l2/fan-out.ts: auth, payment, key-limit, not-found, in-flight-budget) ends the whole run, so there is nothing meaningful to project; fan-out keeps the answers of a per-item spec (it drops them only for a whole-result one), but conclude does not use them.
     if (merged.fatal !== null) {
       const f = merged.fatal;
       throw new Refusal(`${f.message}${f.remedy_hint ? ` ${f.remedy_hint}` : ""}`, exitCodeForError(f.error));
