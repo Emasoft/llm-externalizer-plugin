@@ -4,7 +4,7 @@ title: Local-only classifier profile local-decision that sends classify requests
 column: dev
 status: tasked
 created: 2026-11-16T23:20:23+0100
-updated: 2026-11-18T05:34:59+0100
+updated: 2026-11-18T05:44:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature

@@ -4,7 +4,7 @@ title: Add the LFM3 GGUF and elephant-1 local models to the supported list and t
 column: todo
 status: tasked
 created: 2026-11-17T12:02:14+0100
-updated: 2026-11-18T05:18:31+0100
+updated: 2026-11-18T05:44:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
