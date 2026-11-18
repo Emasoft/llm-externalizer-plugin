@@ -4,7 +4,7 @@ title: Triage the ubs 5.5.26 critical findings in 13 TypeScript files so commits
 column: backburner
 status: tasked
 created: 2026-11-17T22:45:00+0100
-updated: 2026-11-18T02:38:24+0100
+updated: 2026-11-18T04:32:35+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -36,6 +36,7 @@ Counts come from one direct-path run per file, not ubs --staged through the hook
 Real defect found by the triage sweep, not flagged by ubs: broker/server.ts compared the attacker-controlled x-llm-ext-broker-token header with !== (timing leak). Fixed with brokerTokenMatches (crypto.timingSafeEqual) in broker/protocol.ts; unit test broker/protocol-token.test.ts; a real-broker 401 test in broker.test.ts is in progress; not committed yet.
 2026-11-18: commit B landed as c735c1d3: brokerTokenMatches in protocol.ts, the server.ts gate, protocol-token.test.ts (5 cases), the real-broker 401 case in broker.test.ts, the vitest include entry and the 13 server.ts marks. Pre-commit ubs scan 0 critical, not partial. broker.test.ts and protocol-token.test.ts run together: 104 passed, 2 skipped (the two cases of the opt-in real-model suite, RUN_REAL_LOCAL_MODELS unset), vitest exit 0, 746 s (reports_dev/broker-token/it401/broker-full-20261118_000445+0100.txt). This supersedes the earlier line saying the 401 test is in progress and nothing is committed.
 2026-11-18T02:38:23+0100 D2 landed in d824be46 (hook 0 critical, not partial). Accepted deviations: no ubs markers on the new top-level constants (a marker-stripped scan flags none of them, critical severity compared; a marker on a statement with no finding would hide a future real one); the pid and argv compares in broker.test.ts go through the file-local helper sameValue, which hides its === from ubs for any compare routed through it. Correction to the d824be46 message: the Write tool created the script d2_apply.py, whose edits of profile-chain-402.test.ts were fastedit calls; it did not write a test file itself. broker.test.ts: 99 passed, 2 skipped, vitest exit 1 on a temp-dir leak of /tmp/llmext-refs.txt, a list of plugin-cache folders written during the run by another process; the guard compares snapshots taken before and after the run (src/test-tmpdir-guard.ts), so the existing file does not fail later runs.
+2026-11-18T04:29:41+0100 Acceptance: each of the 13 files passed the strict pre-commit hook (ubs on the staged files, 0 critical, not partial) in a commit that staged it: 5f7da310 (9 files), 4ddb3491 (benchmark/index.ts), 5657606b (benchmark/pick.ts), b3a259a1 and d824be46 (broker/broker.test.ts), c735c1d3 (broker/server.ts); file lists checked with git show --name-only. A direct-path ubs scan of all 13 files on 2026-11-18 gave 0 critical on each; that scan is a lead, not the form of check this card names, and config.ts then held the uncommitted TN8OUZ50 edit. All these commits are in v14.7.0. D2 landed in d824be46; D1 moves to TRDD-HCNC6433, so it does not hold this card open.
 
 ## Corrections
 
@@ -59,3 +60,10 @@ D2: keep the whole-call markers listed under Corrections item 2 (pragmatic: fake
 ## Next
 
 1) commit the token fix: server.ts, protocol.ts, protocol-token.test.ts, vitest.config.ts include entry, broker.test.ts 401 test; run broker.test.ts alone first; on a partial run, stop and ask (D1). 2) Acceptance checklist and move to complete once the token fix is committed. 3) Next release via publish.py.
+
+## Acceptance
+
+- [x] A1: every one of the 13 files passed the strict pre-commit hook (ubs on the staged files, 0 critical, not partial) in a commit that staged it; commits and file lists in the Progress line of 2026-11-18T04:29:41+0100.
+- [x] A2: the real defect found by the sweep (broker token compared with !==) is fixed in c735c1d3 with unit and real-broker tests.
+- [x] A3: D2 decided and landed in d824be46; D1 moved to TRDD-HCNC6433.
+- [x] A4: all the commits above are released in v14.7.0 (release commit dc6acf32).
