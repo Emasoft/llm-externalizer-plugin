@@ -4,7 +4,7 @@ title: classify preset that says duplicate, updated version or new for a rule ag
 column: todo
 status: tasked
 created: 2026-11-04T10:29:26+0100
-updated: 2026-11-18T02:12:50+0100
+updated: 2026-11-18T02:38:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -44,3 +44,7 @@ Code line numbers were reported by a read-only audit on 2026-11-04 and are not r
 - OWNER'S CALL, open: (a) whether a contradicting phrase is merged or put to the owner; (b) whether each Jev request must hold one candidate and one existing rule, with the duplicate and version checks as two different requests (owner drafts of 2026-11-03).
 - Acceptance includes a request file for the loading-screen example (phrase, r1, r2, u1, u2) that the 3-pillars session runs once; the main agent messages that session when rule-check is committed and when it is released.
 - PN7F00RF: the 3-pillars session parses PRRD.md with prrdgrep and passes the rules as items, so the PRRD extraction is not needed for this consumer.
+
+## Progress
+
+2026-11-18T02:38:40+0100 The classify code forced five contract changes, accepted by the 3-pillars session on 2026-11-18 with four conditions. Changes: no find step (each rule is judged as a phrase-rule pair, pairs packed per request, no 250 cap); with --json the fields sit under .decision of the envelope; without --strict-exit every answered run exits 0 and the consumer branches on .decision.outcome and treats any non-zero exit as a failed check; precedence duplicate over updated_version over new at 0.6, ambiguous on two or more updated_version; ids [A-Za-z0-9_.:-]{1,64}, echoed unchanged. Conditions: A, any unanswered pair makes the outcome uncertain and lists the rule ids; B, document stopped and degraded, preferably a stopped run is always uncertain; C, each candidate carries its contradicts answer and conflict is true when any rule is contradicted, even one labelled new; D, candidates list only the pairs that are not a confident new, plus a count of the confident-new pairs. Request: a flag for the per-request question cap (one pair per request, as in the owner draft of 2026-11-03), its cost to the owner first. Design spec (local, gitignored): reports_dev/rule-check/20261118_024500+0100-rule-check-spec.md in the main checkout.

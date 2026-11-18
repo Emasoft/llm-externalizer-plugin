@@ -4,7 +4,7 @@ title: Triage the ubs 5.5.26 critical findings in 13 TypeScript files so commits
 column: backburner
 status: tasked
 created: 2026-11-17T22:45:00+0100
-updated: 2026-11-18T01:46:57+0100
+updated: 2026-11-18T02:38:24+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,7 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-17T22:45:00+0100
-implementation-commits: [5f7da310, 4ddb3491, 5657606b, b3a259a1, c735c1d3]
+implementation-commits: [5f7da310, 4ddb3491, 5657606b, b3a259a1, c735c1d3, d824be46]
 ---
 
 # Triage the ubs 5.5.26 critical findings in 13 TypeScript files so commits that stage them pass the pre-commit hook
@@ -35,6 +35,7 @@ Counts come from one direct-path run per file, not ubs --staged through the hook
 2026-11-18: marks committed through the strict hook, each a full scan with 0 critical and exit 0: 5f7da310 (9 files, 115 findings), 4ddb3491 (benchmark/index.ts, 4), 5657606b (benchmark/pick.ts, 4), b3a259a1 (broker/broker.test.ts, 14). broker/server.ts (13 marks) goes into the commit of the token fix. Triage reports: reports_dev/25kzdvyf/triage-production.md, triage-tests.md; apply reports: reports_dev/25kzdvyf-apply/.
 Real defect found by the triage sweep, not flagged by ubs: broker/server.ts compared the attacker-controlled x-llm-ext-broker-token header with !== (timing leak). Fixed with brokerTokenMatches (crypto.timingSafeEqual) in broker/protocol.ts; unit test broker/protocol-token.test.ts; a real-broker 401 test in broker.test.ts is in progress; not committed yet.
 2026-11-18: commit B landed as c735c1d3: brokerTokenMatches in protocol.ts, the server.ts gate, protocol-token.test.ts (5 cases), the real-broker 401 case in broker.test.ts, the vitest include entry and the 13 server.ts marks. Pre-commit ubs scan 0 critical, not partial. broker.test.ts and protocol-token.test.ts run together: 104 passed, 2 skipped (the two cases of the opt-in real-model suite, RUN_REAL_LOCAL_MODELS unset), vitest exit 0, 746 s (reports_dev/broker-token/it401/broker-full-20261118_000445+0100.txt). This supersedes the earlier line saying the 401 test is in progress and nothing is committed.
+2026-11-18T02:38:23+0100 D2 landed in d824be46 (hook 0 critical, not partial). Accepted deviations: no ubs markers on the new top-level constants (a marker-stripped scan flags none of them, critical severity compared; a marker on a statement with no finding would hide a future real one); the pid and argv compares in broker.test.ts go through the file-local helper sameValue, which hides its === from ubs for any compare routed through it. Correction to the d824be46 message: the Write tool created the script d2_apply.py, whose edits of profile-chain-402.test.ts were fastedit calls; it did not write a test file itself. broker.test.ts: 99 passed, 2 skipped, vitest exit 1 on a temp-dir leak of /tmp/llmext-refs.txt, a list of plugin-cache folders written during the run by another process; the guard compares snapshots taken before and after the run (src/test-tmpdir-guard.ts), so the existing file does not fail later runs.
 
 ## Corrections
 
