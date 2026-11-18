@@ -1281,15 +1281,18 @@ describe("classifyUnavailable's 403 gate — model-specific vs auth/key ambiguou
       classifyUnavailable("API error 403 (openrouter): No auth credentials found"),
     ).toBeNull();
     expect(classifyUnavailable("API error 403 (openrouter): Forbidden")).toBeNull();
+    // A region refusal that does not name the model stays ambiguous (TRDD-2IMRJ42O).
+    expect(classifyUnavailable("API error 403 (openrouter): Access in your region is blocked")).toBeNull();
   });
 
-  it("still classifies a 403 naming the model ('only available' / 'unavailable for free') as gone", () => {
+  it("still classifies a 403 naming the model ('only available' / 'unavailable for free' / 'model is not available in your region') as gone", () => {
     expect(
       classifyUnavailable("API error 403 (openrouter): x/y:free is only available on agentic harnesses"),
     ).toBe("gone");
     expect(
       classifyUnavailable("API error 403 (openrouter): x/y:free is unavailable for free tier use"),
     ).toBe("gone");
+    expect(classifyUnavailable("API error 403 (openrouter): This model is not available in your region.")).toBe("gone");
   });
 
   it("classifies a bare 410 as gone — unlike 403, 'Gone' is unambiguous and needs no phrasing gate", () => {

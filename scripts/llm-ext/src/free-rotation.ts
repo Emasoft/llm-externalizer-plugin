@@ -661,12 +661,19 @@ export function classifyUnavailable(
   // STATUS_CODE_RE(404) are NOT gated the same way: those already identify a
   // routing failure for THIS model id, they can't be a generic account-wide
   // auth message.
+  // Measured 2026-11-18 on thinkingmachines/inkling-2-small:free: HTTP 403
+  // "This model is not available in your region." Without the "model is not available in your region"
+  // phrase it was a generic 403 (null), so the session-summary chunk retried
+  // the same model and failed on every resumed run (TRDD-2IMRJ42O).
+  // The match keeps the words "model is" so a region refusal that does not name
+  // the model (an account- or key-wide one) stays a generic 403 under the quorum.
   const modelSpecific403 =
     /\b403\b/.test(s) &&
     (s.includes("only available") ||
       s.includes("agentic harnesses") ||
       s.includes("not available for free") ||
-      s.includes("unavailable for free"));
+      s.includes("unavailable for free") ||
+      s.includes("model is not available in your region"));
   // A bare/generic 403 (no model-specific phrasing) is ambiguous ON ITS OWN —
   // a bad/revoked key returns the same code for every model. But when the
   // caller has already proven THIS credential good this run (it completed a
