@@ -2492,6 +2492,10 @@ function formatLocalTimestamp(d: Date = new Date()): string {
 }
 
 
+// Shared with tools/settings-copy.ts (TRDD-BYHR8EGG) so the stamped copy name matches the corrupt-backup stamp.
+export { formatLocalTimestamp };
+
+
 /** Write `content` to `<stem><ext>` without ever replacing an existing file.
  *  WHY: backup names have one-second resolution, and a plain writeFileSync let a
  *  second backup in the same second silently overwrite the first — the user's

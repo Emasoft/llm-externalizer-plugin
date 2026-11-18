@@ -827,6 +827,8 @@ export default defineConfig({
       'src/benchmark/classify-eval/dataset.test.ts',
       // C4-02 (TRDD-V8Q20MLW): classify tool entries generated from the catalog; entries equal their spec, shared flags equal what runDecisionArgv parses.
       'src/tools/definitions-classify.test.ts',
+      // TRDD-BYHR8EGG: settings show keeps a differing settings_edit.yaml copy under a stamped name.
+      'src/tools/settings-copy.test.ts',
       // C4-03 (TRDD-4Q1IVJOE): classify group of the launcher (in process, replayed replies) and the same through the built CLI (needs `npm run build`).
       'src/cli/classify-launch.test.ts',
       'src/cli/classify-launch-cli.test.ts',
