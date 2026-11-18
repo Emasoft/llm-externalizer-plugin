@@ -1,10 +1,10 @@
 ---
 trdd-id: ABPSC16L
 title: EV-01 Dataset format and fingerprint
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T20:29:01+0200
-updated: 2026-11-18T15:36:18+0100
+updated: 2026-11-18T16:31:45+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,8 +16,8 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T20:29:01+0200
 implementation-commits: [1bb5661d]
-blocked-by: [PCZZCDSR]
-pre-block-column: dev
+blocked-by: []
+pre-block-column: 
 blocker-probe: test -f design/tasks/TRDD-20261007_202836+0200-PCZZCDSR-wk-02-benchmark-workload-kit-ts.md
 blocker-holds-if: exit-0
 unblock-when: [trdd:PCZZCDSR]
@@ -34,6 +34,7 @@ Define the labelled dataset format for `classify-eval`: one jsonl file per decis
 - 2026-10-10T04:27:08+0200 — column → dev by main-agent@llm-externalizer-plugin. wave 9 code committed; acceptance boxes ticked by evidence, remaining boxes owed
 - 2026-10-10T15:06:31+0200 — column → blocked. audit 2026-10-10: code committed in 1bb5661d; the private fingerprint copy must be replaced by the WK-02 kit (TRDD-PCZZCDSR); the definition-of-done subject clause also needs the owner ruling; nobody working it
 - 2026-10-10 note: when the WK-02 block clears this card still needs the owner ruling on the definition-of-done clause (one commit with the card id in its subject); do not return it to dev unworked.
+- 2026-11-18T16:31:45+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18; blocker PCZZCDSR is terminal. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 

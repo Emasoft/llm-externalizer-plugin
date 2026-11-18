@@ -4,7 +4,7 @@ title: A text chunk the local decider refuses as too large cannot be cut again a
 column: complete
 status: tasked
 created: 2026-11-18T05:34:36+0100
-updated: 2026-11-18T16:08:43+0100
+updated: 2026-11-18T16:32:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -46,6 +46,7 @@ Found in TRDD-1L9VMEY7 (root analysis reports_dev/1l9vmey7-check/20261118_051637
 - 2026-11-18T13:01:43+0100 — column → complete by main-agent@llm-externalizer-plugin. code committed and verified on the exported commit (tsc and card tests); ships in 14.7.2; approved by the main agent under the USER delegation of 2026-11-18
 - 2026-11-18T14:14:05+0100 — column → publish by main-agent@llm-externalizer-plugin. shipped in v14.7.2 (8c72f83d, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.2); main agent approves under the USER delegation of 2026-11-18
 - 2026-11-18T16:08:43+0100 — column → complete by main-agent@llm-externalizer-plugin. main agent ruling (delegated by USER 2026-11-18 'solve all issues yourself'; not an owner answer): every acceptance box is ticked or struck with a stated reason; follow-ups carry their own cards
+- 2026-11-18T16:32:47+0100 — column → complete by main-agent@llm-externalizer-plugin. already complete; archive pass (ZVS3IMKT reduced scope)
 
 ## Notes
 

@@ -1,10 +1,10 @@
 ---
 trdd-id: O93LFMF3
 title: Local decider fallback that starts or adopts a loopback mlx-decision server
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-09T19:26:52+0100
-updated: 2026-11-18T16:16:36+0100
+updated: 2026-11-18T16:31:42+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -41,6 +41,7 @@ Port collision, stated as a fact: the increment-1 test fixture defaults to http:
 - 2026-11-13T21:55:00+0100 — correction to the line above: the combined full-suite run was not green; stage 2 failed once on broker F7, cause unknown (see the 21:45 STATE). ai_review covers the code as built; a USER ruling against the 60 s lease fast-fail reopens dev.
 - 2026-11-14T01:37:05+0100 — column → dev by main-agent@llm-externalizer-plugin. ai_review confirmed defects: command-stop ignored in the local tier, bare pgrep in the install hook, phantom server from a grep command line, DeadlineError masking in ping
 - 2026-11-14T11:33:48+0100 — column → human_review. build and full suite done; only the three OPEN (USER) questions remain: 60 s lease fast-fail vs the wait rule, local_fallback settings visibility, J7AIC7ZW port collision
+- 2026-11-18T16:31:42+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Open questions
 

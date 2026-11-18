@@ -1,10 +1,10 @@
 ---
 trdd-id: PEZ08FM4
 title: Guidelines for projects that call the llm-ext CLI (profiles, maintenance, concurrency, reports, settings, upgrades, exit codes, local servers, cost)
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-14T21:28:24+0100
-updated: 2026-11-18T16:17:40+0100
+updated: 2026-11-18T16:31:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -26,6 +26,7 @@ Requested 2026-11-14 by the perch session on the owner's request (cross-session 
 - 2026-11-14T21:28:24+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-11-14T21:37:18+0100 The profile and settings answers (questions 1 and 5) depend on the profile contract redesign ordered by the USER on 2026-11-14 (TRDD-SZ7TO9FW): the guidelines must define the stable user/tool surface vs the internal benchmark-managed settings, a pinning/customizing procedure that survives benchmark updates, and the implicit local fallback. Those sections are written after SZ7TO9FW is designed.
 2026-11-14T21:41:31+0100 consumer-guidelines.md written (99 lines, worker report reports_dev/sonnet-worker/20261114_214106+0100-pez08fm4-consumer-guidelines.md); questions 2-4 and 6-9 complete, 1 and 5 wait on TRDD-SZ7TO9FW. Follow-up found: skills/llm-externalizer-cli-reference/SKILL.md cost rules still say a 402 switches to free models, stale since llm-ext stopped switching; fix it with the SZ7TO9FW docs pass.
+- 2026-11-18T16:31:44+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Acceptance
 

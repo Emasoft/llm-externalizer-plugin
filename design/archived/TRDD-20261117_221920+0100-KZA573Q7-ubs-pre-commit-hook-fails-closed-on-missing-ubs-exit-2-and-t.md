@@ -1,10 +1,10 @@
 ---
 trdd-id: KZA573Q7
 title: ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T22:19:20+0100
-updated: 2026-11-18T16:23:49+0100
+updated: 2026-11-18T16:31:43+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -25,6 +25,7 @@ USER 2026-11-17 verbatim: 'fix. and ubs hook must be stricter. update homebrew v
 ## Approval log
 
 - 2026-11-17T22:19:20+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T16:31:43+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Decisions
 

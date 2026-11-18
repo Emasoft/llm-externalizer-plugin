@@ -1,10 +1,10 @@
 ---
 trdd-id: VASIA3YO
 title: session summary does not fall back to the configured backend
-column: backburner
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T16:25:40+0100
-updated: 2026-11-18T16:25:40+0100
+updated: 2026-11-18T16:31:45+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -28,3 +28,4 @@ approval-datetime: 2026-11-18T16:25:40+0100
 ## Approval log
 
 - 2026-11-18T16:25:40+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-18T16:31:45+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.

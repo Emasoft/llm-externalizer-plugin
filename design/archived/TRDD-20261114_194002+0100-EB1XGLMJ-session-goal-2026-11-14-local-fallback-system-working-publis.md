@@ -1,10 +1,10 @@
 ---
 trdd-id: EB1XGLMJ
 title: Session goal 2026-11-14 local fallback system working, published and installed
-column: human_review
-status: tasked
+column: superseded
+status: archived
 created: 2026-11-14T19:40:02+0100
-updated: 2026-11-18T16:24:37+0100
+updated: 2026-11-18T16:31:46+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-14T19:40:02+0100
+superseded-by: [FC2TX9VU]
 ---
 
 # Session goal 2026-11-14 local fallback system working, published and installed
@@ -23,6 +24,7 @@ approval-datetime: 2026-11-14T19:40:02+0100
 
 - 2026-11-14T19:40:02+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-15T23:13:32+0100 — column → human_review. goal reached: 14.3.0 published, installed and smoke-tested; awaiting USER review
+- 2026-11-18T16:31:46+0100 — SUPERSEDED by main-agent@llm-externalizer-plugin. session goal of 2026-11-14 carried on by the plan card FC2TX9VU.
 
 ## Goal (USER /goal 2026-11-14 ~19:35, verbatim)
 

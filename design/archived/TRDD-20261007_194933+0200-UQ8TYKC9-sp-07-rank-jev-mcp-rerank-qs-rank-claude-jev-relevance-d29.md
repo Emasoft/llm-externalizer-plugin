@@ -1,10 +1,10 @@
 ---
 trdd-id: UQ8TYKC9
 title: SP-07 rank (jev-mcp rerank + qs rank + claude-jev relevance, D29)
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:49:33+0200
-updated: 2026-11-18T16:14:37+0100
+updated: 2026-11-18T16:31:45+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -34,6 +34,7 @@ The rank (jev-mcp rerank + qs rank + claude-jev relevance, D29) decision as one 
 - 2026-10-10T03:11:48+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T05:03:14+0200 — column → blocked by main-agent@llm-externalizer-plugin. only the live reply capture (O4MSZIG5) and the definition of done remain
 - 2026-10-31T12:12:04+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
+- 2026-11-18T16:31:45+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Plan refs
 

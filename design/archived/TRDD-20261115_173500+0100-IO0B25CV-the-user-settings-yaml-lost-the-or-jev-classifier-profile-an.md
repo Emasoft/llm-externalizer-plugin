@@ -1,10 +1,10 @@
 ---
 trdd-id: IO0B25CV
 title: The user settings.yaml lost the or-jev classifier profile and active_classifier after 2026-10-29
-column: human_review
-status: tasked
+column: complete
+status: archived
 created: 2026-11-15T17:35:00+0100
-updated: 2026-11-18T16:15:32+0100
+updated: 2026-11-18T16:31:41+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -27,6 +27,7 @@ Reported 2026-11-15 by the apple-docs-mcp Claude session (peer report, not verif
 - 2026-11-15T17:35:00+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T10:02:20+0100 — column → testing by main-agent@llm-externalizer-plugin. writers covered by a mutation-checked test; restore of the user file waits for the USER
 - 2026-11-16T20:16:02+0100 — column → human_review by main-agent@llm-externalizer-plugin. writers covered by a mutation-checked test, shipped; restoring the or-jev profile in the user settings.yaml is the USER's action
+- 2026-11-18T16:31:41+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Notes
 

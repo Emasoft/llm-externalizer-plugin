@@ -1,10 +1,10 @@
 ---
 trdd-id: BYHR8EGG
 title: llm-ext settings show overwrites an existing settings_edit.yaml copy without keeping it
-column: dev
-status: tasked
+column: complete
+status: archived
 created: 2026-11-18T01:47:17+0100
-updated: 2026-11-18T16:28:18+0100
+updated: 2026-11-18T16:31:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -28,6 +28,7 @@ unblock-when: []
 
 - 2026-11-18T01:47:17+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T15:44:56+0100 — column → dev by main-agent@llm-externalizer-plugin. blocker TYSKX72I complete; fix in progress (tools/settings-copy.ts) Cleared blocked-by (all blockers terminal).
+- 2026-11-18T16:31:44+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Description
 

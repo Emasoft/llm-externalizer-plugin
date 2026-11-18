@@ -1,10 +1,10 @@
 ---
 trdd-id: OHLMZONY
 title: SP-14 findings
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:50:50+0200
-updated: 2026-11-18T15:56:02+0100
+updated: 2026-11-18T16:32:26+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -16,9 +16,9 @@ approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T19:50:50+0200
 implementation-commits: [643d7887, 67649b69, 79a4bf0d]
-blocked-by: [KNSQAQ1S]
+blocked-by: []
 unblock-when: [trdd:KNSQAQ1S]
-pre-block-column: dev
+pre-block-column: 
 blocker-probe: test -f design/tasks/TRDD-20261104_100811+0100-KNSQAQ1S-classifier-tests-replace-forbidden-test-doubles-with-real-in.md
 blocker-holds-if: exit-0
 ---
@@ -34,6 +34,7 @@ The findings decision as one catalog file: input schema, question texts, state s
 - 2026-10-10T04:42:56+0200 — column → blocked by main-agent@llm-externalizer-plugin. remaining work waits on: O4MSZIG5
 - 2026-10-31T12:12:25+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
 - 2026-11-04T10:09:16+0100 — column → blocked by main-agent@llm-externalizer-plugin. waits on TRDD-KNSQAQ1S (forbidden test doubles)
+- 2026-11-18T16:32:26+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; blocker KNSQAQ1S is complete. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 

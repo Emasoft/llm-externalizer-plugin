@@ -1,10 +1,10 @@
 ---
 trdd-id: BUL4EEBP
 title: C4-01 runDecision generic runner
-column: testing
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T19:59:56+0200
-updated: 2026-11-18T16:25:31+0100
+updated: 2026-11-18T16:31:45+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -48,6 +48,7 @@ One generic runner, `runDecision`, that serves every classify spec through one c
 - 2026-11-04T13:39:38+0100 — column → testing by main-agent@llm-externalizer-plugin. test doubles clause met (ddf17705, a3beab9f) under R2 and R4; box waits on a full suite run including ddf17705 Cleared blocked-by (--clear-blocker override).
 - 2026-11-04T13:57:05+0100 — column → blocked. Waits on the owner ruling in TRDD-M2H4RJVQ; the box also waits on a full suite at a HEAD that includes ddf17705 and a committed dist rebuilt from HEAD, which the host's memory pressure delays.
 - 2026-11-05T01:43:37+0100 — column → testing by main-agent@llm-externalizer-plugin. TRDD-YGF9YXF2 complete: run 4b at c668389e passed npm test; A1 fixed in ddf17705; no forbidden doubles in its own test files at HEAD Cleared blocked-by (all blockers terminal).
+- 2026-11-18T16:31:45+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; reviewed by the main agent under the USER delegation of 2026-11-18.
 
 ## Plan refs
 

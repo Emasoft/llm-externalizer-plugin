@@ -1,10 +1,10 @@
 ---
 trdd-id: KNSQAQ1S
 title: Classifier tests replace forbidden test doubles with real inputs
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T10:08:11+0100
-updated: 2026-11-18T15:56:03+0100
+updated: 2026-11-18T16:32:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,8 +16,8 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-04T10:08:11+0100
 implementation-commits: [3140eaaf, aaf521c2, a3beab9f, 46a6bf84, 79a4bf0d, ddf17705]
-blocked-by: [052F3ZC9]
-pre-block-column: dev
+blocked-by: []
+pre-block-column: 
 unblock-when: [decision:owner-answers-three-test-doubles-in-052F3ZC9]
 blocker-probe: grep -c OWNER.ANSWER design/proposals/TRDD-20261104_223020+0100-052F3ZC9-owner-decision-on-three-test-doubles-with-no-observable.md
 blocker-holds-if: not-match:^([4-9]|[1-9][0-9]+)$
@@ -32,6 +32,7 @@ The 2026-11-04 definition-of-done drain found test doubles outside the 2026-10-3
 - 2026-11-04T10:08:11+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-04T12:54:14+0100 — column → dev by main-agent@llm-externalizer-plugin. pulled after the S5KOOT2S checks; one worker confirms each listed site and fixes it with real inputs
 - 2026-11-04T22:30:38+0100 — column → blocked. waits on the owner decision for three test doubles with no observable, TRDD-052F3ZC9
+- 2026-11-18T16:32:26+0100 — COMPLETE by main-agent@llm-externalizer-plugin. acceptance met; the 052F3ZC9 decision was made by the main agent under the USER delegation of 2026-11-18, so the owner-answer probe is cleared by hand. Cleared blocked-by (--clear-blocker override).
 
 ## STATE
 
