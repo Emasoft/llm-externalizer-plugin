@@ -204,18 +204,18 @@ describe("C4-03: the declared classifier-only rule equals what the runner enforc
   });
 });
 
-// TRDD-58CFBQHN increment 1: --estimate works for the 15 classify decision commands (launcher.ts passes it to runDecisionArgv), so their --help must list it with one sentence; --preview is refused for classify by design (launcher.ts runClassifyCommand) and `classify ping` refuses both, so none of those list either.
-// WHY derived from the same schema objects main.ts renders help rows from (tool.inputSchema.properties): a flag the help prints and a flag the schema holds cannot differ; the 15 ids are typed once here so a decision spec added or dropped without a deliberate edit fails the first check.
+// TRDD-58CFBQHN increment 1: --estimate works for the 16 classify decision commands (launcher.ts passes it to runDecisionArgv), so their --help must list it with one sentence; --preview is refused for classify by design (launcher.ts runClassifyCommand) and `classify ping` refuses both, so none of those list either.
+// WHY derived from the same schema objects main.ts renders help rows from (tool.inputSchema.properties): a flag the help prints and a flag the schema holds cannot differ; the 16 ids are typed once here so a decision spec added or dropped without a deliberate edit fails the first check.
 describe("TRDD-58CFBQHN: classify --help lists --estimate, never --preview", () => {
-  const DECISIONS = ["verify", "screen", "filter", "label", "rank", "find", "decide", "compare", "extract", "audit", "review", "check", "findings", "test-output", "requirements"];
+  const DECISIONS = ["verify", "screen", "filter", "label", "rank", "find", "decide", "compare", "extract", "audit", "review", "check", "findings", "test-output", "requirements", "rule-check"];
   const SENTENCE = "Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev.";
 
-  it("the registry holds exactly the 15 decision commands", () => {
+  it("the registry holds exactly the 16 decision commands", () => {
     expect(DECISION_SPECS.map((s) => s.id).sort()).toEqual([...DECISIONS].sort());
   });
 
-  it("each of the 15 decision commands lists --estimate (boolean) with the one sentence, and no --preview", () => {
-    expect(entries).toHaveLength(15);
+  it("each of the 16 decision commands lists --estimate (boolean) with the one sentence, and no --preview", () => {
+    expect(entries).toHaveLength(16);
     for (const e of entries) {
       expect(props(e)["estimate"], `${e.name} --estimate`).toEqual({ type: "boolean", description: SENTENCE });
       expect(props(e)["preview"], `${e.name} --preview`).toBeUndefined();
@@ -229,11 +229,11 @@ describe("TRDD-58CFBQHN: classify --help lists --estimate, never --preview", () 
   });
 });
 
-// TRDD-WYY3SPDX increment A: `--context` is a flag of label and requirements only. filter is left out on purpose: its text-items instruction never references the shared context.
+// TRDD-WYY3SPDX increment A: `--context` is a flag of label, requirements and rule-check only. filter is left out on purpose: its text-items instruction never references the shared context.
 describe("TRDD-WYY3SPDX: the `context` property", () => {
-  it("label and requirements list context as a string; filter and every other command do not", () => {
+  it("label, requirements and rule-check list context as a string; filter and every other command do not", () => {
     for (const e of entries) {
-      const has = e.name === "classify_label" || e.name === "classify_requirements";
+      const has = e.name === "classify_label" || e.name === "classify_requirements" || e.name === "classify_rule_check";
       if (has) expect(props(e)["context"]?.type, e.name).toBe("string");
       else expect(props(e)["context"], e.name).toBeUndefined();
     }

@@ -1,0 +1,1 @@
+We implemented the loading screen, but we need to improve the style. Let me see how is it now.

@@ -1,0 +1,9 @@
+{
+  "phrase": "the loading screen background should be blue",
+  "rules": [
+    {"id": "r1", "text": "make the background color of the loading dialog of a shade of blue"},
+    {"id": "r2", "text": "the background of the load panel must not be transparent."},
+    {"id": "u1", "text": "every API response must include a request id header"},
+    {"id": "u2", "text": "the settings page must be reachable from the main menu"}
+  ]
+}

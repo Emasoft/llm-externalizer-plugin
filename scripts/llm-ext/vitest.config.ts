@@ -815,6 +815,8 @@ export default defineConfig({
       // TRDD-S5KOOT2S Phase 2: the sentence splitter of classify requirements (pure) and the requirements decision spec: one label question per sentence, the min-confidence gate, code segments unscored, partial failure; real captured Jev reply.
       'src/classifiers/l2/sentences.test.ts',
       'src/classifiers/catalog/requirements.test.ts',
+      // TRDD-LFTQCFUX: rule-check decision spec: relation and contradiction question per rule, outcome precedence, unanswered rules make it uncertain (also through the real planner and fan-out when a run stops), candidates, text form.
+      'src/classifiers/catalog/rule-check.test.ts',
       // SP-10 (TRDD-N2TDAXL4): audit decision spec: 4 checks plus absence max-gated at wrong_at, E67 truncated source, index-scoped injection, partial failure; real P-01 noul reply.
       'src/classifiers/catalog/audit.test.ts',
       // SP-11 (TRDD-QFPC4Z8P): review decision spec: whole and per-file, 4 risk scores + unsafe, composite, reason codes, --claims, E68-E70, index-scoped injection, partial failure; real P-01 replies.

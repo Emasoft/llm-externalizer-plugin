@@ -30,6 +30,7 @@ const INPUTS: Record<string, unknown> = {
   findings: { task: "t", findings: [{ file: "f.ts", line: 1, text: "bug" }], sources: [{ file: "f.ts", text: "a\nb" }] },
   "test-output": { log: "ok\nFAIL x\nok", matches: [2] },
   requirements: { prompt: "the colors are horrible. let's improve it a little. the loading screen background should be blue. change it and rebuild. then open the web site in chrome for me to see.", context: "We implemented the loading screen, but we need to improve the style. Let me see how is it now." },
+  "rule-check": { phrase: "the loading screen background should be blue", rules: [{ id: "r1", text: "make the background color of the loading dialog of a shade of blue" }, { id: "r2", text: "the background of the load panel must not be transparent." }, { id: "u1", text: "every API response must include a request id header" }, { id: "u2", text: "the settings page must be reachable from the main menu" }], context: "We implemented the loading screen, but we need to improve the style. Let me see how is it now." },
 };
 
 const KEY = "[REDACTED:openai-key]";
@@ -46,7 +47,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$O4_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 } as unknown as Profile;
+const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$O4_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 } as unknown as Profile; // ubs:ignore env-var reference, not a secret
 
 describe("TRDD-O4MSZIG5: every spec projects one real captured reply", () => {
   it("covers exactly the registered specs", () => {
@@ -83,7 +84,7 @@ describe("TRDD-O4MSZIG5: every spec projects one real captured reply", () => {
   }
 });
 
-// TRDD-58CFBQHN: the help of every decision command lists --estimate (tools/definitions-classify.test.ts), so the dry run must really work for all 15, not only the three measured live. Through the one runner with the recorded catalog and no network: the estimate exits 0, prints "nothing was sent" and reaches no decisions endpoint.
+// TRDD-58CFBQHN: the help of every decision command lists --estimate (tools/definitions-classify.test.ts), so the dry run must really work for all of them, not only the three measured live. Through the one runner with the recorded catalog and no network: the estimate exits 0, prints "nothing was sent" and reaches no decisions endpoint.
 // WHY a positive control per spec: "no decisions request" would also hold if the spy could never see one; the same input without estimate must send exactly one, which makes the zero meaningful.
 describe("TRDD-58CFBQHN: --estimate works for every spec and sends no decisions request", () => {
   for (const spec of DECISION_SPECS) {

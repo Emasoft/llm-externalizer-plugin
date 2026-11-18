@@ -35,6 +35,7 @@ const SAMPLES: Record<string, unknown[]> = {
   findings: [{ task: 't', findings: [{ file: 'f.ts', line: 1, text: 'bug' }], sources: [{ file: 'f.ts', text: 'a\nb' }] }],
   'test-output': [{ log: 'ok\nFAIL x\nok', matches: [2] }],
   requirements: [{ prompt: 'the colors are horrible. make the loading screen blue.', context: 'earlier messages' }, { prompt: 'make it blue.\n```css\n.a{}\n```' }],
+  'rule-check': [{ phrase: 'the loading screen background should be blue', rules: [{ id: 'G7.4', text: 'the loading dialog background is a shade of blue' }, { id: 'u1', text: 'every request has an id header' }], context: 'earlier messages' }],
 };
 const builtOf = (s: AnySpec, raw: unknown): Built => s.build(s.input.parse(raw), resolveThresholds(s.thresholds, {}));
 const questionsOf = (b: Built): Question[] => [...b.units.flatMap((u) => Object.values(u.questions)), ...Object.values(b.unsplittable)];
@@ -62,10 +63,11 @@ describe('specs without noCall: the smallest valid input still builds a question
     check: [{ preset: 'invariant-check', invariants: [{ text: 'i' }], before: 'x', after: 'y' }, { preset: 'criterion-vs-tests', criteria: [{ text: 'c' }], tests: [{ scenario: 's', assertion: 'a' }] }],
     'test-output': [{ log: 'x' }],
     requirements: [{ prompt: 'x' }],
+    'rule-check': [{ phrase: 'p', rules: [{ id: 'r', text: 't' }] }],
   };
   const noCallFree = DECISION_SPECS.filter((s) => s.id !== 'extract' && s.id !== 'findings');
-  it('the minimal table names exactly the 13 specs that never set noCall', () => {
-    expect(noCallFree).toHaveLength(13);
+  it('the minimal table names exactly the 14 specs that never set noCall', () => {
+    expect(noCallFree).toHaveLength(14);
     expect(Object.keys(MINIMAL).sort()).toEqual(noCallFree.map((s) => s.id).sort());
   });
   for (const s of noCallFree) {
@@ -84,6 +86,8 @@ describe('specs without noCall: the smallest valid input still builds a question
     ['test-output', { log: '  \n\n' }],
     ['requirements', { prompt: '  \n\n' }],
     ['requirements', { prompt: '```\nx\n```' }],
+    ['rule-check', { phrase: 'p', rules: [] }],
+    ['rule-check', { phrase: '', rules: [{ id: 'r', text: 't' }] }],
   ])('%s: the schema refuses an input that would build no question', (id, raw) => {
     expect(getSpec(id)!.input.safeParse(raw).success).toBe(false);
   });

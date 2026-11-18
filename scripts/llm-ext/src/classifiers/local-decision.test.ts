@@ -36,10 +36,11 @@ const INPUTS: Record<string, unknown> = {
   findings: { task: "t", findings: [{ file: "f.ts", line: 1, text: "bug" }], sources: [{ file: "f.ts", text: "a\nb" }] },
   "test-output": { log: "ok\nFAIL x\nok", matches: [2] },
   requirements: { prompt: "the colors are horrible. let's improve it a little. the loading screen background should be blue. change it and rebuild. then open the web site in chrome for me to see.", context: "We implemented the loading screen, but we need to improve the style. Let me see how is it now." },
+  "rule-check": { phrase: "the loading screen background should be blue", rules: [{ id: "r1", text: "make the background color of the loading dialog of a shade of blue" }, { id: "r2", text: "the background of the load panel must not be transparent." }, { id: "u1", text: "every API response must include a request id header" }, { id: "u2", text: "the settings page must be reachable from the main menu" }], context: "We implemented the loading screen, but we need to improve the style. Let me see how is it now." },
 };
 
 const LOCAL: Profile = builtinLocalDecisionProfile().profile;
-const REMOTE = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$OPENROUTER_API_KEY" } as unknown as Profile;
+const REMOTE = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$OPENROUTER_API_KEY" } as unknown as Profile; // ubs:ignore env-var reference, not a secret
 
 let tmp: string;
 let prev: Record<string, string | undefined>;
