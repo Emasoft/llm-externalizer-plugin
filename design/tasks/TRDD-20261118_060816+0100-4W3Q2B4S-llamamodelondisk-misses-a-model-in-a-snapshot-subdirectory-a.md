@@ -4,7 +4,7 @@ title: llamaModelOnDisk misses a model in a snapshot subdirectory and trusts a c
 column: todo
 status: tasked
 created: 2026-11-18T06:08:16+0100
-updated: 2026-11-18T06:53:09+0100
+updated: 2026-11-18T07:10:26+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -43,3 +43,4 @@ Fix: for 1, walk the snapshot recursively with the same file rules; for 2, decid
 Not tested: ENOENT and EPERM on a nested folder, the rethrow of other error codes, and an error on the snapshot itself. They need a race or a mocked fs, and the project rule forbids mocks. The chmod cases are skipped on Windows and as root, the symlink cases on Windows. The Windows path with / separators was never run.
 Item 2, decided: not decidable offline. llama.cpp find_best_model (download.cpp:740-776) takes the first file of the online listing that matches the quant. The listing comes from the Hugging Face tree API (hf-cache.cpp:302; llama.cpp does not sort it), so it exists only online (download.cpp:796). Two repos sampled with curl came back sorted by path; that order is observed, not documented. Bounded: when the network is down, get_repo_files returns an empty list and llama-server uses get_cached_files (download.cpp:798-800), the same file set the llm-ext walk lists; only a partial outage with Hugging Face reachable is exposed. Ids of the form org/repo/file.gguf already get --hf-file and an exact path check, so they are not exposed. TRDD-VFIWQ6A6 (backburner) tracks passing --offline on the fallback spawn.
 The unreadable-folder stderr line can repeat, by reading the code: up to 2 lines per failed dispatch. TRDD-2WHKN3GZ (backburner) tracks it.
+2026-11-18, corrections of the Notes above, by the main agent: (a) The line starting Not tested, and the message of commit e1f1fb47, give a wrong reason: the owner rule allows a test double when nothing else can produce a case. These paths need a faked fs, which was not written, so they stay untested. (b) The item 1 line omits one test: a GGUF behind a directory symlink is not on disk. (c) In the item 2 line, the network-down behaviour (get_repo_files returns an empty list, then get_cached_files, download.cpp:798-800) was read by a worker in copies of the 8642541b2 sources, not run. (d) In the unreadable subfolder line, the main agent confirmed by grep in the server.cpp copy that server_run starts at line 735 and calls common_models_handler_init at line 741; the rest of that chain was read by a worker, not run.

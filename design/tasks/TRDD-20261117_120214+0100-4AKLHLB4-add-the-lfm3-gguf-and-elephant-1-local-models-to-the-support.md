@@ -4,7 +4,7 @@ title: Add the LFM3 GGUF and elephant-1 local models to the supported list and t
 column: todo
 status: tasked
 created: 2026-11-17T12:02:14+0100
-updated: 2026-11-18T06:53:15+0100
+updated: 2026-11-18T07:11:12+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -83,3 +83,4 @@ Card ids: C1 = TRDD-R7NKAJ5B, C2 = TRDD-C7ACDK79, C3 = TRDD-GLK56Q6F, C4 = TRDD-
 ## Notes
 
 2026-11-18, corrections of the message of commit b148a1ee, recorded here because TRDD-R7NKAJ5B is archived: (1) the message gives TS2304 at network-give-up.ts(183,55) as the cause of a tsc exit 2; that cause is inferred (another worker was editing that file at the time), not established. (2) The tsc and eslint exit 0 in that message rest on the worker report, not on a run by the main agent. (3) The catalog test (5 passed) was first read from the worker run; the main agent ran it itself at 06:46:02 on 2026-11-18, after TRDD-R7NKAJ5B was archived in 5bbe68ba, on a tree where the catalog source, its test and the docs page equalled b148a1ee and config.ts carried an uncommitted edit to formatResolvedProfileLines, a function that test does not call: 5 passed, exit 0.
+2026-11-18, addendum to item (3) of the correction line above: config.ts names network-give-up.ts only in comments (lines 452, 459, 3832, 3868), not in an import, but the full import closure of the 06:46:02 run was not traced, and a worker was editing network-give-up.ts at that time. The run that settles box 3 of TRDD-R7NKAJ5B is a clean detached checkout of 487d6513 at 06:58:53: the catalog test 5 passed, network-give-up.test.ts 82 passed, tsc --noEmit exit 0. Eslint linted nothing there (files outside its base path), so lint rests on the run in the working tree, whose four files were identical to that commit.
