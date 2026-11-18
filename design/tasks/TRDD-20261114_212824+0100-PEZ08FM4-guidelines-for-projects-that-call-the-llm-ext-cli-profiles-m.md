@@ -4,7 +4,7 @@ title: Guidelines for projects that call the llm-ext CLI (profiles, maintenance,
 column: dev
 status: tasked
 created: 2026-11-14T21:28:24+0100
-updated: 2026-11-14T21:41:32+0100
+updated: 2026-11-18T16:17:40+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -26,3 +26,9 @@ Requested 2026-11-14 by the perch session on the owner's request (cross-session 
 - 2026-11-14T21:28:24+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 2026-11-14T21:37:18+0100 The profile and settings answers (questions 1 and 5) depend on the profile contract redesign ordered by the USER on 2026-11-14 (TRDD-SZ7TO9FW): the guidelines must define the stable user/tool surface vs the internal benchmark-managed settings, a pinning/customizing procedure that survives benchmark updates, and the implicit local fallback. Those sections are written after SZ7TO9FW is designed.
 2026-11-14T21:41:31+0100 consumer-guidelines.md written (99 lines, worker report reports_dev/sonnet-worker/20261114_214106+0100-pez08fm4-consumer-guidelines.md); questions 2-4 and 6-9 complete, 1 and 5 wait on TRDD-SZ7TO9FW. Follow-up found: skills/llm-externalizer-cli-reference/SKILL.md cost rules still say a 402 switches to free models, stale since llm-ext stopped switching; fix it with the SZ7TO9FW docs pass.
+
+## Acceptance
+
+- [x] one document answering the 9 questions, home skills/llm-externalizer-cli-reference/references/consumer-guidelines.md, linked from that skill SKILL.md: the file has sections 1 to 9 (profiles, background maintenance, concurrency, reports root, settings.yaml, upgrades and pinning, exit codes, local servers, cost); SKILL.md line 190 links it; commit 16719d1d refreshed it to v14.7.2
+- [x] stale SKILL.md cost rule (a 402 switches to free models) fixed: SKILL.md line 16 now reads A 402 or a low balance never switches a command to free models
+- [~] ~~questions 1 (profiles, the missing active: key) and 5 (settings.yaml ownership, how a custom profile survives the benchmark rewrite) in their final form after TRDD-SZ7TO9FW: sections 1 and 5 exist as True today with the redesign marked planned, not in this release (TRDD-SZ7TO9FW), so the pinning procedure that survives benchmark updates is not documented as shipped~~ moved: TRDD-SZ7TO9FW owns the profile redesign; the guidelines mark questions 1 and 5 as planned, not in this release

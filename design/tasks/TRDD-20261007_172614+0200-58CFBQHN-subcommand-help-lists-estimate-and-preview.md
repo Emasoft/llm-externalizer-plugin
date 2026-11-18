@@ -4,7 +4,7 @@ title: Subcommand help lists --estimate and --preview
 column: human_review
 status: tasked
 created: 2026-10-07T17:26:14+0200
-updated: 2026-11-18T15:53:18+0100
+updated: 2026-11-18T16:28:18+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -105,3 +105,5 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 2026-11-14T13:37+0100 STATE OWED: the clean-checkout byte-compare is dropped; TRDD-NQMW9AK5 (complete 2026-11-14) made npm ci work and a fresh-worktree build of dist matched the committed dist byte for byte.
 2026-11-14T13:38+0100 Correction to the 13:37 note: the byte-compare was not part of TRDD-NQMW9AK5 (which made npm ci work); it is the zod repro under TRDD-0ETFCKCU: a fresh npm ci and build of the zod 4.6.7 package files in a worktree at e02c93ea gave dist/llm-ext.js SHA-1 e5b3276e28f0, identical to the dist committed in 67f3a89f, which is still the dist at HEAD (re-measured now).
 2026-11-18T15:53:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 2 struck: as worded it cannot be met (classify refuses --preview, classify ping has no dry run; note 2026-11-04). Replacement box added UNTICKED with the reworded form the 2026-11-04 audit proposed: it is implemented (src/cli/dry-run-flags.ts DRY_RUN_SUPPORT; src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts exist in v14.7.2, byte-identical to HEAD, triage B2) but the triage did not run those two test files, so it is not ticked; run them before ticking. This card is user-owned: the rewording is a main agent ruling under the delegation and the USER may veto it. The OWED list of the STATE block is carried by the new card TRDD-FP2SAF4P (docs).
+2026-11-18T16:25:31+0100 main agent check: dry-run-flags.test.ts 46/46 and profile-help-visibility.test.ts 45/45 at HEAD ea68ff6a, but profile-help-visibility spawns dist/llm-ext.js, which was built for v14.7.2 (37 source files changed since), so the box stays open until the 14.7.3 publish gate rebuilds dist and runs them.
+2026-11-18T16:28:17+0100 note writer (batch-2 worker): the 16:25 check note above (test counts, 37 changed files) was supplied by the main agent in the brief; the writer did not re-run it.

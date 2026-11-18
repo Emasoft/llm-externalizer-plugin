@@ -4,7 +4,7 @@ title: Intermediate llm-ext output defaults to reports_dev, final reports stay i
 column: human_review
 status: tasked
 created: 2026-11-15T01:23:15+0100
-updated: 2026-11-18T15:52:37+0100
+updated: 2026-11-18T16:17:35+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -34,3 +34,11 @@ Owner correction relayed by perch-17 on 2026-11-15, verbatim: "why it should ign
 ## Notes
 
 2026-11-18T15:52:36+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling Q1: confirmed, the llm-ext own model-pool reports (benchmark, health, arrivals, auto-replace, update-all) are intermediate output and stay in reports_dev/llm-externalizer (llm-ext own tool state; the USER rule routes tool and environment configuration and intermediate artifacts to reports_dev). Issue 18: decided no sanitizing inside llm-ext (owner rule 2026-11-15: reports are sanitized from secrets before committing; llm-ext never commits, so the pre-commit step is the gate, and a Node port or a shell-out of sanitize-reports would create a second source of truth or a hard dependency). The reply was posted and the issue closed on 2026-11-18: https://github.com/Emasoft/llm-externalizer-plugin/issues/18#issuecomment-6981707539 (read back with gh api). The 864 untracked files under reports/ in the main checkout are a separate task: TRDD-09RLEY2F. Evidence: triage B3.
+
+## Acceptance
+
+- [x] default output-dir resolution per writer class: intermediate output to <root>/reports_dev/llm-externalizer/<sub>/, final reports stay in <root>/reports/llm-externalizer/<sub>/, LLM_EXT_OUTPUT_DIR and -o keep overriding: commits 07164c03 and 1e7811da exist (pre-squash ids, not ancestors of the v14.3.0 tag; consumer-guidelines.md section 4 documents the split, the override and CLAUDE_PROJECT_DIR)
+- [x] consumer-guidelines.md section 4 no longer advises gitignoring reports/llm-externalizer; the installed rule rules/use-llm-externalizer.md default-path line (line 10) and the README (line 128) state the reports and reports_dev split: read this run
+- [x] fix-found-bugs init-run scratch writes to reports_dev (deferred item of note 2026-11-15 02:15): commit 06c438e0 (ancestor of tag v14.7.2), and CHANGELOG.md line 36 lists it under 14.7.2
+- [x] reports_dev/llm-externalizer ignores itself in any project: commit b5ea3eeb (ancestor of tag v14.7.2)
+- [x] owner confirmation of which model-pool reports (benchmark, health, arrivals, auto-replace, update-all) are intermediate: ruling Q1 of main agent 2026-11-18T15:52:36 (delegated by USER 2026-11-18; not an owner answer), they stay in reports_dev/llm-externalizer

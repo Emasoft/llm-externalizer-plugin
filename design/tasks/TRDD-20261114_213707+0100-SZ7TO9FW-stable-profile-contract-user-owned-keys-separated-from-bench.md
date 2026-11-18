@@ -4,7 +4,7 @@ title: Stable profile contract, user-owned keys separated from benchmark-managed
 column: design
 status: tasked
 created: 2026-11-14T21:37:07+0100
-updated: 2026-11-14T22:15:12+0100
+updated: 2026-11-18T16:24:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -29,3 +29,7 @@ Design consequences to carry: (1) reliability and availability are the top prior
 2026-11-14 USER (verbatim, third directive on this card): "also remember that each profile must list the exact list of commands it is compatible with. if the user uses llm-ext with a command that is not supported by the profile specified in `--profile <profile name>` list of compatible commands, then the llm-ext must exit with error. this is one of the very few cases of something that has no fallback." Design consequence: every profile carries an explicit compatible-commands list; a command outside it, with that --profile, exits with an error and no fallback (today: per-action accepted profile TYPES via profileSelectionRefusal, profile-accept.ts:55-61, to be replaced or extended by the per-profile list).
 2026-11-14T22:00:17+0100 Acceptance-case sourcing: the perch session reports no concrete breakage (history.log: 30 perch-cwd entries, all SUCCESS; perch code, CI and hooks never call llm-ext) and relays the owner's words to it, verbatim: "settings are supposed to be updated with the benchmarks findings. that is why the benchmarks are run in the first place. since mods and providers changes continuously, llm-externalizer monitors them and adjust the configuration accordingly to avoid the commands being broken by the changes." So the contract keeps benchmark-driven updates (they are the point) and only separates them from user/tool-owned keys. history.log records no FAILED lines at all (TRDD-3SNQAGIC trace: grep -c ' - FAILED - ' = 0 over the whole file), so it cannot supply failure cases; acceptance cases come from the directives themselves (a pinned model retired by its provider; a hand-written profile whose models stop passing; a benchmark rewrite during a consumer's run; a command outside the profile's list).
 2026-11-14T22:15:10+0100 Spec draft committed 65d77720 (design/specs/profile-contract.md, 13 open questions). USER answer (AskUserQuestion, verbatim choice): paid chain = 'Paid, then free, then local (Recommended)' (Q1: pinned passing, then paid passing, then free remote passing, then local passing). The other three questions came back unanswered; AGENT decisions under the owner's no-blockers instruction, taking the recommendation: Q2 one-way rule ADOPTED (never local to remote, never free to paid unless the profile lists that tier); Q3 a pinned profile may use the passing pool of its OWN category only, then local; Q9 session summary order remote free first, local last. Q4-Q8 and Q10-Q13 also take the spec's recommendations unless the owner objects.
+
+## Acceptance
+
+- [ ] consumer-guidelines.md questions 1 and 5 rewritten in final form after this redesign (moved from TRDD-PEZ08FM4)

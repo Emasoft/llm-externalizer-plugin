@@ -4,7 +4,7 @@ title: Setting to disable or pin the local fallback of general commands
 column: human_review
 status: tasked
 created: 2026-11-16T11:50:02+0100
-updated: 2026-11-18T15:52:32+0100
+updated: 2026-11-18T16:15:36+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -34,3 +34,12 @@ Sibling of TRDD-WSPV40Y5, both EHTs of TRDD-UT7UC025 (WSPV40Y5 card section 3, a
 2026-11-16T15:06:12+0100 main agent: implemented as 5c1ca371 (section name fallback_to_local, gate in readyLocalTarget). Main-agent run: local-fallback-setting, local-fallback-dispatch, settings-keep-or-jev gave 75 passed. Open: full suite (before the next push), a completed UBS scan (the pre-commit scan hit 180 s again), the migrateSettingsTo141 local-profile branches are not exercised by the round-trip test, and the interactive pick.ts handlers that call writeSettingsAtomic are covered only by reading the code.
 - 2026-11-16T15:46:16+0100 main agent: review finding F8 fixed in 73ebd59c: a fallback_to_local.profile pin naming a locals-local profile is now a settings error where Locals cannot run (only macOS on Apple silicon), also with enabled: false, because readyLocalTarget skipped it there and the fallback silently never ran. Consequence open to USER veto: on such a machine every command stops at load until the pin is fixed (a warning instead would be the alternative).
 2026-11-18T15:52:32+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling F8: keep the hard settings error for a fallback_to_local.profile pin naming a locals-local profile where Locals cannot run (also with enabled false). Why: fail fast; a warning would be the silent no-fallback this card fixed. It affects only a pin to locals-local off macOS on Apple silicon, never this machine. Evidence: triage B3 (config.ts fallback_to_local validation, local-fallback-setting.test.ts F8; shipped in v14.4.0 by 5c1ca371 and 73ebd59c).
+
+## Acceptance
+
+- [x] one validated setting, enabled (default true) and profile (pin one local profile or none), in a new top-level section (not under local_fallback), unknown key is an error: commits 5c1ca371 (section named fallback_to_local) and 73ebd59c exist; test file scripts/llm-ext/src/local-fallback-setting.test.ts exists (23 it() blocks incl. the parsed defaults, bad: cases failing the load, fail fast at dispatch)
+- [x] the setting gates readyLocalTarget so a disabled fallback leaves the network give-up window unarmed: local-fallback-setting.test.ts has "readyLocalTarget: the control is ready; enabled false is not", "arm(): the control arms on a closed port; enabled false does not" and "index.ts builds the dispatch window, and with enabled false it does not arm"
+- [x] test: disabled gives the original error with no local send: local-fallback-setting.test.ts "enabled false: the same ready fixture gives the remote error with no fallback line, i.e. no local send"
+- [x] test: a pinned profile is the only one tried: local-fallback-setting.test.ts "dispatch: a ready pin is the profile the fallback goes to" and "dispatch: a pin that is not ready means no fallback at all, though local_llama is ready"
+- [x] docs in models-and-settings.md and the README settings table: grep finds fallback_to_local in README.md and skills/llm-externalizer-cli-reference/references/models-and-settings.md
+- [x] review finding F8, a locals-local pin is a settings error at load where Locals cannot run, also with enabled false: commit 73ebd59c; kept as a hard error by main agent ruling 2026-11-18T15:52:32 (delegated by USER 2026-11-18; not an owner answer); test local-fallback-setting.test.ts "load time on a linux x64 host: settingsLevelErrors and validateSettings both report the Locals pin"

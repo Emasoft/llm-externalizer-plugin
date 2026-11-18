@@ -4,7 +4,7 @@ title: ubs pre-commit hook fails closed on missing ubs, exit 2 and timeout
 column: human_review
 status: tasked
 created: 2026-11-17T22:19:20+0100
-updated: 2026-11-18T15:52:36+0100
+updated: 2026-11-18T16:23:49+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -48,3 +48,14 @@ Commits staging index.ts are blocked until TRDD-TYSKX72I; files with ubs critica
 ## Notes
 
 2026-11-18T15:52:35+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling: core.hooksPath stays an absolute path to the main checkout .githooks; the activation gap listed under Known gaps is accepted and recorded. Why: a relative path would run each worktree own .githooks/pre-commit, so a worktree on a branch without that file would run no hook at all (fail open); today every worktree runs the main checkout hook, and the main checkout branch carries the strict hook (6d76419b, byte-identical to 0ff28ba9, triage B3). Residual: if the main checkout switches to a branch without the hook, every worktree runs that branch hook. Checked 2026-11-18: git config core.hooksPath prints an absolute path ending in /.githooks.
+2026-11-18T16:23:49+0100 main agent check: brew list --versions ubs prints 5.5.26; brew tap lists no awesome-brew tap; brew list --versions brewmate prints nothing.
+
+## Acceptance
+
+- [x] missing ubs, exit 2 and timeout all block the commit with the reason printed; git commit --no-verify stays the only explicit bypass: commit 0ff28ba9 (dev/after-14.3.0) and 6d76419b (release/13.6.1, the copy core.hooksPath runs), both exist; .githooks/pre-commit prints the bypass hint at line 33 and its header names --no-verify as the one explicit bypass (line 18)
+- [x] timeout raised to 600 s: .githooks/pre-commit line 78, timeout_s="${UBS_PRECOMMIT_TIMEOUT:-600}"
+- [x] ubs called by absolute path /opt/homebrew/bin/ubs with minimum version 5.5.26: .githooks/pre-commit lines 42-43 (ubs_bin default and ubs_min_version="5.5.26")
+- [x] partial runs block (USER 2026-11-17 reversal, why partial runs? we cannot risk to commit bugged code): commit title of 0ff28ba9 and 6d76419b says partial runs included; throwaway-repo cases recorded on the card Evidence section, reports under reports_dev/kza573q7/ exist (block-partial-worker.md, strict-hook-worker.md, revised-hook-worker.md, wording-worker.md)
+- [x] README describes the gate: commit f58897e8 (docs(readme): describe the fail-closed ubs pre-commit gate; fix the hooksPath sentence)
+- [x] the hook active for every worktree is the strict one: git config core.hooksPath in the main checkout is the absolute path .../llm-externalizer/.githooks, and cmp of the main checkout .githooks/pre-commit against the dev/after-14.3.0 copy shows them identical; activation gap accepted as recorded (main agent ruling 2026-11-18T15:52:35, delegated by USER 2026-11-18; not an owner answer)
+- [x] ubs brew formula upgraded 5.4.17 to 5.5.26 and awesome-brew tap reset item: the card says upgrade done 2026-11-17 and the tap item is moot (taps removed 2026-11-18 09:08 on USER order, note 2026-11-18T10:11:09); not re-verified this run (card text only)

@@ -4,7 +4,7 @@ title: Bounded give-up window for network-level remote failures
 column: human_review
 status: tasked
 created: 2026-11-13T19:10:59+0100
-updated: 2026-11-18T15:52:33+0100
+updated: 2026-11-18T16:16:38+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -77,3 +77,14 @@ WAITING 2026-11-13: value and existence of the give-up window pending USER Q10; 
 2026-11-16T10:51:28+0100 DONE by the main agent (worker report reports_dev/pn0n4290/20261116_102612+0100-report.md): 42c67aa3. Verified: tsc 0, eslint 0 on the changed files, 286 tests in 8 touched-area files (incl. index.test.ts, free-rotation, ensemble-all-failed, retry-clock-consumers) and 39 in provider http and retry-clock pass. On a disarmed copy the ECONNRESET, strict-probe and dispatch-reset tests fail. KNOWN LIMIT: Required test 3 closed-port case does not discriminate (the ECONNREFUSED budget of 2 tries ends the call before any window of 1 s or more), kept as a bound check. UNRESOLVED: the first dispatch-test run had no HOME stub; recent writes in ~/.llm-externalizer match a Reminzer benchmark at 10:25-10:27, but no backup exists to prove the test wrote nothing. UBS pre-commit scan timed out (900 s). Full suite owed before the push.
 2026-11-16T10:53:33+0100 Main agent, settles the UNRESOLVED line above: the ~/.llm-externalizer entries changed near the un-stubbed run all date 10:21:12-10:21:15 (catalog caches, decisions endpoint, profile-detect log and throttle), before that run started at 10:21:36; settings.yaml last changed 10:27:07 (Reminzer benchmark). No sign the test wrote there. RELEASE NOTE: 42c67aa3 must NOT ship before TRDD-WSPV40Y5 (1d) consumes the give-up error; alone it ends a command after 30 s where it used to retry up to 300 s, with no switch to local.
 2026-11-18T15:52:33+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Ruling: accept the 30 s default give-up window and the 299 s cap. Why: 30 s covers a Wi-Fi reassociation, and the cap (NETWORK_GIVE_UP_MAX_S = RETRY_DEADLINE_MS / 1000 - 1, retry-window.ts:15) prevents a window that can never fire. The known limit (closed-port test 3 does not discriminate) stays documented on this card. Release hold met: 42c67aa3, ff08557f, 1e5ca0d7 (the 1d consumer) and 033ff771 are first in v14.4.0. Evidence: triage B3.
+
+## Acceptance
+
+- [x] 1 the armed window: a NETWORK_GIVE_UP_MS window of consecutive network-code failures ends the http retry loop with the typed error, on the RetryClock of every model of the dispatch: commit 42c67aa3, cap ff08557f, both ancestors of tag v14.4.0; tests scripts/llm-ext/src/network-give-up.test.ts (37 it) and network-give-up-dispatch.test.ts (9 it) exist
+- [x] 2 arming only when all three conditions hold (trigger c, strict probe fails, a local target ready now): network-give-up-dispatch.test.ts "UNARMED (no ready local profile) the same reset server is still being retried past the window" and local-fallback-not-ready.test.ts "the give-up window is NOT armed on a branch with no local fallback site"; commit 033ff771
+- [x] 3 the duration is configurable: default 30 s (Q10 decided 2026-11-14), settings key network_give_up_seconds plus a flag, cap 299 s; tests "a remote active profile: the clock gets the window from settings.yaml network_give_up_seconds" and "the flag wins over the settings key" in network-give-up-dispatch.test.ts; accepted by main agent ruling 2026-11-18T15:52:33 (delegated by USER 2026-11-18; not an owner answer)
+- [x] 4 the STRICT probe with its tests: network-give-up.test.ts describe strictProviderAnswer, "a captive portal answering 200 HTML is NOT a provider answer" and "a captive portal answering 302 is NOT a provider answer, and the redirect is NOT followed"
+- [x] required test 1 (classifyFailure unit test, OpenRouter-host DNS under the armed rule): network-give-up.test.ts line 142 describe "classifyFailure under the armed rule (Required test 1 ...)"
+- [x] required test 3 (typed error in under 5 s against a real closed port and a real unresolvable .invalid host): network-give-up-dispatch.test.ts lines 125 and 136; KNOWN LIMIT recorded on the card: the closed-port case does not discriminate
+- [x] required test 5 (no ready local profile: window does not arm, existing retries run): network-give-up-dispatch.test.ts line 159
+- [x] release hold (42c67aa3 must not ship before the 1d consumer): 42c67aa3, ff08557f, 1e5ca0d7 and 033ff771 are all ancestors of tag v14.4.0 and none of v14.3.1 (git merge-base --is-ancestor, this run)

@@ -4,7 +4,7 @@ title: The user settings.yaml lost the or-jev classifier profile and active_clas
 column: human_review
 status: tasked
 created: 2026-11-15T17:35:00+0100
-updated: 2026-11-18T15:52:32+0100
+updated: 2026-11-18T16:15:32+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -35,3 +35,10 @@ Reported 2026-11-15 by the apple-docs-mcp Claude session (peer report, not verif
 2026-11-16T10:08:22+0100 CORRECTION by the main agent to the previous note: no writer drops or-jev from a PARSEABLE settings.yaml. An unparseable file is replaced by ensureSettingsExist with the default template, and the user or-jev survives only in the .corrupt- backup (settings-keep-or-jev.test.ts pins this). Item 2 is therefore met for parseable files only; for a corrupt file no profile can be kept, because the YAML cannot be read. The mutation check covered the 14 pick.ts writer tests, not the ensureSettingsExist tests.
 2026-11-16T15:14:32+0100 Left open after v14.3.1 (b41cdc26 is in the tag): item 4, restoring the user's own ~/.llm-externalizer/settings.yaml (or-jev profile and active_classifier), is outside git and waits for the USER; the cause of the 10-29 to 11-14 loss is still unproven (leading suspect inferred: test run before guard 1616fb78); a corrupt YAML cannot keep a profile.
 2026-11-18T15:52:31+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Item 4 is moot: the user settings.yaml now lists the or-jev classifier profile and active_classifier or-jev (profile names read only, no key value read; triage B3, reports_dev/card-triage/20261118_151523+0100-b3-review2.md). Who restored it is unknown. The code guard is released in 14.3.1 (b41cdc26). The cause of the 2026-10-29 to 2026-11-14 loss stays unproven (leading suspect, inferred: a test run before guard 1616fb78) and is accepted as a residual; a corrupt YAML cannot keep a profile.
+
+## Acceptance
+
+- [x] (1) find every writer of settings.yaml in scripts/llm-ext/src and the conditions under which it drops a profile or a top-level key: writers are writeSettingsAtomic (scripts/llm-ext/src/benchmark/pick.ts:314, 7 call sites) and ensureSettingsExist (scripts/llm-ext/src/config.ts:2535); inventory per the 2026-11-16T10:02:18 note, function definitions checked this run
+- [x] (2) a regenerating write never drops a user-owned profile or active_classifier: met for a parseable file by commit b41cdc26 (no code change was needed, note 2026-11-16T10:02:18 and its 10:08:22 correction); a corrupt YAML cannot keep a profile, accepted residual (main agent ruling 2026-11-18T15:52:31, delegated by USER 2026-11-18; not an owner answer)
+- [x] (3) a test that a regenerate keeps an or-jev classifier profile and active_classifier: commit b41cdc26 (test(settings): every settings.yaml writer keeps a user or-jev), file scripts/llm-ext/src/settings-keep-or-jev.test.ts exists with 11 it() blocks (writeDynamicProfileSection, writeDynamicUserKeys, dropKeysOutsideClosedSet, regenerateInvalidMarkedSection, migrateProfileSections, migrateSettingsTo141, valid file byte-identical, corrupt file)
+- [x] (4) restoring the user own settings.yaml: moot per main agent ruling 2026-11-18T15:52:31 (delegated by USER 2026-11-18; not an owner answer), the report reports_dev/card-triage/20261118_151523+0100-b3-review2.md exists and names IO0B25CV as DONE with item 4 moot; the user settings.yaml was not read in this run

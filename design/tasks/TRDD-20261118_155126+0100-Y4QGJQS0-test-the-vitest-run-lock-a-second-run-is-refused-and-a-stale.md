@@ -4,7 +4,7 @@ title: Test the vitest run lock, a second run is refused and a stale lock is rep
 column: backburner
 status: tasked
 created: 2026-11-18T15:51:26+0100
-updated: 2026-11-18T15:51:26+0100
+updated: 2026-11-18T16:24:03+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -24,3 +24,9 @@ src/test-tmpdir-guard.ts acquireRunLock (b239d2b4, shipped in v14.4.0, lock file
 ## Approval log
 
 - 2026-11-18T15:51:26+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Acceptance
+
+- [ ] a second llm-ext vitest run started while the first holds the lock is refused at once and the message names the holder (real processes, no mocks)
+- [ ] a stale lock is replaced: a dead pid, a pid reused by a process started after the lock, and an empty lock older than 10 s (real processes, no mocks)
+- [ ] negative-control test that leaks a temp dir on purpose and must make the guard fail (moved from TRDD-VCEX28LN: detection of a real own leak must not weaken)
