@@ -1599,13 +1599,18 @@ export const LOCAL_DECISION_PROFILE_NAME = "local-decision";
  * estimate (l1/estimate.ts) counted MORE than the decider on the same request (config.ts text: estimate 34866, decider 25385,
  * ratio 0.73; a 21304-token estimate was answered under the 16384 limit). Re-measured on six inputs, each repeated until the decider
  * named its own count (TypeScript 0.71 and 0.73, bundled JS 0.73, catalog JSON 0.73, a small-object JSON fixture 0.91, Japanese text
- * 0.57; reports_dev/local-decision): each below 1, so such a request planned to 16384 estimated tokens fits. KNOWN EXCEPTION:
- * random base64 measured 1.99 (estimate 59309, decider 117738): l1/estimate.ts undercounts it, so a base64-heavy request planned
- * to 16384 can still exceed the decider limit and ends with its verbatim 422 after one attempt (exit 4), never a silent cut.
- * The fix belongs in the estimator (it serves the remote planning too), not in a margin here: a margin small enough to keep the
- * request count down would not cover a 2x undercount.
- * It is written into the profile as context_tokens, so it is visible and editable in settings.yaml; a request the decider still
- * refuses ends the run with that 422 text verbatim (l0/local-transport.ts), never retried.
+ * 0.57; reports_dev/local-decision): each below 1, so such a request planned to 16384 estimated tokens fits. RANDOM TEXT
+ * (TRDD-4JLBB1YT): the per-class rates counted random base64 at about half the decider count (1.99: estimate 59309, decider
+ * 117738), so l1/estimate.ts now gives a long run of base64, hex or UUID characters its own rate. Measured against the decider
+ * after that fix: 0.967 to 0.997 of the estimate on random base64 lists of 1000 to 12000 chars and hex and UUID lists of 4000
+ * chars, and 0.987 to 0.989 on hex and UUID lists near this limit. That margin is thin (12 tokens at worst, on one 4000-char hex
+ * list); planner headroom is tracked in TRDD-NL2012O9. The fix belongs in the estimator (it serves the remote planning too), not
+ * in a margin here: a margin small enough to keep the request count down would not have covered the 2x undercount.
+ * It is written into the profile as context_tokens, so it is visible and editable in settings.yaml. A request the decider refuses
+ * with a 422 naming its counts is split by those counts (l2/split-on-overflow.ts). When it cannot be split (l2/planner.ts
+ * replanRequest) or the 422 names no counts, that request fails on its own and keeps the decider 422 text: the 422 is a
+ * bad-request (l0/local-transport.ts), not one of the run-wide FATAL_CLASSES of l2/fan-out.ts, so the other requests of the run
+ * go on and a whole-result command then fails. Never a silent cut.
  */
 export const LOCAL_DECISION_CONTEXT_TOKENS = 16384;
 /**
