@@ -383,7 +383,7 @@ wheels = [
 
 [[package]]
 name = "llm-externalizer-plugin"
-version = "14.7.0"
+version = "14.7.1"
 source = { virtual = "." }
 
 [package.optional-dependencies]

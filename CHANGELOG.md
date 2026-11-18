@@ -1,6 +1,97 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.1] - 2026-11-18
+
+### Added
+
+- Feat(classify): classify filter takes --context FILE for earlier messages (TRDD-7ZA3EE6Z)
+
+- Feat(local-models): a catalog of the local models llm-ext knows, checked against the built-in profiles and the docs (TRDD-R7NKAJ5B)
+
+
+### Changed
+
+- Revert(classify): hold classify filter --context out of the release (TRDD-7ZA3EE6Z)
+
+- Ci(windows): Windows build, CLI smoke and unit-test workflow; LF checkout; shell-neutral npm test stages (TRDD-61EINA10)
+
+
+### Documentation
+
+- Docs(trdd): 7ZA3EE6Z held for a USER decision; new card 0W932B0H; FC2TX9VU STATE (TRDD-7ZA3EE6Z)
+
+- Docs(skills): classify rule-check shipped in llm-ext 14.7.0 (TRDD-LFTQCFUX)
+
+- Docs(trdd): move 4TTFUIL0, PN84WC1L, 1FJAUVBU, OK1NN5RN to published
+
+- Docs(trdd): close 4JLBB1YT, estimator fix landed in ceb16c5c (TRDD-4JLBB1YT)
+
+- Docs(trdd): 4JLBB1YT checks, boxes and corrections of the ceb16c5c message; NL2012O9 planner headroom note (TRDD-4JLBB1YT)
+
+- Docs(trdd): 5AV8UBL1 to complete, FS5WW86J to human_review (TRDD-5AV8UBL1, TRDD-FS5WW86J)
+
+- Docs(trdd): record the FS5WW86J measurements and decision, and the 5AV8UBL1 box 2 basis (TRDD-FS5WW86J, TRDD-5AV8UBL1)
+
+- Docs(trdd): 4W3Q2B4S complete, both readiness gaps closed or recorded (TRDD-4W3Q2B4S)
+
+- Docs(trdd): correct four 4W3Q2B4S notes and the 4AKLHLB4 catalog-run note before 4W3Q2B4S freezes (TRDD-4W3Q2B4S, TRDD-4AKLHLB4)
+
+- Docs(trdd): 4W3Q2B4S notes and ticked boxes, b148a1ee message corrections on 4AKLHLB4, three backburner cards (TRDD-4W3Q2B4S)
+
+- Docs(trdd): R7NKAJ5B complete, the local model catalog landed (TRDD-R7NKAJ5B)
+
+- Docs(local-models): say the one finished calibration found LFM3 MLX unfit; R7NKAJ5B acceptance checklist (TRDD-R7NKAJ5B)
+
+- Docs(trdd): add 4W3Q2B4S, the two readiness gaps GNKO7WZS left open (TRDD-4W3Q2B4S)
+
+- Docs(trdd): GNKO7WZS complete, the quant match fix 8e093733 landed (TRDD-GNKO7WZS)
+
+- Docs(trdd): 4AKLHLB4 decision 5 records the 2026-10-28 smoke test of the local_llama head (TRDD-4AKLHLB4)
+
+- Docs(trdd): 4AKLHLB4 drops an unsourced claim that the local_llama head is proven on this machine (TRDD-4AKLHLB4)
+
+- Docs(trdd): 1L9VMEY7 to human_review (TRDD-1L9VMEY7)
+
+- Docs(trdd): record 8e093733 on GNKO7WZS and its open vision gap on RS2MTVP7 (TRDD-GNKO7WZS, TRDD-RS2MTVP7)
+
+- Docs(trdd): 1L9VMEY7 acceptance met, open items split into three cards; implementation commits on 61EINA10 and GNKO7WZS (TRDD-1L9VMEY7, TRDD-61EINA10, TRDD-GNKO7WZS)
+
+- Docs(trdd): 4AKLHLB4 design and split into five cards; janitor shield measurement on G49XPDNI (TRDD-4AKLHLB4, TRDD-G49XPDNI)
+
+- Docs(trdd): LFTQCFUX and 2IMRJ42O complete, archived (TRDD-LFTQCFUX, TRDD-2IMRJ42O)
+
+- Docs(trdd): acceptance checklists for LFTQCFUX and 2IMRJ42O; janitor shield status on G49XPDNI (TRDD-LFTQCFUX, TRDD-2IMRJ42O, TRDD-G49XPDNI)
+
+- Docs(trdd): 25KZDVYF complete, archived (TRDD-25KZDVYF)
+
+- Docs(trdd): record the v14.7.0 release, the 25KZDVYF acceptance and the D1 split (TRDD-LFTQCFUX, TRDD-25KZDVYF, TRDD-HCNC6433, TRDD-FS5WW86J, TRDD-TN8OUZ50)
+
+
+### Fixed
+
+- Fix(classify): count random base64, hex and UUID runs at the rate the local decider measured (TRDD-4JLBB1YT)
+
+- Fix(local-fallback): an unreadable snapshot folder makes the whole llama.cpp model not ready (TRDD-4W3Q2B4S)
+
+- Fix(local-llama): a GGUF in a snapshot subdirectory counts as on disk (TRDD-4W3Q2B4S)
+
+- Fix(local-models): the catalog records the dated checks of all six built-in models (TRDD-R7NKAJ5B)
+
+- Fix(local-models): the catalog records the 2026-10-28 smoke test of the local_llama head (TRDD-R7NKAJ5B)
+
+- Fix(give-up): a repo:quant model is on disk only when its own weight file and every shard are cached (TRDD-GNKO7WZS)
+
+
+### Testing
+
+- Test(classify): one refused piece of a two-question local escalation names its reason and count (TRDD-5AV8UBL1)
+
+- Test(classify): a decider 422 on a two-question local escalation splits it and answers both pieces (TRDD-5AV8UBL1)
+
+- Test(classify): env-reference key fixture as one named constant so ubs stops flagging it (TRDD-1L9VMEY7)
+
+
 ## [14.7.0] - 2026-11-18
 
 ### Added

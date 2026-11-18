@@ -269659,14 +269659,56 @@ function estimateTokens3(v) {
   const text2 = typeof v === "string" ? v : JSON.stringify(v);
   if (text2 === void 0) throw new TypeError(`estimateTokens: a ${typeof v} value has no JSON form`);
   let twelfths = 0;
+  let runLen = 0;
+  let runOld = 0;
+  let runTransitions = 0;
+  let runLastClass = -1;
+  let runDigits = 0;
+  let runUpper = false;
+  let runLower = false;
+  let runHexOnly = true;
+  const flushRun = () => {
+    if (runLen === 0) return;
+    const dense = runDigits * 5 >= runLen * 2 || runHexOnly && runDigits > 0;
+    const mixedRandom = runUpper && runLower && runTransitions * 2 >= runLen - 1;
+    if (runLen >= 16 && (runUpper || runLower) && (dense || mixedRandom)) twelfths += runLen * (dense ? 11 : 9);
+    else twelfths += runOld;
+    runLen = 0;
+    runOld = 0;
+    runTransitions = 0;
+    runLastClass = -1;
+    runDigits = 0;
+    runUpper = false;
+    runLower = false;
+    runHexOnly = true;
+  };
   for (const ch of text2) {
     const code2 = ch.codePointAt(0);
-    if (code2 > 127) twelfths += 12;
-    else if (code2 >= 97 && code2 <= 122 || code2 >= 65 && code2 <= 90) twelfths += 4;
-    else if (code2 >= 48 && code2 <= 57) twelfths += 6;
-    else if (ch === " " || ch === "\n" || ch === "	" || ch === "\r") twelfths += 3;
-    else twelfths += 8;
+    const lower = code2 >= 97 && code2 <= 122;
+    const upper = code2 >= 65 && code2 <= 90;
+    const digit = code2 >= 48 && code2 <= 57;
+    let rate;
+    if (code2 > 127) rate = 12;
+    else if (lower || upper) rate = 4;
+    else if (digit) rate = 6;
+    else if (ch === " " || ch === "\n" || ch === "	" || ch === "\r") rate = 3;
+    else rate = 8;
+    if (lower || upper || digit || code2 === 43 || code2 === 47 || code2 === 61 || code2 === 45) {
+      const cls = lower ? 0 : upper ? 1 : digit ? 2 : 3;
+      if (runLen > 0 && cls !== runLastClass) runTransitions++;
+      runLastClass = cls;
+      runLen++;
+      runOld += rate;
+      if (!(digit || code2 >= 97 && code2 <= 102 || code2 >= 65 && code2 <= 70 || code2 === 45)) runHexOnly = false;
+      if (digit) runDigits++;
+      else if (lower) runLower = true;
+      else if (upper) runUpper = true;
+    } else {
+      flushRun();
+      twelfths += rate;
+    }
   }
+  flushRun();
   return Math.ceil(twelfths / 12);
 }
 var init_estimate2 = __esm({
@@ -277212,6 +277254,38 @@ function cachedSnapshot(cacheDir, repo) {
   const snap = join48(root2, "snapshots", readFileSync46(ref, "utf8").trim());
   return existsSync35(snap) ? snap : void 0;
 }
+function snapshotRelativePaths(dir, prefix = "") {
+  const out = [];
+  for (const e of readdirSync14(dir, { withFileTypes: true })) {
+    if (!e.isDirectory()) {
+      out.push(`${prefix}${e.name}`);
+      continue;
+    }
+    try {
+      out.push(...snapshotRelativePaths(join48(dir, e.name), `${prefix}${e.name}/`));
+    } catch (err3) {
+      if (err3 instanceof UnreadableSnapshotFolder) throw err3;
+      const code2 = err3.code;
+      if (code2 !== "EACCES" && code2 !== "EPERM" && code2 !== "ENOENT") throw err3;
+      throw new UnreadableSnapshotFolder(code2, `${prefix}${e.name}`);
+    }
+  }
+  return out;
+}
+function ggufQuantWeightsOnDisk(files, quant) {
+  const names2 = new Set(files);
+  const pattern = new RegExp(`(^|[-_./])${quant.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[.-]`, "i");
+  return files.some((f) => {
+    const base = f.slice(f.lastIndexOf("/") + 1);
+    if (!f.endsWith(".gguf") || base.includes("mmproj") || base.includes("mtp-") || base.includes("imatrix") || !pattern.test(f)) return false;
+    const shard = /^(.+)-(\d{5})-of-(\d{5})\.gguf$/i.exec(f);
+    if (shard === null || Number(shard[3]) <= 1) return true;
+    if (Number(shard[2]) !== 1) return false;
+    const count = Number(shard[3]);
+    for (let i = 2; i <= count; i++) if (!names2.has(`${shard[1]}-${String(i).padStart(5, "0")}-of-${shard[3]}${f.slice(-5)}`)) return false;
+    return true;
+  });
+}
 function llamaModelOnDisk(model, env) {
   const parsed = parseManagedModel(model);
   if ("error" in parsed) return false;
@@ -277222,7 +277296,15 @@ function llamaModelOnDisk(model, env) {
   }
   const [repo, quant] = model.split(":");
   const snap = cachedSnapshot(hfCacheDir(env), repo);
-  return snap !== void 0 && readdirSync14(snap).some((f) => /\.gguf$/i.test(f) && f.toLowerCase().includes(quant.toLowerCase()));
+  if (snap === void 0) return false;
+  try {
+    return ggufQuantWeightsOnDisk(snapshotRelativePaths(snap), quant);
+  } catch (err3) {
+    if (!(err3 instanceof UnreadableSnapshotFolder)) throw err3;
+    process.stderr.write(`[llm-externalizer] local model ${model} is not ready: its snapshot folder ${err3.relativeDir} is unreadable (${err3.code}); llama-server cannot list a snapshot with an unreadable folder
+`);
+    return false;
+  }
 }
 function localsModelOnDisk(model, env) {
   if (!("ok" in parseLocalsModel(model))) return false;
@@ -277276,7 +277358,7 @@ function makeNetworkGiveUp(settings, configDir, o = {}) {
     }
   };
 }
-var DEFAULT_NETWORK_GIVE_UP_S, PROBE_TIMEOUT_MS, flagOverrideS;
+var DEFAULT_NETWORK_GIVE_UP_S, PROBE_TIMEOUT_MS, flagOverrideS, UnreadableSnapshotFolder;
 var init_network_give_up = __esm({
   "src/network-give-up.ts"() {
     "use strict";
@@ -277290,6 +277372,13 @@ var init_network_give_up = __esm({
     init_http();
     DEFAULT_NETWORK_GIVE_UP_S = 30;
     PROBE_TIMEOUT_MS = 5e3;
+    UnreadableSnapshotFolder = class extends Error {
+      constructor(code2, relativeDir) {
+        super(`snapshot folder ${relativeDir} is unreadable (${code2})`);
+        this.code = code2;
+        this.relativeDir = relativeDir;
+      }
+    };
   }
 });
 
@@ -293207,7 +293296,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.7.0";
+var VERSION = "14.7.1";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }
