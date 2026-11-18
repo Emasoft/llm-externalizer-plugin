@@ -495,7 +495,7 @@ Known limitation (measured 2026-11-04, TRDD-S5KOOT2S): the check used 10 vague i
 
 ### `llm-ext classify rule-check`
 
-`classify rule-check` is new (TRDD-LFTQCFUX): it is not in llm-ext 14.6.5 or earlier and ships in the next release. The runs quoted here were made on a development build after 14.6.5, 2026-11-18, remote typesafe/jev-1.14, one run per check except the example request, which ran twice (once with `--json`, once in text form), with the environment `HOME`, `LLM_EXT_CONFIG_DIR` (under `HOME`: a config directory elsewhere is refused), `LLM_EXT_OUTPUT_DIR`, `LLM_EXT_SCRATCH_DIR` set to scratch folders and `LLM_EXT_INSTALL_RULE=0`. The binary was `dist/llm-ext.js` (the `bin` of package.json).
+`classify rule-check` is new in llm-ext 14.7.0 (TRDD-LFTQCFUX). The runs quoted here were made on a development build after 14.6.5, 2026-11-18, remote typesafe/jev-1.14, one run per check except the example request, which ran twice (once with `--json`, once in text form), with the environment `HOME`, `LLM_EXT_CONFIG_DIR` (under `HOME`: a config directory elsewhere is refused), `LLM_EXT_OUTPUT_DIR`, `LLM_EXT_SCRATCH_DIR` set to scratch folders and `LLM_EXT_INSTALL_RULE=0`. The binary was `dist/llm-ext.js` (the `bin` of package.json).
 
 - Usage: `llm-ext classify rule-check --input <file.json> [--context FILE] [--flag value ...]` (or the JSON input on stdin); there is no bare file argument
 - Accepted profile types: classifier

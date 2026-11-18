@@ -115,7 +115,7 @@ Repeated in sequence (n=1, 2026-11-04), 2b on the top-ranked candidate of 2a: fi
 
 ### 2b. Is it a duplicate, an updated version or new? (C5)
 
-`classify rule-check` answers it in one command (TRDD-LFTQCFUX; not in llm-ext 14.6.5 or earlier, ships in the next release; measured 2026-11-18 on a development build after 14.6.5, remote typesafe/jev-1.14, two runs of the same file). It asks two questions per rule, how the phrase relates to the rule (duplicate, updated_version or new) and whether it contradicts it, and decides the outcome in code. The request is a JSON file, `rule-check-example.json` (in this folder: the phrase and the four example rules, `{id, text}` each), and the earlier messages go in `--context` (`rule-check-example-context.txt`, the earlier messages of the goal example):
+`classify rule-check` answers it in one command (TRDD-LFTQCFUX; ships in llm-ext 14.7.0 and later; measured 2026-11-18 on a development build after 14.6.5, remote typesafe/jev-1.14, two runs of the same file). It asks two questions per rule, how the phrase relates to the rule (duplicate, updated_version or new) and whether it contradicts it, and decides the outcome in code. The request is a JSON file, `rule-check-example.json` (in this folder: the phrase and the four example rules, `{id, text}` each), and the earlier messages go in `--context` (`rule-check-example-context.txt`, the earlier messages of the goal example):
 
 ```bash
 llm-ext classify rule-check --json --input ./rule-check-example.json --context ./rule-check-example-context.txt
