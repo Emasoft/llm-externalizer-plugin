@@ -4,7 +4,7 @@ title: DOC-15 NOTICE
 column: backburner
 status: tasked
 created: 2026-10-07T20:38:48+0200
-updated: 2026-11-19T10:15:58+0100
+updated: 2026-11-19T11:21:40+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -59,3 +59,5 @@ The licence audit itself (SEC-01).
 ## Notes
 
 T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: NOTICE has quicksilver and claude-jev entries; headers of extract.ts:2, compare.ts:2, review.ts:1, audit.ts:1, findings.ts:1 say the question wording is own. Remaining: Pleo2 entry if the preset labels are copied (classifiers/catalog/check.ts:1 says they come from it); jev-mcp and Moreno entries only if text is copied (the fixed reason-code vocabulary in review.ts is open); needs a one-line judge decision.
+2026-11-19T11:11:32+0100 R3 of the T6F52GB8 final report (main agent ruling, delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): NOTICE entry added for Pleo2/awesome-jev-agent-skills (MIT, Copyright (c) 2026 Pleo2); no jev-mcp or Moreno entry, because those file headers say the wording is our own.
+2026-11-19T11:21:39+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): box 1 unticked again: whether review.ts copies the jev-mcp reason-code vocabulary is unknown (the jev-mcp source is not on disk), so NOTICE cannot yet be shown to cover every reused source; it is re-ticked when that comparison is done.

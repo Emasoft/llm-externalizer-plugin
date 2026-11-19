@@ -4,7 +4,7 @@ title: BR-11 Search keyword fallback
 column: backburner
 status: tasked
 created: 2026-10-07T20:01:20+0200
-updated: 2026-10-07T20:01:22+0200
+updated: 2026-11-19T11:11:41+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -57,3 +57,7 @@ Under `scripts/llm-ext/src/browser/` (exact list at card start).
 ## Out of scope
 
 The typing call (BR-10).
+
+## Notes
+
+2026-11-19T11:11:40+0100 R6 of the T6F52GB8 final report (main agent ruling, delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): the standing no-fallbacks rule wins over plan default D1 (not a user quote); this card drops the source fallback when worked.
