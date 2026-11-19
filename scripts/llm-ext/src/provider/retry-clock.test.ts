@@ -201,8 +201,8 @@ describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => 
     // Stopped by the clock, not by exhausting the 3-retry x 6-attempt counters
     // (that would take > 60 s): inside the window, and after at least 2 waits.
     expect(elapsed).toBeGreaterThan(2000);
-    // WHY 6000 ms window (TRDD-FC2TX9VU): attempt 3 starts after both backoffs (2250-3750 ms); 4000 left about 250 ms of slack under host load, the 14.7.6 publish gate.
-    expect(elapsed).toBeLessThan(6000 + 1500);
+    // WHY 6000 ms window and 5 s after it (TRDD-FC2TX9VU): attempt 3 starts after both backoffs (2250-3750 ms), and 4000 left about 250 ms of slack under the host load of the 14.7.6 publish gate. An attempt may start just before the deadline and is never aborted, so its round trip gets 5 s; the bound only has to tell a clock stop from the retry counters running out (over 60 s).
+    expect(elapsed).toBeLessThan(6000 + 5000);
     expect(e.trail.attempts).toBe(requestCount());
     expect(e.trail.attempts).toBeGreaterThanOrEqual(3);
     expect(e.trail.lastStatus).toBe(503);
