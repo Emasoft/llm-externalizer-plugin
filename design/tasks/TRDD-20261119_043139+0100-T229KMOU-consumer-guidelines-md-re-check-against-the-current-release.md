@@ -4,7 +4,7 @@ title: consumer-guidelines.md re-check against the current release
 column: dev
 status: tasked
 created: 2026-11-19T04:31:39+0100
-updated: 2026-11-19T04:43:52+0100
+updated: 2026-11-19T04:53:42+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T04:31:39+0100
+implementation-commits: [a359ad12]
 ---
 
 # consumer-guidelines.md re-check against the current release
