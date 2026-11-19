@@ -87,8 +87,7 @@ import {
   type DynamicProfileRecord,
 } from "./default-profiles-state.js";
 import { getCatalog, catalogCachePath, catalogFetchRecentlyFailed } from "./catalog-cache.js";
-import { filterFreeModels, goneEvictedModels, type FreeModelCatalogEntry } from "./free-rotation.js";
-import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { catalogFreeCandidateIds, filterFreeModels, type FreeModelCatalogEntry } from "./free-rotation.js";
 import {
   benchmarkFailedModels,
   benchmarkPassedModels,
@@ -862,9 +861,8 @@ export async function maintainDynamicProfiles(input: MaintainDynamicProfilesInpu
       !catalogFetchFailed && rawCatalog.length > 0 && !catalogFetchRecentlyFailedSafe(nowMs);
     const catalog = rawCatalog.map(toDynamicCatalogEntry);
     const catalogById = new Map(rawCatalog.map((m) => [m.id, m]));
-    // GitHub 15 item 3 (TRDD-NC7873YO): a catalog id with repeated gone verdicts answers every call with a 403 or 404. Re-offering it would re-adopt a dead model on every pass, so it is left out here. Catalog-only: a user-configured free_models id never enters this list, so it is not affected.
-    const goneEvicted = goneEvictedModels();
-    const freeIds = rawCatalog.map((m) => m.id).filter(isFreeSuffixModelId).filter((id) => !goneEvicted.has(id));
+    // GitHub 15 item 3 (TRDD-NC7873YO): a catalog id with repeated gone verdicts answers every call with a 403 or 404. Re-offering it would re-adopt a dead model on every pass, so it is left out here. Catalog-only: a user-configured free_models id never enters this list, so it is not affected. The profile detector builds its free fingerprint through the same catalogFreeCandidateIds helper, so the two sides compare the same pool.
+    const freeIds = catalogFreeCandidateIds(rawCatalog.map((m) => m.id), nowMs);
     const catalogFreeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
     // D3c-1b (TRDD-FDI9NYAS): the STRICT serving gate -- computed once per
     // pass, same shape as `catalogFreeQualified`/`unusable` above, and

@@ -896,6 +896,12 @@ export function goneEvictedModels(nowMs: number = Date.now()): Set<string> {
   return out;
 }
 
+/** The free-model candidate ids: `:free` ids minus the ones with repeated gone verdicts (goneEvictedModels). ONE source for the maintainer and the profile detector, because both derive the free fingerprint from this list. If one side omits the eviction filter, the detector compares a different pool from the one the maintainer banked and reports "changed" on every dispatch (a flip-flop). GitHub 15 item 3, TRDD-NC7873YO. */
+export function catalogFreeCandidateIds(ids: readonly string[], nowMs: number = Date.now()): string[] {
+  const gone = goneEvictedModels(nowMs);
+  return ids.filter((id) => isFreeSuffixModelId(id) && !gone.has(id));
+}
+
 export function isCooling(store: CooldownStore, modelId: string, nowMs: number): boolean {
   const cd = store.models[modelId];
   return !!cd && cd.until > nowMs;

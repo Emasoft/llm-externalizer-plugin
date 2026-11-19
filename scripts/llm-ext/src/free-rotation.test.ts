@@ -37,6 +37,7 @@ import {
   POOL_403_QUORUM,
   GONE_EVICT_STRIKES,
   GONE_EVICT_TTL_MS,
+  catalogFreeCandidateIds,
   goneEvictedModels,
   selectFreeEnsembleModels,
   clearCooldown,
@@ -1616,6 +1617,15 @@ describe("AC3 persisted eviction — gone strikes accumulate across restarts and
     recordUnavailable("windowed/model:free", GONE_DETAIL, lastAt + GONE_EVICT_TTL_MS + 1);
     resetCooldownCacheForTests();
     expect(goneEvictedModels(lastAt + GONE_EVICT_TTL_MS + 2).has("windowed/model:free")).toBe(false);
+  });
+
+  it("catalogFreeCandidateIds keeps a healthy :free id and drops a blocked :free id and any non-:free id (GitHub 15 item 3, TRDD-NC7873YO)", () => {
+    for (let run = 0; run < GONE_EVICT_STRIKES; run++) {
+      recordUnavailable("blocked/model:free", GONE_DETAIL, T0 + run * 60_000);
+    }
+    expect(
+      catalogFreeCandidateIds(["healthy/model:free", "blocked/model:free", "vendor/plain-model"], T0 + 10 * 60_000),
+    ).toEqual(["healthy/model:free"]);
   });
 });
 

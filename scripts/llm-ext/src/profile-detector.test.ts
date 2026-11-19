@@ -67,6 +67,7 @@ import type { Profile } from "./config.js";
 // imported here (not re-derived) so the equivalence test below runs the
 // ACTUAL maintainer, not this file's guess at what it would compute.
 import { maintainDynamicProfiles, type RawCatalogModel } from "./dynamic-maintainer.js";
+import { GONE_EVICT_STRIKES, recordUnavailable, resetCooldownCacheForTests, resetRunUnusableForTests } from "./free-rotation.js";
 
 let cfgDir: string;
 let prevCfgDir: string | undefined;
@@ -344,7 +345,7 @@ describe("the section write the UPDATER performs (writeDynamicProfileSection in 
       free_only: true,
       free_models: ["new/model:free"],
       model: "placeholder/unpopulated-default-profile",
-      api_key: "$OPENROUTER_API_KEY",
+      api_key: "$OPENROUTER_API_KEY", // ubs:ignore (env-var reference, not a key)
     } as Profile;
     writeDynamicProfileSection(settingsPath, "free", () => patched, { notify: () => {} });
 
@@ -453,6 +454,36 @@ describe("detectRemoteProfileChange's fingerprint agrees with maintainOneDynamic
     }
   });
 
+  it("GitHub 15 item 3 (TRDD-NC7873YO): a :free id with repeated gone verdicts is left out of the banked fingerprint, and the detector computes the same one, so no change is reported", async () => {
+    writeSettings(["active: free", "profiles:", ...FREE_PLACEHOLDER, ""].join("\n"));
+    const nowMs = Date.now();
+    const catalog: RawCatalogModel[] = [
+      { id: "vendor/qualified:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+      { id: "vendor/gone:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+    ];
+    resetCooldownCacheForTests();
+    try {
+      for (let strike = 0; strike < GONE_EVICT_STRIKES; strike++) {
+        recordUnavailable(
+          "vendor/gone:free",
+          "API error 403 (openrouter): This model is only available on agentic harnesses",
+          nowMs - (GONE_EVICT_STRIKES - strike) * 60_000,
+        );
+      }
+      // Two real passes, not one: the first banks an empty modelSpecFingerprints
+      // (see the test above), so only the second reaches the steady state.
+      await maintainDynamicProfiles({ fetchCatalog: async () => catalog, log: () => {} });
+      await maintainDynamicProfiles({ fetchCatalog: async () => catalog, log: () => {} });
+      populateDefaultProfileMock.mockClear();
+
+      const result = await detectProfileChanges("free", { fetchCatalog: async () => catalog, nowMs });
+      expect(result.changed).toBe(false);
+      expect(populateDefaultProfileMock).not.toHaveBeenCalled();
+    } finally {
+      resetCooldownCacheForTests();
+      resetRunUnusableForTests();
+    }
+  });
 });
 
 // ── D2: the update a command requested, run by the lock's holder ─────────────

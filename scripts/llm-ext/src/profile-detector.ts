@@ -46,8 +46,7 @@ import { DISABLE_RECONCILE_ENV } from "./model-reconcile.js";
 import { decideDynamicProfile } from "./default-profiles.js";
 import { getDynamicProfileRecord } from "./default-profiles-state.js";
 import { getCatalog, catalogCachePath } from "./catalog-cache.js";
-import { filterFreeModels } from "./free-rotation.js";
-import { isFreeSuffixModelId } from "./benchmark/free-mode.js";
+import { catalogFreeCandidateIds, filterFreeModels } from "./free-rotation.js";
 import { benchmarkFailedModels, benchmarkPassedModels } from "./benchmark/security-triage/index.js";
 // mkdir-lock.ts's withMkdirLock is the shared cross-process mutex every small
 // sidecar read-modify-write in this codebase uses (default-profiles-state.ts,
@@ -252,7 +251,8 @@ async function detectRemoteProfileChange(args: {
 
   const catalog = rawCatalog.map(toDynamicCatalogEntry);
   const catalogById = new Map(rawCatalog.map((m) => [m.id, m]));
-  const freeIds = rawCatalog.map((m) => m.id).filter(isFreeSuffixModelId);
+  // Same helper the maintainer uses (dynamic-maintainer.ts, TRDD-NC7873YO): a free list that keeps a blocked id fingerprints a pool the maintainer never banked, so every dispatch would report "changed".
+  const freeIds = catalogFreeCandidateIds(rawCatalog.map((m) => m.id), nowMs);
   const catalogFreeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
   const priceCeiling = name === "paid" ? getEnsemblePriceCeiling(settings) : 0;
 
