@@ -287384,6 +287384,35 @@ var init_handler2 = __esm({
   }
 });
 
+// src/boot-settings.ts
+function loadSettingsAfterMigrations() {
+  migrateProfileSections(getSettingsPath(), {
+    notify: (msg) => process.stderr.write(`${msg}
+`),
+    readStamp: getProfileMigrationStamp,
+    writeStamp: stampProfileMigrationDone
+  });
+  migrateSettingsTo141(getSettingsPath(), {
+    notify: (msg) => process.stderr.write(`${msg}
+`),
+    isApplied: isMigrationStepApplied,
+    markApplied: markMigrationStepApplied
+  });
+  const reread = loadSettings();
+  if (reread === null) {
+    throw new Error(`settings.yaml could not be read again after the boot migrations (${getSettingsPath()}): it was deleted or no longer parses`);
+  }
+  return reread;
+}
+var init_boot_settings = __esm({
+  "src/boot-settings.ts"() {
+    "use strict";
+    init_config();
+    init_pick();
+    init_default_profiles_state();
+  }
+});
+
 // src/model-reconcile.ts
 import { mkdirSync as mkdirSync39, readFileSync as readFileSync56, renameSync as renameSync32, writeFileSync as writeFileSync39 } from "node:fs";
 import { join as join59 } from "node:path";
@@ -291899,7 +291928,7 @@ var init_index = __esm({
     init_config();
     init_catalog_cache();
     init_pick();
-    init_default_profiles_state();
+    init_boot_settings();
     init_dynamic_maintainer();
     init_default_profiles_runner();
     init_foreground_repair();
@@ -291931,21 +291960,8 @@ var init_index = __esm({
     settingsError = "";
     activeSettings = (() => {
       try {
-        const loaded = ensureSettingsExist();
-        const migration = migrateProfileSections(getSettingsPath(), {
-          notify: (msg) => process.stderr.write(`${msg}
-`),
-          readStamp: getProfileMigrationStamp,
-          writeStamp: stampProfileMigrationDone
-        });
-        const migration141 = migrateSettingsTo141(getSettingsPath(), {
-          notify: (msg) => process.stderr.write(`${msg}
-`),
-          isApplied: isMigrationStepApplied,
-          markApplied: markMigrationStepApplied
-        });
-        if (migration.alreadyDone && migration141.applied.length === 0) return loaded;
-        return loadSettings() ?? loaded;
+        ensureSettingsExist();
+        return loadSettingsAfterMigrations();
       } catch (err3) {
         settingsError = `Failed to load settings: ${err3 instanceof Error ? err3.message : String(err3)}
 

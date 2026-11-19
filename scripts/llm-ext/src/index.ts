@@ -368,13 +368,8 @@ import {
   PROVISIONAL_LOCAL_CTX,
 } from "./config.js";
 import { readCachedModelPrice } from "./catalog-cache.js";
-import { writeDynamicProfileSection, migrateProfileSections, migrateSettingsTo141 } from "./benchmark/pick.js";
-import {
-  getProfileMigrationStamp,
-  stampProfileMigrationDone,
-  isMigrationStepApplied,
-  markMigrationStepApplied,
-} from "./default-profiles-state.js";
+import { writeDynamicProfileSection } from "./benchmark/pick.js";
+import { loadSettingsAfterMigrations } from "./boot-settings.js";
 // P6b item 1 (design §2.1/§3.3): the dynamic free/paid gate. D2: this file
 // no longer runs the maintainer at all -- every profile update happens in a
 // detached child (default-profiles-runner.ts's requestProfileUpdate /
@@ -539,37 +534,9 @@ function evaluateSettingsValidity(
 
 let activeSettings: Settings = (() => {
   try {
-    const loaded = ensureSettingsExist();
-    // P6c-a item 3 (addendum K): the ONE-TIME pre-14.0.0 migration runs HERE —
-    // at boot, before validateSettings below and therefore long before the
-    // dispatch maintainer. Order is load-bearing twice over: a section it
-    // ADOPTS must already carry the generated marker when the maintainer first
-    // looks at it (otherwise the maintainer backs the same section up a second
-    // time), and validateSettings' reserved-name refusal must not fire on the
-    // very file the migration is about to fix.
-    //
-    // Never throws (see migrateProfileSections); a no-op after its first
-    // successful pass, so this costs one state-file read per boot thereafter.
-    const migration = migrateProfileSections(getSettingsPath(), {
-      notify: (msg) => process.stderr.write(`${msg}\n`),
-      readStamp: getProfileMigrationStamp,
-      writeStamp: stampProfileMigrationDone,
-    });
-    // D0 (TRDD-AL8GIZYA): the 14.1.0 migration list runs right after the
-    // pre-14.0.0 one, for the same two reasons — a step must see MARKED
-    // dynamic sections (writeDynamicProfileSection's per-key generated-key
-    // merge assumes that), and a settings-level refusal it fixes (E-D3) must
-    // not fire on the very file this migration is about to correct.
-    const migration141 = migrateSettingsTo141(getSettingsPath(), {
-      notify: (msg) => process.stderr.write(`${msg}\n`),
-      isApplied: isMigrationStepApplied,
-      markApplied: markMigrationStepApplied,
-    });
-    if (migration.alreadyDone && migration141.applied.length === 0) return loaded;
-    // Re-read: either migration may have deleted, adopted, regenerated or
-    // rewritten a section, and `loaded` is the document as it was BEFORE
-    // both ran.
-    return loadSettings() ?? loaded;
+    // The migrations and the re-read that follow live in boot-settings.ts (loadSettingsAfterMigrations); the call here only makes sure settings.yaml exists and parses.
+    ensureSettingsExist();
+    return loadSettingsAfterMigrations();
   } catch (err) {
     settingsError = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}\n\nSettings file: ${SETTINGS_FILE}`;
     process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
