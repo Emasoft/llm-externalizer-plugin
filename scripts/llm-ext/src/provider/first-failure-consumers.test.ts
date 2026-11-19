@@ -105,7 +105,9 @@ describe("the outer gate reads the verdict: the whole call is one budget, not on
     server = createServer((req) => { req.socket.destroy(); });
     await new Promise<void>((r) => server!.listen(0, "127.0.0.1", r));
     const { port } = server.address() as { port: number };
-    const clock: RetryClock = { deadlineAt: Date.now() + 4000 };
+    // WHY 8 s, not 4 s (TRDD-FC2TX9VU): 3 attempts need two backoffs, up to 1250 + 2500 ms (http.ts computeBackoffMs) plus request time, so 4 s left no slack
+    // for a loaded host. At 8 s a third backoff (~3.4 s in the measured run) also fits and the test takes ~7 s; the asserted claims (attempts > 2, no final verdict) hold for any count above 2.
+    const clock: RetryClock = { deadlineAt: Date.now() + 8000 };
     const err = await outer(`http://127.0.0.1:${port}`, clock);
     expect(failureOf(err)?.final).toBeUndefined();
     expect(clock.attempts).toBeGreaterThan(2);
@@ -201,15 +203,19 @@ describe("429 ledger detail", () => {
   }, 60_000);
 });
 
-const YAML = `active: bare
-allow_paid_models: true
-profiles:
-  bare:
-    mode: remote
-    api: openrouter-remote
-    model: vendor/whatever
-    api_key: "sk-test-fake-openrouter-key"
-`;
+// WHY an array of lines, not a template literal: a comment cannot sit inside a template literal, and the api_key line carries the
+// ubs:ignore marker that the pre-commit hook message prescribes for a verified false positive.
+const YAML = [
+  "active: bare",
+  "allow_paid_models: true",
+  "profiles:",
+  "  bare:",
+  "    mode: remote",
+  "    api: openrouter-remote",
+  "    model: vendor/whatever",
+  "    api_key: \"sk-test-fake-openrouter-key\"", // ubs:ignore fake fixture key, sent only to a local test server (TRDD-FC2TX9VU)
+  "",
+].join("\n");
 
 async function loadFreshIndex() {
   const cfgDir = mkdtempSync(join("/tmp", "llm-ext-ffc-cfg-"));

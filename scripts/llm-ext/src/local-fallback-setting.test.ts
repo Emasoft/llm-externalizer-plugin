@@ -290,14 +290,16 @@ describe("enabled: false gates readyLocalTarget: no ready target, so the window 
     expect(await makeNetworkGiveUp(loaded(), g.cfgDir, { ...LINUX, env: g.env }).arm(refused(), url)).toBe(false);
   });
 
-  it("the completion layer, a server resetting every connection, window 2 s: the control ends in under 5 s; enabled false is still retrying after 4 s", async () => {
+  it("the completion layer, a server resetting every connection, window 2 s: the control ends in under 20 s; enabled false is still retrying after 4 s", async () => {
     setNetworkGiveUpOverrideS(2);
     const url = await resetServer();
     const f = fixture(FREE([]), [MODEL]);
     const armed: RetryClock = { networkGiveUp: makeNetworkGiveUp(loaded(), f.cfgDir, { ...LINUX, env: f.env }) };
     const t0 = Date.now();
     await caught(chatCompletionWithRetry(MESSAGES, { model: "vendor/m", maxTokens: 64, retryClock: armed }, depsFor(url)));
-    expect(Date.now() - t0, "control: the armed window ends the retries").toBeLessThan(5_000);
+    // WHY 20 s, not 5 s (TRDD-FC2TX9VU): the bound only has to tell a give-up at the 2 s window from the generic reset ladder (about 31 s); the window arms after a strict probe of up to 5 s,
+    // and the same scenario took 8921 ms under load in network-give-up.test.ts, which uses the same 20 s.
+    expect(Date.now() - t0, "control: the armed window ends the retries").toBeLessThan(20_000);
     resetServiceHealthForTests();
     const g = fixture(FREE(["fallback_to_local:", "  enabled: false"]), [MODEL]);
     const clock: RetryClock = { networkGiveUp: makeNetworkGiveUp(loaded(), g.cfgDir, { ...LINUX, env: g.env }) };

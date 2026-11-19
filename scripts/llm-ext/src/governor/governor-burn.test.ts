@@ -441,10 +441,12 @@ describe("governor burn tests (spec section 3)", () => {
     expect(snapshot().waiters).toEqual([]);
   }, DEADLINE_MS);
 
-  it("stop: --command_timeout 3 during a RAM wait exits 124, sends nothing, and leaves no waiter", async () => {
+  it("stop: --command_timeout 60 during a RAM wait exits 124, sends nothing, and leaves no waiter", async () => {
     const limit = await ramLimitUnderReading();
     const srv = await standIn(0);
-    const run = runCli(configDir("cfg", srv.url, [`ram_limit_pct: ${limit}`]), ["--command_timeout", "3"]);
+    // WHY 60 s, not 3 s (TRDD-FC2TX9VU): the timeout must outlast the CLI start-up (settings migrations, backups; about 33 s on a loaded host)
+    // so the RAM-wait line is printed before 124 ends the run. The RAM limit is below the reading, so the wait is unbounded and 124 still ends it.
+    const run = runCli(configDir("cfg", srv.url, [`ram_limit_pct: ${limit}`]), ["--command_timeout", "60"]);
     const { code, stderr } = await run.done;
     expect(code, stderr).toBe(124);
     // Coordinator amendment 6: the wait was a RAM denial, not some other reason that also ends in 124.

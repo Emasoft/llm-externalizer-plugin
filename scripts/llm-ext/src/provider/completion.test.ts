@@ -753,7 +753,9 @@ describe("payment errors — skip when certain, retry once when not, never a bre
   it("HTTP 500 with API error 400 in its body still counts as an outage", async () => {
     const { url } = await startErrorServer(500, "upstream reports API error 400");
     const deps = { ...baseDeps(backendAt(url), null), getSoftTimeoutMs: () => 700 };
-    await expect(chatCompletionWithRetry(MESSAGES, { model: "chain/body-status", deadlineAt: Date.now() + 3000 }, deps)).rejects.toThrow(/API error 500/);
+    // WHY 30 s, not 3 s (TRDD-FC2TX9VU): the 4 attempts end by exhausting their retries (no backoff below the breaker threshold), so the window plays no part;
+    // under host load a 3 s window can close first and throw RetryDeadlineError, whose neutral message does not carry "API error 500".
+    await expect(chatCompletionWithRetry(MESSAGES, { model: "chain/body-status", deadlineAt: Date.now() + 30_000 }, deps)).rejects.toThrow(/API error 500/);
     expect(serviceFailureCountForTests()).toBeGreaterThan(0);
   }, 10_000);
   it("an IRON RULE refusal caught after the retry window closed is thrown as itself, not as RetryDeadlineError (TRDD-VAORGKVF)", async () => {

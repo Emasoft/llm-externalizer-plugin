@@ -138,7 +138,9 @@ describe("retry clock — second review (TRDD-YG72CYY7 inc 1, N3 N6)", () => {
     const { url } = await emptyServer("stop");
     const result = await chatCompletionWithRetry(
       MESSAGES,
-      { model: "n3-label-model", deadlineAt: Date.now() + 3000 },
+      // WHY 3900 ms, not 3000 (TRDD-FC2TX9VU): attempt 2 needs the 2000 ms empty-reply wait (EMPTY_RESPONSE_RETRY_DELAY_MS) to fit, so attempt 1 had to end within 1000 ms; 3900 allows 1900 ms under host load,
+      // yet two 2000 ms waits never fit, so a third attempt cannot start and the window still closes on attempt 2.
+      { model: "n3-label-model", deadlineAt: Date.now() + 3900 },
       depsFor(url),
     );
     expect(result.content).toContain("retry window closed after 2 attempt(s)");
@@ -149,7 +151,9 @@ describe("retry clock — second review (TRDD-YG72CYY7 inc 1, N3 N6)", () => {
     const { url } = await emptyServer("stop");
     await chatCompletionWithRetry(
       MESSAGES,
-      { model: "n3-ladder-model", deadlineAt: Date.now() + 3000 },
+      // WHY 3900 ms, not 3000 (TRDD-FC2TX9VU): attempt 2 needs the 2000 ms empty-reply wait (EMPTY_RESPONSE_RETRY_DELAY_MS) to fit, so attempt 1 had to end within 1000 ms; 3900 allows 1900 ms under host load,
+      // yet two 2000 ms waits never fit, so a third attempt cannot start and the window still closes on attempt 2.
+      { model: "n3-ladder-model", deadlineAt: Date.now() + 3900 },
       depsFor(url),
     );
     const { reasoningLadderForModel } = await import("./completion.js");
@@ -167,7 +171,9 @@ describe("retry clock — second review (TRDD-YG72CYY7 inc 1, N3 N6)", () => {
       const { url } = await emptyServer("length");
       const result = await chatCompletionWithRetry(
         MESSAGES,
-        { model: "n3-strike-model", deadlineAt: Date.now() + 3000 },
+        // WHY 3900 ms, not 3000 (TRDD-FC2TX9VU): attempt 2 needs the 2000 ms empty-reply wait (EMPTY_RESPONSE_RETRY_DELAY_MS) to fit, so attempt 1 had to end within 1000 ms; 3900 allows 1900 ms under host load,
+        // yet two 2000 ms waits never fit, so a third attempt cannot start and the window still closes on attempt 2.
+        { model: "n3-strike-model", deadlineAt: Date.now() + 3900 },
         depsFor(url),
       );
       expect(result.content).toContain("retry window closed after 2 attempt(s)");
