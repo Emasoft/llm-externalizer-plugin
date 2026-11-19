@@ -4,7 +4,7 @@ title: Machine-wide governor caps RAM and CPU use of local inference
 column: publish
 status: tasked
 created: 2026-10-31T03:23:49+0100
-updated: 2026-11-18T14:48:20+0100
+updated: 2026-11-19T01:18:33+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -68,6 +68,7 @@ implementation-commits: d0d7765e (D13 body), 4eaedcf5 (PRRD+BH1XNP06 card), bc4c
 2026-11-14T16:20+0100 from the review of TRDD-SWNIIFTF (archived, box (c) closed in 164fa021 on a held governor lease with max inferences 1): read by the main agent, the governor's decide() refuses for RAM at governor/controller.ts:357, :384 and :388 and for the inference window at :392-396; client.ts:275-279 treats every refusal the same (lease null, the caller keeps waiting), and a RAM refusal for a load also calls giveRamBack (client.ts:273). So a RAM wait takes the same waiter path as the tested window wait (read, not run: no test forces the RAM gate under --stop_on_errors). Not tested either: a governor acquire timeout under --stop_on_errors, which direct.ts:58 rethrows as local inference governor ... failed, request not sent; whether the stop-on-errors classifier counts that as a dead model is untraced. The 164fa021 fail-before injected stopCommand directly and bypassed that classifier.
 2026-11-14T16:21+0100 correction to the previous note (review of 81cea4ee): a RAM refusal that can fit later returns no lease, like the window refusal (client.ts:275-279); the loop that then keeps waiting was not read, so keeps waiting is inferred. Not every memory shortfall is a wait: a model load whose lower bound (weights plus headroom) exceeds the whole RAM limit even alone is an immediate error (neverFits, controller.ts:232-234; thrown at broker/server.ts:1130-1132 and calibration/runner.ts:241 with neverFitsMessage). A load whose upper bound alone does not fit runs only alone and otherwise waits (controller.ts:375-386). Whether --stop_on_errors fires on the neverFits error is untested, and whether a model too large for the machine counts as not enough memory under the 2026-10-28 ruling is a user question (asked on DS6OM3KX).
 2026-11-14T20:40:23+0100 Defaults 80/80 landed 51cbf755 (code, help, README, skill reference, spec, tests).
+2026-11-19T01:18:33+0100 main agent (verified by the main agent 2026-11-19, written by worker): the STATE prose commits d0d7765e, 4eaedcf5, bc4c02f9 and f6a5ffe4 are pre-squash objects (only on release/13.6.1 and a backup branch), not ancestors of v14.7.3. Their content shipped through the v14.3.0 squash c4dc6bd5, an ancestor of v14.7.3: the f6a5ffe4 stat-stamp line is at scripts/llm-ext/src/governor/settings.ts:47 in v14.7.3, and governor/governor-burn.test.ts (from d0d7765e) is in the v14.7.3 tree. 5a1658b5 is also in v14.7.3. The card stays in publish only because box 1 (the USER goal) is unchecked; trddgrep refuses the move.
 
 ## Progress
 

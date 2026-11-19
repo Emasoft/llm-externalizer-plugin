@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-19T01:10:01+0100
+updated: 2026-11-19T01:18:37+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -76,6 +76,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 2026-11-19T01:08:40+0100 main agent (written by worker, fact from the main agent 2026-11-19): conflict between the CPV validator and a USER rule. CPV reports '[MAJOR] .gitignore missing coverage for: Agent/script reports (reports/)' when an untracked reports/ folder exists, while the USER rule of 2026-11-15 says reports/ is git-tracked. For the 14.7.3 publish the main agent moved the reword worker's two reports into reports_dev/ and is filing a CPV issue.
 2026-11-19T01:08:40+0100 worker note, recorded here because TYSKX72I is archived and refuses appends: the pre-commit comment 'blocked until the file is split (TRDD-TYSKX72I)' may be stale. Found with grep -n 'is split' on .githooks/pre-commit: lines 25-26 read '# no setting raises it), so a commit that stages that file is blocked until the' and '# file is split (TRDD-TYSKX72I).'; the sentence is about scripts/llm-ext/src/index.ts (8572 lines at 2026-11-17, ubs taint analysis work limit, lines 22-24). The worker did not re-measure whether ubs still stops on index.ts after the e19e5609 handler move or the later splits; the exact phrase 'blocked until index.ts is split' does not occur in any file.
 2026-11-19T01:10:01+0100 worker note, recorded here because NL2012O9, 09905HDI and H0JE5W6K were moved to published and archived on 2026-11-19 before their Approval-log line could be appended (archived cards refuse every write). The line they should carry: 'column → published by main-agent@llm-externalizer-plugin. shipped in v14.7.3 (release commit ac3fcdef, tags v14.7.3 and llm-externalizer--v14.7.3, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.3, published 2026-11-19T00:57+0100); every implementation-commits SHA verified an ancestor of v14.7.3 (NL2012O9 21699151 and 0a682690; 09905HDI and H0JE5W6K 3cb60045) per the worker's git merge-base --is-ancestor check on 2026-11-19'.
+2026-11-19T01:18:36+0100 main agent corrections (written by worker): (a) the note of 2026-11-19T01:08:40 says the main agent is filing a CPV issue about reports/; none was filed because CPV issues 274 and 275 already cover it. The RC-164 false positive on vitest breadcrumbs was filed as CPV issue 281. (b) Commit e3f8fe54 states 'every implementation commit is an ancestor of v14.7.3 (merge-base check)' as a main-agent fact; the merge-base checks were run by the worker, not repeated by the main agent. (c) CI for ac3fcdef (checked by the main agent 2026-11-19): Release success, Notify Marketplace success, Windows failure (Windows stays experimental, TRDD-61EINA10), Linux CI still running at the time of this note.
 
 ## Next
 
