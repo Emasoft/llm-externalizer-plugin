@@ -4,7 +4,7 @@ title: Stable profile contract, user-owned keys separated from benchmark-managed
 column: todo
 status: tasked
 created: 2026-11-14T21:37:07+0100
-updated: 2026-11-18T16:48:05+0100
+updated: 2026-11-19T04:29:15+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -45,3 +45,4 @@ Design consequences to carry: (1) reliability and availability are the top prior
 2026-11-18T16:38:34+0100 absorbed 8HDAFJ3N: its acceptance (a retired pin is replaced by a passing model; a working pin is never replaced) is spec acceptance A1/A2.
 2026-11-18T16:38:40+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Q1 = paid, then free, then local (USER answer). Q2-Q13 take the spec recommendations in design/specs/profile-contract.md section 11, including Q9 remote free first with local last (secrets are now redacted, G49XPDNI published) and Q13 hold bounded by --command_timeout. Q12: until a paid high-quality ledger exists a paid id is `untested` for high_quality_scan (spec text). The USER may overrule any of them.
 2026-11-18T16:41:50+0100 correction (main agent): Q9 is withdrawn from the ruling above and stays a USER question: Q9 (session summary order) stays a USER question, the same as TYHKAKCB D1: the owner text "Always use the locale inferencer" (#111) points to local first, and the USER permission of 2026-11-18 to send sessions to free models named the janitor secrets-shield, which the product does not use (it uses safeRedact, G49XPDNI line 46); the shipped order (remote free first, local last) stays until the USER answers.
+2026-11-19T04:29:14+0100 found while working TRDD-FP2SAF4P (main agent, 2026-11-19): skills/llm-externalizer-cli-reference/references/consumer-guidelines.md line 3 still says its statements were checked against v14.7.2, 'the latest release', and the line 5 legend defines the marker '(next release after 14.7.2: ...)'; v14.7.3 and v14.7.4 are released. No line uses that marker any more (grep on 2026-11-19 found it only in the legend). The re-check of the file against the current release belongs with this card's open box (consumer-guidelines.md questions 1 and 5 rewritten in final form).
