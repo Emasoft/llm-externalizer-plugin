@@ -44,17 +44,20 @@ describe("llm-ext dry runs (built CLI)", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("included: 1");
   });
-  // Pins CURRENT behaviour (candidate defect, TRDD-FP2SAF4P item 1): main.ts strips the dry-run flag from anywhere in argv, even after a bare `--`, and parseFlags then rejects the leftover `--`, so the command exits 1 with no dry-run output instead of treating `--estimate` as a file name or running the dry run.
+  // TRDD-23J3NYW8 (decided): a bare `--` is refused by name in every position. main.ts still strips a dry-run flag from anywhere in argv, even after `--`, so no dry run is printed; parseFlags then refuses the `--` itself.
   it.each([
-    [["scan_folder", "--folder_path", ".", "--", "--estimate"], "unknown flag -- for 'scan-folder'"],
-    [["scan", "folder", ".", "--", "--estimate"], "unknown flag -- for 'scan folder'"],
-    [["scan_folder", "--folder_path", ".", "--", "--preview"], "unknown flag -- for 'scan-folder'"],
-    [["scan", "folder", ".", "--", "--preview"], "unknown flag -- for 'scan folder'"],
-  ])("a dry-run flag after a bare `--` is consumed, then the `--` is rejected: %j", async (args, message) => {
+    [["scan_folder", "--folder_path", ".", "--", "--estimate"], "scan-folder"],
+    [["scan", "folder", ".", "--", "--estimate"], "scan folder"],
+    [["scan_folder", "--folder_path", ".", "--", "--preview"], "scan-folder"],
+    [["scan", "folder", ".", "--", "--preview"], "scan folder"],
+    [["scan", "folder", "--", "."], "scan folder"],
+    [["llm", "ask", "--", "a.txt", "--instructions", "x"], "llm ask"],
+  ])("a bare `--` is refused by name, with or without a dry-run flag after it: %j", async (args, invocation) => {
     const r = await run(args, PAID);
     expect(r.code).toBe(1);
     expect(r.stdout).toBe("");
-    expect(r.stderr).toContain(`llm-ext: ${message}. Run 'llm-ext`);
+    expect(r.stderr).toContain(`llm-ext: a bare '--' is not supported by '${invocation}': `);
+    expect(r.stderr).not.toContain("unknown flag --");
   });
   // TRDD-OK1NN5RN: a repeated array flag used to keep only its last value.
   it("a repeated --input_files_paths keeps every file", async () => {

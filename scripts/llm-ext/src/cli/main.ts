@@ -296,6 +296,10 @@ function parseFlags(argv: string[], tool: ToolDef, invocation: string): ParsedAr
 
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
+    // WHY (TRDD-23J3NYW8): a bare `--` (the POSIX end of options) means nothing here: every input is a named flag, and a grouped command's positional is turned into its flag by the launcher before this parser runs. It used to fall through to "unknown flag -- for ...", which names no flag anyone can look up. Rejected by name rather than supported: support would need the launcher's positional capture to take every token after it, and the classify path keeps its own `--` handling (run-decision.ts).
+    if (token === "--") {
+      die(`a bare '--' is not supported by '${invocation}': its inputs are named flags (plus the positional argument, where the command has one), so remove the '--'. Run 'llm-ext ${invocation} --help' to see its parameters.`);
+    }
     if (!token.startsWith("--")) {
       die(`unexpected argument '${token}' (all inputs are named flags)`);
     }
@@ -859,7 +863,7 @@ async function main(): Promise<void> {
   // global flag, not part of any tool's schema. The paid-mode rules/skills
   // tell agents to run this before every paid operation. Global boolean flags
   // stripped here MUST also be listed in GLOBAL_BOOLEAN_FLAGS (launcher.ts).
-  // WHY indexOf over all of `rest`: the flag is found anywhere in argv, including after a bare `--` (where it would otherwise be a file name); it is spliced out before parseFlags, which then rejects the leftover `--` (pinned in estimate-positional-cli.test.ts).
+  // WHY indexOf over all of `rest`: the flag is found anywhere in argv, including after a bare `--` (where it would otherwise be a file name); it is spliced out before parseFlags, which then rejects the leftover `--` by name (TRDD-23J3NYW8; pinned in estimate-positional-cli.test.ts).
   const estimateIdx = isClassify ? -1 : rest.indexOf(DRY_RUN_FLAGS.estimate.flag);
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);

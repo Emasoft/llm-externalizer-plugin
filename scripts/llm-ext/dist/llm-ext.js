@@ -293951,6 +293951,9 @@ function parseFlags2(argv, tool, invocation) {
   let quiet = false;
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i];
+    if (token === "--") {
+      die(`a bare '--' is not supported by '${invocation}': its inputs are named flags (plus the positional argument, where the command has one), so remove the '--'. Run 'llm-ext ${invocation} --help' to see its parameters.`);
+    }
     if (!token.startsWith("--")) {
       die(`unexpected argument '${token}' (all inputs are named flags)`);
     }
