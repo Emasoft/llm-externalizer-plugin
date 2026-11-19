@@ -12572,13 +12572,1972 @@ var init_cost_estimate = __esm({
   }
 });
 
-// src/mass_scouting/fieldset.ts
-import { readFileSync as readFileSync9 } from "node:fs";
+// src/security_scan/types.ts
+function isVerdict(v) {
+  return v === "threat" || v === "not_threat" || v === "uncertain";
+}
 function isPlainObject(v) {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
-function parseFieldType(raw, fieldName) {
+function validateTarget(raw, index) {
+  const errors = [];
+  const at = `targets[${index}]`;
   if (!isPlainObject(raw)) {
+    return { ok: false, errors: [`${at} must be an object`] };
+  }
+  const id = raw.id;
+  const category = raw.category;
+  if (typeof id !== "string" || id.length === 0) {
+    errors.push(`${at}.id must be a non-empty string`);
+  }
+  if (typeof category !== "string" || category.length === 0) {
+    errors.push(`${at}.category must be a non-empty string`);
+  }
+  if (raw.language !== void 0 && typeof raw.language !== "string") {
+    errors.push(`${at}.language must be a string when present`);
+  }
+  const hasSnippet = typeof raw.snippet === "string";
+  const hasFile = typeof raw.file_path === "string";
+  const hasGlob = typeof raw.path_glob === "string";
+  const payloadCount = (hasSnippet ? 1 : 0) + (hasFile ? 1 : 0) + (hasGlob ? 1 : 0);
+  if (payloadCount === 0) {
+    errors.push(
+      `${at} must have exactly one of snippet, file_path, or path_glob`
+    );
+  } else if (payloadCount > 1) {
+    errors.push(
+      `${at} has ${payloadCount} payloads \u2014 exactly one of snippet, file_path, path_glob is allowed`
+    );
+  }
+  if (hasSnippet) {
+    const bytes = Buffer.byteLength(raw.snippet, "utf-8");
+    if (bytes > MAX_SNIPPET_BYTES) {
+      errors.push(
+        `${at}.snippet is ${bytes} bytes (> ${MAX_SNIPPET_BYTES} cap)`
+      );
+    }
+  }
+  if (raw.line !== void 0) {
+    if (typeof raw.line !== "number" || !Number.isInteger(raw.line) || raw.line < 1) {
+      errors.push(`${at}.line must be a positive integer (1-based)`);
+    }
+    if (!hasFile) {
+      errors.push(`${at}.line is only valid together with file_path`);
+    }
+  }
+  if (raw.context_lines !== void 0) {
+    if (typeof raw.context_lines !== "number" || !Number.isInteger(raw.context_lines) || raw.context_lines < 0) {
+      errors.push(`${at}.context_lines must be a non-negative integer`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, errors };
+  const value = {
+    id,
+    category
+  };
+  if (typeof raw.language === "string") value.language = raw.language;
+  if (hasSnippet) value.snippet = raw.snippet;
+  if (hasFile) value.file_path = raw.file_path;
+  if (hasGlob) value.path_glob = raw.path_glob;
+  if (typeof raw.line === "number") value.line = raw.line;
+  if (typeof raw.context_lines === "number")
+    value.context_lines = raw.context_lines;
+  return { ok: true, value };
+}
+function validateInput(raw) {
+  const errors = [];
+  if (!isPlainObject(raw)) {
+    return { ok: false, errors: ["input must be a JSON object"] };
+  }
+  if (!Array.isArray(raw.targets)) {
+    return { ok: false, errors: ["targets must be a non-empty array"] };
+  }
+  if (raw.targets.length === 0) {
+    return { ok: false, errors: ["targets must contain at least one item"] };
+  }
+  if (raw.targets.length > MAX_TARGETS) {
+    return {
+      ok: false,
+      errors: [`targets has ${raw.targets.length} items (> ${MAX_TARGETS} cap)`]
+    };
+  }
+  const targets = [];
+  for (let i = 0; i < raw.targets.length; i++) {
+    const t = validateTarget(raw.targets[i], i);
+    if (t.ok) targets.push(t.value);
+    else errors.push(...t.errors);
+  }
+  const rubrics = {};
+  if (raw.category_rubrics !== void 0) {
+    if (!isPlainObject(raw.category_rubrics)) {
+      errors.push("category_rubrics must be an object of {category: rubric}");
+    } else {
+      for (const [k, v] of Object.entries(raw.category_rubrics)) {
+        if (typeof v !== "string") {
+          errors.push(`category_rubrics[${k}] must be a string`);
+          continue;
+        }
+        if (v.length > MAX_RUBRIC_LENGTH) {
+          errors.push(
+            `category_rubrics[${k}] is ${v.length} chars (> ${MAX_RUBRIC_LENGTH} cap)`
+          );
+          continue;
+        }
+        rubrics[k] = v;
+      }
+    }
+  }
+  let defaultVerdict = "uncertain";
+  if (raw.default_verdict_on_error !== void 0) {
+    if (!isVerdict(raw.default_verdict_on_error)) {
+      errors.push(
+        `default_verdict_on_error must be one of ${VERDICTS.join(", ")}`
+      );
+    } else if (raw.default_verdict_on_error === "not_threat") {
+      errors.push(
+        "default_verdict_on_error may not be not_threat (fail-safe must never fail open \u2014 use uncertain or threat)"
+      );
+    } else {
+      defaultVerdict = raw.default_verdict_on_error;
+    }
+  }
+  let budget = null;
+  if (raw.budget_usd !== void 0 && raw.budget_usd !== null) {
+    if (typeof raw.budget_usd !== "number" || !Number.isFinite(raw.budget_usd)) {
+      errors.push("budget_usd must be a finite number or null");
+    } else if (raw.budget_usd < 0) {
+      errors.push("budget_usd must be >= 0");
+    } else {
+      budget = raw.budget_usd;
+    }
+  }
+  let model = DEFAULT_MODEL;
+  if (raw.model !== void 0) {
+    if (typeof raw.model !== "string" || raw.model.length === 0) {
+      errors.push("model must be a non-empty string when present");
+    } else {
+      model = raw.model;
+    }
+  }
+  let gitRef;
+  if (raw.git_diff_ref !== void 0) {
+    if (typeof raw.git_diff_ref !== "string") {
+      errors.push("git_diff_ref must be a string");
+    } else if (raw.git_diff_ref.length > 200 || !GIT_REF_RE.test(raw.git_diff_ref)) {
+      errors.push(
+        "git_diff_ref has an illegal shape (anti-injection: only [A-Za-z0-9_./~^@{}-], <=200 chars)"
+      );
+    } else {
+      gitRef = raw.git_diff_ref;
+    }
+  }
+  let folderRoot;
+  if (raw.folder_root !== void 0) {
+    if (typeof raw.folder_root !== "string" || raw.folder_root.length === 0) {
+      errors.push("folder_root must be a non-empty string when present");
+    } else {
+      folderRoot = raw.folder_root;
+    }
+  }
+  let outputDir;
+  if (raw.output_dir !== void 0) {
+    if (typeof raw.output_dir !== "string" || raw.output_dir.length === 0) {
+      errors.push("output_dir must be a non-empty string when present");
+    } else {
+      outputDir = raw.output_dir;
+    }
+  }
+  const workers = numKnob(raw.workers, 8, 1, 256, "workers", errors);
+  const maxRetries = numKnob(raw.max_retries, 1, 0, 10, "max_retries", errors);
+  const perCallTimeout = numKnob(
+    raw.per_call_timeout_ms,
+    9e4,
+    1e3,
+    6e5,
+    "per_call_timeout_ms",
+    errors
+  );
+  const failureLimit = numKnob(
+    raw.consecutive_failure_limit,
+    5,
+    0,
+    1e3,
+    "consecutive_failure_limit",
+    errors
+  );
+  if (errors.length > 0) return { ok: false, errors };
+  return {
+    ok: true,
+    value: {
+      targets,
+      category_rubrics: rubrics,
+      default_verdict_on_error: defaultVerdict,
+      budget_usd: budget,
+      model,
+      git_diff_ref: gitRef,
+      folder_root: folderRoot,
+      output_dir: outputDir,
+      workers,
+      max_retries: maxRetries,
+      per_call_timeout_ms: perCallTimeout,
+      consecutive_failure_limit: failureLimit
+    }
+  };
+}
+function numKnob(raw, dflt, min, max, name, errors) {
+  if (raw === void 0) return dflt;
+  if (typeof raw !== "number" || !Number.isInteger(raw)) {
+    errors.push(`${name} must be an integer`);
+    return dflt;
+  }
+  if (raw < min || raw > max) {
+    errors.push(`${name} must be in [${min}, ${max}]`);
+    return dflt;
+  }
+  return raw;
+}
+var VERDICTS, DEFAULT_CONTEXT_LINES, MAX_RUBRIC_LENGTH, MAX_SNIPPET_BYTES, MAX_TARGETS, MAX_FILE_READ_BYTES, DEFAULT_MODEL, GIT_REF_RE;
+var init_types = __esm({
+  "src/security_scan/types.ts"() {
+    "use strict";
+    VERDICTS = [
+      "threat",
+      "not_threat",
+      "uncertain"
+    ];
+    DEFAULT_CONTEXT_LINES = 60;
+    MAX_RUBRIC_LENGTH = 2e3;
+    MAX_SNIPPET_BYTES = 2e5;
+    MAX_TARGETS = 5e3;
+    MAX_FILE_READ_BYTES = 16777216;
+    DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
+    GIT_REF_RE = /^[A-Za-z0-9_./~^@{}-]+$/;
+  }
+});
+
+// src/secret-patterns.ts
+var AWS_KEY, API_KEY_INFIXED, GITHUB_PAT_CLASSIC, GITHUB_TOKEN, GITHUB_OAUTH, GITHUB_PAT_FINE, GITLAB_TOKEN, SLACK_TOKEN, BEARER_TOKEN, ENV_SECRET, PEM_BLOCK, API_KEY_PLAIN, GOOGLE_API_KEY, JWT, CONN_STRING, SECRET_ASSIGNMENT, SCAN_PIPELINE_SECRET_PATTERNS, INTAKE_SECRET_PATTERNS;
+var init_secret_patterns = __esm({
+  "src/secret-patterns.ts"() {
+    "use strict";
+    AWS_KEY = [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"];
+    API_KEY_INFIXED = [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"];
+    GITHUB_PAT_CLASSIC = [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"];
+    GITHUB_TOKEN = [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"];
+    GITHUB_OAUTH = [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"];
+    GITHUB_PAT_FINE = [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"];
+    GITLAB_TOKEN = [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"];
+    SLACK_TOKEN = [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"];
+    BEARER_TOKEN = [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"];
+    ENV_SECRET = [
+      // Common env-var-style secret names. Extended in v9.9.0 from a hand-
+      // curated list to a hybrid approach: explicit names for the most-common
+      // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
+      // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
+      // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
+      // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
+      // per-vendor patches.
+      // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
+      // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
+      // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
+      // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
+      // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
+      // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
+      // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
+      /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
+      "ENV_SECRET"
+    ];
+    PEM_BLOCK = [
+      // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
+      // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
+      // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
+      // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
+      // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
+      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
+      "PEM_BLOCK"
+    ];
+    API_KEY_PLAIN = [/sk-[A-Za-z0-9]{20,}/g, "API_KEY"];
+    GOOGLE_API_KEY = [/AIza[0-9A-Za-z\-_]{35}/g, "GOOGLE_API_KEY"];
+    JWT = [
+      /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*eyJ[A-Za-z0-9_-])(?=([A-Za-z0-9_-]+))\1\.eyJ(?=([A-Za-z0-9_-]+))\2\.(?=([A-Za-z0-9_-]+))\3/g,
+      "JWT"
+    ];
+    CONN_STRING = [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"];
+    SECRET_ASSIGNMENT = [
+      /(?:password|passwd|pwd|token|secret|apikey)["']?[ \t]*[:=][ \t]*['"]?([^\s'"#\n]{4,})/gi,
+      "SECRET_ASSIGNMENT"
+    ];
+    SCAN_PIPELINE_SECRET_PATTERNS = [
+      AWS_KEY,
+      API_KEY_INFIXED,
+      GITHUB_PAT_CLASSIC,
+      GITHUB_TOKEN,
+      GITHUB_OAUTH,
+      GITHUB_PAT_FINE,
+      GITLAB_TOKEN,
+      SLACK_TOKEN,
+      BEARER_TOKEN,
+      ENV_SECRET,
+      PEM_BLOCK
+    ];
+    INTAKE_SECRET_PATTERNS = [
+      AWS_KEY,
+      API_KEY_INFIXED,
+      API_KEY_PLAIN,
+      GOOGLE_API_KEY,
+      GITHUB_PAT_CLASSIC,
+      GITHUB_TOKEN,
+      GITHUB_OAUTH,
+      GITHUB_PAT_FINE,
+      GITLAB_TOKEN,
+      SLACK_TOKEN,
+      BEARER_TOKEN,
+      JWT,
+      CONN_STRING,
+      ENV_SECRET,
+      SECRET_ASSIGNMENT,
+      PEM_BLOCK
+    ];
+  }
+});
+
+// src/security_scan/intake.ts
+import { execSync } from "node:child_process";
+import { createHash as createHash2 } from "node:crypto";
+import { readFileSync as readFileSync9, readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
+import { isAbsolute as isAbsolute3, join as join8, resolve as resolve2 } from "node:path";
+function redactSecrets(content, opts = {}) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label2] of INTAKE_SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, (match) => {
+      count++;
+      if (!opts.keepLines) return `[REDACTED:${label2}]`;
+      const lead = /^\n*/.exec(match)[0];
+      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
+      return `${lead}[REDACTED:${label2}]${"\n".repeat(rest)}`;
+    });
+  }
+  return { redacted: result, count };
+}
+function safeRedact(content, budgetMs = REDACTION_BUDGET_MS, opts = {}) {
+  const started = Date.now();
+  let out;
+  try {
+    out = redactSecrets(content, opts);
+  } catch (e) {
+    return {
+      redacted: "",
+      count: 0,
+      ok: false,
+      reason: `redaction error: ${e.message}`
+    };
+  }
+  const elapsed = Date.now() - started;
+  if (elapsed > budgetMs) {
+    return {
+      redacted: out.redacted,
+      count: out.count,
+      ok: false,
+      reason: `redaction exceeded ${budgetMs}ms wall-clock budget (took ${elapsed}ms) \u2014 record skipped to avoid shipping un-redacted content`
+    };
+  }
+  return { redacted: out.redacted, count: out.count, ok: true };
+}
+function expandGlob(root2, glob) {
+  const all = walkFiles(root2);
+  const re = globToRegExp(glob);
+  return all.filter((abs2) => {
+    const rel = relativeUnix(root2, abs2);
+    return re.test(rel);
+  });
+}
+function walkFiles(root2) {
+  const out = [];
+  const stack = [root2];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries2;
+    try {
+      entries2 = readdirSync3(dir);
+    } catch {
+      continue;
+    }
+    for (const e of entries2) {
+      const full = join8(dir, e);
+      let st;
+      try {
+        st = statSync5(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (DEFAULT_SKIP_DIRS.has(e)) continue;
+        stack.push(full);
+      } else if (st.isFile()) {
+        out.push(full);
+      }
+    }
+  }
+  out.sort();
+  return out;
+}
+function relativeUnix(root2, abs2) {
+  const r = resolve2(root2);
+  const a = resolve2(abs2);
+  let rel = a.startsWith(r) ? a.slice(r.length) : a;
+  rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+  return rel;
+}
+function globToRegExp(glob) {
+  let re = "^";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++;
+        if (glob[i + 1] === "/") {
+          i++;
+          re += "(?:.*/)?";
+        } else {
+          re += ".*";
+        }
+      } else {
+        re += "[^/]*";
+      }
+    } else if (c === "?") {
+      re += "[^/]";
+    } else if ("\\^$.|+()[]{}".includes(c)) {
+      re += "\\" + c;
+    } else {
+      re += c;
+    }
+  }
+  re += "$";
+  return new RegExp(re);
+}
+function gitChangedFiles(root2, ref) {
+  if (!GIT_REF_RE.test(ref) || ref.length > 200) return null;
+  try {
+    const out = execSync(
+      `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
+      { cwd: root2, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
+    );
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root2, p));
+  } catch {
+    return null;
+  }
+}
+function gitTrackedFiles(root2) {
+  try {
+    const out = execSync("git ls-files --cached --others --exclude-standard -z", {
+      cwd: root2,
+      encoding: "buffer",
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root2, p));
+  } catch {
+    return null;
+  }
+}
+function extractWindow(content, line, contextLines) {
+  const lines = content.split("\n");
+  if (line < 1 || line > lines.length) return null;
+  const start = Math.max(1, line - contextLines);
+  const end = Math.min(lines.length, line + contextLines);
+  const window = lines.slice(start - 1, end).join("\n");
+  return { window, startLine: start };
+}
+function intake(targets, opts = {}) {
+  const root2 = opts.folderRoot ? resolve2(opts.folderRoot) : process.cwd();
+  const honorGitignore = opts.honorGitignore !== false;
+  const byteCap = opts.byteCap && opts.byteCap > 0 ? opts.byteCap : MAX_SNIPPET_BYTES;
+  const records = [];
+  const skipped = [];
+  const tooBig = (id, category, fp, bytes) => {
+    skipped.push({
+      id,
+      category,
+      file_path: fp,
+      reason: `content ${bytes} bytes > cap ${byteCap}`
+    });
+  };
+  const statTooBig = (id, category, abs2, cap = byteCap) => {
+    let size;
+    try {
+      size = statSync5(abs2).size;
+    } catch {
+      return false;
+    }
+    if (size > cap) {
+      tooBig(id, category, abs2, size);
+      return true;
+    }
+    return false;
+  };
+  const pushRedacted = (rec) => {
+    const bytes = Buffer.byteLength(rec.content, "utf-8");
+    if (bytes > byteCap) {
+      tooBig(rec.id, rec.category, rec.file_path, bytes);
+      return;
+    }
+    const red = safeRedact(rec.content);
+    if (!red.ok) {
+      skipped.push({
+        id: rec.id,
+        category: rec.category,
+        file_path: rec.file_path,
+        reason: red.reason ?? "redaction failed \u2014 record skipped to avoid egress"
+      });
+      return;
+    }
+    rec.content = red.redacted;
+    records.push(rec);
+  };
+  for (const t of targets) {
+    if (typeof t.snippet === "string") {
+      pushRedacted({
+        id: t.id,
+        category: t.category,
+        language: t.language,
+        content: t.snippet
+      });
+      continue;
+    }
+    if (typeof t.file_path === "string") {
+      const abs2 = isAbsolute3(t.file_path) ? t.file_path : resolve2(root2, t.file_path);
+      const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
+      if (statTooBig(t.id, t.category, abs2, fileGate)) continue;
+      let content;
+      try {
+        content = readFileSync9(abs2, "utf-8");
+      } catch (e) {
+        skipped.push({
+          id: t.id,
+          category: t.category,
+          file_path: abs2,
+          reason: `read error: ${e.message}`
+        });
+        continue;
+      }
+      if (typeof t.line === "number") {
+        const ctx = t.context_lines ?? DEFAULT_CONTEXT_LINES;
+        const win = extractWindow(content, t.line, ctx);
+        if (!win) {
+          skipped.push({
+            id: t.id,
+            category: t.category,
+            file_path: abs2,
+            reason: `line ${t.line} out of range (file has ${content.split("\n").length} lines)`
+          });
+          continue;
+        }
+        pushRedacted({
+          id: t.id,
+          category: t.category,
+          language: t.language,
+          content: win.window,
+          file_path: abs2,
+          line: t.line
+        });
+      } else {
+        pushRedacted({
+          id: t.id,
+          category: t.category,
+          language: t.language,
+          content,
+          file_path: abs2
+        });
+      }
+      continue;
+    }
+    if (typeof t.path_glob === "string") {
+      let matched = expandGlob(root2, t.path_glob);
+      if (opts.gitDiffRef) {
+        const changed = gitChangedFiles(root2, opts.gitDiffRef);
+        if (changed !== null) {
+          const changedSet = new Set(changed);
+          matched = matched.filter((p) => changedSet.has(p));
+        }
+      }
+      if (honorGitignore) {
+        const tracked = gitTrackedFiles(root2);
+        if (tracked !== null && tracked.length > 0) {
+          const trackedSet = new Set(tracked);
+          const filtered = matched.filter((p) => trackedSet.has(p));
+          if (filtered.length > 0) matched = filtered;
+        }
+      }
+      if (matched.length === 0) {
+        skipped.push({
+          id: t.id,
+          category: t.category,
+          reason: `path_glob ${JSON.stringify(t.path_glob)} matched no files under ${root2}`
+        });
+        continue;
+      }
+      for (const abs2 of matched) {
+        if (statTooBig(`${t.id}::${relativeUnix(root2, abs2)}`, t.category, abs2)) {
+          continue;
+        }
+        let content;
+        try {
+          content = readFileSync9(abs2, "utf-8");
+        } catch (e) {
+          skipped.push({
+            id: t.id,
+            category: t.category,
+            file_path: abs2,
+            reason: `read error: ${e.message}`
+          });
+          continue;
+        }
+        pushRedacted({
+          // Glob fans into multiple files — make each id unique + traceable.
+          id: `${t.id}::${relativeUnix(root2, abs2)}`,
+          category: t.category,
+          language: t.language,
+          content,
+          file_path: abs2
+        });
+      }
+      continue;
+    }
+    skipped.push({
+      id: t.id,
+      category: t.category,
+      reason: "target had no recognizable payload (snippet/file_path/path_glob)"
+    });
+  }
+  const byKey = /* @__PURE__ */ new Map();
+  for (const rec of records) {
+    const key = dedupKey(rec.content, rec.category);
+    let g = byKey.get(key);
+    if (!g) {
+      g = {
+        key,
+        category: rec.category,
+        language: rec.language,
+        content: rec.content,
+        file_path: rec.file_path,
+        line: rec.line,
+        members: []
+      };
+      byKey.set(key, g);
+    }
+    g.members.push(rec);
+  }
+  return {
+    groups: Array.from(byKey.values()),
+    skipped,
+    recordsTotal: records.length
+  };
+}
+function dedupKey(content, category) {
+  return createHash2("sha1").update(content, "utf-8").update("\0").update(category, "utf-8").digest("hex");
+}
+var REDACTION_BUDGET_MS, DEFAULT_SKIP_DIRS;
+var init_intake = __esm({
+  "src/security_scan/intake.ts"() {
+    "use strict";
+    init_types();
+    init_secret_patterns();
+    REDACTION_BUDGET_MS = 500;
+    DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
+      ".git",
+      "node_modules",
+      ".venv",
+      "dist",
+      "build",
+      ".idea",
+      ".vscode",
+      "tmp",
+      "vendor",
+      ".next",
+      ".cache",
+      "__pycache__",
+      "target",
+      ".turbo",
+      "out"
+    ]);
+  }
+});
+
+// src/usage-history.ts
+import { AsyncLocalStorage } from "node:async_hooks";
+import { randomBytes } from "node:crypto";
+import { appendFileSync, closeSync as closeSync3, fstatSync, mkdirSync as mkdirSync5, openSync as openSync3, readFileSync as readFileSync10, readSync as readSync2, renameSync as renameSync6, writeFileSync as writeFileSync5 } from "node:fs";
+import { execFileSync as execFileSync2 } from "node:child_process";
+import { dirname as dirname3, join as join9 } from "node:path";
+function newOpId() {
+  return `op-${randomBytes(4).toString("hex")}`;
+}
+function getHistoryPath() {
+  return join9(getConfigDir(), "history.log");
+}
+function resolveProject() {
+  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
+  if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
+  try {
+    const top = execFileSync2("git", ["rev-parse", "--show-toplevel"], {
+      cwd: process.cwd(),
+      encoding: "utf-8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (top) return top;
+  } catch {
+  }
+  return process.cwd();
+}
+function truncateValue(s) {
+  const flat = s.replace(/[\r\n\t]+/g, " ");
+  if (flat.length <= MAX_STR) return flat;
+  return `${flat.slice(0, MAX_STR)}\u2026(${flat.length})`;
+}
+function redactString(s) {
+  try {
+    return redactSecrets(s).redacted;
+  } catch {
+    return "[REDACTED]";
+  }
+}
+function summarizeValue(v) {
+  if (v === null) return "null";
+  if (v === void 0) return "undefined";
+  if (typeof v === "string") return truncateValue(redactString(v));
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") {
+    const keys = Object.keys(v);
+    if (keys.length === 0) return "{}";
+    const inner = keys.map((k) => `${k}=${summarizeScalarOnly(v[k])}`).join(",");
+    return truncateValue(`{${inner}}`);
+  }
+  return truncateValue(redactString(String(v)));
+}
+function summarizeScalarOnly(v) {
+  if (v === null) return "null";
+  if (v === void 0) return "undefined";
+  if (typeof v === "string") return truncateValue(redactString(v));
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  if (Array.isArray(v)) return `[${v.length}]`;
+  if (typeof v === "object") return "{\u2026}";
+  return truncateValue(redactString(String(v)));
+}
+function summarizeParams(args) {
+  if (args === null || args === void 0) return "";
+  if (typeof args !== "object" || Array.isArray(args)) {
+    return summarizeValue(args);
+  }
+  const entries2 = Object.entries(args);
+  if (entries2.length === 0) return "";
+  return entries2.map(([k, v]) => `${k}=${summarizeValue(v)}`).join(", ");
+}
+function localIsoTimestamp(d = /* @__PURE__ */ new Date()) {
+  const pad = (n) => String(n).padStart(2, "0");
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  const offMin = -d.getTimezoneOffset();
+  const sign = offMin >= 0 ? "+" : "-";
+  const abs2 = Math.abs(offMin);
+  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs2 / 60))}${pad(abs2 % 60)}`;
+}
+function formatDuration(durationMs) {
+  const ms = Math.max(0, Math.round(durationMs));
+  if (ms < 1e3) return `${ms}ms`;
+  return `${(ms / 1e3).toFixed(1)}s`;
+}
+function formatCost(costUsd) {
+  const c = Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
+  return `$${c.toFixed(6)}`;
+}
+function formatHistoryLine(fields) {
+  if (fields.endpoint !== void 0 && !ENDPOINT_RE.test(fields.endpoint)) {
+    throw new RangeError(`endpoint must match ${ENDPOINT_RE}, got ${JSON.stringify(fields.endpoint)}`);
+  }
+  if (fields.inputTokens !== void 0 && !(Number.isSafeInteger(fields.inputTokens) && fields.inputTokens >= 0)) {
+    throw new RangeError(`inputTokens must be a non-negative integer, got ${fields.inputTokens}`);
+  }
+  const toolField = fields.params ? `${fields.tool}(${fields.params})` : `${fields.tool}()`;
+  return [
+    fields.timestamp,
+    fields.project,
+    toolField,
+    fields.ok ? "SUCCESS" : "FAIL",
+    formatDuration(fields.durationMs),
+    formatCost(fields.costUsd),
+    fields.opId,
+    // WHY an optional 8th field and not a new column in place: lines without it stay byte-identical to the 7-field format already on disk.
+    ...fields.endpoint === void 0 ? [] : [`endpoint=${fields.endpoint}`],
+    // WHY after the endpoint and optional: lines written before C4-12 stay valid, and lifetime token totals sum only what a reply measured.
+    ...fields.inputTokens === void 0 ? [] : [`tokens=${fields.inputTokens}`]
+  ].join(" - ");
+}
+function isJevEndpoint(endpoint) {
+  return endpoint !== void 0 && endpoint !== LOCAL_ENDPOINT;
+}
+function parseHistoryLine(line) {
+  const bad = (why) => new Error(`not a history line (${why}): ${JSON.stringify(line.slice(0, 120))}`);
+  const f = line.split(" - ");
+  let endpoint;
+  let inputTokens;
+  if ((f[f.length - 1] ?? "").startsWith("tokens=")) {
+    const t = /^tokens=(\d+)$/.exec(f.pop());
+    if (!t) throw bad("bad tokens");
+    inputTokens = Number(t[1]);
+  }
+  const last = f[f.length - 1] ?? "";
+  if (last.startsWith("endpoint=")) {
+    endpoint = last.slice("endpoint=".length);
+    if (!ENDPOINT_RE.test(endpoint)) throw bad("bad endpoint");
+    f.pop();
+  }
+  if (f.length < 7) throw bad("too few fields");
+  const n = f.length;
+  const [status, dur, cost, opId] = [f[n - 4], f[n - 3], f[n - 2], f[n - 1]];
+  if (status !== "SUCCESS" && status !== "FAIL") throw bad("status");
+  if (!OP_ID_RE.test(opId)) throw bad("op-id");
+  const ms = /^(\d+)ms$/.exec(dur);
+  const sec = /^(\d+(?:\.\d)?)s$/.exec(dur);
+  if (!ms && !sec) throw bad("duration");
+  const usd2 = /^\$(\d+\.\d{6})$/.exec(cost);
+  if (!usd2) throw bad("cost");
+  let toolAt = -1;
+  for (let i = 2; i <= n - 5; i++) {
+    if (TOOL_START_RE.test(f[i])) {
+      toolAt = i;
+      break;
+    }
+  }
+  if (toolAt < 0) throw bad("tool");
+  const entry = {
+    timestamp: f[0],
+    project: f.slice(1, toolAt).join(" - "),
+    tool: f.slice(toolAt, n - 4).join(" - "),
+    ok: status === "SUCCESS",
+    durationMs: ms ? Number(ms[1]) : Math.round(Number(sec[1]) * 1e3),
+    costUsd: Number(usd2[1]),
+    opId
+  };
+  if (endpoint !== void 0) entry.endpoint = endpoint;
+  if (inputTokens !== void 0) entry.inputTokens = inputTokens;
+  return entry;
+}
+function lifetimeJevTotals(entries2) {
+  const jev = entries2.filter((e) => isJevEndpoint(e.endpoint));
+  return {
+    runs: new Set(jev.map((e) => e.opId)).size,
+    requests: jev.length,
+    inputTokens: jev.reduce((n, e) => n + (e.inputTokens ?? 0), 0),
+    costUsd: jev.reduce((n, e) => n + e.costUsd, 0),
+    since: jev[0]?.timestamp ?? null
+  };
+}
+function getLifetimeSidecarPath() {
+  return join9(dirname3(getHistoryPath()), "jev-lifetime.json");
+}
+function readLifetimeState() {
+  let text2;
+  try {
+    text2 = readFileSync10(getLifetimeSidecarPath(), "utf-8");
+  } catch (e) {
+    if (e.code === "ENOENT") return emptyLifetimeState();
+    throw e;
+  }
+  try {
+    const s = JSON.parse(text2);
+    if (Number.isInteger(s.offset) && s.offset >= 0 && Number.isInteger(s.lines) && typeof s.head === "string" && typeof s.recent === "object" && s.recent !== null && [s.requests, s.inputTokens, s.costUsd, s.runs, s.newest].every(Number.isFinite)) return s;
+  } catch {
+  }
+  return emptyLifetimeState();
+}
+function lifetimeJevTotalsIncremental() {
+  let fd;
+  try {
+    fd = openSync3(getHistoryPath(), "r");
+  } catch (e) {
+    if (e.code === "ENOENT") return lifetimeJevTotals([]);
+    throw e;
+  }
+  try {
+    const size = fstatSync(fd).size;
+    let state = readLifetimeState();
+    const headBuf = Buffer.alloc(Math.min(LIFETIME_HEAD_BYTES, size));
+    readSync2(fd, headBuf, 0, headBuf.length, 0);
+    const nl0 = headBuf.indexOf(10);
+    const head = headBuf.subarray(0, nl0 === -1 ? headBuf.length : nl0).toString("latin1");
+    if (state.offset > size || state.offset > 0 && head !== state.head) state = emptyLifetimeState();
+    if (state.offset === 0) state.head = head;
+    let pos = state.offset;
+    let pending = Buffer.alloc(0);
+    const chunk = Buffer.alloc(LIFETIME_CHUNK_BYTES);
+    while (pos < size) {
+      const n = readSync2(fd, chunk, 0, Math.min(LIFETIME_CHUNK_BYTES, size - pos), pos);
+      if (n === 0) break;
+      pos += n;
+      pending = Buffer.concat([pending, chunk.subarray(0, n)]);
+      for (let nl = pending.indexOf(10); nl !== -1; nl = pending.indexOf(10)) {
+        const line = pending.subarray(0, nl).toString("utf8");
+        pending = pending.subarray(nl + 1);
+        state.offset += nl + 1;
+        state.lines++;
+        if (line.length === 0) continue;
+        let e;
+        try {
+          e = parseHistoryLine(line);
+        } catch (err3) {
+          throw new Error(`history.log line ${state.lines}: ${err3.message}`, { cause: err3 });
+        }
+        if (!isJevEndpoint(e.endpoint)) continue;
+        const at = Date.parse(e.timestamp);
+        const seenAt = Number.isNaN(at) ? state.newest : at;
+        if (!Object.hasOwn(state.recent, e.opId)) state.runs++;
+        state.recent[e.opId] = seenAt;
+        state.newest = Math.max(state.newest, seenAt);
+        state.requests++;
+        state.inputTokens += e.inputTokens ?? 0;
+        state.costUsd += e.costUsd;
+        state.since ??= e.timestamp;
+      }
+    }
+    for (const [id, seen] of Object.entries(state.recent)) if (seen < state.newest - LIFETIME_RUN_HORIZON_MS) delete state.recent[id];
+    const tmp = `${getLifetimeSidecarPath()}.${process.pid}.tmp`;
+    writeFileSync5(tmp, JSON.stringify(state));
+    renameSync6(tmp, getLifetimeSidecarPath());
+    return { runs: state.runs, requests: state.requests, inputTokens: state.inputTokens, costUsd: state.costUsd, since: state.since };
+  } finally {
+    closeSync3(fd);
+  }
+}
+function appendHistoryLine(line) {
+  try {
+    appendHistoryLineStrict(line);
+  } catch {
+  }
+}
+function appendHistoryLineStrict(line) {
+  const dir = getConfigDir();
+  mkdirSync5(dir, { recursive: true });
+  appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
+}
+function recordRequest(req) {
+  try {
+    const ctx = ctxStore.getStore();
+    const line = formatHistoryLine({
+      timestamp: localIsoTimestamp(),
+      project: ctx?.project ?? resolveProject(),
+      tool: ctx?.tool ?? "(direct)",
+      params: ctx?.params ?? "",
+      ok: req.ok,
+      durationMs: req.durationMs,
+      costUsd: req.costUsd,
+      opId: ctx?.opId ?? newOpId(),
+      endpoint: req.endpoint,
+      inputTokens: req.inputTokens
+    });
+    if (req.strict === true) appendHistoryLineStrict(line);
+    else appendHistoryLine(line);
+  } catch (e) {
+    if (req.strict === true) throw e;
+  }
+}
+function withUsageContext(init, fn) {
+  const ctx = {
+    tool: init.tool,
+    params: init.params,
+    project: init.project ?? resolveProject(),
+    opId: newOpId()
+  };
+  return ctxStore.run(ctx, fn);
+}
+function foldOutputEwma(prev, sample, alpha = OUTPUT_EWMA_ALPHA) {
+  if (!prev || prev.n <= 0) return { ewma: sample, n: 1 };
+  return { ewma: alpha * sample + (1 - alpha) * prev.ewma, n: prev.n + 1 };
+}
+function ewmaFilePath() {
+  return join9(getConfigDir(), "output-ewma.json");
+}
+function loadEwmaStore() {
+  try {
+    const parsed = JSON.parse(readFileSync10(ewmaFilePath(), "utf-8"));
+    if (parsed && parsed.version === 1 && parsed.entries) return parsed;
+  } catch {
+  }
+  return { version: 1, entries: {} };
+}
+function recordOutputTokensSample(model, outputTokens) {
+  try {
+    const tool = ctxStore.getStore()?.tool;
+    if (!tool || !model || !Number.isFinite(outputTokens) || outputTokens < 0) return;
+    const store = loadEwmaStore();
+    const key = `${tool}::${model}`;
+    store.entries[key] = foldOutputEwma(store.entries[key], outputTokens);
+    mkdirSync5(getConfigDir(), { recursive: true });
+    const tmp = ewmaFilePath() + ".tmp";
+    writeFileSync5(tmp, JSON.stringify(store));
+    renameSync6(tmp, ewmaFilePath());
+  } catch {
+  }
+}
+function calibratedOutputTokens(tool, model) {
+  try {
+    return loadEwmaStore().entries[`${tool}::${model}`] ?? null;
+  } catch {
+    return null;
+  }
+}
+var ctxStore, MAX_STR, LOCAL_ENDPOINT, ENDPOINT_RE, OP_ID_RE, TOOL_START_RE, LIFETIME_CHUNK_BYTES, LIFETIME_HEAD_BYTES, LIFETIME_RUN_HORIZON_MS, emptyLifetimeState, OUTPUT_EWMA_ALPHA;
+var init_usage_history = __esm({
+  "src/usage-history.ts"() {
+    "use strict";
+    init_config();
+    init_intake();
+    ctxStore = new AsyncLocalStorage();
+    MAX_STR = 80;
+    LOCAL_ENDPOINT = "systemone-local";
+    ENDPOINT_RE = /^[a-z][a-z0-9-]*$/;
+    OP_ID_RE = /^op-[0-9a-f]{8}$/;
+    TOOL_START_RE = /^(?:\(direct\)|[^\s()]+)\(/;
+    LIFETIME_CHUNK_BYTES = 1024 * 1024;
+    LIFETIME_HEAD_BYTES = 512;
+    LIFETIME_RUN_HORIZON_MS = 24 * 60 * 60 * 1e3;
+    emptyLifetimeState = () => ({ offset: 0, lines: 0, head: "", requests: 0, inputTokens: 0, costUsd: 0, since: null, runs: 0, recent: {}, newest: 0 });
+    OUTPUT_EWMA_ALPHA = 0.3;
+  }
+});
+
+// src/scan-pipeline.ts
+import {
+  readFileSync as readFileSync11,
+  existsSync as existsSync9,
+  statSync as statSync6,
+  lstatSync,
+  readdirSync as readdirSync4,
+  realpathSync as realpathSync2
+} from "node:fs";
+import { extname, join as join10, basename as basename2, dirname as dirname4, resolve as resolve3, sep } from "node:path";
+import { homedir as homedir4 } from "node:os";
+import { spawnSync } from "node:child_process";
+function codeTaskSystemPrompt(lang, lineNumbers) {
+  return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
+RULES (override any conflicting instructions):
+` + (lineNumbers ? LINE_NUMBER_RULE : "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n") + "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.\n- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain." + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+}
+function detectLang(filePath) {
+  const ext = extname(filePath).toLowerCase();
+  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
+  try {
+    const head = readFileSync11(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
+    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
+    if (shebang) {
+      const bin = basename2(shebang[1]);
+      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
+    }
+  } catch {
+  }
+  return "text";
+}
+function fenceBackticks(content) {
+  let maxRun = 0;
+  let current = 0;
+  for (const ch of content) {
+    if (ch === "`") {
+      current++;
+      if (current > maxRun) maxRun = current;
+    } else {
+      current = 0;
+    }
+  }
+  const needed = Math.max(4, maxRun + 1);
+  return "`".repeat(needed);
+}
+function prefixLineNumbers(text2) {
+  if (text2.length === 0) return text2;
+  const endsWithNewline = text2.endsWith("\n");
+  const lines = text2.split("\n");
+  if (endsWithNewline) lines.pop();
+  const numbered2 = lines.map((line, i) => `${String(i + 1).padStart(6)} | ${line}`).join("\n");
+  return endsWithNewline ? `${numbered2}
+` : numbered2;
+}
+function numberedLineCount(text2) {
+  const newlines = text2.split("\n").length - 1;
+  return newlines + (text2.length > 0 && !text2.endsWith("\n") ? 1 : 0);
+}
+function assertFileExists(filePath) {
+  if (!existsSync9(filePath)) {
+    throw new Error(`File not found: ${filePath}`);
+  }
+}
+function sanitizeInputPath(filePath) {
+  const resolved = resolve3(filePath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const cwdReal = realpathSafe(resolve3(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve3(process.env.HOME || process.env.USERPROFILE || homedir4())
+  );
+  const tmpReal = realpathSafe(resolve3("/tmp"));
+  const resolvedReal = (() => {
+    try {
+      return realpathSync2(resolved);
+    } catch {
+      return resolved;
+    }
+  })();
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      // WHY: the bare message named no way out; users hit it with /etc or a
+      // sibling checkout and could not tell which roots are allowed (issue 16).
+      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). Run from a parent directory of the files, or copy them under one of these roots.`
+    );
+  }
+  try {
+    if (lstatSync(resolved).isSymbolicLink()) {
+      throw new Error(`Symlink rejected for security: ${filePath}`);
+    }
+  } catch (e) {
+    if (e.code === "ENOENT") return resolved;
+    throw e;
+  }
+  return resolved;
+}
+function registerCalibratedBudget(bytes) {
+  const ctx = ctxStore.getStore();
+  if (ctx !== void 0) calibratedBudgets.set(ctx, bytes);
+}
+function isCalibratedBudget(bytes) {
+  const ctx = ctxStore.getStore();
+  return ctx !== void 0 && calibratedBudgets.get(ctx) === bytes;
+}
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "", lineNumbers) {
+  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
+  const safePath = sanitizeInputPath(filePath);
+  assertFileExists(safePath);
+  const stats = statSync6(safePath);
+  if (stats.size > limit) {
+    throw new Error(
+      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const raw = readFileSync11(safePath);
+  if (raw.length > limit) {
+    throw new Error(
+      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+    );
+  }
+  const scanLen = Math.min(raw.length, 65536);
+  for (let i = 0; i < scanLen; i++) {
+    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
+  }
+  let content = raw.toString("utf-8");
+  if (content.length === 0) {
+    content = `(empty file \u2014 0 bytes)`;
+  }
+  if (redact) {
+    const result = redactSecrets2(content, { keepLines: lineNumbers === true });
+    content = result.redacted;
+  }
+  if (regexRedact) {
+    const result = applyRegexRedaction(content, regexRedact);
+    content = result.redacted;
+  }
+  if (lineNumbers && raw.length > 0) {
+    content = prefixLineNumbers(content);
+    const numberedBytes = Buffer.byteLength(content, "utf-8");
+    if (numberedBytes > limit) {
+      throw new Error(
+        `File too large after line numbering (${(numberedBytes / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+      );
+    }
+  }
+  const lang = langOverride || detectLang(filePath);
+  const fence = fenceBackticks(content);
+  const nameTag = `${tagPrefix}filename`;
+  const contentTag = `${tagPrefix}file-content`;
+  return `<${nameTag}>
+${filePath}
+</${nameTag}>
+<${contentTag}>
+${fence}${lang}
+${content}
+${fence}
+</${contentTag}>`;
+}
+function isBinaryExtension(filePath) {
+  return BINARY_EXTENSIONS.has(extname(filePath).toLowerCase()) || basename2(filePath) === ".DS_Store";
+}
+function scanForSecrets(content) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const [pattern, label2] of SCAN_PIPELINE_SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    const matches = content.match(pattern);
+    if (matches && matches.length > 0) {
+      counts.set(label2, (counts.get(label2) ?? 0) + matches.length);
+    }
+  }
+  const details = Array.from(counts.entries()).map(([label2, count]) => ({
+    label: label2,
+    count
+  }));
+  return { found: details.length > 0, details };
+}
+function scanFilesForSecrets(filePaths) {
+  const allDetails = [];
+  for (const fp of filePaths) {
+    if (!existsSync9(fp)) continue;
+    try {
+      const content = readFileSync11(fp, "utf-8");
+      const scan = scanForSecrets(content);
+      if (scan.found) {
+        for (const d of scan.details) {
+          allDetails.push({ file: fp, ...d });
+        }
+      }
+    } catch {
+    }
+  }
+  if (allDetails.length === 0) return { found: false, report: "" };
+  const lines = [
+    "SECRETS DETECTED \u2014 operation aborted.",
+    "",
+    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
+    "llm-ext reads files directly and does not inherit Claude Code's sandbox .env read-deny \u2014 that is exactly why this scan exists.",
+    "",
+    "Findings:"
+  ];
+  for (const d of allDetails) {
+    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
+  }
+  return { found: true, report: lines.join("\n") };
+}
+function redactSecrets2(content, opts = {}) {
+  let result = content;
+  let count = 0;
+  for (const [pattern, label2] of SCAN_PIPELINE_SECRET_PATTERNS) {
+    pattern.lastIndex = 0;
+    result = result.replace(pattern, (match) => {
+      count++;
+      if (!opts.keepLines) return `[REDACTED:${label2}]`;
+      const lead = /^\n*/.exec(match)[0];
+      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
+      return `${lead}[REDACTED:${label2}]${"\n".repeat(rest)}`;
+    });
+  }
+  return { redacted: result, count };
+}
+function parseRedactRegex(raw) {
+  if (!raw || typeof raw !== "string") return null;
+  const pattern = raw.trim();
+  if (!pattern) {
+    throw new Error("Invalid redact_regex: pattern must not be empty.");
+  }
+  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
+    throw new Error(
+      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
+
+Pattern: ${pattern}
+
+Simplify the quantifiers to avoid ReDoS.`
+    );
+  }
+  try {
+    const regex = new RegExp(pattern, "g");
+    return { regex, patternStr: pattern };
+  } catch (err3) {
+    const msg = err3 instanceof Error ? err3.message : String(err3);
+    throw new Error(
+      `Invalid redact_regex pattern: ${msg}
+
+Pattern received: ${pattern}
+
+Ensure it is a valid JavaScript regular expression.`,
+      { cause: err3 }
+    );
+  }
+}
+function applyRegexRedaction(content, opts) {
+  opts.regex.lastIndex = 0;
+  let count = 0;
+  const MAX_REPLACEMENTS = 1e5;
+  const redacted = content.replace(opts.regex, (match) => {
+    if (++count > MAX_REPLACEMENTS) return match;
+    const hasLetters = /[a-zA-Z]/.test(match);
+    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
+  });
+  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
+}
+function buildPreInstructions(hasFiles, toolContext, lineNumbers) {
+  if (!hasFiles) return "";
+  if (toolContext === "fix") {
+    return "";
+  }
+  return "TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n" + (lineNumbers ? LINE_NUMBER_RULE : "- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n") + '- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
+}
+function resolvePrompt(instructions, instructionsFilesPaths) {
+  let prompt = instructions || "";
+  if (instructionsFilesPaths) {
+    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
+    for (const fp of paths) {
+      assertFileExists(fp);
+      const content = readFileSync11(fp, "utf-8");
+      prompt = prompt ? `${prompt}
+
+${content}` : content;
+    }
+  }
+  return prompt;
+}
+function estimateTokens2(text2) {
+  return Math.ceil(text2.length / 4);
+}
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact, lineNumbers) {
+  const requested = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+  const calibrated = isCalibratedBudget(requested);
+  const totalBudget = calibrated ? requested : Math.max(10 * 1024, requested);
+  const availableForFiles = Math.max(0, totalBudget - promptBytes);
+  const skipped = [];
+  const fileData = [];
+  for (const fp of filePaths) {
+    try {
+      const stats = statSync6(fp);
+      if (stats.size > totalBudget) {
+        skipped.push(fp);
+        continue;
+      }
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact, void 0, lineNumbers);
+      if (block.length > availableForFiles) {
+        skipped.push(fp);
+        continue;
+      }
+      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
+    } catch {
+      skipped.push(fp);
+    }
+  }
+  if (calibrated) {
+    for (const fp of skipped) {
+      let size = "unreadable";
+      try {
+        size = `${statSync6(fp).size} bytes`;
+      } catch {
+      }
+      process.stderr.write(`[llm-externalizer] skipped ${fp}: ${size}, over the ${availableForFiles} bytes the calibrated input budget leaves for files (${totalBudget} bytes with the prompt)
+`);
+    }
+    if (fileData.length === 0 && filePaths.length > 0) {
+      throw new Error(`no file fits the calibrated input budget (${availableForFiles} bytes for files after a ${promptBytes}-byte prompt); nothing to send`);
+    }
+  }
+  if (fileData.length === 0) {
+    return { groups: [], autoBatched: false, skipped };
+  }
+  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
+  if (totalFileBytes <= availableForFiles) {
+    return { groups: [fileData], autoBatched: false, skipped };
+  }
+  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
+  const bins = [];
+  for (const fd of sorted) {
+    let placed2 = false;
+    for (const bin of bins) {
+      if (bin.used + fd.block.length <= availableForFiles) {
+        bin.items.push(fd);
+        bin.used += fd.block.length;
+        placed2 = true;
+        break;
+      }
+    }
+    if (!placed2) {
+      bins.push({ items: [fd], used: fd.block.length });
+    }
+  }
+  const groups = bins.map((bin) => bin.items);
+  return { groups, autoBatched: groups.length > 1, skipped };
+}
+function resolveAnswerMode(raw, defaultMode) {
+  if (raw === 0 || raw === 1 || raw === 2) return raw;
+  return defaultMode;
+}
+function buildPerFileSectionPrompt(filePaths) {
+  if (filePaths.length <= 1) return "";
+  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
+}
+function validateGitCwd(dirPath) {
+  if (!dirPath || typeof dirPath !== "string") {
+    throw new Error("validateGitCwd: empty cwd not allowed");
+  }
+  if (dirPath.includes("..")) {
+    const trimmed = resolve3(dirPath);
+    if (trimmed.includes("..")) {
+      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
+    }
+  }
+  const resolved = resolve3(dirPath);
+  const realpathSafe = (p) => {
+    try {
+      return realpathSync2(p);
+    } catch {
+      return p;
+    }
+  };
+  const resolvedReal = realpathSafe(resolved);
+  if (resolvedReal === "/" || resolvedReal === "") {
+    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
+  }
+  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
+    const sysReal = realpathSafe(sys);
+    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
+      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
+    }
+  }
+  const cwdReal = realpathSafe(resolve3(process.cwd()));
+  const homeReal = realpathSafe(
+    resolve3(process.env.HOME || process.env.USERPROFILE || homedir4())
+  );
+  const tmpReal = realpathSafe(resolve3("/tmp"));
+  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+    throw new Error(
+      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
+    );
+  }
+}
+function ensureGitOnPath() {
+  if (_gitOnPath !== void 0) return _gitOnPath;
+  const probe = spawnSync("git", ["--version"], {
+    encoding: "utf-8",
+    timeout: 2e3,
+    killSignal: "SIGKILL"
+  });
+  _gitOnPath = probe.status === 0;
+  if (!_gitOnPath) {
+    process.stderr.write(
+      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
+    );
+  }
+  return _gitOnPath;
+}
+function lstatSyncRetry(p) {
+  for (let attempt2 = 0; attempt2 < 3; attempt2++) {
+    try {
+      return lstatSync(p);
+    } catch (err3) {
+      const code2 = err3.code;
+      if (code2 === "EAGAIN" || code2 === "EBUSY") {
+        const deadline = Date.now() + 50;
+        while (Date.now() < deadline) {
+        }
+        continue;
+      }
+      return null;
+    }
+  }
+  return null;
+}
+function gitLsFilesMultiRepo(dirPath, recursive2) {
+  validateGitCwd(dirPath);
+  if (!ensureGitOnPath()) return null;
+  const GIT_TIMEOUT_MS = 5e3;
+  const gitOpts = {
+    encoding: "utf-8",
+    timeout: GIT_TIMEOUT_MS,
+    killSignal: "SIGKILL"
+  };
+  const allFiles = /* @__PURE__ */ new Set();
+  const topLevelResult = spawnSync(
+    "git",
+    ["rev-parse", "--show-toplevel"],
+    { cwd: dirPath, ...gitOpts }
+  );
+  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
+  if (isInGitRepo) {
+    const trackedResult = spawnSync(
+      "git",
+      ["ls-files", "--cached"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (trackedResult.status === 0 && trackedResult.stdout) {
+      for (const relPath of trackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join10(dirPath, relPath));
+      }
+    }
+    const untrackedResult = spawnSync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard"],
+      { cwd: dirPath, ...gitOpts }
+    );
+    if (untrackedResult.status === 0 && untrackedResult.stdout) {
+      for (const relPath of untrackedResult.stdout.split("\n")) {
+        if (!relPath.trim()) continue;
+        allFiles.add(join10(dirPath, relPath));
+      }
+    }
+  }
+  if (recursive2) {
+    let findNestedGitRoots2 = function(dir, depth) {
+      if (depth > 10) return;
+      let entries2;
+      try {
+        entries2 = readdirSync4(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries2) {
+        if (!entry.isDirectory()) continue;
+        if (entry.name === ".git" || entry.name === "node_modules") continue;
+        if (entry.name.startsWith(".")) continue;
+        const subDir = join10(dir, entry.name);
+        const gitDir = join10(subDir, ".git");
+        const gitStat = lstatSyncRetry(gitDir);
+        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
+        if (gitDirIsDir) {
+          nestedGitRoots.push(subDir);
+          continue;
+        }
+        findNestedGitRoots2(subDir, depth + 1);
+      }
+    };
+    var findNestedGitRoots = findNestedGitRoots2;
+    const nestedGitRoots = [];
+    findNestedGitRoots2(dirPath, 0);
+    for (const nestedRoot of nestedGitRoots) {
+      try {
+        validateGitCwd(nestedRoot);
+      } catch {
+        continue;
+      }
+      const nestedResult = spawnSync(
+        "git",
+        ["ls-files", "--cached", "--others", "--exclude-standard"],
+        { cwd: nestedRoot, ...gitOpts }
+      );
+      if (nestedResult.status === 0 && nestedResult.stdout) {
+        for (const relPath of nestedResult.stdout.split("\n")) {
+          if (!relPath.trim()) continue;
+          allFiles.add(join10(nestedRoot, relPath));
+        }
+      }
+    }
+  }
+  if (!isInGitRepo) return null;
+  return [...allFiles];
+}
+function walkDir(dirPath, options) {
+  const maxFiles = options?.maxFiles ?? 1e4;
+  const extensions = options?.extensions;
+  const skipBinary = !options?.includeBinary;
+  const recursive2 = options?.recursive !== false;
+  const followSymlinks = options?.followSymlinks !== false;
+  const onExcluded = options?.onExcluded ?? (() => {
+  });
+  if (options?.useGitignore) {
+    const gitResults = gitLsFilesMultiRepo(dirPath, recursive2);
+    if (gitResults !== null) {
+      const extraExcludeSet = new Set(options?.exclude ?? []);
+      const results2 = [];
+      for (const fullPath of gitResults) {
+        if (results2.length >= maxFiles) {
+          if (!options?.onExcluded) break;
+          onExcluded(fullPath, "max-files cap");
+          continue;
+        }
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
+        if (extensions) {
+          const ext = extname(fullPath).toLowerCase();
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
+        }
+        if (extraExcludeSet.size > 0) {
+          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
+          const segments = rel.split("/").filter((s) => s.length > 0);
+          const dirSegments = segments.slice(0, -1);
+          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) {
+            onExcluded(fullPath, "excluded dir");
+            continue;
+          }
+        }
+        results2.push(fullPath);
+      }
+      return results2;
+    }
+    process.stderr.write(
+      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
+`
+    );
+  }
+  const results = [];
+  const extraExclude = options?.exclude ?? [];
+  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
+  const visitedPaths = /* @__PURE__ */ new Set();
+  const addFile = (p) => {
+    if (results.length >= maxFiles) {
+      onExcluded(p, "max-files cap");
+      return;
+    }
+    results.push(p);
+  };
+  function recurse(dir) {
+    if (results.length >= maxFiles && !options?.onExcluded) return;
+    let entries2;
+    try {
+      entries2 = readdirSync4(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries2) {
+      if (results.length >= maxFiles && !options?.onExcluded) return;
+      const fullPath = join10(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        if (!followSymlinks) continue;
+        try {
+          const realPath = realpathSync2(fullPath);
+          if (visitedPaths.has(realPath)) continue;
+          visitedPaths.add(realPath);
+          const targetStat = statSync6(realPath);
+          if (targetStat.isDirectory() && recursive2) {
+            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
+              recurse(fullPath);
+            }
+          } else if (targetStat.isFile()) {
+            if (skipBinary && isBinaryExtension(fullPath)) {
+              onExcluded(fullPath, "binary extension");
+              continue;
+            }
+            if (extensions) {
+              const ext = extname(entry.name).toLowerCase();
+              if (!extensions.includes(ext)) {
+                onExcluded(fullPath, "extension filter");
+                continue;
+              }
+            }
+            addFile(fullPath);
+          }
+        } catch {
+          continue;
+        }
+        continue;
+      }
+      if (entry.isDirectory()) {
+        if (!recursive2) continue;
+        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) {
+          onExcluded(fullPath, "excluded dir");
+          continue;
+        }
+        if (entry.name.startsWith(".")) {
+          onExcluded(fullPath, "hidden dir");
+          continue;
+        }
+        try {
+          const dirRealPath = realpathSync2(fullPath);
+          if (visitedPaths.has(dirRealPath)) continue;
+          visitedPaths.add(dirRealPath);
+        } catch {
+          continue;
+        }
+        recurse(fullPath);
+      } else if (entry.isFile()) {
+        if (skipBinary && isBinaryExtension(fullPath)) {
+          onExcluded(fullPath, "binary extension");
+          continue;
+        }
+        if (extensions) {
+          const ext = extname(entry.name).toLowerCase();
+          if (!extensions.includes(ext)) {
+            onExcluded(fullPath, "extension filter");
+            continue;
+          }
+        }
+        addFile(fullPath);
+      }
+    }
+  }
+  recurse(dirPath);
+  return results;
+}
+function extractLocalImports(filePath, sourceCode) {
+  const dir = dirname4(filePath);
+  const lang = detectLang(filePath);
+  const paths = [];
+  const patterns = [];
+  if (lang === "typescript" || lang === "javascript") {
+    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
+    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
+  } else if (lang === "python") {
+    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
+  }
+  for (const pattern of patterns) {
+    pattern.lastIndex = 0;
+    let match;
+    while ((match = pattern.exec(sourceCode)) !== null) {
+      const importPath = match[1];
+      let resolved;
+      if (lang === "python" && importPath.startsWith(".")) {
+        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
+        const modulePart = importPath.slice(dotCount);
+        const baseDir = dotCount === 1 ? dir : join10(dir, ...Array(dotCount - 1).fill(".."));
+        resolved = modulePart ? join10(baseDir, ...modulePart.split(".")) : baseDir;
+      } else {
+        resolved = join10(dir, importPath);
+      }
+      if (!extname(resolved)) {
+        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
+        let found = false;
+        for (const ext of tryExts) {
+          if (existsSync9(resolved + ext)) {
+            resolved = resolved + ext;
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          const indexCandidates = [
+            "index.ts",
+            "index.tsx",
+            "index.js",
+            "index.jsx",
+            "__init__.py"
+          ];
+          for (const leaf of indexCandidates) {
+            const indexPath = join10(resolved, leaf);
+            if (existsSync9(indexPath)) {
+              resolved = indexPath;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) continue;
+      } else if (!existsSync9(resolved)) {
+        continue;
+      }
+      paths.push(resolved);
+    }
+  }
+  return [...new Set(paths)];
+}
+var BREVITY_RULES, FILE_FORMAT_EXAMPLE, LINE_NUMBER_RULE, LINE_NUMBER_PREFIX_BYTES, EXT_TO_LANG, SHEBANG_TO_LANG, DEFAULT_MAX_PAYLOAD_BYTES, calibratedBudgets, BINARY_EXTENSIONS, WALK_DEFAULT_EXCLUDE, FORBIDDEN_GIT_CWD_PREFIXES, _gitOnPath;
+var init_scan_pipeline = __esm({
+  "src/scan-pipeline.ts"() {
+    "use strict";
+    init_usage_history();
+    init_secret_patterns();
+    BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
+    FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+    LINE_NUMBER_RULE = "- Each line of an attached file's content is prefixed with its line number in the form NNNNNN | (six columns, a space, a pipe, a space). Cite code by FUNCTION/CLASS/METHOD NAME plus these line numbers. The prefix is not part of the file: never include it in quoted or returned code.\n";
+    LINE_NUMBER_PREFIX_BYTES = 9;
+    EXT_TO_LANG = {
+      ".ts": "typescript",
+      ".tsx": "typescript",
+      ".mts": "typescript",
+      ".cts": "typescript",
+      ".js": "javascript",
+      ".jsx": "javascript",
+      ".mjs": "javascript",
+      ".cjs": "javascript",
+      ".py": "python",
+      ".rs": "rust",
+      ".go": "go",
+      ".java": "java",
+      ".kt": "kotlin",
+      ".c": "c",
+      ".h": "c",
+      ".cpp": "cpp",
+      ".hpp": "cpp",
+      ".cc": "cpp",
+      ".cs": "csharp",
+      ".rb": "ruby",
+      ".php": "php",
+      ".swift": "swift",
+      ".sh": "bash",
+      ".bash": "bash",
+      ".zsh": "zsh",
+      ".fish": "fish",
+      ".sql": "sql",
+      ".html": "html",
+      ".css": "css",
+      ".scss": "scss",
+      ".less": "less",
+      ".json": "json",
+      ".yaml": "yaml",
+      ".yml": "yaml",
+      ".toml": "toml",
+      ".xml": "xml",
+      ".md": "markdown",
+      ".mdx": "mdx",
+      ".tex": "latex",
+      ".lua": "lua",
+      ".r": "r",
+      ".R": "r",
+      ".dart": "dart",
+      ".ex": "elixir",
+      ".exs": "elixir",
+      ".zig": "zig",
+      ".nim": "nim",
+      ".jl": "julia",
+      ".sol": "solidity",
+      ".vue": "vue",
+      ".svelte": "svelte"
+    };
+    SHEBANG_TO_LANG = {
+      python: "python",
+      python3: "python",
+      node: "javascript",
+      bash: "bash",
+      sh: "bash",
+      zsh: "zsh",
+      ruby: "ruby",
+      perl: "perl",
+      php: "php",
+      lua: "lua"
+    };
+    DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
+    calibratedBudgets = /* @__PURE__ */ new WeakMap();
+    BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".gif",
+      ".bmp",
+      ".ico",
+      ".webp",
+      ".avif",
+      ".tiff",
+      ".tif",
+      ".mp3",
+      ".mp4",
+      ".wav",
+      ".ogg",
+      ".webm",
+      ".avi",
+      ".mov",
+      ".flac",
+      ".aac",
+      ".m4a",
+      ".pdf",
+      ".doc",
+      ".docx",
+      ".xls",
+      ".xlsx",
+      ".ppt",
+      ".pptx",
+      ".zip",
+      ".tar",
+      ".gz",
+      ".bz2",
+      ".xz",
+      ".7z",
+      ".rar",
+      ".dmg",
+      ".iso",
+      ".jar",
+      ".exe",
+      ".dll",
+      ".so",
+      ".dylib",
+      ".o",
+      ".a",
+      ".lib",
+      ".class",
+      ".pyc",
+      ".pyo",
+      ".wasm",
+      ".bin",
+      ".dat",
+      ".db",
+      ".sqlite",
+      ".sqlite3",
+      ".ttf",
+      ".otf",
+      ".woff",
+      ".woff2",
+      ".eot",
+      ".DS_Store",
+      ".lock"
+    ]);
+    WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
+      // Version control
+      ".git",
+      // Package managers / dependencies
+      "node_modules",
+      "bower_components",
+      ".pnpm-store",
+      // Python
+      "__pycache__",
+      ".venv",
+      "venv",
+      ".tox",
+      ".mypy_cache",
+      ".pytest_cache",
+      ".eggs",
+      "*.egg-info",
+      // Build outputs
+      "dist",
+      "build",
+      "out",
+      ".next",
+      ".nuxt",
+      ".output",
+      "target",
+      // Caches / temp
+      ".cache",
+      ".turbo",
+      "coverage",
+      "tmp",
+      "temp",
+      ".temp",
+      ".tmp",
+      // IDE / editor
+      ".idea",
+      ".vscode",
+      // Other
+      ".gradle",
+      ".cargo",
+      ".nx",
+      "vendor"
+    ]);
+    FORBIDDEN_GIT_CWD_PREFIXES = [
+      "/etc",
+      "/usr",
+      "/bin",
+      "/sbin",
+      "/sys",
+      "/proc",
+      "/dev",
+      "/var/log",
+      "/var/db",
+      "/Library",
+      "/System"
+    ];
+    _gitOnPath = void 0;
+  }
+});
+
+// src/mass_scouting/fieldset.ts
+import { readFileSync as readFileSync12 } from "node:fs";
+function isPlainObject2(v) {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+function parseFieldType(raw, fieldName) {
+  if (!isPlainObject2(raw)) {
     throw new FieldsetParseError(
       `field "${fieldName}".type must be an object`
     );
@@ -12732,7 +14691,7 @@ function parseFieldType(raw, fieldName) {
       const itemFields = [];
       for (let i = 0; i < itemFieldsRaw.length; i++) {
         const f = itemFieldsRaw[i];
-        if (!isPlainObject(f)) {
+        if (!isPlainObject2(f)) {
           throw new FieldsetParseError(
             `field "${fieldName}".type.item_fields[${i}] must be an object`
           );
@@ -12800,7 +14759,7 @@ function parseFieldType(raw, fieldName) {
   }
 }
 function parseFieldDef(raw, idx) {
-  if (!isPlainObject(raw)) {
+  if (!isPlainObject2(raw)) {
     throw new FieldsetParseError(`fields[${idx}] must be an object`);
   }
   const name = raw.name;
@@ -12836,7 +14795,7 @@ function parseFieldDef(raw, idx) {
   return out;
 }
 function parseFieldset(input8) {
-  if (!isPlainObject(input8)) {
+  if (!isPlainObject2(input8)) {
     throw new FieldsetParseError("root must be a JSON object");
   }
   if (input8.version !== 1) {
@@ -13027,7 +14986,7 @@ function jsonSchemaName(fsName) {
 }
 function makeRequiredKeysValidator(required2) {
   return (parsed) => {
-    if (!isPlainObject(parsed)) {
+    if (!isPlainObject2(parsed)) {
       const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
       return { ok: false, reason: `expected object, got ${got}` };
     }
@@ -13282,8 +15241,8 @@ function repairOneField(raw, f, repairs) {
       const items = [];
       for (let i = 0; i < raw.length; i++) {
         const itemRaw = raw[i];
-        const obj = isPlainObject(itemRaw) ? itemRaw : {};
-        if (!isPlainObject(itemRaw)) {
+        const obj = isPlainObject2(itemRaw) ? itemRaw : {};
+        if (!isPlainObject2(itemRaw)) {
           repairs.push(`${f.name}[${i}]: not an object \u2014 using {}`);
         }
         const repairedItem = {};
@@ -13347,8 +15306,8 @@ function makeRepair(fs2) {
   return (parsed) => {
     const repairs = [];
     const repaired = {};
-    const obj = isPlainObject(parsed) ? parsed : {};
-    if (!isPlainObject(parsed)) {
+    const obj = isPlainObject2(parsed) ? parsed : {};
+    if (!isPlainObject2(parsed)) {
       const got = parsed === null ? "null" : Array.isArray(parsed) ? "array" : typeof parsed;
       repairs.push(`top-level not an object (${got}) \u2014 treating as empty`);
     }
@@ -13682,8 +15641,8 @@ var init_shorthand = __esm({
 
 // src/mass_scouting/registry.ts
 import Database from "better-sqlite3";
-import { createHash as createHash2 } from "node:crypto";
-import { basename as basename2 } from "node:path";
+import { createHash as createHash3 } from "node:crypto";
+import { basename as basename3 } from "node:path";
 function applyMigrations(db) {
   db.exec(
     "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);"
@@ -13953,7 +15912,7 @@ var init_registry2 = __esm({
       }
       /** Compute SHA1 fingerprint of a body. Stable across runs. */
       static fingerprintOf(body) {
-        return createHash2("sha1").update(body).digest("hex");
+        return createHash3("sha1").update(body).digest("hex");
       }
       /**
        * Register one file. Idempotent on (fingerprint): re-registering the same
@@ -13975,7 +15934,7 @@ var init_registry2 = __esm({
             fp,
             input8.file_path,
             input8.source_root,
-            basename2(input8.file_path),
+            basename3(input8.file_path),
             input8.body.length,
             input8.registered_via,
             (/* @__PURE__ */ new Date()).toISOString()
@@ -14282,7 +16241,7 @@ var init_registry2 = __esm({
 });
 
 // src/mass_scouting/preclassify.ts
-import { basename as basename3, extname } from "node:path";
+import { basename as basename4, extname as extname2 } from "node:path";
 function detectYamlFrontmatter(head, format) {
   if (format !== "markdown") return 0;
   let s = head.toString("utf-8", 0, Math.min(head.length, HEAD_SAMPLE_BYTES));
@@ -14302,7 +16261,7 @@ function isBinary(head) {
   return false;
 }
 function isRulesFile(path2) {
-  const bn = basename3(path2);
+  const bn = basename4(path2);
   if (RULES_BASENAMES.has(bn)) return true;
   return /[/\\]rules[/\\]/.test(path2);
 }
@@ -14324,12 +16283,12 @@ function classifyFile(path2, head) {
       detected_format: "markdown"
     };
   }
-  const bn = basename3(path2).toLowerCase();
+  const bn = basename4(path2).toLowerCase();
   let meta3;
   if (bn === ".env" || bn.startsWith(".env.")) {
     meta3 = { format: "ini", bucketHint: "config" };
   } else {
-    const ext = extname(path2).toLowerCase();
+    const ext = extname2(path2).toLowerCase();
     meta3 = EXT_MAP[ext];
   }
   if (!meta3) {
@@ -14449,1071 +16408,32 @@ var init_preclassify = __esm({
   }
 });
 
-// src/security_scan/types.ts
-function isVerdict(v) {
-  return v === "threat" || v === "not_threat" || v === "uncertain";
-}
-function isPlainObject2(v) {
-  return typeof v === "object" && v !== null && !Array.isArray(v);
-}
-function validateTarget(raw, index) {
-  const errors = [];
-  const at = `targets[${index}]`;
-  if (!isPlainObject2(raw)) {
-    return { ok: false, errors: [`${at} must be an object`] };
-  }
-  const id = raw.id;
-  const category = raw.category;
-  if (typeof id !== "string" || id.length === 0) {
-    errors.push(`${at}.id must be a non-empty string`);
-  }
-  if (typeof category !== "string" || category.length === 0) {
-    errors.push(`${at}.category must be a non-empty string`);
-  }
-  if (raw.language !== void 0 && typeof raw.language !== "string") {
-    errors.push(`${at}.language must be a string when present`);
-  }
-  const hasSnippet = typeof raw.snippet === "string";
-  const hasFile = typeof raw.file_path === "string";
-  const hasGlob = typeof raw.path_glob === "string";
-  const payloadCount = (hasSnippet ? 1 : 0) + (hasFile ? 1 : 0) + (hasGlob ? 1 : 0);
-  if (payloadCount === 0) {
-    errors.push(
-      `${at} must have exactly one of snippet, file_path, or path_glob`
-    );
-  } else if (payloadCount > 1) {
-    errors.push(
-      `${at} has ${payloadCount} payloads \u2014 exactly one of snippet, file_path, path_glob is allowed`
-    );
-  }
-  if (hasSnippet) {
-    const bytes = Buffer.byteLength(raw.snippet, "utf-8");
-    if (bytes > MAX_SNIPPET_BYTES) {
-      errors.push(
-        `${at}.snippet is ${bytes} bytes (> ${MAX_SNIPPET_BYTES} cap)`
-      );
-    }
-  }
-  if (raw.line !== void 0) {
-    if (typeof raw.line !== "number" || !Number.isInteger(raw.line) || raw.line < 1) {
-      errors.push(`${at}.line must be a positive integer (1-based)`);
-    }
-    if (!hasFile) {
-      errors.push(`${at}.line is only valid together with file_path`);
-    }
-  }
-  if (raw.context_lines !== void 0) {
-    if (typeof raw.context_lines !== "number" || !Number.isInteger(raw.context_lines) || raw.context_lines < 0) {
-      errors.push(`${at}.context_lines must be a non-negative integer`);
-    }
-  }
-  if (errors.length > 0) return { ok: false, errors };
-  const value = {
-    id,
-    category
-  };
-  if (typeof raw.language === "string") value.language = raw.language;
-  if (hasSnippet) value.snippet = raw.snippet;
-  if (hasFile) value.file_path = raw.file_path;
-  if (hasGlob) value.path_glob = raw.path_glob;
-  if (typeof raw.line === "number") value.line = raw.line;
-  if (typeof raw.context_lines === "number")
-    value.context_lines = raw.context_lines;
-  return { ok: true, value };
-}
-function validateInput(raw) {
-  const errors = [];
-  if (!isPlainObject2(raw)) {
-    return { ok: false, errors: ["input must be a JSON object"] };
-  }
-  if (!Array.isArray(raw.targets)) {
-    return { ok: false, errors: ["targets must be a non-empty array"] };
-  }
-  if (raw.targets.length === 0) {
-    return { ok: false, errors: ["targets must contain at least one item"] };
-  }
-  if (raw.targets.length > MAX_TARGETS) {
-    return {
-      ok: false,
-      errors: [`targets has ${raw.targets.length} items (> ${MAX_TARGETS} cap)`]
-    };
-  }
-  const targets = [];
-  for (let i = 0; i < raw.targets.length; i++) {
-    const t = validateTarget(raw.targets[i], i);
-    if (t.ok) targets.push(t.value);
-    else errors.push(...t.errors);
-  }
-  const rubrics = {};
-  if (raw.category_rubrics !== void 0) {
-    if (!isPlainObject2(raw.category_rubrics)) {
-      errors.push("category_rubrics must be an object of {category: rubric}");
-    } else {
-      for (const [k, v] of Object.entries(raw.category_rubrics)) {
-        if (typeof v !== "string") {
-          errors.push(`category_rubrics[${k}] must be a string`);
-          continue;
-        }
-        if (v.length > MAX_RUBRIC_LENGTH) {
-          errors.push(
-            `category_rubrics[${k}] is ${v.length} chars (> ${MAX_RUBRIC_LENGTH} cap)`
-          );
-          continue;
-        }
-        rubrics[k] = v;
-      }
-    }
-  }
-  let defaultVerdict = "uncertain";
-  if (raw.default_verdict_on_error !== void 0) {
-    if (!isVerdict(raw.default_verdict_on_error)) {
-      errors.push(
-        `default_verdict_on_error must be one of ${VERDICTS.join(", ")}`
-      );
-    } else if (raw.default_verdict_on_error === "not_threat") {
-      errors.push(
-        "default_verdict_on_error may not be not_threat (fail-safe must never fail open \u2014 use uncertain or threat)"
-      );
-    } else {
-      defaultVerdict = raw.default_verdict_on_error;
-    }
-  }
-  let budget = null;
-  if (raw.budget_usd !== void 0 && raw.budget_usd !== null) {
-    if (typeof raw.budget_usd !== "number" || !Number.isFinite(raw.budget_usd)) {
-      errors.push("budget_usd must be a finite number or null");
-    } else if (raw.budget_usd < 0) {
-      errors.push("budget_usd must be >= 0");
-    } else {
-      budget = raw.budget_usd;
-    }
-  }
-  let model = DEFAULT_MODEL;
-  if (raw.model !== void 0) {
-    if (typeof raw.model !== "string" || raw.model.length === 0) {
-      errors.push("model must be a non-empty string when present");
-    } else {
-      model = raw.model;
-    }
-  }
-  let gitRef;
-  if (raw.git_diff_ref !== void 0) {
-    if (typeof raw.git_diff_ref !== "string") {
-      errors.push("git_diff_ref must be a string");
-    } else if (raw.git_diff_ref.length > 200 || !GIT_REF_RE.test(raw.git_diff_ref)) {
-      errors.push(
-        "git_diff_ref has an illegal shape (anti-injection: only [A-Za-z0-9_./~^@{}-], <=200 chars)"
-      );
-    } else {
-      gitRef = raw.git_diff_ref;
-    }
-  }
-  let folderRoot;
-  if (raw.folder_root !== void 0) {
-    if (typeof raw.folder_root !== "string" || raw.folder_root.length === 0) {
-      errors.push("folder_root must be a non-empty string when present");
-    } else {
-      folderRoot = raw.folder_root;
-    }
-  }
-  let outputDir;
-  if (raw.output_dir !== void 0) {
-    if (typeof raw.output_dir !== "string" || raw.output_dir.length === 0) {
-      errors.push("output_dir must be a non-empty string when present");
-    } else {
-      outputDir = raw.output_dir;
-    }
-  }
-  const workers = numKnob(raw.workers, 8, 1, 256, "workers", errors);
-  const maxRetries = numKnob(raw.max_retries, 1, 0, 10, "max_retries", errors);
-  const perCallTimeout = numKnob(
-    raw.per_call_timeout_ms,
-    9e4,
-    1e3,
-    6e5,
-    "per_call_timeout_ms",
-    errors
-  );
-  const failureLimit = numKnob(
-    raw.consecutive_failure_limit,
-    5,
-    0,
-    1e3,
-    "consecutive_failure_limit",
-    errors
-  );
-  if (errors.length > 0) return { ok: false, errors };
-  return {
-    ok: true,
-    value: {
-      targets,
-      category_rubrics: rubrics,
-      default_verdict_on_error: defaultVerdict,
-      budget_usd: budget,
-      model,
-      git_diff_ref: gitRef,
-      folder_root: folderRoot,
-      output_dir: outputDir,
-      workers,
-      max_retries: maxRetries,
-      per_call_timeout_ms: perCallTimeout,
-      consecutive_failure_limit: failureLimit
-    }
-  };
-}
-function numKnob(raw, dflt, min, max, name, errors) {
-  if (raw === void 0) return dflt;
-  if (typeof raw !== "number" || !Number.isInteger(raw)) {
-    errors.push(`${name} must be an integer`);
-    return dflt;
-  }
-  if (raw < min || raw > max) {
-    errors.push(`${name} must be in [${min}, ${max}]`);
-    return dflt;
-  }
-  return raw;
-}
-var VERDICTS, DEFAULT_CONTEXT_LINES, MAX_RUBRIC_LENGTH, MAX_SNIPPET_BYTES, MAX_TARGETS, MAX_FILE_READ_BYTES, DEFAULT_MODEL, GIT_REF_RE;
-var init_types = __esm({
-  "src/security_scan/types.ts"() {
-    "use strict";
-    VERDICTS = [
-      "threat",
-      "not_threat",
-      "uncertain"
-    ];
-    DEFAULT_CONTEXT_LINES = 60;
-    MAX_RUBRIC_LENGTH = 2e3;
-    MAX_SNIPPET_BYTES = 2e5;
-    MAX_TARGETS = 5e3;
-    MAX_FILE_READ_BYTES = 16777216;
-    DEFAULT_MODEL = "qwen/qwen-2.5-7b-instruct";
-    GIT_REF_RE = /^[A-Za-z0-9_./~^@{}-]+$/;
-  }
-});
-
-// src/secret-patterns.ts
-var AWS_KEY, API_KEY_INFIXED, GITHUB_PAT_CLASSIC, GITHUB_TOKEN, GITHUB_OAUTH, GITHUB_PAT_FINE, GITLAB_TOKEN, SLACK_TOKEN, BEARER_TOKEN, ENV_SECRET, PEM_BLOCK, API_KEY_PLAIN, GOOGLE_API_KEY, JWT, CONN_STRING, SECRET_ASSIGNMENT, SCAN_PIPELINE_SECRET_PATTERNS, INTAKE_SECRET_PATTERNS;
-var init_secret_patterns = __esm({
-  "src/secret-patterns.ts"() {
-    "use strict";
-    AWS_KEY = [/AKIA[0-9A-Z]{16}/g, "AWS_KEY"];
-    API_KEY_INFIXED = [/(?:sk|pk)[-_](?:live|test|proj)[-_][A-Za-z0-9]{20,}/g, "API_KEY"];
-    GITHUB_PAT_CLASSIC = [/ghp_[A-Za-z0-9]{36}/g, "GITHUB_PAT"];
-    GITHUB_TOKEN = [/ghr_[A-Za-z0-9]{36}/g, "GITHUB_TOKEN"];
-    GITHUB_OAUTH = [/gho_[A-Za-z0-9]{36}/g, "GITHUB_OAUTH"];
-    GITHUB_PAT_FINE = [/github_pat_[A-Za-z0-9_]{82}/g, "GITHUB_PAT"];
-    GITLAB_TOKEN = [/glpat-[A-Za-z0-9\-_]{20,}/g, "GITLAB_TOKEN"];
-    SLACK_TOKEN = [/xox[bpsar]-[A-Za-z0-9-]+/g, "SLACK_TOKEN"];
-    BEARER_TOKEN = [/Bearer\s+[A-Za-z0-9._\-/+=]{20,}/g, "BEARER_TOKEN"];
-    ENV_SECRET = [
-      // Common env-var-style secret names. Extended in v9.9.0 from a hand-
-      // curated list to a hybrid approach: explicit names for the most-common
-      // OAuth / vendor key shapes AND a wildcard for any *_KEY / *_TOKEN /
-      // *_SECRET / *_PASSWORD. Wildcards intentionally catch JWT_SECRET,
-      // LM_API_TOKEN (the plugin's own preset!), STRIPE_SECRET_KEY,
-      // SUPABASE_SERVICE_KEY, SLACK_BOT_TOKEN, and similar without needing
-      // per-vendor patches.
-      // TRDD-G49XPDNI: indent/spacing is `[^\S\r\n]*` (any whitespace except a line break, so VT/FF count), never `\s*`: the old unbounded `\s*` spans newlines and
-      // backtracked for more than 120 s on 500 KB (100 KB took 2.4-2.9 s). Newlines are therefore allowed only in bounded places, so cost stays linear:
-      // up to THREE newlines before the separator (`API_KEY` newline `= v`) and up to THREE after it (`API_KEY:` newline `  v`, or blank lines before the value).
-      // A line break is `\r\n`, `\n` or a bare `\r` (old Mac files; the old `\s*` matched it). Remaining loss vs the old `\s*`: 4+ line breaks on one side of the separator
-      // (the only misses in a 500000-string fuzz over a fixed alphabet that includes a bare `\r`; not proven exhaustive).
-      // Trade-off (measured): a benign next line is also hidden (`API_KEY =` newline `  process.env.X;`, `API_KEY:` newline `  nested_key: value`); a redactor prefers
-      // hiding one extra token to leaking a value. `# comment` and `await getKey();` after `const API_KEY =` are not matched.
-      /(?:^|\n)[^\S\r\n]*(?:(?:PASSWORD|PASSWD|SECRET|API_KEY|APIKEY|AUTH|AUTH_TOKEN|ACCESS_TOKEN|REFRESH_TOKEN|PRIVATE_KEY|SECRET_KEY|ACCESS_KEY|DB_PASSWORD|DATABASE_URL|OPENAI_API_KEY|ANTHROPIC_API_KEY|OPENROUTER_API_KEY|AWS_SECRET_ACCESS_KEY|AWS_ACCESS_KEY_ID|AWS_SESSION_TOKEN|GITHUB_TOKEN|GH_TOKEN|GITLAB_TOKEN|BITBUCKET_TOKEN|NPM_TOKEN|DOCKER_PASSWORD|HF_TOKEN|HUGGINGFACE_TOKEN|LM_API_TOKEN|VLLM_API_KEY|JWT_SECRET|JWT_PRIVATE_KEY|STRIPE_SECRET_KEY|STRIPE_API_KEY|SUPABASE_SERVICE_KEY|SUPABASE_ANON_KEY|FIREBASE_TOKEN|SLACK_BOT_TOKEN|SLACK_TOKEN|DISCORD_TOKEN|TELEGRAM_BOT_TOKEN|TWILIO_AUTH_TOKEN|SENDGRID_API_KEY|MAILGUN_API_KEY|SENTRY_AUTH_TOKEN|PRIVATE)|[A-Z][A-Z0-9_]*(?:_KEY|_TOKEN|_SECRET|_PASSWORD|_APIKEY|_API_KEY|_AUTH))[^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}[=:][^\S\r\n]*(?:(?:\r\n?|\n)[^\S\r\n]*){0,3}['"]?([^\s'"#\n]{8,})/gim,
-      "ENV_SECRET"
-    ];
-    PEM_BLOCK = [
-      // TRDD-G49XPDNI: the first 16384 body chars are bounded (an RSA-8192 PEM is ~6.4 KB) so each BEGIN costs O(16384); the old lazy `[\s\S]*?`
-      // re-scanned to end of input per unterminated BEGIN (20000 headers: 2.7-4.4 s, 200000: > 3 min). A BEGIN with no END inside that window fails
-      // TOWARD REDACTION: the second alternative takes the header, 16384 chars, the rest of the base64 run `[A-Za-z0-9+/=\s]*` and an optional END line,
-      // so a terminated block of ANY length is redacted through its END and nothing of its body is left. Measured linear (1 MB hostile: <= 8 ms).
-      // Unterminated and over 16384 chars: the following base64-like text (letters, digits, +/=, whitespace) is redacted with it (over-redaction accepted).
-      /-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----(?:[\s\S]{0,16384}?-----END (?:RSA |EC |DSA |OPENSSH |PGP )?(?:PRIVATE KEY|CERTIFICATE)-----|[\s\S]{0,16384}[A-Za-z0-9+/=\s]*(?:-----END [A-Z0-9 ]+-----)?)/g,
-      "PEM_BLOCK"
-    ];
-    API_KEY_PLAIN = [/sk-[A-Za-z0-9]{20,}/g, "API_KEY"];
-    GOOGLE_API_KEY = [/AIza[0-9A-Za-z\-_]{35}/g, "GOOGLE_API_KEY"];
-    JWT = [
-      /(?<![A-Za-z0-9_-])(?=[A-Za-z0-9_-]*eyJ[A-Za-z0-9_-])(?=([A-Za-z0-9_-]+))\1\.eyJ(?=([A-Za-z0-9_-]+))\2\.(?=([A-Za-z0-9_-]+))\3/g,
-      "JWT"
-    ];
-    CONN_STRING = [/:\/\/[^:@/\s]+:[^@/\s]+@/g, "CONN_STRING"];
-    SECRET_ASSIGNMENT = [
-      /(?:password|passwd|pwd|token|secret|apikey)["']?[ \t]*[:=][ \t]*['"]?([^\s'"#\n]{4,})/gi,
-      "SECRET_ASSIGNMENT"
-    ];
-    SCAN_PIPELINE_SECRET_PATTERNS = [
-      AWS_KEY,
-      API_KEY_INFIXED,
-      GITHUB_PAT_CLASSIC,
-      GITHUB_TOKEN,
-      GITHUB_OAUTH,
-      GITHUB_PAT_FINE,
-      GITLAB_TOKEN,
-      SLACK_TOKEN,
-      BEARER_TOKEN,
-      ENV_SECRET,
-      PEM_BLOCK
-    ];
-    INTAKE_SECRET_PATTERNS = [
-      AWS_KEY,
-      API_KEY_INFIXED,
-      API_KEY_PLAIN,
-      GOOGLE_API_KEY,
-      GITHUB_PAT_CLASSIC,
-      GITHUB_TOKEN,
-      GITHUB_OAUTH,
-      GITHUB_PAT_FINE,
-      GITLAB_TOKEN,
-      SLACK_TOKEN,
-      BEARER_TOKEN,
-      JWT,
-      CONN_STRING,
-      ENV_SECRET,
-      SECRET_ASSIGNMENT,
-      PEM_BLOCK
-    ];
-  }
-});
-
-// src/security_scan/intake.ts
-import { execSync } from "node:child_process";
-import { createHash as createHash3 } from "node:crypto";
-import { readFileSync as readFileSync10, readdirSync as readdirSync3, statSync as statSync5 } from "node:fs";
-import { isAbsolute as isAbsolute3, join as join8, resolve as resolve2 } from "node:path";
-function redactSecrets(content, opts = {}) {
-  let result = content;
-  let count = 0;
-  for (const [pattern, label2] of INTAKE_SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, (match) => {
-      count++;
-      if (!opts.keepLines) return `[REDACTED:${label2}]`;
-      const lead = /^\n*/.exec(match)[0];
-      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
-      return `${lead}[REDACTED:${label2}]${"\n".repeat(rest)}`;
-    });
-  }
-  return { redacted: result, count };
-}
-function safeRedact(content, budgetMs = REDACTION_BUDGET_MS, opts = {}) {
-  const started = Date.now();
-  let out;
-  try {
-    out = redactSecrets(content, opts);
-  } catch (e) {
-    return {
-      redacted: "",
-      count: 0,
-      ok: false,
-      reason: `redaction error: ${e.message}`
-    };
-  }
-  const elapsed = Date.now() - started;
-  if (elapsed > budgetMs) {
-    return {
-      redacted: out.redacted,
-      count: out.count,
-      ok: false,
-      reason: `redaction exceeded ${budgetMs}ms wall-clock budget (took ${elapsed}ms) \u2014 record skipped to avoid shipping un-redacted content`
-    };
-  }
-  return { redacted: out.redacted, count: out.count, ok: true };
-}
-function expandGlob(root2, glob) {
-  const all = walkFiles(root2);
-  const re = globToRegExp(glob);
-  return all.filter((abs2) => {
-    const rel = relativeUnix(root2, abs2);
-    return re.test(rel);
-  });
-}
-function walkFiles(root2) {
-  const out = [];
-  const stack = [root2];
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    let entries2;
-    try {
-      entries2 = readdirSync3(dir);
-    } catch {
-      continue;
-    }
-    for (const e of entries2) {
-      const full = join8(dir, e);
-      let st;
-      try {
-        st = statSync5(full);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (DEFAULT_SKIP_DIRS.has(e)) continue;
-        stack.push(full);
-      } else if (st.isFile()) {
-        out.push(full);
-      }
-    }
-  }
-  out.sort();
-  return out;
-}
-function relativeUnix(root2, abs2) {
-  const r = resolve2(root2);
-  const a = resolve2(abs2);
-  let rel = a.startsWith(r) ? a.slice(r.length) : a;
-  rel = rel.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-  return rel;
-}
-function globToRegExp(glob) {
-  let re = "^";
-  for (let i = 0; i < glob.length; i++) {
-    const c = glob[i];
-    if (c === "*") {
-      if (glob[i + 1] === "*") {
-        i++;
-        if (glob[i + 1] === "/") {
-          i++;
-          re += "(?:.*/)?";
-        } else {
-          re += ".*";
-        }
-      } else {
-        re += "[^/]*";
-      }
-    } else if (c === "?") {
-      re += "[^/]";
-    } else if ("\\^$.|+()[]{}".includes(c)) {
-      re += "\\" + c;
-    } else {
-      re += c;
-    }
-  }
-  re += "$";
-  return new RegExp(re);
-}
-function gitChangedFiles(root2, ref) {
-  if (!GIT_REF_RE.test(ref) || ref.length > 200) return null;
-  try {
-    const out = execSync(
-      `git diff --name-only --diff-filter=ACMR -z ${JSON.stringify(ref)}...HEAD`,
-      { cwd: root2, encoding: "buffer", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root2, p));
-  } catch {
-    return null;
-  }
-}
-function gitTrackedFiles(root2) {
-  try {
-    const out = execSync("git ls-files --cached --others --exclude-standard -z", {
-      cwd: root2,
-      encoding: "buffer",
-      stdio: ["ignore", "pipe", "ignore"]
-    });
-    return out.toString("utf-8").split("\0").filter((s) => s.length > 0).map((p) => resolve2(root2, p));
-  } catch {
-    return null;
-  }
-}
-function extractWindow(content, line, contextLines) {
-  const lines = content.split("\n");
-  if (line < 1 || line > lines.length) return null;
-  const start = Math.max(1, line - contextLines);
-  const end = Math.min(lines.length, line + contextLines);
-  const window = lines.slice(start - 1, end).join("\n");
-  return { window, startLine: start };
-}
-function intake(targets, opts = {}) {
-  const root2 = opts.folderRoot ? resolve2(opts.folderRoot) : process.cwd();
-  const honorGitignore = opts.honorGitignore !== false;
-  const byteCap = opts.byteCap && opts.byteCap > 0 ? opts.byteCap : MAX_SNIPPET_BYTES;
-  const records = [];
-  const skipped = [];
-  const tooBig = (id, category, fp, bytes) => {
-    skipped.push({
-      id,
-      category,
-      file_path: fp,
-      reason: `content ${bytes} bytes > cap ${byteCap}`
-    });
-  };
-  const statTooBig = (id, category, abs2, cap = byteCap) => {
-    let size;
-    try {
-      size = statSync5(abs2).size;
-    } catch {
-      return false;
-    }
-    if (size > cap) {
-      tooBig(id, category, abs2, size);
-      return true;
-    }
-    return false;
-  };
-  const pushRedacted = (rec) => {
-    const bytes = Buffer.byteLength(rec.content, "utf-8");
-    if (bytes > byteCap) {
-      tooBig(rec.id, rec.category, rec.file_path, bytes);
-      return;
-    }
-    const red = safeRedact(rec.content);
-    if (!red.ok) {
-      skipped.push({
-        id: rec.id,
-        category: rec.category,
-        file_path: rec.file_path,
-        reason: red.reason ?? "redaction failed \u2014 record skipped to avoid egress"
-      });
-      return;
-    }
-    rec.content = red.redacted;
-    records.push(rec);
-  };
-  for (const t of targets) {
-    if (typeof t.snippet === "string") {
-      pushRedacted({
-        id: t.id,
-        category: t.category,
-        language: t.language,
-        content: t.snippet
-      });
-      continue;
-    }
-    if (typeof t.file_path === "string") {
-      const abs2 = isAbsolute3(t.file_path) ? t.file_path : resolve2(root2, t.file_path);
-      const fileGate = typeof t.line === "number" ? MAX_FILE_READ_BYTES : byteCap;
-      if (statTooBig(t.id, t.category, abs2, fileGate)) continue;
-      let content;
-      try {
-        content = readFileSync10(abs2, "utf-8");
-      } catch (e) {
-        skipped.push({
-          id: t.id,
-          category: t.category,
-          file_path: abs2,
-          reason: `read error: ${e.message}`
-        });
-        continue;
-      }
-      if (typeof t.line === "number") {
-        const ctx = t.context_lines ?? DEFAULT_CONTEXT_LINES;
-        const win = extractWindow(content, t.line, ctx);
-        if (!win) {
-          skipped.push({
-            id: t.id,
-            category: t.category,
-            file_path: abs2,
-            reason: `line ${t.line} out of range (file has ${content.split("\n").length} lines)`
-          });
-          continue;
-        }
-        pushRedacted({
-          id: t.id,
-          category: t.category,
-          language: t.language,
-          content: win.window,
-          file_path: abs2,
-          line: t.line
-        });
-      } else {
-        pushRedacted({
-          id: t.id,
-          category: t.category,
-          language: t.language,
-          content,
-          file_path: abs2
-        });
-      }
-      continue;
-    }
-    if (typeof t.path_glob === "string") {
-      let matched = expandGlob(root2, t.path_glob);
-      if (opts.gitDiffRef) {
-        const changed = gitChangedFiles(root2, opts.gitDiffRef);
-        if (changed !== null) {
-          const changedSet = new Set(changed);
-          matched = matched.filter((p) => changedSet.has(p));
-        }
-      }
-      if (honorGitignore) {
-        const tracked = gitTrackedFiles(root2);
-        if (tracked !== null && tracked.length > 0) {
-          const trackedSet = new Set(tracked);
-          const filtered = matched.filter((p) => trackedSet.has(p));
-          if (filtered.length > 0) matched = filtered;
-        }
-      }
-      if (matched.length === 0) {
-        skipped.push({
-          id: t.id,
-          category: t.category,
-          reason: `path_glob ${JSON.stringify(t.path_glob)} matched no files under ${root2}`
-        });
-        continue;
-      }
-      for (const abs2 of matched) {
-        if (statTooBig(`${t.id}::${relativeUnix(root2, abs2)}`, t.category, abs2)) {
-          continue;
-        }
-        let content;
-        try {
-          content = readFileSync10(abs2, "utf-8");
-        } catch (e) {
-          skipped.push({
-            id: t.id,
-            category: t.category,
-            file_path: abs2,
-            reason: `read error: ${e.message}`
-          });
-          continue;
-        }
-        pushRedacted({
-          // Glob fans into multiple files — make each id unique + traceable.
-          id: `${t.id}::${relativeUnix(root2, abs2)}`,
-          category: t.category,
-          language: t.language,
-          content,
-          file_path: abs2
-        });
-      }
-      continue;
-    }
-    skipped.push({
-      id: t.id,
-      category: t.category,
-      reason: "target had no recognizable payload (snippet/file_path/path_glob)"
-    });
-  }
-  const byKey = /* @__PURE__ */ new Map();
-  for (const rec of records) {
-    const key = dedupKey(rec.content, rec.category);
-    let g = byKey.get(key);
-    if (!g) {
-      g = {
-        key,
-        category: rec.category,
-        language: rec.language,
-        content: rec.content,
-        file_path: rec.file_path,
-        line: rec.line,
-        members: []
-      };
-      byKey.set(key, g);
-    }
-    g.members.push(rec);
-  }
-  return {
-    groups: Array.from(byKey.values()),
-    skipped,
-    recordsTotal: records.length
-  };
-}
-function dedupKey(content, category) {
-  return createHash3("sha1").update(content, "utf-8").update("\0").update(category, "utf-8").digest("hex");
-}
-var REDACTION_BUDGET_MS, DEFAULT_SKIP_DIRS;
-var init_intake = __esm({
-  "src/security_scan/intake.ts"() {
-    "use strict";
-    init_types();
-    init_secret_patterns();
-    REDACTION_BUDGET_MS = 500;
-    DEFAULT_SKIP_DIRS = /* @__PURE__ */ new Set([
-      ".git",
-      "node_modules",
-      ".venv",
-      "dist",
-      "build",
-      ".idea",
-      ".vscode",
-      "tmp",
-      "vendor",
-      ".next",
-      ".cache",
-      "__pycache__",
-      "target",
-      ".turbo",
-      "out"
-    ]);
-  }
-});
-
-// src/usage-history.ts
-import { AsyncLocalStorage } from "node:async_hooks";
-import { randomBytes } from "node:crypto";
-import { appendFileSync, closeSync as closeSync3, fstatSync, mkdirSync as mkdirSync5, openSync as openSync3, readFileSync as readFileSync11, readSync as readSync2, renameSync as renameSync6, writeFileSync as writeFileSync5 } from "node:fs";
-import { execFileSync as execFileSync2 } from "node:child_process";
-import { dirname as dirname3, join as join9 } from "node:path";
-function newOpId() {
-  return `op-${randomBytes(4).toString("hex")}`;
-}
-function getHistoryPath() {
-  return join9(getConfigDir(), "history.log");
-}
-function resolveProject() {
-  const fromEnv = process.env.CLAUDE_PROJECT_DIR;
-  if (typeof fromEnv === "string" && fromEnv.trim()) return fromEnv.trim();
-  try {
-    const top = execFileSync2("git", ["rev-parse", "--show-toplevel"], {
-      cwd: process.cwd(),
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-    if (top) return top;
-  } catch {
-  }
-  return process.cwd();
-}
-function truncateValue(s) {
-  const flat = s.replace(/[\r\n\t]+/g, " ");
-  if (flat.length <= MAX_STR) return flat;
-  return `${flat.slice(0, MAX_STR)}\u2026(${flat.length})`;
-}
-function redactString(s) {
-  try {
-    return redactSecrets(s).redacted;
-  } catch {
-    return "[REDACTED]";
-  }
-}
-function summarizeValue(v) {
-  if (v === null) return "null";
-  if (v === void 0) return "undefined";
-  if (typeof v === "string") return truncateValue(redactString(v));
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) return `[${v.length}]`;
-  if (typeof v === "object") {
-    const keys = Object.keys(v);
-    if (keys.length === 0) return "{}";
-    const inner = keys.map((k) => `${k}=${summarizeScalarOnly(v[k])}`).join(",");
-    return truncateValue(`{${inner}}`);
-  }
-  return truncateValue(redactString(String(v)));
-}
-function summarizeScalarOnly(v) {
-  if (v === null) return "null";
-  if (v === void 0) return "undefined";
-  if (typeof v === "string") return truncateValue(redactString(v));
-  if (typeof v === "number" || typeof v === "boolean") return String(v);
-  if (Array.isArray(v)) return `[${v.length}]`;
-  if (typeof v === "object") return "{\u2026}";
-  return truncateValue(redactString(String(v)));
-}
-function summarizeParams(args) {
-  if (args === null || args === void 0) return "";
-  if (typeof args !== "object" || Array.isArray(args)) {
-    return summarizeValue(args);
-  }
-  const entries2 = Object.entries(args);
-  if (entries2.length === 0) return "";
-  return entries2.map(([k, v]) => `${k}=${summarizeValue(v)}`).join(", ");
-}
-function localIsoTimestamp(d = /* @__PURE__ */ new Date()) {
-  const pad = (n) => String(n).padStart(2, "0");
-  const y = d.getFullYear();
-  const mo = pad(d.getMonth() + 1);
-  const da = pad(d.getDate());
-  const h = pad(d.getHours());
-  const mi = pad(d.getMinutes());
-  const s = pad(d.getSeconds());
-  const offMin = -d.getTimezoneOffset();
-  const sign = offMin >= 0 ? "+" : "-";
-  const abs2 = Math.abs(offMin);
-  return `${y}-${mo}-${da}T${h}:${mi}:${s}${sign}${pad(Math.floor(abs2 / 60))}${pad(abs2 % 60)}`;
-}
-function formatDuration(durationMs) {
-  const ms = Math.max(0, Math.round(durationMs));
-  if (ms < 1e3) return `${ms}ms`;
-  return `${(ms / 1e3).toFixed(1)}s`;
-}
-function formatCost(costUsd) {
-  const c = Number.isFinite(costUsd) && costUsd > 0 ? costUsd : 0;
-  return `$${c.toFixed(6)}`;
-}
-function formatHistoryLine(fields) {
-  if (fields.endpoint !== void 0 && !ENDPOINT_RE.test(fields.endpoint)) {
-    throw new RangeError(`endpoint must match ${ENDPOINT_RE}, got ${JSON.stringify(fields.endpoint)}`);
-  }
-  if (fields.inputTokens !== void 0 && !(Number.isSafeInteger(fields.inputTokens) && fields.inputTokens >= 0)) {
-    throw new RangeError(`inputTokens must be a non-negative integer, got ${fields.inputTokens}`);
-  }
-  const toolField = fields.params ? `${fields.tool}(${fields.params})` : `${fields.tool}()`;
-  return [
-    fields.timestamp,
-    fields.project,
-    toolField,
-    fields.ok ? "SUCCESS" : "FAIL",
-    formatDuration(fields.durationMs),
-    formatCost(fields.costUsd),
-    fields.opId,
-    // WHY an optional 8th field and not a new column in place: lines without it stay byte-identical to the 7-field format already on disk.
-    ...fields.endpoint === void 0 ? [] : [`endpoint=${fields.endpoint}`],
-    // WHY after the endpoint and optional: lines written before C4-12 stay valid, and lifetime token totals sum only what a reply measured.
-    ...fields.inputTokens === void 0 ? [] : [`tokens=${fields.inputTokens}`]
-  ].join(" - ");
-}
-function isJevEndpoint(endpoint) {
-  return endpoint !== void 0 && endpoint !== LOCAL_ENDPOINT;
-}
-function parseHistoryLine(line) {
-  const bad = (why) => new Error(`not a history line (${why}): ${JSON.stringify(line.slice(0, 120))}`);
-  const f = line.split(" - ");
-  let endpoint;
-  let inputTokens;
-  if ((f[f.length - 1] ?? "").startsWith("tokens=")) {
-    const t = /^tokens=(\d+)$/.exec(f.pop());
-    if (!t) throw bad("bad tokens");
-    inputTokens = Number(t[1]);
-  }
-  const last = f[f.length - 1] ?? "";
-  if (last.startsWith("endpoint=")) {
-    endpoint = last.slice("endpoint=".length);
-    if (!ENDPOINT_RE.test(endpoint)) throw bad("bad endpoint");
-    f.pop();
-  }
-  if (f.length < 7) throw bad("too few fields");
-  const n = f.length;
-  const [status, dur, cost, opId] = [f[n - 4], f[n - 3], f[n - 2], f[n - 1]];
-  if (status !== "SUCCESS" && status !== "FAIL") throw bad("status");
-  if (!OP_ID_RE.test(opId)) throw bad("op-id");
-  const ms = /^(\d+)ms$/.exec(dur);
-  const sec = /^(\d+(?:\.\d)?)s$/.exec(dur);
-  if (!ms && !sec) throw bad("duration");
-  const usd2 = /^\$(\d+\.\d{6})$/.exec(cost);
-  if (!usd2) throw bad("cost");
-  let toolAt = -1;
-  for (let i = 2; i <= n - 5; i++) {
-    if (TOOL_START_RE.test(f[i])) {
-      toolAt = i;
-      break;
-    }
-  }
-  if (toolAt < 0) throw bad("tool");
-  const entry = {
-    timestamp: f[0],
-    project: f.slice(1, toolAt).join(" - "),
-    tool: f.slice(toolAt, n - 4).join(" - "),
-    ok: status === "SUCCESS",
-    durationMs: ms ? Number(ms[1]) : Math.round(Number(sec[1]) * 1e3),
-    costUsd: Number(usd2[1]),
-    opId
-  };
-  if (endpoint !== void 0) entry.endpoint = endpoint;
-  if (inputTokens !== void 0) entry.inputTokens = inputTokens;
-  return entry;
-}
-function lifetimeJevTotals(entries2) {
-  const jev = entries2.filter((e) => isJevEndpoint(e.endpoint));
-  return {
-    runs: new Set(jev.map((e) => e.opId)).size,
-    requests: jev.length,
-    inputTokens: jev.reduce((n, e) => n + (e.inputTokens ?? 0), 0),
-    costUsd: jev.reduce((n, e) => n + e.costUsd, 0),
-    since: jev[0]?.timestamp ?? null
-  };
-}
-function getLifetimeSidecarPath() {
-  return join9(dirname3(getHistoryPath()), "jev-lifetime.json");
-}
-function readLifetimeState() {
-  let text2;
-  try {
-    text2 = readFileSync11(getLifetimeSidecarPath(), "utf-8");
-  } catch (e) {
-    if (e.code === "ENOENT") return emptyLifetimeState();
-    throw e;
-  }
-  try {
-    const s = JSON.parse(text2);
-    if (Number.isInteger(s.offset) && s.offset >= 0 && Number.isInteger(s.lines) && typeof s.head === "string" && typeof s.recent === "object" && s.recent !== null && [s.requests, s.inputTokens, s.costUsd, s.runs, s.newest].every(Number.isFinite)) return s;
-  } catch {
-  }
-  return emptyLifetimeState();
-}
-function lifetimeJevTotalsIncremental() {
-  let fd;
-  try {
-    fd = openSync3(getHistoryPath(), "r");
-  } catch (e) {
-    if (e.code === "ENOENT") return lifetimeJevTotals([]);
-    throw e;
-  }
-  try {
-    const size = fstatSync(fd).size;
-    let state = readLifetimeState();
-    const headBuf = Buffer.alloc(Math.min(LIFETIME_HEAD_BYTES, size));
-    readSync2(fd, headBuf, 0, headBuf.length, 0);
-    const nl0 = headBuf.indexOf(10);
-    const head = headBuf.subarray(0, nl0 === -1 ? headBuf.length : nl0).toString("latin1");
-    if (state.offset > size || state.offset > 0 && head !== state.head) state = emptyLifetimeState();
-    if (state.offset === 0) state.head = head;
-    let pos = state.offset;
-    let pending = Buffer.alloc(0);
-    const chunk = Buffer.alloc(LIFETIME_CHUNK_BYTES);
-    while (pos < size) {
-      const n = readSync2(fd, chunk, 0, Math.min(LIFETIME_CHUNK_BYTES, size - pos), pos);
-      if (n === 0) break;
-      pos += n;
-      pending = Buffer.concat([pending, chunk.subarray(0, n)]);
-      for (let nl = pending.indexOf(10); nl !== -1; nl = pending.indexOf(10)) {
-        const line = pending.subarray(0, nl).toString("utf8");
-        pending = pending.subarray(nl + 1);
-        state.offset += nl + 1;
-        state.lines++;
-        if (line.length === 0) continue;
-        let e;
-        try {
-          e = parseHistoryLine(line);
-        } catch (err3) {
-          throw new Error(`history.log line ${state.lines}: ${err3.message}`, { cause: err3 });
-        }
-        if (!isJevEndpoint(e.endpoint)) continue;
-        const at = Date.parse(e.timestamp);
-        const seenAt = Number.isNaN(at) ? state.newest : at;
-        if (!Object.hasOwn(state.recent, e.opId)) state.runs++;
-        state.recent[e.opId] = seenAt;
-        state.newest = Math.max(state.newest, seenAt);
-        state.requests++;
-        state.inputTokens += e.inputTokens ?? 0;
-        state.costUsd += e.costUsd;
-        state.since ??= e.timestamp;
-      }
-    }
-    for (const [id, seen] of Object.entries(state.recent)) if (seen < state.newest - LIFETIME_RUN_HORIZON_MS) delete state.recent[id];
-    const tmp = `${getLifetimeSidecarPath()}.${process.pid}.tmp`;
-    writeFileSync5(tmp, JSON.stringify(state));
-    renameSync6(tmp, getLifetimeSidecarPath());
-    return { runs: state.runs, requests: state.requests, inputTokens: state.inputTokens, costUsd: state.costUsd, since: state.since };
-  } finally {
-    closeSync3(fd);
-  }
-}
-function appendHistoryLine(line) {
-  try {
-    appendHistoryLineStrict(line);
-  } catch {
-  }
-}
-function appendHistoryLineStrict(line) {
-  const dir = getConfigDir();
-  mkdirSync5(dir, { recursive: true });
-  appendFileSync(getHistoryPath(), line + "\n", { flag: "a" });
-}
-function recordRequest(req) {
-  try {
-    const ctx = ctxStore.getStore();
-    const line = formatHistoryLine({
-      timestamp: localIsoTimestamp(),
-      project: ctx?.project ?? resolveProject(),
-      tool: ctx?.tool ?? "(direct)",
-      params: ctx?.params ?? "",
-      ok: req.ok,
-      durationMs: req.durationMs,
-      costUsd: req.costUsd,
-      opId: ctx?.opId ?? newOpId(),
-      endpoint: req.endpoint,
-      inputTokens: req.inputTokens
-    });
-    if (req.strict === true) appendHistoryLineStrict(line);
-    else appendHistoryLine(line);
-  } catch (e) {
-    if (req.strict === true) throw e;
-  }
-}
-function withUsageContext(init, fn) {
-  const ctx = {
-    tool: init.tool,
-    params: init.params,
-    project: init.project ?? resolveProject(),
-    opId: newOpId()
-  };
-  return ctxStore.run(ctx, fn);
-}
-function foldOutputEwma(prev, sample, alpha = OUTPUT_EWMA_ALPHA) {
-  if (!prev || prev.n <= 0) return { ewma: sample, n: 1 };
-  return { ewma: alpha * sample + (1 - alpha) * prev.ewma, n: prev.n + 1 };
-}
-function ewmaFilePath() {
-  return join9(getConfigDir(), "output-ewma.json");
-}
-function loadEwmaStore() {
-  try {
-    const parsed = JSON.parse(readFileSync11(ewmaFilePath(), "utf-8"));
-    if (parsed && parsed.version === 1 && parsed.entries) return parsed;
-  } catch {
-  }
-  return { version: 1, entries: {} };
-}
-function recordOutputTokensSample(model, outputTokens) {
-  try {
-    const tool = ctxStore.getStore()?.tool;
-    if (!tool || !model || !Number.isFinite(outputTokens) || outputTokens < 0) return;
-    const store = loadEwmaStore();
-    const key = `${tool}::${model}`;
-    store.entries[key] = foldOutputEwma(store.entries[key], outputTokens);
-    mkdirSync5(getConfigDir(), { recursive: true });
-    const tmp = ewmaFilePath() + ".tmp";
-    writeFileSync5(tmp, JSON.stringify(store));
-    renameSync6(tmp, ewmaFilePath());
-  } catch {
-  }
-}
-function calibratedOutputTokens(tool, model) {
-  try {
-    return loadEwmaStore().entries[`${tool}::${model}`] ?? null;
-  } catch {
-    return null;
-  }
-}
-var ctxStore, MAX_STR, LOCAL_ENDPOINT, ENDPOINT_RE, OP_ID_RE, TOOL_START_RE, LIFETIME_CHUNK_BYTES, LIFETIME_HEAD_BYTES, LIFETIME_RUN_HORIZON_MS, emptyLifetimeState, OUTPUT_EWMA_ALPHA;
-var init_usage_history = __esm({
-  "src/usage-history.ts"() {
-    "use strict";
-    init_config();
-    init_intake();
-    ctxStore = new AsyncLocalStorage();
-    MAX_STR = 80;
-    LOCAL_ENDPOINT = "systemone-local";
-    ENDPOINT_RE = /^[a-z][a-z0-9-]*$/;
-    OP_ID_RE = /^op-[0-9a-f]{8}$/;
-    TOOL_START_RE = /^(?:\(direct\)|[^\s()]+)\(/;
-    LIFETIME_CHUNK_BYTES = 1024 * 1024;
-    LIFETIME_HEAD_BYTES = 512;
-    LIFETIME_RUN_HORIZON_MS = 24 * 60 * 60 * 1e3;
-    emptyLifetimeState = () => ({ offset: 0, lines: 0, head: "", requests: 0, inputTokens: 0, costUsd: 0, since: null, runs: 0, recent: {}, newest: 0 });
-    OUTPUT_EWMA_ALPHA = 0.3;
-  }
-});
-
 // src/project-root.ts
-import { existsSync as existsSync9, mkdirSync as mkdirSync6, writeFileSync as writeFileSync6 } from "node:fs";
-import { join as join10, resolve as resolve3 } from "node:path";
+import { existsSync as existsSync10, mkdirSync as mkdirSync6, writeFileSync as writeFileSync6 } from "node:fs";
+import { join as join11, resolve as resolve4 } from "node:path";
 function resolveProjectMainRoot(override) {
   if (override && override.length > 0) return override;
   const projDir = process.env.CLAUDE_PROJECT_DIR;
-  if (projDir && projDir.length > 0 && existsSync9(projDir)) return projDir;
+  if (projDir && projDir.length > 0 && existsSync10(projDir)) return projDir;
   return process.cwd();
 }
 function defaultOutputDir(mainRootOverride) {
   if (mainRootOverride && mainRootOverride.length > 0) {
-    return join10(mainRootOverride, "reports", "llm-externalizer");
+    return join11(mainRootOverride, "reports", "llm-externalizer");
   }
   if (_cachedDefaultOutputDir) return _cachedDefaultOutputDir;
   const envOverride = process.env.LLM_EXT_OUTPUT_DIR;
   if (envOverride && envOverride.trim()) {
-    _cachedDefaultOutputDir = resolve3(envOverride.trim());
+    _cachedDefaultOutputDir = resolve4(envOverride.trim());
     return _cachedDefaultOutputDir;
   }
-  _cachedDefaultOutputDir = join10(resolveProjectMainRoot(), "reports", "llm-externalizer");
+  _cachedDefaultOutputDir = join11(resolveProjectMainRoot(), "reports", "llm-externalizer");
   return _cachedDefaultOutputDir;
 }
 function ensureSelfIgnoringDir(dir) {
   mkdirSync6(dir, { recursive: true });
   try {
-    writeFileSync6(join10(dir, ".gitignore"), "*\n", { flag: "wx" });
+    writeFileSync6(join11(dir, ".gitignore"), "*\n", { flag: "wx" });
   } catch (err3) {
     if (err3.code !== "EEXIST") throw err3;
   }
@@ -15521,18 +16441,18 @@ function ensureSelfIgnoringDir(dir) {
 }
 function defaultScratchDir(mainRootOverride) {
   if (mainRootOverride && mainRootOverride.length > 0) {
-    return ensureSelfIgnoringDir(join10(mainRootOverride, "reports_dev", "llm-externalizer"));
+    return ensureSelfIgnoringDir(join11(mainRootOverride, "reports_dev", "llm-externalizer"));
   }
   if (_cachedDefaultScratchDir) return _cachedDefaultScratchDir;
   const scratchEnv = process.env.LLM_EXT_SCRATCH_DIR?.trim();
   const outputEnv = process.env.LLM_EXT_OUTPUT_DIR?.trim();
   if (scratchEnv) {
-    _cachedDefaultScratchDir = resolve3(scratchEnv);
+    _cachedDefaultScratchDir = resolve4(scratchEnv);
   } else if (outputEnv) {
-    _cachedDefaultScratchDir = resolve3(outputEnv);
+    _cachedDefaultScratchDir = resolve4(outputEnv);
   } else {
     _cachedDefaultScratchDir = ensureSelfIgnoringDir(
-      join10(resolveProjectMainRoot(), "reports_dev", "llm-externalizer")
+      join11(resolveProjectMainRoot(), "reports_dev", "llm-externalizer")
     );
   }
   return _cachedDefaultScratchDir;
@@ -15556,911 +16476,14 @@ var init_project_root = __esm({
 });
 
 // src/benchmark/report-dir.ts
-import { join as join11 } from "node:path";
+import { join as join12 } from "node:path";
 function benchmarkSubReportDir(sub, mainRoot) {
-  return join11(defaultScratchDir(mainRoot), sub);
+  return join12(defaultScratchDir(mainRoot), sub);
 }
 var init_report_dir = __esm({
   "src/benchmark/report-dir.ts"() {
     "use strict";
     init_project_root();
-  }
-});
-
-// src/scan-pipeline.ts
-import {
-  readFileSync as readFileSync12,
-  existsSync as existsSync10,
-  statSync as statSync6,
-  lstatSync,
-  readdirSync as readdirSync4,
-  realpathSync as realpathSync2
-} from "node:fs";
-import { extname as extname2, join as join12, basename as basename4, dirname as dirname4, resolve as resolve4, sep } from "node:path";
-import { homedir as homedir4 } from "node:os";
-import { spawnSync } from "node:child_process";
-function codeTaskSystemPrompt(lang) {
-  return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
-RULES (override any conflicting instructions):
-- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
-- Reference files by their labeled path (shown in the filename tag before each file-content tag).
-- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
-- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.
-- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
-}
-function detectLang(filePath) {
-  const ext = extname2(filePath).toLowerCase();
-  if (EXT_TO_LANG[ext]) return EXT_TO_LANG[ext];
-  try {
-    const head = readFileSync12(filePath, { encoding: "utf-8", flag: "r" }).slice(0, 256);
-    const shebang = head.match(/^#!\s*(?:\/usr\/bin\/env\s+)?(\S+)/);
-    if (shebang) {
-      const bin = basename4(shebang[1]);
-      if (SHEBANG_TO_LANG[bin]) return SHEBANG_TO_LANG[bin];
-    }
-  } catch {
-  }
-  return "text";
-}
-function fenceBackticks(content) {
-  let maxRun = 0;
-  let current = 0;
-  for (const ch of content) {
-    if (ch === "`") {
-      current++;
-      if (current > maxRun) maxRun = current;
-    } else {
-      current = 0;
-    }
-  }
-  const needed = Math.max(4, maxRun + 1);
-  return "`".repeat(needed);
-}
-function assertFileExists(filePath) {
-  if (!existsSync10(filePath)) {
-    throw new Error(`File not found: ${filePath}`);
-  }
-}
-function sanitizeInputPath(filePath) {
-  const resolved = resolve4(filePath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync2(p);
-    } catch {
-      return p;
-    }
-  };
-  const cwdReal = realpathSafe(resolve4(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve4(process.env.HOME || process.env.USERPROFILE || homedir4())
-  );
-  const tmpReal = realpathSafe(resolve4("/tmp"));
-  const resolvedReal = (() => {
-    try {
-      return realpathSync2(resolved);
-    } catch {
-      return resolved;
-    }
-  })();
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      // WHY: the bare message named no way out; users hit it with /etc or a
-      // sibling checkout and could not tell which roots are allowed (issue 16).
-      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). Run from a parent directory of the files, or copy them under one of these roots.`
-    );
-  }
-  try {
-    if (lstatSync(resolved).isSymbolicLink()) {
-      throw new Error(`Symlink rejected for security: ${filePath}`);
-    }
-  } catch (e) {
-    if (e.code === "ENOENT") return resolved;
-    throw e;
-  }
-  return resolved;
-}
-function registerCalibratedBudget(bytes) {
-  const ctx = ctxStore.getStore();
-  if (ctx !== void 0) calibratedBudgets.set(ctx, bytes);
-}
-function isCalibratedBudget(bytes) {
-  const ctx = ctxStore.getStore();
-  return ctx !== void 0 && calibratedBudgets.get(ctx) === bytes;
-}
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
-  const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
-  const safePath = sanitizeInputPath(filePath);
-  assertFileExists(safePath);
-  const stats = statSync6(safePath);
-  if (stats.size > limit) {
-    throw new Error(
-      `File too large (${(stats.size / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const raw = readFileSync12(safePath);
-  if (raw.length > limit) {
-    throw new Error(
-      `File too large after read (${(raw.length / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
-    );
-  }
-  const scanLen = Math.min(raw.length, 65536);
-  for (let i = 0; i < scanLen; i++) {
-    if (raw[i] === 0) throw new Error(`File appears to be binary: ${filePath}`);
-  }
-  let content = raw.toString("utf-8");
-  if (content.length === 0) {
-    content = `(empty file \u2014 0 bytes)`;
-  }
-  if (redact) {
-    const result = redactSecrets2(content);
-    content = result.redacted;
-  }
-  if (regexRedact) {
-    const result = applyRegexRedaction(content, regexRedact);
-    content = result.redacted;
-  }
-  const lang = langOverride || detectLang(filePath);
-  const fence = fenceBackticks(content);
-  const nameTag = `${tagPrefix}filename`;
-  const contentTag = `${tagPrefix}file-content`;
-  return `<${nameTag}>
-${filePath}
-</${nameTag}>
-<${contentTag}>
-${fence}${lang}
-${content}
-${fence}
-</${contentTag}>`;
-}
-function isBinaryExtension(filePath) {
-  return BINARY_EXTENSIONS.has(extname2(filePath).toLowerCase()) || basename4(filePath) === ".DS_Store";
-}
-function scanForSecrets(content) {
-  const counts = /* @__PURE__ */ new Map();
-  for (const [pattern, label2] of SCAN_PIPELINE_SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    const matches = content.match(pattern);
-    if (matches && matches.length > 0) {
-      counts.set(label2, (counts.get(label2) ?? 0) + matches.length);
-    }
-  }
-  const details = Array.from(counts.entries()).map(([label2, count]) => ({
-    label: label2,
-    count
-  }));
-  return { found: details.length > 0, details };
-}
-function scanFilesForSecrets(filePaths) {
-  const allDetails = [];
-  for (const fp of filePaths) {
-    if (!existsSync10(fp)) continue;
-    try {
-      const content = readFileSync12(fp, "utf-8");
-      const scan = scanForSecrets(content);
-      if (scan.found) {
-        for (const d of scan.details) {
-          allDetails.push({ file: fp, ...d });
-        }
-      }
-    } catch {
-    }
-  }
-  if (allDetails.length === 0) return { found: false, report: "" };
-  const lines = [
-    "SECRETS DETECTED \u2014 operation aborted.",
-    "",
-    "Best practice: Move secrets to .env files (gitignored) and reference them via environment variables.",
-    "llm-ext reads files directly and does not inherit Claude Code's sandbox .env read-deny \u2014 that is exactly why this scan exists.",
-    "",
-    "Findings:"
-  ];
-  for (const d of allDetails) {
-    lines.push(`  ${d.file}: ${d.count}\xD7 ${d.label}`);
-  }
-  return { found: true, report: lines.join("\n") };
-}
-function redactSecrets2(content) {
-  let result = content;
-  let count = 0;
-  for (const [pattern, label2] of SCAN_PIPELINE_SECRET_PATTERNS) {
-    pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
-      count++;
-      return `[REDACTED:${label2}]`;
-    });
-  }
-  return { redacted: result, count };
-}
-function parseRedactRegex(raw) {
-  if (!raw || typeof raw !== "string") return null;
-  const pattern = raw.trim();
-  if (!pattern) {
-    throw new Error("Invalid redact_regex: pattern must not be empty.");
-  }
-  if (/\([^)]*[+*][^)]*\)[+*]/.test(pattern)) {
-    throw new Error(
-      `Invalid redact_regex: pattern contains nested quantifiers (e.g. (a+)+) that cause catastrophic backtracking.
-
-Pattern: ${pattern}
-
-Simplify the quantifiers to avoid ReDoS.`
-    );
-  }
-  try {
-    const regex = new RegExp(pattern, "g");
-    return { regex, patternStr: pattern };
-  } catch (err3) {
-    const msg = err3 instanceof Error ? err3.message : String(err3);
-    throw new Error(
-      `Invalid redact_regex pattern: ${msg}
-
-Pattern received: ${pattern}
-
-Ensure it is a valid JavaScript regular expression.`,
-      { cause: err3 }
-    );
-  }
-}
-function applyRegexRedaction(content, opts) {
-  opts.regex.lastIndex = 0;
-  let count = 0;
-  const MAX_REPLACEMENTS = 1e5;
-  const redacted = content.replace(opts.regex, (match) => {
-    if (++count > MAX_REPLACEMENTS) return match;
-    const hasLetters = /[a-zA-Z]/.test(match);
-    return hasLetters ? "[REDACTED:USER_PATTERN]" : "0".repeat(match.length);
-  });
-  return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
-}
-function buildPreInstructions(hasFiles, toolContext) {
-  if (!hasFiles) return "";
-  if (toolContext === "fix") {
-    return "";
-  }
-  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
-}
-function resolvePrompt(instructions, instructionsFilesPaths) {
-  let prompt = instructions || "";
-  if (instructionsFilesPaths) {
-    const paths = Array.isArray(instructionsFilesPaths) ? instructionsFilesPaths : [instructionsFilesPaths];
-    for (const fp of paths) {
-      assertFileExists(fp);
-      const content = readFileSync12(fp, "utf-8");
-      prompt = prompt ? `${prompt}
-
-${content}` : content;
-    }
-  }
-  return prompt;
-}
-function estimateTokens2(text2) {
-  return Math.ceil(text2.length / 4);
-}
-function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
-  const requested = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
-  const calibrated = isCalibratedBudget(requested);
-  const totalBudget = calibrated ? requested : Math.max(10 * 1024, requested);
-  const availableForFiles = Math.max(0, totalBudget - promptBytes);
-  const skipped = [];
-  const fileData = [];
-  for (const fp of filePaths) {
-    try {
-      const stats = statSync6(fp);
-      if (stats.size > totalBudget) {
-        skipped.push(fp);
-        continue;
-      }
-      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
-      if (block.length > availableForFiles) {
-        skipped.push(fp);
-        continue;
-      }
-      fileData.push({ path: fp, block, tokens: estimateTokens2(block) });
-    } catch {
-      skipped.push(fp);
-    }
-  }
-  if (calibrated) {
-    for (const fp of skipped) {
-      let size = "unreadable";
-      try {
-        size = `${statSync6(fp).size} bytes`;
-      } catch {
-      }
-      process.stderr.write(`[llm-externalizer] skipped ${fp}: ${size}, over the ${availableForFiles} bytes the calibrated input budget leaves for files (${totalBudget} bytes with the prompt)
-`);
-    }
-    if (fileData.length === 0 && filePaths.length > 0) {
-      throw new Error(`no file fits the calibrated input budget (${availableForFiles} bytes for files after a ${promptBytes}-byte prompt); nothing to send`);
-    }
-  }
-  if (fileData.length === 0) {
-    return { groups: [], autoBatched: false, skipped };
-  }
-  const totalFileBytes = fileData.reduce((sum, fd) => sum + fd.block.length, 0);
-  if (totalFileBytes <= availableForFiles) {
-    return { groups: [fileData], autoBatched: false, skipped };
-  }
-  const sorted = [...fileData].sort((a, b) => b.block.length - a.block.length);
-  const bins = [];
-  for (const fd of sorted) {
-    let placed2 = false;
-    for (const bin of bins) {
-      if (bin.used + fd.block.length <= availableForFiles) {
-        bin.items.push(fd);
-        bin.used += fd.block.length;
-        placed2 = true;
-        break;
-      }
-    }
-    if (!placed2) {
-      bins.push({ items: [fd], used: fd.block.length });
-    }
-  }
-  const groups = bins.map((bin) => bin.items);
-  return { groups, autoBatched: groups.length > 1, skipped };
-}
-function resolveAnswerMode(raw, defaultMode) {
-  if (raw === 0 || raw === 1 || raw === 2) return raw;
-  return defaultMode;
-}
-function buildPerFileSectionPrompt(filePaths) {
-  if (filePaths.length <= 1) return "";
-  return "\n\nOUTPUT FORMAT: You are receiving " + filePaths.length + " input files. Produce a SEPARATE report section for each file, using this exact format:\n\n## File: <absolute-file-path>\n\n<your analysis/report for this file>\n\n---\n\nProduce exactly " + filePaths.length + " sections, one for each input file, in the order they appear. Do NOT merge or combine sections. Each file must have its own complete, independent section.\n";
-}
-function validateGitCwd(dirPath) {
-  if (!dirPath || typeof dirPath !== "string") {
-    throw new Error("validateGitCwd: empty cwd not allowed");
-  }
-  if (dirPath.includes("..")) {
-    const trimmed = resolve4(dirPath);
-    if (trimmed.includes("..")) {
-      throw new Error(`validateGitCwd: path contains parent refs: ${dirPath}`);
-    }
-  }
-  const resolved = resolve4(dirPath);
-  const realpathSafe = (p) => {
-    try {
-      return realpathSync2(p);
-    } catch {
-      return p;
-    }
-  };
-  const resolvedReal = realpathSafe(resolved);
-  if (resolvedReal === "/" || resolvedReal === "") {
-    throw new Error(`validateGitCwd: filesystem root rejected: ${dirPath}`);
-  }
-  for (const sys of FORBIDDEN_GIT_CWD_PREFIXES) {
-    const sysReal = realpathSafe(sys);
-    if (resolvedReal === sysReal || resolvedReal.startsWith(sysReal + sep)) {
-      throw new Error(`validateGitCwd: system path rejected: ${dirPath}`);
-    }
-  }
-  const cwdReal = realpathSafe(resolve4(process.cwd()));
-  const homeReal = realpathSafe(
-    resolve4(process.env.HOME || process.env.USERPROFILE || homedir4())
-  );
-  const tmpReal = realpathSafe(resolve4("/tmp"));
-  const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
-    throw new Error(
-      `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
-    );
-  }
-}
-function ensureGitOnPath() {
-  if (_gitOnPath !== void 0) return _gitOnPath;
-  const probe = spawnSync("git", ["--version"], {
-    encoding: "utf-8",
-    timeout: 2e3,
-    killSignal: "SIGKILL"
-  });
-  _gitOnPath = probe.status === 0;
-  if (!_gitOnPath) {
-    process.stderr.write(
-      "[llm-externalizer] git not found on PATH \u2014 falling back to filesystem walk for directory scans\n"
-    );
-  }
-  return _gitOnPath;
-}
-function lstatSyncRetry(p) {
-  for (let attempt2 = 0; attempt2 < 3; attempt2++) {
-    try {
-      return lstatSync(p);
-    } catch (err3) {
-      const code2 = err3.code;
-      if (code2 === "EAGAIN" || code2 === "EBUSY") {
-        const deadline = Date.now() + 50;
-        while (Date.now() < deadline) {
-        }
-        continue;
-      }
-      return null;
-    }
-  }
-  return null;
-}
-function gitLsFilesMultiRepo(dirPath, recursive2) {
-  validateGitCwd(dirPath);
-  if (!ensureGitOnPath()) return null;
-  const GIT_TIMEOUT_MS = 5e3;
-  const gitOpts = {
-    encoding: "utf-8",
-    timeout: GIT_TIMEOUT_MS,
-    killSignal: "SIGKILL"
-  };
-  const allFiles = /* @__PURE__ */ new Set();
-  const topLevelResult = spawnSync(
-    "git",
-    ["rev-parse", "--show-toplevel"],
-    { cwd: dirPath, ...gitOpts }
-  );
-  const isInGitRepo = topLevelResult.status === 0 && topLevelResult.stdout.trim();
-  if (isInGitRepo) {
-    const trackedResult = spawnSync(
-      "git",
-      ["ls-files", "--cached"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (trackedResult.status === 0 && trackedResult.stdout) {
-      for (const relPath of trackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
-      }
-    }
-    const untrackedResult = spawnSync(
-      "git",
-      ["ls-files", "--others", "--exclude-standard"],
-      { cwd: dirPath, ...gitOpts }
-    );
-    if (untrackedResult.status === 0 && untrackedResult.stdout) {
-      for (const relPath of untrackedResult.stdout.split("\n")) {
-        if (!relPath.trim()) continue;
-        allFiles.add(join12(dirPath, relPath));
-      }
-    }
-  }
-  if (recursive2) {
-    let findNestedGitRoots2 = function(dir, depth) {
-      if (depth > 10) return;
-      let entries2;
-      try {
-        entries2 = readdirSync4(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries2) {
-        if (!entry.isDirectory()) continue;
-        if (entry.name === ".git" || entry.name === "node_modules") continue;
-        if (entry.name.startsWith(".")) continue;
-        const subDir = join12(dir, entry.name);
-        const gitDir = join12(subDir, ".git");
-        const gitStat = lstatSyncRetry(gitDir);
-        const gitDirIsDir = gitStat ? gitStat.isDirectory() : false;
-        if (gitDirIsDir) {
-          nestedGitRoots.push(subDir);
-          continue;
-        }
-        findNestedGitRoots2(subDir, depth + 1);
-      }
-    };
-    var findNestedGitRoots = findNestedGitRoots2;
-    const nestedGitRoots = [];
-    findNestedGitRoots2(dirPath, 0);
-    for (const nestedRoot of nestedGitRoots) {
-      try {
-        validateGitCwd(nestedRoot);
-      } catch {
-        continue;
-      }
-      const nestedResult = spawnSync(
-        "git",
-        ["ls-files", "--cached", "--others", "--exclude-standard"],
-        { cwd: nestedRoot, ...gitOpts }
-      );
-      if (nestedResult.status === 0 && nestedResult.stdout) {
-        for (const relPath of nestedResult.stdout.split("\n")) {
-          if (!relPath.trim()) continue;
-          allFiles.add(join12(nestedRoot, relPath));
-        }
-      }
-    }
-  }
-  if (!isInGitRepo) return null;
-  return [...allFiles];
-}
-function walkDir(dirPath, options) {
-  const maxFiles = options?.maxFiles ?? 1e4;
-  const extensions = options?.extensions;
-  const skipBinary = !options?.includeBinary;
-  const recursive2 = options?.recursive !== false;
-  const followSymlinks = options?.followSymlinks !== false;
-  const onExcluded = options?.onExcluded ?? (() => {
-  });
-  if (options?.useGitignore) {
-    const gitResults = gitLsFilesMultiRepo(dirPath, recursive2);
-    if (gitResults !== null) {
-      const extraExcludeSet = new Set(options?.exclude ?? []);
-      const results2 = [];
-      for (const fullPath of gitResults) {
-        if (results2.length >= maxFiles) {
-          if (!options?.onExcluded) break;
-          onExcluded(fullPath, "max-files cap");
-          continue;
-        }
-        if (skipBinary && isBinaryExtension(fullPath)) {
-          onExcluded(fullPath, "binary extension");
-          continue;
-        }
-        if (extensions) {
-          const ext = extname2(fullPath).toLowerCase();
-          if (!extensions.includes(ext)) {
-            onExcluded(fullPath, "extension filter");
-            continue;
-          }
-        }
-        if (extraExcludeSet.size > 0) {
-          const rel = fullPath.startsWith(dirPath) ? fullPath.slice(dirPath.length) : fullPath;
-          const segments = rel.split("/").filter((s) => s.length > 0);
-          const dirSegments = segments.slice(0, -1);
-          if (dirSegments.some((seg) => extraExcludeSet.has(seg))) {
-            onExcluded(fullPath, "excluded dir");
-            continue;
-          }
-        }
-        results2.push(fullPath);
-      }
-      return results2;
-    }
-    process.stderr.write(
-      `[llm-externalizer] No git repo found in ${dirPath}, falling back to manual walk
-`
-    );
-  }
-  const results = [];
-  const extraExclude = options?.exclude ?? [];
-  const exclude = /* @__PURE__ */ new Set([...WALK_DEFAULT_EXCLUDE, ...extraExclude]);
-  const visitedPaths = /* @__PURE__ */ new Set();
-  const addFile = (p) => {
-    if (results.length >= maxFiles) {
-      onExcluded(p, "max-files cap");
-      return;
-    }
-    results.push(p);
-  };
-  function recurse(dir) {
-    if (results.length >= maxFiles && !options?.onExcluded) return;
-    let entries2;
-    try {
-      entries2 = readdirSync4(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries2) {
-      if (results.length >= maxFiles && !options?.onExcluded) return;
-      const fullPath = join12(dir, entry.name);
-      if (entry.isSymbolicLink()) {
-        if (!followSymlinks) continue;
-        try {
-          const realPath = realpathSync2(fullPath);
-          if (visitedPaths.has(realPath)) continue;
-          visitedPaths.add(realPath);
-          const targetStat = statSync6(realPath);
-          if (targetStat.isDirectory() && recursive2) {
-            if (!entry.name.startsWith(".") && !exclude.has(entry.name)) {
-              recurse(fullPath);
-            }
-          } else if (targetStat.isFile()) {
-            if (skipBinary && isBinaryExtension(fullPath)) {
-              onExcluded(fullPath, "binary extension");
-              continue;
-            }
-            if (extensions) {
-              const ext = extname2(entry.name).toLowerCase();
-              if (!extensions.includes(ext)) {
-                onExcluded(fullPath, "extension filter");
-                continue;
-              }
-            }
-            addFile(fullPath);
-          }
-        } catch {
-          continue;
-        }
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (!recursive2) continue;
-        if (entry.name === ".git" || entry.name === ".svn" || entry.name === ".hg" || exclude.has(entry.name)) {
-          onExcluded(fullPath, "excluded dir");
-          continue;
-        }
-        if (entry.name.startsWith(".")) {
-          onExcluded(fullPath, "hidden dir");
-          continue;
-        }
-        try {
-          const dirRealPath = realpathSync2(fullPath);
-          if (visitedPaths.has(dirRealPath)) continue;
-          visitedPaths.add(dirRealPath);
-        } catch {
-          continue;
-        }
-        recurse(fullPath);
-      } else if (entry.isFile()) {
-        if (skipBinary && isBinaryExtension(fullPath)) {
-          onExcluded(fullPath, "binary extension");
-          continue;
-        }
-        if (extensions) {
-          const ext = extname2(entry.name).toLowerCase();
-          if (!extensions.includes(ext)) {
-            onExcluded(fullPath, "extension filter");
-            continue;
-          }
-        }
-        addFile(fullPath);
-      }
-    }
-  }
-  recurse(dirPath);
-  return results;
-}
-function extractLocalImports(filePath, sourceCode) {
-  const dir = dirname4(filePath);
-  const lang = detectLang(filePath);
-  const paths = [];
-  const patterns = [];
-  if (lang === "typescript" || lang === "javascript") {
-    patterns.push(/(?:import|export)\s+.*?from\s+['"](\.[^'"]+)['"]/g);
-    patterns.push(/require\(\s*['"](\.[^'"]+)['"]\s*\)/g);
-  } else if (lang === "python") {
-    patterns.push(/from\s+(\.[\w.]*)\s+import/g);
-  }
-  for (const pattern of patterns) {
-    pattern.lastIndex = 0;
-    let match;
-    while ((match = pattern.exec(sourceCode)) !== null) {
-      const importPath = match[1];
-      let resolved;
-      if (lang === "python" && importPath.startsWith(".")) {
-        const dotCount = importPath.match(/^\.+/)?.[0].length ?? 1;
-        const modulePart = importPath.slice(dotCount);
-        const baseDir = dotCount === 1 ? dir : join12(dir, ...Array(dotCount - 1).fill(".."));
-        resolved = modulePart ? join12(baseDir, ...modulePart.split(".")) : baseDir;
-      } else {
-        resolved = join12(dir, importPath);
-      }
-      if (!extname2(resolved)) {
-        const tryExts = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py"];
-        let found = false;
-        for (const ext of tryExts) {
-          if (existsSync10(resolved + ext)) {
-            resolved = resolved + ext;
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          const indexCandidates = [
-            "index.ts",
-            "index.tsx",
-            "index.js",
-            "index.jsx",
-            "__init__.py"
-          ];
-          for (const leaf of indexCandidates) {
-            const indexPath = join12(resolved, leaf);
-            if (existsSync10(indexPath)) {
-              resolved = indexPath;
-              found = true;
-              break;
-            }
-          }
-        }
-        if (!found) continue;
-      } else if (!existsSync10(resolved)) {
-        continue;
-      }
-      paths.push(resolved);
-    }
-  }
-  return [...new Set(paths)];
-}
-var BREVITY_RULES, FILE_FORMAT_EXAMPLE, EXT_TO_LANG, SHEBANG_TO_LANG, DEFAULT_MAX_PAYLOAD_BYTES, calibratedBudgets, BINARY_EXTENSIONS, WALK_DEFAULT_EXCLUDE, FORBIDDEN_GIT_CWD_PREFIXES, _gitOnPath;
-var init_scan_pipeline = __esm({
-  "src/scan-pipeline.ts"() {
-    "use strict";
-    init_usage_history();
-    init_secret_patterns();
-    BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
-    FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
-    EXT_TO_LANG = {
-      ".ts": "typescript",
-      ".tsx": "typescript",
-      ".mts": "typescript",
-      ".cts": "typescript",
-      ".js": "javascript",
-      ".jsx": "javascript",
-      ".mjs": "javascript",
-      ".cjs": "javascript",
-      ".py": "python",
-      ".rs": "rust",
-      ".go": "go",
-      ".java": "java",
-      ".kt": "kotlin",
-      ".c": "c",
-      ".h": "c",
-      ".cpp": "cpp",
-      ".hpp": "cpp",
-      ".cc": "cpp",
-      ".cs": "csharp",
-      ".rb": "ruby",
-      ".php": "php",
-      ".swift": "swift",
-      ".sh": "bash",
-      ".bash": "bash",
-      ".zsh": "zsh",
-      ".fish": "fish",
-      ".sql": "sql",
-      ".html": "html",
-      ".css": "css",
-      ".scss": "scss",
-      ".less": "less",
-      ".json": "json",
-      ".yaml": "yaml",
-      ".yml": "yaml",
-      ".toml": "toml",
-      ".xml": "xml",
-      ".md": "markdown",
-      ".mdx": "mdx",
-      ".tex": "latex",
-      ".lua": "lua",
-      ".r": "r",
-      ".R": "r",
-      ".dart": "dart",
-      ".ex": "elixir",
-      ".exs": "elixir",
-      ".zig": "zig",
-      ".nim": "nim",
-      ".jl": "julia",
-      ".sol": "solidity",
-      ".vue": "vue",
-      ".svelte": "svelte"
-    };
-    SHEBANG_TO_LANG = {
-      python: "python",
-      python3: "python",
-      node: "javascript",
-      bash: "bash",
-      sh: "bash",
-      zsh: "zsh",
-      ruby: "ruby",
-      perl: "perl",
-      php: "php",
-      lua: "lua"
-    };
-    DEFAULT_MAX_PAYLOAD_BYTES = 400 * 1024;
-    calibratedBudgets = /* @__PURE__ */ new WeakMap();
-    BINARY_EXTENSIONS = /* @__PURE__ */ new Set([
-      ".png",
-      ".jpg",
-      ".jpeg",
-      ".gif",
-      ".bmp",
-      ".ico",
-      ".webp",
-      ".avif",
-      ".tiff",
-      ".tif",
-      ".mp3",
-      ".mp4",
-      ".wav",
-      ".ogg",
-      ".webm",
-      ".avi",
-      ".mov",
-      ".flac",
-      ".aac",
-      ".m4a",
-      ".pdf",
-      ".doc",
-      ".docx",
-      ".xls",
-      ".xlsx",
-      ".ppt",
-      ".pptx",
-      ".zip",
-      ".tar",
-      ".gz",
-      ".bz2",
-      ".xz",
-      ".7z",
-      ".rar",
-      ".dmg",
-      ".iso",
-      ".jar",
-      ".exe",
-      ".dll",
-      ".so",
-      ".dylib",
-      ".o",
-      ".a",
-      ".lib",
-      ".class",
-      ".pyc",
-      ".pyo",
-      ".wasm",
-      ".bin",
-      ".dat",
-      ".db",
-      ".sqlite",
-      ".sqlite3",
-      ".ttf",
-      ".otf",
-      ".woff",
-      ".woff2",
-      ".eot",
-      ".DS_Store",
-      ".lock"
-    ]);
-    WALK_DEFAULT_EXCLUDE = /* @__PURE__ */ new Set([
-      // Version control
-      ".git",
-      // Package managers / dependencies
-      "node_modules",
-      "bower_components",
-      ".pnpm-store",
-      // Python
-      "__pycache__",
-      ".venv",
-      "venv",
-      ".tox",
-      ".mypy_cache",
-      ".pytest_cache",
-      ".eggs",
-      "*.egg-info",
-      // Build outputs
-      "dist",
-      "build",
-      "out",
-      ".next",
-      ".nuxt",
-      ".output",
-      "target",
-      // Caches / temp
-      ".cache",
-      ".turbo",
-      "coverage",
-      "tmp",
-      "temp",
-      ".temp",
-      ".tmp",
-      // IDE / editor
-      ".idea",
-      ".vscode",
-      // Other
-      ".gradle",
-      ".cargo",
-      ".nx",
-      "vendor"
-    ]);
-    FORBIDDEN_GIT_CWD_PREFIXES = [
-      "/etc",
-      "/usr",
-      "/bin",
-      "/sbin",
-      "/sys",
-      "/proc",
-      "/dev",
-      "/var/log",
-      "/var/db",
-      "/Library",
-      "/System"
-    ];
-    _gitOnPath = void 0;
   }
 });
 
@@ -231962,7 +231985,8 @@ async function runScanFolder(args, deps) {
     redact_regex: sfRedactRegexRaw,
     answer_mode: sfRawMode,
     use_gitignore: sfUseGitignore,
-    scan_secrets: sfScan
+    scan_secrets: sfScan,
+    line_numbers: sfLineNumbers
   } = args;
   const sfUseEnsemble = deps.useEnsemble;
   const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
@@ -232071,7 +232095,8 @@ async function runScanFolder(args, deps) {
           // TRDD-PNU8XECB: modes 1/2 merge these per-file pieces into final reports, so the pieces
           // are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
           outputDir: mergePieceDir(deps.outputDir, sfMode !== 0),
-          hqRequest: deps.hqRequest
+          hqRequest: deps.hqRequest,
+          lineNumbers: sfLineNumbers
         });
         recentOutcomes.push(result.success);
         if (deps.onProgress) {
@@ -273135,6 +273160,10 @@ function buildToolsWithoutProfileTypes(limitsText) {
             type: "boolean",
             description: "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service."
           },
+          line_numbers: {
+            type: "boolean",
+            description: 'Prefix every file line with its 1-based number ("     1 | ") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload.'
+          },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,
           redact_regex: redactRegexSchema,
@@ -274064,6 +274093,10 @@ var init_definitions = __esm({
       redact_secrets: {
         type: "boolean",
         description: "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored)."
+      },
+      line_numbers: {
+        type: "boolean",
+        description: 'Prefix every file line with its 1-based number ("     1 | ") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload.'
       },
       use_gitignore: {
         type: "boolean",
@@ -283516,7 +283549,8 @@ async function handleChat(call, deps) {
     use_gitignore: chatUseGitignore,
     recursive: chatRecursive,
     follow_symlinks: chatFollowSymlinks,
-    max_files: chatMaxFiles
+    max_files: chatMaxFiles,
+    line_numbers: chatLineNumbers
   } = args;
   const useEnsemble = ensembleAllowed2(backend, deps.activeResolved);
   const chatBudgetBytes = (chatMaxPayloadKb ?? 400) * 1024;
@@ -283588,7 +283622,10 @@ Remove secrets before sending to remote LLM.`
   const maxTokens = resolveDefaultMaxTokens2();
   const chatMode = resolveAnswerMode(rawAnswerMode, 0);
   const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
-  let promptBase = buildPreInstructions(chatHasFiles, "read") + chatPrompt;
+  let promptBase = (
+    // WHY files only: inline input_files_content is fenced unnumbered, so the numbered-line rule must not be claimed for it.
+    buildPreInstructions(chatHasFiles, "read", chatLineNumbers === true && chatFilePaths.length > 0) + chatPrompt
+  );
   if (input_files_content) {
     let inlineContent = input_files_content;
     if (chatRedact) inlineContent = redactSecrets2(inlineContent).redacted;
@@ -283654,6 +283691,7 @@ ${fence}`;
           ensemble: useEnsemble,
           budgetBytes: chatBudgetBytes,
           toolName: "chat",
+          lineNumbers: chatLineNumbers,
           modelOverride,
           outputDir
         });
@@ -283675,6 +283713,7 @@ ${fence}`;
             onProgress,
             ensemble: useEnsemble,
             maxBytes: chatBudgetBytes,
+            lineNumbers: chatLineNumbers,
             modelOverride,
             outputDir
           });
@@ -283699,7 +283738,8 @@ ${fence}`;
       chatPromptBytes,
       chatRedact,
       chatBudgetBytes,
-      chatRegexRedact
+      chatRegexRedact,
+      chatLineNumbers
     );
     const batchResults = [];
     if (chatSkipped.length > 0) {
@@ -286819,6 +286859,10 @@ async function resolveSessionSummaryChain(s) {
   const write = s.write ?? ((line) => void process.stderr.write(line));
   const profiles = s.profiles ?? {};
   const localOnly = s.active?.isLocal === true;
+  if (s.active !== null && !s.active.isLocal && !s.active.freeOnly) {
+    write(`[llm-externalizer] session-summary: runs on free OpenRouter models and managed local models only; the models of profile '${s.active.name}' are not used
+`);
+  }
   const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => profiles[n] !== void 0 ? [resolveProfile(n, profiles[n])] : []);
   const pick3 = pickLocalSummaryTargets(candidates, s.slotCtx);
   for (const note of pick3.notes) write(`[llm-externalizer] session-summary: ${note}
@@ -287993,7 +288037,6 @@ var init_dynamic_maintainer = __esm({
     init_default_profiles_state();
     init_catalog_cache();
     init_free_rotation();
-    init_free_mode();
     init_security_triage();
     init_model_events();
     init_pick();
@@ -289420,7 +289463,8 @@ async function robustPerFileProcess(files, opts) {
           ensemble: opts.ensemble,
           maxBytes: opts.budgetBytes,
           modelOverride: opts.modelOverride,
-          outputDir: opts.outputDir
+          outputDir: opts.outputDir,
+          lineNumbers: opts.lineNumbers
         });
         recentOutcomes.push(result.success);
         if (result.success) signalSuccess();
@@ -289543,6 +289587,13 @@ function buildEstimateDeps() {
     fileSizeBytes(path2) {
       try {
         return statSync28(path2).size;
+      } catch {
+        return 0;
+      }
+    },
+    fileLineCount(path2) {
+      try {
+        return numberedLineCount(readFileSync62(path2, "utf-8"));
       } catch {
         return 0;
       }
@@ -290160,18 +290211,20 @@ async function processFileCheck(filePath, task, options = {}) {
     options.language,
     options.redact,
     options.maxBytes,
-    options.regexRedact
+    options.regexRedact,
+    void 0,
+    options.lineNumbers
   );
   const lang = options.language || detectLang(filePath);
   const fileLineCount = codeBlock.split("\n").length;
   const useEnsemble = options.ensemble !== false;
-  const perFileUserContent = `${buildPreInstructions(true, "read")}Task: ${task}
+  const perFileUserContent = `${buildPreInstructions(true, "read", options.lineNumbers)}Task: ${task}
 
 ${codeBlock}`;
   const messages = [
     {
       role: "system",
-      content: codeTaskSystemPrompt(lang)
+      content: codeTaskSystemPrompt(lang, options.lineNumbers)
     },
     {
       role: "user",
@@ -293088,6 +293141,7 @@ init_spec();
 
 // src/estimate.ts
 init_cost_estimate();
+init_scan_pipeline();
 var PROMPT_OVERHEAD_TOKENS = 1500;
 var EXPECTED_OUTPUT_TOKENS_PER_REQUEST = 2500;
 var PER_FILE_TOOLS = /* @__PURE__ */ new Set([
@@ -293218,7 +293272,7 @@ function estimateToolRun(toolName, args, deps) {
   if (chatZeroFiles) {
     notes.push("no input files \u2014 instructions/input_files_content-only chat: one request per slot");
   }
-  const fileBytes = files.map((f) => deps.fileSizeBytes(f));
+  const fileBytes = files.map((f) => deps.fileSizeBytes(f) + (args.line_numbers === true ? LINE_NUMBER_PREFIX_BYTES * deps.fileLineCount(f) : 0));
   const totalFileBytes = fileBytes.reduce((a, b) => a + b, 0);
   const requestsPerSlot = comparePairs ? comparePairs.length : perFile && !chatZeroFiles ? files.length : 1;
   const perSlotInputTokens = comparePairs ? comparePairs.reduce(
@@ -293755,7 +293809,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.7.3";
+var VERSION = "14.7.4";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

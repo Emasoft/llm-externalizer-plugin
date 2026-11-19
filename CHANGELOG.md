@@ -1,6 +1,35 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.4] - 2026-11-19
+
+### Added
+
+- Feat(input): opt-in --line_numbers numbers file lines so reports can cite exact lines (GitHub #16, TRDD-MI0UJQF1)
+
+
+### Documentation
+
+- Docs(trdd): close 61EINA10 and YHGYWPHQ, Windows failures all carded (TRDD-61EINA10, TRDD-YHGYWPHQ)
+
+- Docs(trdd): MI0UJQF1 boxes ticked, commit 6e79df85 recorded, card to publish (TRDD-MI0UJQF1)
+
+- Docs(trdd): WP8W8L5E to publish with amended acceptance; FC2TX9VU records 14.7.3 CI and the 15/16 comments (TRDD-WP8W8L5E, TRDD-FC2TX9VU)
+
+- Docs(trdd): correct the 14.7.3 card notes after review (TRDD-FC2TX9VU)
+
+- Docs(trdd): record the 14.7.3 release on its cards (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(profiles): detector and maintainer build the free fingerprint from one candidate list (GitHub #15, TRDD-NC7873YO)
+
+- Fix(free-pool): discovery leaves out auto-discovered models blocked by repeated gone verdicts (GitHub #15, TRDD-NC7873YO)
+
+- Fix(session-summary): say on stderr when the profile models are not used (GitHub #15, TRDD-WP8W8L5E)
+
+
 ## [14.7.3] - 2026-11-18
 
 ### Added

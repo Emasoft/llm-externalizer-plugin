@@ -7646,7 +7646,9 @@ function resolveFreePool(configuredIds, catalog, opts) {
     const zeroCost = filterModels(catalog, freeCriteria).filter(
       (q) => isZeroCostPriced(q.inputDollarsPerMillion, q.outputDollarsPerMillion)
     );
-    for (const q of rankByQualityIndex(zeroCost).slice(0, opts.autoDiscoverTopN)) {
+    const blocked = opts.exclude ?? /* @__PURE__ */ new Set();
+    const eligible = zeroCost.filter((q) => seen.has(q.id) || !blocked.has(q.id));
+    for (const q of rankByQualityIndex(eligible).slice(0, opts.autoDiscoverTopN)) {
       if (!seen.has(q.id)) {
         add(q.id);
         autoDiscovered.push(q.id);
@@ -221270,14 +221272,10 @@ import {
 import { extname, join as join10, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
 import { homedir as homedir4 } from "node:os";
 import { spawnSync } from "node:child_process";
-function codeTaskSystemPrompt(lang) {
+function codeTaskSystemPrompt(lang, lineNumbers) {
   return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
 RULES (override any conflicting instructions):
-- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.
-- Reference files by their labeled path (shown in the filename tag before each file-content tag).
-- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.
-- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.
-- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain.` + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
+` + (lineNumbers ? LINE_NUMBER_RULE : "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n") + "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders.\n- Be specific and actionable \u2014 reference concrete function names, variable names, and code patterns.\n- If you assign a severity or priority to findings, reserve the highest level (e.g. CRITICAL) for demonstrably exploitable, data-loss, or crash-in-normal-use issues; default to a lower level when uncertain." + FILE_FORMAT_EXAMPLE + BREVITY_RULES;
 }
 function detectLang(filePath) {
   const ext = extname(filePath).toLowerCase();
@@ -221306,6 +221304,15 @@ function fenceBackticks(content) {
   }
   const needed = Math.max(4, maxRun + 1);
   return "`".repeat(needed);
+}
+function prefixLineNumbers(text) {
+  if (text.length === 0) return text;
+  const endsWithNewline = text.endsWith("\n");
+  const lines = text.split("\n");
+  if (endsWithNewline) lines.pop();
+  const numbered = lines.map((line, i) => `${String(i + 1).padStart(6)} | ${line}`).join("\n");
+  return endsWithNewline ? `${numbered}
+` : numbered;
 }
 function assertFileExists(filePath) {
   if (!existsSync8(filePath)) {
@@ -221355,7 +221362,7 @@ function isCalibratedBudget(bytes) {
   const ctx = ctxStore.getStore();
   return ctx !== void 0 && calibratedBudgets.get(ctx) === bytes;
 }
-function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "") {
+function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexRedact, tagPrefix = "", lineNumbers) {
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   const limit = !Number.isFinite(rawLimit) || rawLimit <= 0 ? DEFAULT_MAX_PAYLOAD_BYTES : rawLimit;
   const safePath = sanitizeInputPath(filePath);
@@ -221381,12 +221388,21 @@ function readFileAsCodeBlock(filePath, langOverride, redact, maxBytes, regexReda
     content = `(empty file \u2014 0 bytes)`;
   }
   if (redact) {
-    const result = redactSecrets2(content);
+    const result = redactSecrets2(content, { keepLines: lineNumbers === true });
     content = result.redacted;
   }
   if (regexRedact) {
     const result = applyRegexRedaction(content, regexRedact);
     content = result.redacted;
+  }
+  if (lineNumbers && raw.length > 0) {
+    content = prefixLineNumbers(content);
+    const numberedBytes = Buffer.byteLength(content, "utf-8");
+    if (numberedBytes > limit) {
+      throw new Error(
+        `File too large after line numbering (${(numberedBytes / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`
+      );
+    }
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
@@ -221448,14 +221464,17 @@ function scanFilesForSecrets(filePaths) {
   }
   return { found: true, report: lines.join("\n") };
 }
-function redactSecrets2(content) {
+function redactSecrets2(content, opts = {}) {
   let result = content;
   let count = 0;
   for (const [pattern, label] of SCAN_PIPELINE_SECRET_PATTERNS) {
     pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
+    result = result.replace(pattern, (match) => {
       count++;
-      return `[REDACTED:${label}]`;
+      if (!opts.keepLines) return `[REDACTED:${label}]`;
+      const lead = /^\n*/.exec(match)[0];
+      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
+      return `${lead}[REDACTED:${label}]${"\n".repeat(rest)}`;
     });
   }
   return { redacted: result, count };
@@ -221501,12 +221520,12 @@ function applyRegexRedaction(content, opts) {
   });
   return { redacted, count: Math.min(count, MAX_REPLACEMENTS) };
 }
-function buildPreInstructions(hasFiles, toolContext) {
+function buildPreInstructions(hasFiles, toolContext, lineNumbers) {
   if (!hasFiles) return "";
   if (toolContext === "fix") {
     return "";
   }
-  return 'TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
+  return "TASK: Read the following instructions carefully, then examine the attached file(s) and respond according to the instructions.\n\nRULES (override any conflicting instructions below):\n- Process ALL attached files \u2014 do not skip any.\n- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n" + (lineNumbers ? LINE_NUMBER_RULE : "- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n") + '- If asked to return modified code, return the COMPLETE file content \u2014 never truncate, abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\nINSTRUCTIONS:\n';
 }
 function resolvePrompt(instructions, instructionsFilesPaths) {
   let prompt = instructions || "";
@@ -221525,7 +221544,7 @@ ${content}` : content;
 function estimateTokens(text) {
   return Math.ceil(text.length / 4);
 }
-function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact) {
+function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRedact, lineNumbers) {
   const requested = budgetBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
   const calibrated = isCalibratedBudget(requested);
   const totalBudget = calibrated ? requested : Math.max(10 * 1024, requested);
@@ -221539,7 +221558,7 @@ function readAndGroupFiles(filePaths, promptBytes, redact, budgetBytes, regexRed
         skipped.push(fp);
         continue;
       }
-      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact);
+      const block = readFileAsCodeBlock(fp, void 0, redact, totalBudget, regexRedact, void 0, lineNumbers);
       if (block.length > availableForFiles) {
         skipped.push(fp);
         continue;
@@ -221895,7 +221914,7 @@ function walkDir(dirPath, options) {
   recurse(dirPath);
   return results;
 }
-var BREVITY_RULES, FILE_FORMAT_EXAMPLE, EXT_TO_LANG, SHEBANG_TO_LANG, DEFAULT_MAX_PAYLOAD_BYTES, calibratedBudgets, BINARY_EXTENSIONS, WALK_DEFAULT_EXCLUDE, FORBIDDEN_GIT_CWD_PREFIXES, _gitOnPath;
+var BREVITY_RULES, FILE_FORMAT_EXAMPLE, LINE_NUMBER_RULE, EXT_TO_LANG, SHEBANG_TO_LANG, DEFAULT_MAX_PAYLOAD_BYTES, calibratedBudgets, BINARY_EXTENSIONS, WALK_DEFAULT_EXCLUDE, FORBIDDEN_GIT_CWD_PREFIXES, _gitOnPath;
 var init_scan_pipeline = __esm({
   "src/scan-pipeline.ts"() {
     "use strict";
@@ -221903,6 +221922,7 @@ var init_scan_pipeline = __esm({
     init_secret_patterns();
     BREVITY_RULES = "\nOUTPUT RULES:\n- Be SUCCINCT. Use bullet points, not paragraphs.\n- Skip preamble, filler, and restating the task.\n- Only report findings, not things that are correct.\n- For code reviews: skip files/areas with no issues \u2014 only mention what needs attention.\n- Maximum 3 sentences per finding. Lead with the problem, not the context.";
     FILE_FORMAT_EXAMPLE = "\nINPUT FORMAT: Each attached file is wrapped as follows (placeholders use {BRACES}, actual tags use angle brackets):\n<filename>\n{ABSOLUTE_PATH_HERE}\n</filename>\n<file-content>\n````{LANGUAGE}\n{FILE_CONTENTS_HERE}\n````\n</file-content>\nReference files by the path inside the filename tag. Multiple files may appear in sequence.\n";
+    LINE_NUMBER_RULE = "- Each line of an attached file's content is prefixed with its line number in the form NNNNNN | (six columns, a space, a pipe, a space). Cite code by FUNCTION/CLASS/METHOD NAME plus these line numbers. The prefix is not part of the file: never include it in quoted or returned code.\n";
     EXT_TO_LANG = {
       ".ts": "typescript",
       ".tsx": "typescript",
@@ -224520,6 +224540,10 @@ function goneEvictedModels(nowMs = Date.now()) {
   }
   return out;
 }
+function catalogFreeCandidateIds(ids, nowMs = Date.now()) {
+  const gone = goneEvictedModels(nowMs);
+  return ids.filter((id) => isFreeSuffixModelId(id) && !gone.has(id));
+}
 function isCooling(store, modelId, nowMs) {
   const cd = store.models[modelId];
   return !!cd && cd.until > nowMs;
@@ -226750,7 +226774,8 @@ async function runScanFolder(args, deps) {
     redact_regex: sfRedactRegexRaw,
     answer_mode: sfRawMode,
     use_gitignore: sfUseGitignore,
-    scan_secrets: sfScan
+    scan_secrets: sfScan,
+    line_numbers: sfLineNumbers
   } = args;
   const sfUseEnsemble = deps.useEnsemble;
   const sfBudgetBytes = (args.max_payload_kb ?? 400) * 1024;
@@ -226859,7 +226884,8 @@ async function runScanFolder(args, deps) {
           // TRDD-PNU8XECB: modes 1/2 merge these per-file pieces into final reports, so the pieces
           // are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
           outputDir: mergePieceDir(deps.outputDir, sfMode !== 0),
-          hqRequest: deps.hqRequest
+          hqRequest: deps.hqRequest,
+          lineNumbers: sfLineNumbers
         });
         recentOutcomes.push(result.success);
         if (deps.onProgress) {
@@ -232358,7 +232384,7 @@ async function maintainDynamicProfiles(input) {
     const catalogUsable = !catalogFetchFailed && rawCatalog.length > 0 && !catalogFetchRecentlyFailedSafe(nowMs);
     const catalog = rawCatalog.map(toDynamicCatalogEntry);
     const catalogById = new Map(rawCatalog.map((m) => [m.id, m]));
-    const freeIds = rawCatalog.map((m) => m.id).filter(isFreeSuffixModelId);
+    const freeIds = catalogFreeCandidateIds(rawCatalog.map((m) => m.id), nowMs);
     const catalogFreeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
     const benchmarkPassed = benchmarkPassedModels();
     const events = readModelEvents();
@@ -232461,7 +232487,6 @@ var init_dynamic_maintainer = __esm({
     init_default_profiles_state();
     init_catalog_cache();
     init_free_rotation();
-    init_free_mode();
     init_security_triage();
     init_model_events();
     init_pick();
@@ -232544,7 +232569,7 @@ async function detectRemoteProfileChange(args) {
   if (catalogFetchFailed || rawCatalog.length === 0) return { changed: false };
   const catalog = rawCatalog.map(toDynamicCatalogEntry);
   const catalogById = new Map(rawCatalog.map((m) => [m.id, m]));
-  const freeIds = rawCatalog.map((m) => m.id).filter(isFreeSuffixModelId);
+  const freeIds = catalogFreeCandidateIds(rawCatalog.map((m) => m.id), nowMs);
   const catalogFreeQualified = filterFreeModels(freeIds, catalogById, benchmarkFailedModels());
   const priceCeiling = name === "paid" ? getEnsemblePriceCeiling(settings) : 0;
   const existing = settings.profiles[name];
@@ -232656,7 +232681,6 @@ var init_profile_detector = __esm({
     init_default_profiles_state();
     init_catalog_cache();
     init_free_rotation();
-    init_free_mode();
     init_security_triage();
     init_mkdir_lock();
     init_dynamic_maintainer();
@@ -233255,6 +233279,7 @@ init_daily_spend();
 
 // src/benchmark/update-all.ts
 init_project_root();
+init_free_rotation();
 init_discover();
 init_free_mode();
 init_registry();
@@ -235837,7 +235862,8 @@ async function runUpdateAll(opts, deps) {
       const { pool: discoveredPool, autoDiscovered, rejected } = resolveFreePool(
         opts.configuredFreeModels,
         catalog,
-        { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16 }
+        // GitHub 15 item 3 (TRDD-NC7873YO): auto-discovered ids with repeated gone verdicts stay out of the free pool.
+        { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16, exclude: goneEvictedModels() }
       );
       if (rejected.length > 0) {
         return abortResult(
@@ -238403,7 +238429,9 @@ async function main() {
     const freePoolCatalog = await fetchProgrammingModels();
     const { pool, autoDiscovered, rejected } = resolveFreePool(configured, freePoolCatalog, {
       autoDiscover: true,
-      autoDiscoverTopN: opts.qualifyingTopN ?? 16
+      autoDiscoverTopN: opts.qualifyingTopN ?? 16,
+      // GitHub 15 item 3 (TRDD-NC7873YO): auto-discovered ids with repeated gone verdicts stay out of the bench free pool.
+      exclude: goneEvictedModels()
     });
     if (rejected.length > 0) {
       throw new Error(
