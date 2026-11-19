@@ -1,10 +1,10 @@
 ---
 trdd-id: 7ZA3EE6Z
 title: classify filter takes a context flag for earlier messages
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-14T17:11:46+0100
-updated: 2026-11-18T17:36:51+0100
+updated: 2026-11-19T03:45:37+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-14T17:11:46+0100
 implementation-commits: [028ad703, fcdd58c6, 994bfbce]
+release-via: publish
 ---
 
 # classify filter takes a context flag for earlier messages
@@ -42,6 +43,7 @@ Tests go through the recorded-reply GlobalFetch seam, the same as the label test
 - 2026-11-14T17:11:46+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-18T08:59:01+0100 — column → human_review by main-agent@llm-externalizer-plugin. held: live-check case c failed, code reverted in fcdd58c6; USER chooses ship with a caveat or a new pre-registered check
 - 2026-11-18T17:02:42+0100 — column → dev by main-agent@llm-externalizer-plugin. USER asked for a working --context (2026-11-18); wording spike 3 running
+- 2026-11-19T03:45:37+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. 994bfbce shipped in v14.7.3; live check 3 passed.
 
 ## Notes
 
@@ -68,3 +70,12 @@ Tests go through the recorded-reply GlobalFetch seam, the same as the label test
 2026-11-18T17:21:29+0100 Correction (main agent) to the ruling line of 2026-11-18T17:18:43+0100 above that calls V3 "the only variant with no verdict change in any arm": false. The spike 3 tables show no verdict change in B, C or R for V2 as well as V3; V3 differs from V2 by the drift margin (-0.017 against -0.063). V3 is chosen because it is the USER design and has the smaller margin. Also stated plainly: the one bar changed for live check 3 (the referent item gated on its verdict, not its drift, under unrelated contexts) is the only bar V3 missed in spike 3, so live check 3 cannot fail V3 on that dimension; the live check 3 report must list the J1 drift against 0.15 next to the verdicts.
 2026-11-18T17:23:52+0100 How a pass of live check 3 must be read (main agent, before its result): a pass shows the gated bars only (a, b, c). The 0.15 drift bar on the referent item under unrelated contexts, the one bar V3 missed in spike 3, is reported in check 3 and is not shown to pass by it; no later line may cite a check 3 pass as "V3 meets the run 2 bars".
 2026-11-18T17:29:16+0100 Live check 3 result (by worker report reports_dev/7za3ee6z/20261118_172814+0100-live-check-3.md, seed 31415926, 125 of 125 calls, all typesafe/jev-1.14-20261014, 17:22 to 17:24 +0100; the main agent matched the five raw F-J1 runs, 0.76, 0.80, 0.75, 0.73, 0.83, against the calls table): valid run (A: J1 0.032, J2 0.988, J3 0.024, J4 0.988, J5 0.016). Bar (a) PASS, F matches J1 (0.774). Bar (b) PASS, every J2-J5 cell in N, U and M keeps the A verdict, largest drift 0.020 (J3 U). Bar (c) PASS, J1 unmatched in N (0.012) and U (0.016). Reported, not gated: J1 drift in N 0.020 and U 0.016, both within 0.15; J1 in M 0.490 (runs 0.37 to 0.71), unmatched by 0.01, pushed up by a context that itself asks to cancel. Ship by the bars. Arm A sends the HEAD request: the worker compared git show HEAD filter.ts with the V3 file (same no-context string, shared null). Read as pre-written above: the pass shows the gated bars only.
+2026-11-19T03:45:34+0100 main agent: shipped in v14.7.3 (994bfbce, V2, V3). STATE NEXT ACTION done. Card to published.
+
+## Acceptance
+
+- [x] (scope 1) classify filter takes --context and its text-items instruction references the context in a labelled block it never judges: 994bfbce (filter.ts), shipped in v14.7.3
+- [x] (scope 2) golden pins change only with a context; requests without a context stay byte-identical, pinned in filter.test.ts and input-args.test.ts (994bfbce); v14.7.3 publish full suite passed (log line 20)
+- [x] (scope 3) pre-registered live check passed: live check 3, bars (a), (b), (c) PASS (Notes 2026-11-18T17:29:16+0100)
+- [x] (scope 4) find and compare get no context input, decided in Notes 2026-11-18T08:22:59+0100
+- [x] (scope 5) docs: classify.md flag row and request-shape note, SKILL.md routing row, requirements-pipeline.md, in 994bfbce, shipped in v14.7.3

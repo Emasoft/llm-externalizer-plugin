@@ -1,10 +1,10 @@
 ---
 trdd-id: 0W932B0H
 title: label requirements and rule-check leave the shared context outside the injection guard
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T08:23:15+0100
-updated: 2026-11-19T01:06:05+0100
+updated: 2026-11-19T03:45:17+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T08:23:15+0100
 implementation-commits: [e6c31136]
+release-via: publish
 ---
 
 # label requirements and rule-check leave the shared context outside the injection guard
@@ -25,6 +26,7 @@ Found 2026-11-18 by a review of TRDD-7ZA3EE6Z. label.ts:197, requirements.ts:87 
 ## Approval log
 
 - 2026-11-18T08:23:15+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T03:45:17+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. all boxes met; e6c31136 shipped in v14.7.2.
 
 ## Notes
 
@@ -33,6 +35,7 @@ Found 2026-11-18 by a review of TRDD-7ZA3EE6Z. label.ts:197, requirements.ts:87 
 2026-11-18T16:24:37+0100 main agent check: gh release view v14.7.2 --json body shows line 37 ### Behaviour change: classify label, requirements and rule-check with --context.
 2026-11-18T16:28:17+0100 note writer (batch-2 worker): the 16:24 check note above and box 3 were supplied by the main agent in the brief; the writer did not re-run gh release view.
 2026-11-19T01:06:05+0100 main agent (written by worker): box 4 ticked. e6c31136 is an ancestor of v14.7.3 (verified by the main agent 2026-11-19). v14.7.3 published 2026-11-19T00:57+0100 (release commit ac3fcdef, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.3); publish log reports_dev/publish/20261118-14.7.3-publish.log line 20 reads 'OK: test' (the publish.py full-suite gate, run 7). Per-test counts are not in that log line; the test stages of run 6 (same code before the CPV fix 1b7b3d82) were unit 6593 passed, broker stage 222, burn, e2e, per the main agent facts of 2026-11-19.
+2026-11-19T03:45:14+0100 main agent: shipped in v14.7.2 (e6c31136, V1); box 4 met by the v14.7.3 publish full suite (V4). Card to published.
 
 ## Acceptance
 
