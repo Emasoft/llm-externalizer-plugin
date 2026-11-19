@@ -854,8 +854,8 @@ describe("maintainDynamicProfiles", () => {
     // branch and the dispatch rewrite dropped.
     const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat"));
     expect(gate).not.toBeNull();
-    expect(gate?.message).toMatch(/not benchmarked yet and is being benchmarked now/);
-    expect(gate?.message).toMatch(/~15 minutes/);
+    expect(gate?.message).toMatch(/not benchmarked yet; this command asks a background benchmark to start/);
+    expect(gate?.message).not.toMatch(/being benchmarked now/);
   });
 
   it("P6b-fix B1: an unpopulated 'paid' with allow_paid_models: false queues nothing and never spawns", async () => {
@@ -2208,7 +2208,7 @@ describe("dynamicProfileGate", () => {
     // id went to the provider; it must refuse.
     const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
     expect(gate).not.toBeNull();
-    expect(gate?.message).toMatch(/being benchmarked now/);
+    expect(gate?.message).toMatch(/asks a background benchmark to start/);
   });
 
   it("P6b-fix S4: 'paid' unpopulated with the daily cap SPENT refuses, naming the cap as $X.XX (§3.3 table row 4)", () => {
@@ -2383,11 +2383,11 @@ describe("dynamicProfileGate", () => {
       paid_benchmark_daily_cap_usd: 0.5,
       profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
     } as never;
-    // Both texts, as the finding asks: with the opt-out OFF the user is told a
-    // benchmark is running (true — the maintainer just spawned it); with it ON
+    // Both texts, as the finding asks: with the opt-out OFF the user is told a background
+    // benchmark is asked to start (true — a real command spawns it); with it ON
     // that sentence is a promise the opt-out itself guarantees cannot be kept.
     const on = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
-    expect(on?.message).toMatch(/being benchmarked now/);
+    expect(on?.message).toMatch(/asks a background benchmark to start/);
 
     const prev = process.env.LLM_EXT_DISABLE_AUTO_RECONCILE;
     process.env.LLM_EXT_DISABLE_AUTO_RECONCILE = "1";
@@ -2395,6 +2395,7 @@ describe("dynamicProfileGate", () => {
       const off = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
       expect(off).not.toBeNull();
       expect(off?.message).not.toMatch(/being benchmarked now/);
+      expect(off?.message).not.toMatch(/asks a background benchmark to start/);
       expect(off?.message).toContain("LLM_EXT_DISABLE_AUTO_RECONCILE=1");
       expect(off?.message).toContain("--populate-default-profile paid");
     } finally {
@@ -2407,7 +2408,7 @@ describe("dynamicProfileGate", () => {
     // The maintainer's two spawn throttles are deliberately SILENT (a line on
     // every dispatch for hours is noise), so the gate asserted "is being
     // benchmarked now (typically ~15 minutes) — re-run this command when it
-    // finishes" for up to six hours in which nothing was running at all.
+    // finishes" (the pre-TRDD-0QQVTUCF text) for up to six hours in which nothing was running at all.
     const { recordDynamicBenchmarkAt } = await import("./default-profiles-state.js");
     const t0 = 1_800_000_000_000;
     // A sweep that started long enough ago that the child cannot still be alive.
@@ -2433,14 +2434,14 @@ describe("dynamicProfileGate", () => {
     // The one actionable fact: WHEN to come back. 6h after the sweep started.
     expect(gate?.message).toContain(new Date(sweepAt + MIN_SWEEP_INTERVAL_MS).toISOString());
 
-    // Control: with NO recorded sweep the old sentence is the true one and must
+    // Control: with NO recorded sweep the start-requested sentence (branch e) is the true one and must
     // still be produced — this must not become "always queued".
     const fresh = mkdtempSync(join(tmpdir(), "llmext-n7-fresh-"));
     const prevCfg = process.env.LLM_EXT_CONFIG_DIR;
     process.env.LLM_EXT_CONFIG_DIR = fresh;
     try {
       const running = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings, nowMs: t0 }));
-      expect(running?.message).toMatch(/is being benchmarked now/);
+      expect(running?.message).toMatch(/asks a background benchmark to start/);
     } finally {
       if (prevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
       else process.env.LLM_EXT_CONFIG_DIR = prevCfg;
@@ -2448,8 +2449,8 @@ describe("dynamicProfileGate", () => {
     }
   });
 
-  it("TRDD-P10QMUW7: the unpopulated paid gate carries reason paid-unpopulated only when a real command would start the benchmark, and its message is unchanged", async () => {
-    // WHY: cli/main.ts --estimate keys on this reason to say that an estimate starts no benchmark. Where the benchmark is already running, queued, or opted out, the unchanged gate text is already true under --estimate, so a reason there would make the estimate say something false.
+  it("TRDD-P10QMUW7: the unpopulated paid gate carries reason paid-unpopulated only when a real command would start the benchmark, and the reason does not change the message text (TRDD-0QQVTUCF branch e)", async () => {
+    // WHY: cli/main.ts --estimate keys on this reason to say that an estimate starts no benchmark. Where the benchmark is already running, in failure cooldown, queued, or opted out, the gate text of that state is already true under --estimate, so a reason there would make the estimate say something false.
     const settings = {
       allow_paid_models: true,
       paid_benchmark_daily_cap_usd: 0.5,
@@ -2459,7 +2460,7 @@ describe("dynamicProfileGate", () => {
     // The key is set explicitly (a dummy, nothing is sent): without it the gate refuses with the no-key message instead (next test).
     await withProviderKeys(async () => {
       const fresh = dynamicProfileGate("paid", "chat", { settings });
-      expect(fresh?.message).toMatch(/is being benchmarked now/);
+      expect(fresh?.message).toMatch(/asks a background benchmark to start/);
       expect(fresh?.reason).toBe("paid-unpopulated");
 
       const prev = process.env.LLM_EXT_DISABLE_AUTO_RECONCILE;
@@ -2471,11 +2472,11 @@ describe("dynamicProfileGate", () => {
         else process.env.LLM_EXT_DISABLE_AUTO_RECONCILE = prev;
       }
 
-      // A live pid in the paid background-update lock: a sweep is running, "is being benchmarked now" is already true.
+      // A live pid in the paid background-update lock: an update is running, so the gate says so (TRDD-0QQVTUCF branch b).
       const lockPath = join(cfgDir, "background-update-paid.lock");
       writeFileSync(lockPath, String(process.pid), "utf-8");
       const running = dynamicProfileGate("paid", "chat", { settings });
-      expect(running?.message).toMatch(/is being benchmarked now/);
+      expect(running?.message).toMatch(/a background update of it is running/);
       expect(running?.reason).toBeUndefined();
       rmSync(lockPath, { force: true });
 
@@ -2522,6 +2523,58 @@ describe("dynamicProfileGate", () => {
     }
   });
 
+  it("TRDD-0QQVTUCF branch b: with a live pid in the paid background-update lock the gate says an update is running, and does not claim a 15-minute benchmark", () => {
+    // WHY: a held lock means an update is running; the detector child holds the same lock, so it is not always a full benchmark (a rejected key or an unchanged catalog ends it in seconds).
+    const settings = {
+      allow_paid_models: true,
+      paid_benchmark_daily_cap_usd: 0.5,
+      profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
+    } as never;
+    const lockPath = join(cfgDir, "background-update-paid.lock");
+    writeFileSync(lockPath, String(process.pid), "utf-8");
+    try {
+      const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
+      expect(gate?.message).toMatch(/paid profile is not benchmarked yet; a background update of it is running/);
+      expect(gate?.message).toMatch(/a rejected key or an unchanged catalog ends it in seconds/);
+      expect(gate?.message).not.toMatch(/being benchmarked now/);
+      expect(gate?.reason).toBeUndefined();
+    } finally {
+      rmSync(lockPath, { force: true });
+    }
+  });
+
+  it("TRDD-0QQVTUCF branch c: after a failed benchmark attempt the gate names the cooldown end time and says the attempt failed, never that a benchmark is running", () => {
+    // WHY: the trace showed "is being benchmarked now" printed while nothing ran, only a failed attempt waiting out its cooldown.
+    const settings = {
+      allow_paid_models: true,
+      paid_benchmark_daily_cap_usd: 0.5,
+      profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
+    } as never;
+    const t0 = 1_800_000_000_000;
+    recordBenchmarkFailure("paid", t0 - 60_000);
+    const cooldownEnd = t0 - 60_000 + 15 * 60_000; // first backoff step
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings, nowMs: t0 }));
+    expect(gate?.message).toMatch(/paid profile is not benchmarked yet; its last benchmark attempt failed/);
+    expect(gate?.message).toContain(new Date(cooldownEnd).toISOString());
+    expect(gate?.message).toMatch(/The progress log records the failed attempt/);
+    expect(gate?.message).not.toMatch(/shows why it failed/);
+    expect(gate?.message).not.toMatch(/being benchmarked now/);
+    expect(gate?.reason).toBeUndefined();
+  });
+
+  it("TRDD-0QQVTUCF branch e: with nothing running, in cooldown or queued the gate says a command asks a background benchmark to start, never that one is running now", () => {
+    // WHY: the start is only tried by a real command (at most once a minute) and needs the catalog, so "being benchmarked now" was not true yet.
+    const settings = {
+      allow_paid_models: true,
+      paid_benchmark_daily_cap_usd: 0.5,
+      profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
+    } as never;
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
+    expect(gate?.message).toMatch(/paid profile is not benchmarked yet; this command asks a background benchmark to start/);
+    expect(gate?.message).toMatch(/a start is tried at most once a minute/);
+    expect(gate?.message).not.toMatch(/being benchmarked now/);
+    expect(gate?.reason).toBe("paid-unpopulated");
+  });
   it("P6b-fix B1 last-line guard: a free_only profile's INERT placeholder `model` is not mistaken for a live chain entry", () => {
     // resolveProfile overrides `model` from free_models[0] on a free_only
     // profile, so the stub's leftover placeholder there is never sent. A guard
@@ -2635,7 +2688,7 @@ describe("row 80: paid arm order with a non-empty free_models slot", () => {
     } as never;
     const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
     expect(gate).not.toBeNull();
-    expect(gate?.message).toMatch(/being benchmarked now/);
+    expect(gate?.message).toMatch(/asks a background benchmark to start/);
     expect(gate?.message).not.toContain("placeholder/unpopulated-default-profile");
   });
 });

@@ -261,7 +261,7 @@ describe("main.ts ordering (real CLI entry)", () => {
     expect(r.out).toContain(`Profile 'f' (free): model '${id}' is a decisions model`);
   }, 120_000);
 
-  // TRDD-P10QMUW7: the paid gate text claims "is being benchmarked now", which is true only after a real command started the benchmark; --estimate starts nothing, so it must say what is true and what to run.
+  // TRDD-P10QMUW7: the paid gate text in this state (TRDD-0QQVTUCF: "this command asks a background benchmark to start ...") describes what a real command does, which is true only for a real command; --estimate starts nothing, so it must say what is true and what to run.
   it("P10QMUW7: --estimate on a never-benchmarked paid profile says nothing is benchmarking it and to run the command once without --estimate", () => {
     const s = ["active: paid", "allow_paid_models: true", "profiles:", "  paid:", "    mode: remote", "    api: openrouter-remote", "    model: placeholder/unpopulated-default-profile", ""].join("\n");
     const r = run(s, ["llm", "ask", "--estimate", "--instructions", "x"], {}, { OPENROUTER_API_KEY: "dummy-not-a-key" }); // ubs:ignore dummy placeholder key, never sent: the paid gate only needs a non-empty $OPENROUTER_API_KEY (TRDD-P10QMUW7)

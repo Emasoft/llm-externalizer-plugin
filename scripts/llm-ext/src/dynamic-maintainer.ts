@@ -1391,12 +1391,13 @@ function populationDisabledMessage(name: string): string {
  * it; a booked failure stamps `cooldownUntil` instead) — and stays
  * deliberately silent about both, because a line on every dispatch for hours
  * is noise. The GATE is the one place that speaks, so it has to read the same
- * two floors; otherwise it asserts "is being benchmarked now" for up to six
+ * two floors; otherwise it asserts a running benchmark for up to six
  * hours during which nothing is running.
  *
  * While a sweep child is ALIVE (bench lock held — SIGKILL-safe liveness) the
- * floor is NOT asserted: "is being benchmarked now" is then the true sentence,
- * with no completion-timestamp guess involved.
+ * floor is NOT asserted: "a background update of it is running" is then the true sentence,
+ * with no completion-timestamp guess involved. (TRDD-0QQVTUCF: the gate message now takes the cooldown branch itself,
+ * so for it only the 6 h success-sweep floor remains; this helper still reads both for paidBenchmarkStartableByRealCommand.)
  *
  * Both reads reach getConfigDir(), which THROWS for a config dir outside the
  * allowlist — and a message-rendering path is the last place that may throw, so
@@ -1456,10 +1457,41 @@ function paidBenchmarkInProgressMessage(nowMs: number): string {
   } catch {
     /* no readable config dir — the rest of the message still stands */
   }
+  // WHY the split (TRDD-0QQVTUCF trace): the old last branch said "is being benchmarked now (typically ~15 minutes)"
+  // when nothing ran (a failed attempt in cooldown, or a start not yet tried). A held lock means an update is running,
+  // which is not always a 15-minute benchmark (the detector child holds the same lock, by the detectOnce comment), so
+  // each state gets its own sentence. Every state read is guarded: a message-rendering path never throws.
+  let lockHeld = false;
+  try {
+    lockHeld = benchLockIsHeld(backgroundUpdateLockPathFor("paid"), nowMs);
+  } catch {
+    /* a throw counts as not held */
+  }
+  if (lockHeld) {
+    return (
+      "paid profile is not benchmarked yet; a background update of it is running (a full benchmark takes about 15 minutes; " +
+      `a rejected key or an unchanged catalog ends it in seconds) — re-run this command when it finishes.${progress}`
+    );
+  }
+  let cooldownUntil = 0;
+  try {
+    cooldownUntil = getProfileRecord("paid")?.cooldownUntil ?? 0;
+  } catch {
+    /* unreadable state: no evidence of a failed attempt */
+  }
+  if (cooldownUntil > nowMs) {
+    // WHY no "the log shows why it failed": for a rejected key the log names the wrong cause (trace: 11 replies 401 are
+    // logged as "no candidate cleared the price ceiling"; separate card), so the message only claims the log records the attempt.
+    return (
+      "paid profile is not benchmarked yet; its last benchmark attempt failed, and the next attempt starts on the first " +
+      `command run after ${new Date(cooldownUntil).toISOString()}.` +
+      (progress === "" ? "" : ` The progress log records the failed attempt.${progress}`)
+    );
+  }
   // P6b-fix3 N-7: same class as S-3, one level down — never assert a benchmark
   // the code has already decided not to start yet. "Re-run when it finishes" is
   // unactionable advice when nothing is running; the throttle's expiry is the
-  // one fact that tells the user when to come back.
+  // one fact that tells the user when to come back. Here only the 6 h success-sweep floor can remain: the cooldown was taken above.
   const throttledUntil = paidSweepThrottledUntilMs(nowMs);
   if (throttledUntil !== null) {
     return (
@@ -1467,8 +1499,10 @@ function paidBenchmarkInProgressMessage(nowMs: number): string {
       `starts after ${new Date(throttledUntil).toISOString()} — re-run this command then.${progress}`
     );
   }
+  // Reached when paidBenchmarkStartableByRealCommand is true, except when a state read throws (an unreadable config dir; then no benchmark can start either).
   return (
-    "paid profile is not benchmarked yet and is being benchmarked now (typically ~15 minutes) — " +
-    `re-run this command when it finishes.${progress}`
+    "paid profile is not benchmarked yet; this command asks a background benchmark to start (it needs the model catalog, " +
+    "and a start is tried at most once a minute) — re-run this command in a minute to see its state." +
+    (progress === "" ? "" : ` The progress log shows the outcome.${progress}`)
   );
 }
