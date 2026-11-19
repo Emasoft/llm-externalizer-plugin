@@ -2161,8 +2161,13 @@ export function migrateSettingsTo141(
   // otherwise never does (D32): one explicit way to know a type beats inferring
   // it at every load; the user is shown every inferred type and the backup. Runs
   // LAST so it sees the profiles the steps above created. Recorded only after a
-  // clean pass: a profile whose type cannot be inferred leaves the file
-  // untouched and the step unrecorded, so E81g (strict) never switches on for it.
+  // clean pass: on a first run, a profile whose type cannot be inferred leaves
+  // the file untouched and the step unrecorded, so E81g (strict) does not switch
+  // on for it. On a file restored while the record says applied, E81g is already
+  // on: the step still leaves the file untouched, the profile with the bad
+  // explicit type fails the load on its own (E81d/E113) until the user fixes it
+  // by hand, and the next run then stamps the remaining profiles, because the
+  // step is not gated on the record (TRDD-VBAJX5A1 window (b)).
   try {
     // WHY it is not gated on the record (PT-02 lockout fix): restoring the backup this step made, an older file or one synced from another machine gives an untyped settings.yaml while the record still says migrated, so E81g would reject every profile and a gated step would never run again. Stamping is idempotent (backup, locked write, only the missing ones); the record keeps one meaning, "this file went through the migration once", which is what turns E81g on.
     const firstRun = !opts.isApplied(PROFILE_TYPE_STEP);
