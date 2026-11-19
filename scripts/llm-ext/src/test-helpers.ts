@@ -74,7 +74,7 @@ export interface TestConfigOptions {
 
 // ── Cost-safety: the default test backend (TRDD-e82f2c49, TRDD-CBOTP0DY) ──
 // A LOCAL profile NEVER contacts openrouter.ai (local mode → local URL), and
-// nothing listens on the test port, so the default integration tests fail fast
+// the test port is assumed free, so the default integration tests fail fast
 // on ECONNREFUSED — free, no billing, regardless of the user's real active
 // profile. Port 29871: below both ephemeral ranges (macOS 49152+, Linux
 // 32768+) and off the fetch bad-ports list, so connect gives ECONNREFUSED and
