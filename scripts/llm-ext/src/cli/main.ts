@@ -58,7 +58,7 @@ import { stopNoticeLine } from "./stop-notice.js";
  * longer existed, which aborts the release. This is now the only anchor, so it
  * is load-bearing: do not reformat, inline, or compute it.
  */
-const VERSION = "14.7.4";
+const VERSION = "14.7.5";
 
 // ── Catalog ──────────────────────────────────────────────────────────
 

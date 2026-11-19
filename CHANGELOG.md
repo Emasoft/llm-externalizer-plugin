@@ -1,6 +1,72 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.5] - 2026-11-19
+
+### Changed
+
+- Build(lint): lint the package root, root .mjs files included (TRDD-B5BN44I8)
+
+
+### Documentation
+
+- Docs(cli-reference): name 14.7.5 where the docs said the release after 14.7.4
+
+- Docs(trdd): HUBGO80N landed in 4b9e2e48, card to dev (TRDD-HUBGO80N)
+
+- Docs(trdd): B5BN44I8 landed in 576bc5cf, card to dev; 23J3NYW8 publish note (TRDD-B5BN44I8, TRDD-23J3NYW8)
+
+- Docs(trdd): 23J3NYW8 landed in 0319488e, card to dev (TRDD-23J3NYW8)
+
+- Docs(trdd): Z8LRK2DZ and P10QMUW7 landed in 16426995; FP2SAF4P item 7; add HUBGO80N (TRDD-Z8LRK2DZ, TRDD-P10QMUW7, TRDD-FP2SAF4P, TRDD-HUBGO80N)
+
+- Docs(cli-reference): classify --estimate, ping --no-call and llm cluster --estimate as measured; classify rows whole (TRDD-FP2SAF4P)
+
+- Docs(trdd): record FP2SAF4P items 5, 6, 9, 10; file P10QMUW7 and Z8LRK2DZ (TRDD-FP2SAF4P)
+
+- Docs(cli-reference): consumer-guidelines.md checked against v14.7.4, Q1 names the 14.7.4 session-summary line (TRDD-T229KMOU)
+
+- Docs(trdd): add T229KMOU and B5BN44I8; SZ7TO9FW points to the split-out re-check (TRDD-T229KMOU, TRDD-B5BN44I8, TRDD-SZ7TO9FW)
+
+- Docs(trdd): FP2SAF4P corrections and items 12-13; consumer-guidelines staleness noted (TRDD-FP2SAF4P, TRDD-SZ7TO9FW)
+
+- Docs(trdd): FP2SAF4P progress and the bare -- bug as its own card (TRDD-FP2SAF4P, TRDD-23J3NYW8)
+
+- Docs(classify): add the missing flag rows, name the build behind each measurement (TRDD-FP2SAF4P)
+
+- Docs(trdd): FP2SAF4P to dev, carry the rest of the 58CFBQHN owed list (TRDD-FP2SAF4P)
+
+- Docs(trdd): 58CFBQHN to published, dry-run flag help shipped (TRDD-58CFBQHN)
+
+- Docs(trdd): NGXUX45F to published, find spec shipped in v14.7.3 (TRDD-NGXUX45F)
+
+- Docs(trdd): record the v14.7.4 outcome on the goal card (TRDD-FC2TX9VU)
+
+- Docs(trdd): close 0W932B0H and 7ZA3EE6Z, both shipped (TRDD-0W932B0H, TRDD-7ZA3EE6Z)
+
+- Docs(classify): filter --context shipped in 14.7.3, drop the needs-a-release markers (TRDD-7ZA3EE6Z)
+
+- Docs(trdd): six shipped cards to published after v14.7.4 (TRDD-WP8W8L5E, TRDD-MI0UJQF1, TRDD-NC7873YO, TRDD-GBWVXEF6, TRDD-YRRZJ5UH, TRDD-7B7TAQGD)
+
+
+### Fixed
+
+- Fix(cli): the --estimate header no longer claims nothing was sent (TRDD-HUBGO80N)
+
+- Fix(cli): refuse a bare -- by name outside classify (TRDD-23J3NYW8)
+
+- Fix(cli): true estimate and paid-gate texts (TRDD-Z8LRK2DZ, TRDD-P10QMUW7)
+
+- Fix(launcher): keep the last EEXIST failure as the install-lock timeout cause
+
+- Fix(cli): classify dry-run refusals name what is missing; pin flags after -- (TRDD-FP2SAF4P)
+
+
+### Testing
+
+- Test(classify): pin the uncut --estimate help row, once, for every decision command (TRDD-FP2SAF4P)
+
+
 ## [14.7.4] - 2026-11-19
 
 ### Added
