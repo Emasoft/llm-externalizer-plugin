@@ -21,11 +21,11 @@
 - Request JSON shapes (`--input` of `classify filter`, `label`, `find`)
 - `llm-ext classify ping`
 
-Output: a classify command prints its text form on stdout and the receipt line (items, time, Jev tokens and cost) as the last line. Add `--json` to print the JSON envelope instead; the receipt then goes to stderr, so stdout stays one parseable JSON document. A script that parses the output must pass `--json`. `--estimate` prices the run from the catalog and sends nothing (no API key needed; it writes no `-o` report). `-o <dir>` saves the JSON envelope of every completed run, whichever output form was printed. `classify ping --estimate` is refused with `llm-ext: --estimate is not supported by classify ping, which has no dry run; use --no-call to check the key without asking the question.` (exit 1, this wording ships in the release after 14.7.4); ping does not take `--estimate`, and its help says `--no_call` sends no question.
+Output: a classify command prints its text form on stdout and the receipt line (items, time, Jev tokens and cost) as the last line. Add `--json` to print the JSON envelope instead; the receipt then goes to stderr, so stdout stays one parseable JSON document. A script that parses the output must pass `--json`. `--estimate` prices the run from the catalog and sends no question to Jev (no API key needed; it writes no `-o` report). It is not offline: unless the files are cached it fetches the public decisions catalog and the model's endpoint prompt limit from openrouter.ai, without a key, and it exits 5 (`llm-ext: decisions catalog unavailable and cache expired: ...`) when the catalog fetch fails and no fresh cache exists. With the `local-decision` profile it needs no key and fetches nothing: the run goes straight to the local decider. The output line `classify <action> --estimate: nothing was sent` refers to the question. `-o <dir>` saves the JSON envelope of every completed run, whichever output form was printed. `classify ping --estimate` is refused with `llm-ext: --estimate is not supported by classify ping, which has no dry run; use --no-call to check the key without asking the question.` (exit 1, this wording ships in the release after 14.7.4); ping does not take `--estimate`, and its help says `--no_call` sends no question.
 
 The `--estimate` row in the flag tables below ships in llm-ext 14.3.0 and later. The flag already worked on a development build after 14.2.0 (measured 2026-11-04: `classify filter`, `rank` and `label` with `--estimate` exit 0 and print that nothing was sent). llm-ext 14.2.0 (measured 2026-11-04) has neither: `classify filter --help` does not list `--estimate`, and `llm-ext classify filter "is this a rule" ./small.txt --estimate` exits 1 with `llm-ext: --estimate is not available for classify yet.` The same 14.2.0 message appears for `classify label ... --estimate`.
 
-Flags are written `--name value`. Boolean flags (measured on a development build after 14.2.0 for `--json` and `--estimate` on `classify filter` and `classify requirements`) are bare switches: a value after one is taken as an extra positional (file) argument. With `--input` the error is `llm-ext: --input cannot be combined with files, --items or the other file options; pass one or the other` (command `classify filter --input filter-text.json --estimate true`); without `--input` it is the usage line `llm-ext: usage: llm-ext classify requirements <file, - for stdin> [--max-bytes N]`. `--estimate` alone works. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see cli-conventions.md). All text below comes from `llm-ext <group> <action> --help`, except the sections that say they come from live runs and the source.
+Flags are written `--name value`. Boolean flags (measured on a development build after 14.2.0 for `--json` and `--estimate` on `classify filter` and `classify requirements`) are bare switches: a value after one is taken as an extra positional (file) argument. With `--input` the error is `llm-ext: --input cannot be combined with files, --items or the other file options; pass one or the other` (command `classify filter --input filter-text.json --estimate true`); without `--input` it is the usage line `llm-ext: usage: llm-ext classify requirements <file, - for stdin> [--max-bytes N]`. `--estimate` alone works. Every action also accepts the global flags (`--quiet`, `--profile <name>`, `--command_timeout <s>`, `--queue_timeout <s>`; see cli-conventions.md). All text below comes from `llm-ext <group> <action> --help`, except the sections that say they come from live runs and the source. A flag row that `--help` cuts with `...` is written whole here.
 
 ## `classify` group
 
@@ -38,17 +38,17 @@ Flags are written `--name value`. Boolean flags (measured on a development build
 
 Classify decision "verify" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--auto` | number | relation confidence at or above which a grounded verdict is auto-accepted (default 0.8, range 0.5..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 | `--subject_at` | number | same-subject probability a contradiction needs; lower and it is unknown (default 0.5, range 0..1) |
@@ -66,17 +66,17 @@ llm-ext classify verify --input ./request.json
 
 Classify decision "screen" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--block` | number | injection probability at or above which the text is blocked (default 0.75, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--review` | number | injection probability at or above which the text goes to review (default 0.25, range 0..1) |
 | `--skip` | number | substance or relevance probability below which the text is skipped (default 0.3, range 0..1) |
@@ -95,26 +95,26 @@ llm-ext classify screen --input ./request.json
 
 Classify decision "filter" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--auto` | number | p at or above which (or p + auto <= 1 below which) an item counts as decided (default 0.85, range 0.5..1) |
 | `--band` | number | width around the threshold inside which an item is borderline (default 0.15, range 0..0.5) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request (since 14.7.3). |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
-| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
-| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
+| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the inputs, not to --items or stdin. |
+| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target outside the allowed roots is still skipped and listed. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--items` | string | JSONL file of items ({"id","text"} per line, or plain lines); - reads stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
 | `--limit` | number | Refuse to run on more items than this, a whole number of 1 or more (default 5000). |
 | `--lines` | boolean | Judge each non-blank line of every input as its own item (ids name:N). |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--no_collapse` | boolean | Print every row of a --lines run; by default rows whose text differs only in numbers are... |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--no_collapse` | boolean | Print every row of a --lines run; by default rows whose text differs only in numbers are shown once as ×N with their line numbers. |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--save` | string | Write every answered row ([{id, p}], JSON, best first) to this file. |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
@@ -134,29 +134,29 @@ llm-ext classify filter "Does this text ask to cancel the subscription?" ./a.txt
 
 Classify decision "label" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--auto` | number | --auto: lowest confidence that makes a label automatic (must be >= --min-confidence) (default 0.85, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
 | `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
-| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
-| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
+| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the inputs, not to --items or stdin. |
+| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target outside the allowed roots is still skipped and listed. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--items` | string | JSONL file of items ({"id","text"} per line, or plain lines); - reads stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--labels` | string | Classes as "a:hint,b": comma separated, text after the first colon is the hint (2 to 255... |
+| `--labels` | string | Classes as "a:hint,b": comma separated, text after the first colon is the hint (2 to 255 labels). |
 | `--labels_json` | string | Classes as a JSON object {"label": "description"}, or @file holding one (2 to 255 labels). |
 | `--limit` | number | Refuse to run on more items than this, a whole number of 1 or more (default 5000). |
 | `--lines` | boolean | Judge each non-blank line of every input as its own item (ids name:N). |
 | `--margin` | number | --margin: lowest gap between the top two class probabilities for an automatic label (default 0.5, range 0..1) |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
 | `--min_confidence` | number | --min-confidence: below this a label is listed as low confidence (default 0.6, range 0..1) |
 | `--only` | string | Show only these classes (comma separated); the count line still lists all. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--save` | string | Write every labelled item ([{id, label, confidence}], JSON) to this file. |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
@@ -176,25 +176,25 @@ llm-ext classify label --labels "bug,feature,question" --items ./items.jsonl --c
 
 Classify decision "rank" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--all` | boolean | List every ranked candidate instead of the top N. |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
-| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
-| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
-| `--head` | number | Send at most the first N bytes of every candidate, cut at a character boundary (a whole... |
+| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the inputs, not to --items or stdin. |
+| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target outside the allowed roots is still skipped and listed. |
+| `--head` | number | Send at most the first N bytes of every candidate, cut at a character boundary (a whole number of at least 1). |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--items` | string | JSONL file of items ({"id","text"} per line, or plain lines); - reads stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
 | `--keep_at` | number | --keep-at: drop candidates whose relevance is below this (default 0, range 0..1) |
 | `--limit` | number | Refuse to run on more items than this, a whole number of 1 or more (default 5000). |
 | `--lines` | boolean | Judge each non-blank line of every input as its own item (ids name:N). |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 | `--top` | number | --top: how many candidates to list (ignored with --all) (default 10, range 1..100000) |
@@ -212,26 +212,26 @@ llm-ext classify rank "where do we issue refunds?" ./src
 
 Classify decision "find" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
-| `--absent` | number | --absent: json mode, exists probability below this is absent (between absent and answered is... (default 0.35, range 0..1) |
+| `--absent` | number | --absent: json mode, exists probability below this is absent (between absent and answered is partial) (default 0.35, range 0..1) |
 | `--answered` | number | --answered: json mode, lowest exists probability that counts as answered (default 0.7, range 0..1) |
 | `--chunk` | number | --chunk: file mode, lines per request (default 150, range 1..250) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
-| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the... |
-| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target... |
+| `--ext` | string | Only files with these extensions, comma separated (ts,tsx); applies to files found from the inputs, not to --items or stdin. |
+| `--follow_symlinks` | boolean | Read the targets of symlinks instead of skipping the links; a broken link or a target outside the allowed roots is still skipped and listed. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--items` | string | JSONL file of items ({"id","text"} per line, or plain lines); - reads stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
 | `--limit` | number | Refuse to run on more items than this, a whole number of 1 or more (default 5000). |
 | `--lines` | boolean | Judge each non-blank line of every input as its own item (ids name:N). |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
 | `--min_score` | number | --min-score: file mode, drop lines scoring below this (default 0.05, range 0..1) |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 | `--top` | number | --top: how many ranked candidates (json) or lines (files) to list (default 5, range 1..100000) |
@@ -249,16 +249,16 @@ llm-ext classify find "the retry backoff logic" ./src/big_module.py
 
 Classify decision "decide" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
@@ -275,18 +275,18 @@ llm-ext classify decide --input ./request.json
 
 Classify decision "compare" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--auto` | number | --auto: lowest top probability that makes a relation automatic (default 0.85, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
 | `--margin` | number | --margin: lowest gap between the top two relation probabilities for an automatic relation (default 0.5, range 0..1) |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
@@ -303,19 +303,19 @@ llm-ext classify compare --input ./request.json
 
 Classify decision "extract" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--auto` | number | --auto: lowest top probability that makes a pick found (default 0.85, range 0..1) |
-| `--candidate_cap` | number | --candidate-cap: most regex matches kept per field; more are cut and the field cannot be... (default 20, range 2..100) |
+| `--candidate_cap` | number | --candidate-cap: most regex matches kept per field; more are cut and the field cannot be found with certainty (default 20, range 2..100) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
 | `--margin` | number | --margin: lowest gap between the top two candidates for a pick to be found (default 0.5, range 0..1) |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
@@ -332,19 +332,19 @@ llm-ext classify extract --input ./request.json
 
 Classify decision "audit" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
-| `--wrong_at` | number | --wrong-at: a record's largest check probability at or above which its value is flagged... (default 0.7, range 0.5..1) |
+| `--wrong_at` | number | --wrong-at: a record's largest check probability at or above which its value is flagged wrong and the audit escalates (default 0.7, range 0.5..1) |
 
 Example:
 ```bash
@@ -359,21 +359,21 @@ llm-ext classify audit --input ./request.json
 
 Classify decision "review" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
-| `--auto_accept` | number | --auto-accept: safe_to_apply, minimum score confidence and every claim's confidence at or... (default 0.8, range 0..1) |
+| `--auto_accept` | number | --auto-accept: safe_to_apply, minimum score confidence and every claim's confidence at or above this may stand as auto (default 0.8, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--claims` | string | File with one claim per non-empty line (- reads stdin), judged against the evidence; up to... |
+| `--claims` | string | File with one claim per non-empty line (- reads stdin), judged against the evidence; up to 16. Needs evidence in the JSON input; without --claims only the review half runs. |
 | `--composite_floor` | number | --composite-floor: the weighted composite must be at or above this for auto (default 0.7, range 0..1) |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
-| `--review_at` | number | --review-at: minimum score confidence, safe_to_apply or claim confidence below this... (default 0.5, range 0..1) |
+| `--review_at` | number | --review-at: minimum score confidence, safe_to_apply or claim confidence below this escalates (must not be above --auto-accept) (default 0.5, range 0..1) |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
 Example:
@@ -389,16 +389,16 @@ llm-ext classify review --input ./request.json
 
 Classify decision "check" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--preset` | string | Which check: invariant-check or criterion-vs-tests (the JSON input must not hold `preset` too). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
@@ -416,19 +416,19 @@ llm-ext classify check --input ./request.json
 
 Classify decision "findings" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--already_handled` | number | --already-handled: p at or above which the finding is dropped as already handled (default 0.4, range 0..1) |
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
-| `--reachable` | number | --reachable: lowest p that the problem can happen; below it a real finding is kept with low... (default 0.7, range 0..1) |
+| `--reachable` | number | --reachable: lowest p that the problem can happen; below it a real finding is kept with low confidence (default 0.7, range 0..1) |
 | `--real` | number | --real: lowest p that the finding is a real problem; below it the finding is dropped (default 0.5, range 0..1) |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
@@ -445,20 +445,20 @@ llm-ext classify findings --input ./request.json
 
 Classify decision "test-output" (catalog spec; flags, defaults and ranges are generated from it).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
-| `--evidence` | number | --evidence: lowest p that the log shows enough to tell the cause; below it a shown failure... (default 0.5, range 0..1) |
+| `--evidence` | number | --evidence: lowest p that the log shows enough to tell the cause; below it a shown failure needs attention (default 0.5, range 0..1) |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--output_dir` | string | Directory for the JSON report (same text as stdout). |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
-| `--regression` | number | --regression: lowest p that the failure is a code regression; at or above it the run needs... (default 0.5, range 0..1) |
+| `--regression` | number | --regression: lowest p that the failure is a code regression; at or above it the run needs attention (default 0.5, range 0..1) |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
 
 Example:
@@ -481,18 +481,18 @@ Purpose: pick the explicit requirements out of one user prompt. The prompt is sp
 
 Input: the prompt as a text file (one prompt per run). The earlier messages of the conversation, which decide what "it" and "the style" refer to, go in a second file given with `--context` (`-` reads stdin); they are background for every sentence and are never scored. JSON input form: `{"prompt": "...", "context": "..."}`, `context` optional, no other key (`catalog/requirements.ts`).
 
-| Flag | Type | Meaning (as printed by --help; long text is truncated there) |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
 | `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
-| `--context` | string | File with the earlier messages of the conversation (- reads stdin), used as background for... |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... |
+| `--context` | string | File with the earlier messages of the conversation (- reads stdin), used as background for every sentence; never scored. |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
 | `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
 | `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
 | `--json` | boolean | Print the JSON envelope instead of the text form. |
-| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops... |
-| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is... |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_bytes` | number | Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap). |
 | `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
-| `--min_confidence` | number | --min-confidence: a sentence is a requirement only when its label is requirement and its... (default 0.6, range 0..1) |
+| `--min_confidence` | number | --min-confidence: a sentence is a requirement only when its label is requirement and its confidence is at or above this (default 0.6, range 0..1) |
 | `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
 | `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
 | `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
@@ -521,7 +521,7 @@ invalid: []   usage: input_tokens 1035, output_tokens 241, cost 0.00004347 USD
 
 `s2` ("let's improve it a little.") is the borderline sentence: its label can flip between runs (see Known limitation); the confidence gate is what kept it out here.
 
-`--estimate` (checked live, 2026-11-04, on a development build after 14.2.0): works for `classify requirements`. `llm-ext classify requirements ./prompt.txt --context ./context.txt --estimate` exits 0, sends nothing and prints `classify requirements --estimate: nothing was sent`, `model: typesafe/jev-1.14`, `requests: 1`, `estimated input tokens: 1070`, `estimated input cost: 0.000045 USD (0.042 USD per million tokens)` and the line "This is an estimate, not a ceiling: it counts input tokens only, and small requests have measured up to 55% below the tokens the API reports."
+`--estimate` (checked live, 2026-11-04, on a development build after 14.2.0): works for `classify requirements`. `llm-ext classify requirements ./prompt.txt --context ./context.txt --estimate` exits 0, sends no question and prints `classify requirements --estimate: nothing was sent`, `model: typesafe/jev-1.14`, `requests: 1`, `estimated input tokens: 1070`, `estimated input cost: 0.000045 USD (0.042 USD per million tokens)` and the line "This is an estimate, not a ceiling: it counts input tokens only, and small requests have measured up to 55% below the tokens the API reports."
 
 Limits:
 
@@ -544,14 +544,23 @@ Purpose: say whether a new phrase DUPLICATES one of a list of existing rules, is
 
 Input: `{"phrase": "...", "rules": [{"id": "G7.4", "text": "..."}, ...], "context": "..."}`; `rules` has at least 1 entry, `context` is optional (the `--context` file fills it), no other key is accepted. A rule id matches `[A-Za-z0-9_.:-]{1,64}` (so PRRD ids such as `G7.4` and `S64.134` are returned unchanged), ids must be unique and `__proto__` is refused. The rule text and the phrase never appear in a question, only in the request state. Example request: `references/rule-check-example.json` with `references/rule-check-example-context.txt`.
 
-| Flag | Type | Meaning |
+| Flag | Type | Meaning (as printed by --help; a row that --help cuts with `...` is given whole) |
 |---|---|---|
-| `--conflict` | number | The phrase contradicts a rule when the contradiction probability is at or above this (default 0.6, range 0..1). |
-| `--min_confidence` | number | A relation counts only when its confidence is at or above this; below it the rule stays a candidate (default 0.6, range 0..1). |
+| `--chunk_chars` | number | Size in characters at which a long text item is split into chunks. |
+| `--conflict` | number | --conflict: the phrase contradicts a rule when the contradiction probability is at or above this (default 0.6, range 0..1) |
 | `--context` | string | File of earlier messages (- reads stdin) as background, never scored; sent with every request. |
-| `--max_questions_per_request` | number | Most questions per request, a whole number of 1 or more (all classify commands). It multiplies the request count: rule-check asks 2 questions per rule, so 2 sends one rule per request. A value below the questions of one unit (1 for rule-check) is refused for the whole run: exit 1, `llm-ext: unit 0 (questions: rel_i0, con_i0) has 2 questions, over the limit of 1 per request` (measured). 0, 1.5 or a negative value is refused with `llm-ext: --max-questions-per-request must be a whole number of 1 or more, got ...`. |
-| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default... (truncated by --help). Does not apply to rule-check: it has no choice question over text. |
-| `--input`, `--json`, `--estimate`, `--max_budget`, `--output_dir`, `--profile`, `--strict_exit`, `--chunk_chars` | | As for the other classify commands. `--default` is listed but does not apply: rule-check has no choice question over text. |
+| `--default` | string | Default label of every choice question over text; a chunk whose top label is the default does not vote. |
+| `--estimate` | boolean | Dry run: print the estimated input cost (an estimate, not a ceiling); nothing is sent to Jev. |
+| `--input` | string | Path of the JSON input file; without it the JSON is read from stdin. |
+| `--json` | boolean | Print the JSON envelope instead of the text form. |
+| `--max_budget` | number | Opt-in spend cap in USD; a run whose estimate exceeds it is refused and a running one stops at it. |
+| `--max_questions_per_request` | number | Most questions per request (whole number, 1 or more); a low cap multiplies the request count. |
+| `--min_confidence` | number | --min-confidence: a relation counts only when its confidence is at or above this; otherwise the rule stays a candidate (default 0.6, range 0..1) |
+| `--output_dir` | string | Directory for the JSON report (the JSON envelope, as --json prints it). |
+| `--profile` | string | Classifier profile to run on (default: the active classifier profile). |
+| `--strict_exit` | boolean | Exit non-zero when the result needs attention. |
+
+Notes on the rows above (from live runs and the source, not from --help). `--default` is listed but does not apply: rule-check has no choice question over text. `--max_questions_per_request` (all classify commands) multiplies the request count: rule-check asks 2 questions per rule, so 2 sends one rule per request. A value below the questions of one unit (1 for rule-check) is refused for the whole run: exit 1, `llm-ext: unit 0 (questions: rel_i0, con_i0) has 2 questions, over the limit of 1 per request` (measured). 0, 1.5 or a negative value is refused with `llm-ext: --max-questions-per-request must be a whole number of 1 or more, got ...`. The other rows behave as for the other classify commands.
 
 Output (`decision` object): `outcome` (`duplicate`, `updated_version`, `new` or `uncertain`), `rule_id` (the matched rule, else null), `ambiguous`, `conflict`, `reason` (one line built from the result), `unanswered` (ids of the rules with no valid answer), `candidates` and `confident_new_count`. A candidate is a rule that is NOT a confident new: `{id, label, confidence, probabilities, contradicts: {yes, probability} or null, unanswered, invalid}`, sorted by the probability of `new` ascending, unanswered last. `confident_new_count` counts the other rules, so `candidates` length plus `confident_new_count` is the number of rules and a long list never prints one row per rule. The text form is the first line `outcome rule_id` (plus ` · ambiguous`, ` · conflict`), one line per answered candidate (confidence, label, id, `contradicts`), `N rules are confidently new`, and `? no answer: <id> (<reason>)` lines.
 
@@ -665,6 +674,8 @@ decision call: ok (the remote service; model typesafe/jev-1.14-20261014, answer 
 ```
 
 Ping is a round-trip check: it exits non-zero when the key check fails; when the call fails and the local decider does not answer either; when the reply has no usable answer; or when the command is stopped (`--command_timeout`, exit 124). An answer below 0.5 prints a warning line on stderr and still exits 0. The question is recorded in the usage history (a local answer is recorded under the local decider's endpoint at no cost); `--max_budget` does not apply to it.
+
+`--no_call` is the free key check alone (`--no-call` is the same flag). On a remote profile it still needs the key: with the variable unset it exits 3 before any request, with a message that names `OPENROUTER_API_KEY`; with the key set it sends one authenticated GET (the key as a Bearer token) to `https://openrouter.ai/api/v1/key`, prints `key check: ok (...)` then `decision call: skipped (--no-call); ...`, and sends no question. With the `local-decision` profile it needs no key and makes no request (`key check: skipped (profile local-decision is local-only: ...)`).
 
 Local decider fallback (ships in llm-ext 14.3.0 and later):
 
