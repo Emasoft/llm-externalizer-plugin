@@ -350,6 +350,10 @@ export async function resolveSessionSummaryChain<D>(s: SessionSummaryChainSeams<
   const profiles = s.profiles ?? {};
   // A selected local profile runs local-only: its deps cannot reach the OpenRouter pool, and the user asked for local.
   const localOnly = s.active?.isLocal === true;
+  // WHY a line and not a fall-through (issue 15 item 4): session-summary is free-only by design (cost safety, handler.ts "can never hand back a paid model"), so a paid or non-local profile is not honoured; the line replaces a silent free-only run.
+  if (s.active !== null && !s.active.isLocal && !s.active.freeOnly) {
+    write(`[llm-externalizer] session-summary: runs on free OpenRouter models and managed local models only; the models of profile '${s.active.name}' are not used\n`);
+  }
   const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => (profiles[n] !== undefined ? [resolveProfile(n, profiles[n])] : []));
   const pick = pickLocalSummaryTargets(candidates, s.slotCtx);
   for (const note of pick.notes) write(`[llm-externalizer] session-summary: ${note}\n`);

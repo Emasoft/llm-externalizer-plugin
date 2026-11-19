@@ -541,6 +541,46 @@ describe("resolveSessionSummaryChain (the index.ts seam)", () => {
     expect(r.models.map((m) => m.id)).toEqual([LFM3_MLX]);
     expect(r.local?.deps).toBe("deps:locals-mlx");
   });
+
+  const NOT_USED = "are not used";
+  const remoteProfile = (name: string, over: Record<string, unknown> = {}): ResolvedProfile =>
+    resolveProfile(name, { mode: "remote", api: "openrouter-remote", model: "vendor/paid-model", api_key: "sk-or-test-direct", ...over } as Parameters<typeof resolveProfile>[1]); // ubs:ignore (test fixture, not a key)
+  it("an active paid (non-local, non-free-only) profile: one stderr line says its models are not used, the chain stays free-only", async () => {
+    const dir = tempDir("llm-ext-chain-");
+    writeRecord(dir, okRecord());
+    const { s, lines } = seams(dir, { active: remoteProfile("my-paid") });
+    expect(s.active?.freeOnly).toBe(false);
+    const r = await resolveSessionSummaryChain(s);
+    expect(lines.filter((l) => l.includes(NOT_USED))).toEqual([
+      "[llm-externalizer] session-summary: runs on free OpenRouter models and managed local models only; the models of profile 'my-paid' are not used\n",
+    ]);
+    expect(r.models.map((m) => m.id)).toEqual([REMOTE, LFM3_MLX]);
+  });
+  it("an active free-only profile prints no 'not used' line", async () => {
+    const dir = tempDir("llm-ext-chain-");
+    writeRecord(dir, okRecord());
+    const { s, lines } = seams(dir, { active: remoteProfile("my-free", { free_only: true, free_models: ["vendor/free-one:free"] }) });
+    expect(s.active?.freeOnly).toBe(true);
+    await resolveSessionSummaryChain(s);
+    expect(lines.join("")).not.toContain(NOT_USED);
+  });
+  it("an active local profile prints no 'not used' line", async () => {
+    const dir = tempDir("llm-ext-chain-");
+    writeRecord(dir, okRecord());
+    const { s, lines } = seams(dir, { active: builtin("locals-mlx") });
+    expect(s.active?.isLocal).toBe(true);
+    await resolveSessionSummaryChain(s);
+    expect(lines.join("")).not.toContain(NOT_USED);
+  });
+  it("no active profile prints no 'not used' line", async () => {
+    const dir = tempDir("llm-ext-chain-");
+    writeRecord(dir, okRecord());
+    const { s, lines } = seams(dir);
+    expect(s.active).toBeNull();
+    await resolveSessionSummaryChain(s);
+    expect(lines.join("")).not.toContain(NOT_USED);
+  });
+
 });
 
 /**
