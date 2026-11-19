@@ -4,7 +4,7 @@ title: Stable profile contract, user-owned keys separated from benchmark-managed
 column: todo
 status: tasked
 created: 2026-11-14T21:37:07+0100
-updated: 2026-11-19T04:34:07+0100
+updated: 2026-11-19T04:44:00+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -47,3 +47,4 @@ Design consequences to carry: (1) reliability and availability are the top prior
 2026-11-18T16:41:50+0100 correction (main agent): Q9 is withdrawn from the ruling above and stays a USER question: Q9 (session summary order) stays a USER question, the same as TYHKAKCB D1: the owner text "Always use the locale inferencer" (#111) points to local first, and the USER permission of 2026-11-18 to send sessions to free models named the janitor secrets-shield, which the product does not use (it uses safeRedact, G49XPDNI line 46); the shipped order (remote free first, local last) stays until the USER answers.
 2026-11-19T04:29:14+0100 found while working TRDD-FP2SAF4P (main agent, 2026-11-19): skills/llm-externalizer-cli-reference/references/consumer-guidelines.md line 3 still says its statements were checked against v14.7.2, 'the latest release', and the line 5 legend defines the marker '(next release after 14.7.2: ...)'; v14.7.3 and v14.7.4 are released. No line uses that marker any more (grep on 2026-11-19 found it only in the legend). The re-check of the file against the current release belongs with this card's open box (consumer-guidelines.md questions 1 and 5 rewritten in final form).
 2026-11-19T04:34:06+0100 supersedes the 04:29:14 note's last sentence (main agent, 2026-11-19): the consumer-guidelines.md re-check against the current release is split out to its own card TRDD-T229KMOU, because this card's open box waits on nine backburner children; this card keeps only its box for questions 1 and 5.
+2026-11-19T04:43:59+0100 main agent: consumer-guidelines.md Q1 profile-types bullet gained a 14.7.4 clause under TRDD-T229KMOU (paid or other non-local, non-free-only profile: session summary still runs on free OpenRouter and managed local models, stderr line says the profile models are not used; source v14.7.4 session_summary/local-model.ts:354-355). Rewrites of Q1 and Q5 remain this card's.
