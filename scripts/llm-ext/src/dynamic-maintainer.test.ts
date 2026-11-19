@@ -185,6 +185,26 @@ async function withProviderKeys<T>(fn: () => T | Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * TRDD-P10QMUW7: the paid gate now refuses an unpopulated paid profile with a "no key" message when openRouterDetectorKey() is empty,
+ * so every test about the "being benchmarked now" row must set the key itself (a dummy literal, nothing is sent), whatever the shell has.
+ * The plugin-option variable is cleared too: resolveEnvValue gives it precedence over the plain variable.
+ */
+function withDummyOpenRouterKey<T>(fn: () => T): T {
+  const prevOr = process.env.OPENROUTER_API_KEY;
+  const prevPlugin = process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  process.env.OPENROUTER_API_KEY = "test-openrouter-key-not-a-real-one";
+  delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+  try {
+    return fn();
+  } finally {
+    if (prevOr === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevOr;
+    if (prevPlugin === undefined) delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    else process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY = prevPlugin;
+  }
+}
+
 /** The free section as an unpopulated placeholder: present (so the maintainer
  *  has something to merge onto) but contributing no candidates when the
  *  catalog carries no ':free' ids — which keeps a `paid` test's spawn count
@@ -832,7 +852,7 @@ describe("maintainDynamicProfiles", () => {
     // And the gate refuses rather than letting the still-placeholder chain
     // reach a provider — the behaviour HEAD had at index.ts's paid population
     // branch and the dispatch rewrite dropped.
-    const gate = dynamicProfileGate("paid", "chat");
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat"));
     expect(gate).not.toBeNull();
     expect(gate?.message).toMatch(/not benchmarked yet and is being benchmarked now/);
     expect(gate?.message).toMatch(/~15 minutes/);
@@ -2186,7 +2206,7 @@ describe("dynamicProfileGate", () => {
     // LLM_EXT_CONFIG_DIR — nothing booked yet this UTC day, so the cap is NOT
     // reached. On HEAD's dispatch path this returned null and the placeholder
     // id went to the provider; it must refuse.
-    const gate = dynamicProfileGate("paid", "chat", { settings });
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
     expect(gate).not.toBeNull();
     expect(gate?.message).toMatch(/being benchmarked now/);
   });
@@ -2366,13 +2386,13 @@ describe("dynamicProfileGate", () => {
     // Both texts, as the finding asks: with the opt-out OFF the user is told a
     // benchmark is running (true — the maintainer just spawned it); with it ON
     // that sentence is a promise the opt-out itself guarantees cannot be kept.
-    const on = dynamicProfileGate("paid", "chat", { settings });
+    const on = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
     expect(on?.message).toMatch(/being benchmarked now/);
 
     const prev = process.env.LLM_EXT_DISABLE_AUTO_RECONCILE;
     process.env.LLM_EXT_DISABLE_AUTO_RECONCILE = "1";
     try {
-      const off = dynamicProfileGate("paid", "chat", { settings });
+      const off = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
       expect(off).not.toBeNull();
       expect(off?.message).not.toMatch(/being benchmarked now/);
       expect(off?.message).toContain("LLM_EXT_DISABLE_AUTO_RECONCILE=1");
@@ -2406,7 +2426,7 @@ describe("dynamicProfileGate", () => {
       paid_benchmark_daily_cap_usd: 0.5,
       profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
     } as never;
-    const gate = dynamicProfileGate("paid", "chat", { settings, nowMs: t0 });
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings, nowMs: t0 }));
     expect(gate).not.toBeNull();
     expect(gate?.message).not.toMatch(/is being benchmarked now/);
     expect(gate?.message).toContain("QUEUED");
@@ -2419,12 +2439,86 @@ describe("dynamicProfileGate", () => {
     const prevCfg = process.env.LLM_EXT_CONFIG_DIR;
     process.env.LLM_EXT_CONFIG_DIR = fresh;
     try {
-      const running = dynamicProfileGate("paid", "chat", { settings, nowMs: t0 });
+      const running = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings, nowMs: t0 }));
       expect(running?.message).toMatch(/is being benchmarked now/);
     } finally {
       if (prevCfg === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
       else process.env.LLM_EXT_CONFIG_DIR = prevCfg;
       rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+
+  it("TRDD-P10QMUW7: the unpopulated paid gate carries reason paid-unpopulated only when a real command would start the benchmark, and its message is unchanged", async () => {
+    // WHY: cli/main.ts --estimate keys on this reason to say that an estimate starts no benchmark. Where the benchmark is already running, queued, or opted out, the unchanged gate text is already true under --estimate, so a reason there would make the estimate say something false.
+    const settings = {
+      allow_paid_models: true,
+      paid_benchmark_daily_cap_usd: 0.5,
+      profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
+    } as never;
+
+    // The key is set explicitly (a dummy, nothing is sent): without it the gate refuses with the no-key message instead (next test).
+    await withProviderKeys(async () => {
+      const fresh = dynamicProfileGate("paid", "chat", { settings });
+      expect(fresh?.message).toMatch(/is being benchmarked now/);
+      expect(fresh?.reason).toBe("paid-unpopulated");
+
+      const prev = process.env.LLM_EXT_DISABLE_AUTO_RECONCILE;
+      process.env.LLM_EXT_DISABLE_AUTO_RECONCILE = "1";
+      try {
+        expect(dynamicProfileGate("paid", "chat", { settings })?.reason).toBeUndefined();
+      } finally {
+        if (prev === undefined) delete process.env.LLM_EXT_DISABLE_AUTO_RECONCILE;
+        else process.env.LLM_EXT_DISABLE_AUTO_RECONCILE = prev;
+      }
+
+      // A live pid in the paid background-update lock: a sweep is running, "is being benchmarked now" is already true.
+      const lockPath = join(cfgDir, "background-update-paid.lock");
+      writeFileSync(lockPath, String(process.pid), "utf-8");
+      const running = dynamicProfileGate("paid", "chat", { settings });
+      expect(running?.message).toMatch(/is being benchmarked now/);
+      expect(running?.reason).toBeUndefined();
+      rmSync(lockPath, { force: true });
+
+      // The 6h sweep floor holds the benchmark back (the N-7 fixture): QUEUED, nothing is running now.
+      const { recordDynamicBenchmarkAt, updateDynamicProfileRecord } = await import("./default-profiles-state.js");
+      const t0 = 1_800_000_000_000;
+      const sweepAt = t0 - 5 * 60 * 60 * 1000;
+      recordDynamicBenchmarkAt("paid", sweepAt);
+      updateDynamicProfileRecord("paid", (p) => ({
+        lastBenchmarkAt: p?.lastBenchmarkAt ?? 0,
+        poolFingerprint: p?.poolFingerprint ?? "",
+        modelIds: p?.modelIds ?? [],
+        failCount: p?.failCount ?? 0,
+        lastMaintainedAt: sweepAt,
+      }));
+      const queued = dynamicProfileGate("paid", "chat", { settings, nowMs: t0 });
+      expect(queued?.message).toContain("QUEUED");
+      expect(queued?.reason).toBeUndefined();
+    });
+  });
+
+  it("TRDD-P10QMUW7: with no OpenRouter key the unpopulated paid gate says so and never claims a benchmark, because the detector starts nothing without it", () => {
+    // WHY: measured in real-paid-nokey.txt, a real paid command with the key unset printed "is being benchmarked now" while the detector (profile-detector.ts, same openRouterDetectorKey) fetched no catalog and started nothing.
+    const settings = {
+      allow_paid_models: true,
+      paid_benchmark_daily_cap_usd: 0.5,
+      profiles: { paid: { mode: "remote", api: "openrouter-remote", model: "placeholder/unpopulated-default-profile" } },
+    } as never;
+    const prevOr = process.env.OPENROUTER_API_KEY;
+    const prevPlugin = process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    try {
+      const gate = dynamicProfileGate("paid", "chat", { settings });
+      expect(gate).not.toBeNull();
+      expect(gate?.message).toContain("$OPENROUTER_API_KEY");
+      expect(gate?.message).not.toMatch(/being benchmarked now/);
+      expect(gate?.reason).toBeUndefined();
+    } finally {
+      if (prevOr === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevOr;
+      if (prevPlugin === undefined) delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+      else process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY = prevPlugin;
     }
   });
 
@@ -2539,7 +2633,7 @@ describe("row 80: paid arm order with a non-empty free_models slot", () => {
         },
       },
     } as never;
-    const gate = dynamicProfileGate("paid", "chat", { settings });
+    const gate = withDummyOpenRouterKey(() => dynamicProfileGate("paid", "chat", { settings }));
     expect(gate).not.toBeNull();
     expect(gate?.message).toMatch(/being benchmarked now/);
     expect(gate?.message).not.toContain("placeholder/unpopulated-default-profile");

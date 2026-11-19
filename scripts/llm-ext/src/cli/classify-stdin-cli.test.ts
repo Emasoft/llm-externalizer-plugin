@@ -88,7 +88,7 @@ describe("classify filter --estimate with stdin piped (built CLI)", () => {
   it("valid filter JSON on stdin: exit 0 and the estimate text, no fetch call except the endpoints GET, no key", async () => {
     const r = await runWithStdin(JSON.stringify({ question: "Does it fail?", items: [{ text: "boom" }] }));
     expect(r.exitCode, how(r)).toBe(0);
-    expect(r.stdout).toContain("classify filter --estimate: nothing was sent");
+    expect(r.stdout).toContain("classify filter --estimate: no question was sent");
     expect(r.stdout).toContain("model: typesafe/jev-1.13");
     expect(r.stdout).toMatch(/requests: [1-9]/);
     expect(r.stdout).toMatch(/estimated input tokens: [1-9]/);
@@ -102,7 +102,7 @@ describe("classify filter --estimate with stdin piped (built CLI)", () => {
     expect(Buffer.byteLength(body)).toBeGreaterThan(128 * 1024);
     const r = await runWithStdin(body);
     expect(r.exitCode, how(r)).toBe(0);
-    expect(r.stdout).toContain("classify filter --estimate: nothing was sent");
+    expect(r.stdout).toContain("classify filter --estimate: no question was sent");
     // Measured on the shipped bundle: 68219 tokens for this input (150000 chars; the small case gives 138); the bound is about half the measured number, far above what the first 64 KiB chunk alone could give.
     expect(tokensOf(r)).toBeGreaterThan(30_000);
     expect(r.fetched.trim().split("\n")).toEqual(["https://openrouter.ai/api/v1/models/typesafe/jev-1.13/endpoints"]);

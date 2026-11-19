@@ -526,7 +526,7 @@ describe("C4-08 --estimate", () => {
     expect(r.err).toEqual([]);
     expect(r.out).toHaveLength(1);
     expect(() => JSON.parse(r.out[0]!)).toThrow();
-    expect(r.out[0]).toMatch(/^classify filter --estimate: nothing was sent\nmodel: typesafe\/jev-1\.13\nrequests: \d+\nestimated input tokens: \d+\nestimated input cost: [\d.]+ USD \(/);
+    expect(r.out[0]).toMatch(/^classify filter --estimate: no question was sent\nmodel: typesafe\/jev-1\.13\nrequests: \d+\nestimated input tokens: \d+\nestimated input cost: [\d.]+ USD \(/);
     expect(r.out[0]).toContain("This is an estimate, not a ceiling");
   });
   it("--json prints the numbers as JSON, and the cost is the tokens times the catalog prompt price", async () => {

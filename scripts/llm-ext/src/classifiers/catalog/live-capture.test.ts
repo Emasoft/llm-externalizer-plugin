@@ -84,7 +84,7 @@ describe("TRDD-O4MSZIG5: every spec projects one real captured reply", () => {
   }
 });
 
-// TRDD-58CFBQHN: the help of every decision command lists --estimate (tools/definitions-classify.test.ts), so the dry run must really work for all of them, not only the three measured live. Through the one runner with the recorded catalog and no network: the estimate exits 0, prints "nothing was sent" and reaches no decisions endpoint.
+// TRDD-58CFBQHN: the help of every decision command lists --estimate (tools/definitions-classify.test.ts), so the dry run must really work for all of them, not only the three measured live. Through the one runner with the recorded catalog and no network: the estimate exits 0, prints "no question was sent" (TRDD-Z8LRK2DZ) and reaches no decisions endpoint.
 // WHY a positive control per spec: "no decisions request" would also hold if the spy could never see one; the same input without estimate must send exactly one, which makes the zero meaningful.
 describe("TRDD-58CFBQHN: --estimate works for every spec and sends no decisions request", () => {
   for (const spec of DECISION_SPECS) {
@@ -110,7 +110,7 @@ describe("TRDD-58CFBQHN: --estimate works for every spec and sends no decisions 
       const dry = await run(true);
       expect(dry.out.exitCode, dry.out.text).toBe(0);
       expect(dry.decisions).toBe(0);
-      expect(dry.out.display).toContain(`classify ${spec.id} --estimate: nothing was sent`);
+      expect(dry.out.display).toContain(`classify ${spec.id} --estimate: no question was sent`);
       expect(dry.out.envelope).toBeUndefined();
       const real = await run(false);
       expect(real.decisions).toBe(1);

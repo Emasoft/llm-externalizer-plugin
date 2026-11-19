@@ -2801,3 +2801,25 @@ describe("validateProfile — free_only billable-group boot warning (D6a review 
     }
   });
 });
+
+describe("openRouterDetectorKey (TRDD-P10QMUW7): the one credential the detector and the paid gate both ask", () => {
+  it("is empty with both variables unset, the plain variable when set, and the plugin-option variable wins over it", async () => {
+    const { openRouterDetectorKey } = await import("./config.js");
+    const prevOr = process.env.OPENROUTER_API_KEY;
+    const prevPlugin = process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    try {
+      delete process.env.OPENROUTER_API_KEY;
+      delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+      expect(openRouterDetectorKey()).toBe("");
+      process.env.OPENROUTER_API_KEY = "plain-not-a-real-key";
+      expect(openRouterDetectorKey()).toBe("plain-not-a-real-key");
+      process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY = "plugin-not-a-real-key";
+      expect(openRouterDetectorKey()).toBe("plugin-not-a-real-key");
+    } finally {
+      if (prevOr === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevOr;
+      if (prevPlugin === undefined) delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+      else process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY = prevPlugin;
+    }
+  });
+});

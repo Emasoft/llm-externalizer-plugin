@@ -8685,6 +8685,9 @@ function resolveEnvValue(value) {
   }
   return value;
 }
+function openRouterDetectorKey() {
+  return resolveEnvValue(API_PRESETS["openrouter-remote"]?.defaultAuthEnv ?? "$OPENROUTER_API_KEY");
+}
 function isLocalUrl(url) {
   return LOCAL_URL_PATTERN.test(url);
 }
@@ -232548,7 +232551,7 @@ function claimDetectThrottle(name, nowMs = Date.now()) {
 async function defaultFetchOpenRouterCatalog() {
   const preset = API_PRESETS["openrouter-remote"];
   const url = preset?.defaultUrl ?? "https://openrouter.ai/api";
-  const key = resolveEnvValue(preset?.defaultAuthEnv ?? "$OPENROUTER_API_KEY");
+  const key = openRouterDetectorKey();
   if (!key) return [];
   const res = await fetchWithTimeout(`${url}/v1/models`, {
     headers: { Authorization: `Bearer ${key}` }

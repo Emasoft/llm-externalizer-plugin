@@ -272,7 +272,7 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
     expect(await runClassifyCommand(filterSpec, withInput("--estimate", "--output_dir", dir), "c", deps)).toBe(0);
     neverRead(stdin);
     expect(err).toEqual([]);
-    expect(out[0]).toContain("filter --estimate: nothing was sent");
+    expect(out[0]).toContain("filter --estimate: no question was sent");
     expect(s.urls.some((u) => !u.includes("output_modalities=decisions") && !u.endsWith("/endpoints"))).toBe(false);
     expect(existsSync(dir)).toBe(true);
   });
@@ -286,7 +286,7 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
     expect(code).toBe(0);
     neverRead(stdin);
     const text = out.join("\n");
-    expect(text).toContain("filter --estimate: nothing was sent");
+    expect(text).toContain("filter --estimate: no question was sent");
     // A filter with no inputs exits 1 ("nothing to filter", IN-01), so exit 0 plus requests >= 1 means the file after "--" was read and planned.
     expect(Number(/^requests: (\d+)/m.exec(text)?.[1])).toBeGreaterThanOrEqual(1);
     // The "output_modalities=decisions" URL is the catalog listing (serve() above answers it), not a decision request: a decision request is any URL that is neither it nor /endpoints, and serve() would throw on it.

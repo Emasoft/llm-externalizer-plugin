@@ -996,11 +996,14 @@ async function main(): Promise<void> {
     const gate = profileGateRefusal(tool.name);
     if (gate) {
       // WHY (empty-pool-refreshable): the gate text says a background benchmark is refreshing the pool, which is true only after a real command started the repair (index.ts dispatch). An estimate starts nothing, so on a never-populated pool that sentence is false and sends the user to wait for work that is not running. Say what is actually true and what to do. Not started from here: the repair is a long free benchmark, not a dry-run side effect.
-      process.stderr.write(
+      // WHY (paid-unpopulated, TRDD-P10QMUW7): the paid gate text says the paid profile "is being benchmarked now", which is true only after a real command started it (index.ts finally -> detached detector -> populateDefaultProfile; measured: default-profile-paid.log appears after one real run, not after --estimate). The gate sets this reason only when nothing is running, queued or opted out. An estimate starts nothing, so say what is true and what to do. Not started from here: it is a ~15 minute billable benchmark, not a dry-run side effect.
+      const estimateText =
         gate.reason === "empty-pool-refreshable"
           ? "free profile: no usable free model yet (0 available), and nothing is populating the pool: an estimate starts no work. Run the command once without --estimate (it populates the free pool first, no cost), then re-run --estimate.\n"
-          : `${gate.message}\n`,
-      );
+          : gate.reason === "paid-unpopulated"
+            ? "paid profile: not benchmarked yet, and nothing is benchmarking it: an estimate starts no work. Run the command once without --estimate to start the paid benchmark (needs a valid OpenRouter key; about 15 minutes; it spends from the daily paid-benchmark budget), then re-run --estimate.\n"
+            : `${gate.message}\n`;
+      process.stderr.write(estimateText);
       exitCommand(1);
     }
     await warmEstimatePricing();

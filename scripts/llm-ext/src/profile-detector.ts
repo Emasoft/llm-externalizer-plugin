@@ -37,7 +37,7 @@ import {
   getEnsemblePriceCeiling,
   isPlaceholderProfile,
   loadSettings,
-  resolveEnvValue,
+  openRouterDetectorKey,
   type DynamicProfileName,
   type Settings,
 } from "./config.js";
@@ -200,7 +200,8 @@ export function claimDetectThrottle(name: DynamicProfileName, nowMs: number = Da
 async function defaultFetchOpenRouterCatalog(): Promise<RawCatalogModel[]> {
   const preset = API_PRESETS["openrouter-remote"];
   const url = preset?.defaultUrl ?? "https://openrouter.ai/api";
-  const key = resolveEnvValue(preset?.defaultAuthEnv ?? "$OPENROUTER_API_KEY");
+  // TRDD-P10QMUW7: the key comes from the same helper the paid gate asks (config.ts openRouterDetectorKey), so the gate refuses with "no key" exactly when this returns [] and starts nothing (measured: real-paid-nokey.txt).
+  const key = openRouterDetectorKey();
   if (!key) return []; // no credential: fail open exactly like getCatalog's own failure path
   const res = await fetchWithTimeout(`${url}/v1/models`, {
     headers: { Authorization: `Bearer ${key}` },

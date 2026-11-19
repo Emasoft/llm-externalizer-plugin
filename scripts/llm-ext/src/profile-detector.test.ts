@@ -208,6 +208,32 @@ describe("detectProfileChanges — fingerprint-only, never writes settings.yaml 
     }
   });
 
+  it("TRDD-P10QMUW7: with no OpenRouter key the DEFAULT catalog fetcher sends no request and the detector starts nothing (the fact the paid gate relies on)", async () => {
+    // WHY: the paid gate refuses with a no-key message exactly when openRouterDetectorKey() is empty, because this default fetcher then returns [] (profile-detector.ts) and detectOnce reports changed:false. No fetchCatalog is injected, so the real default fetcher runs.
+    writeSettings(["active: paid", "allow_paid_models: true", "profiles:", "  paid:", "    mode: remote", "    api: openrouter-remote", "    model: placeholder/unpopulated-default-profile", ""].join("\n"));
+    const prevOr = process.env.OPENROUTER_API_KEY;
+    const prevPlugin = process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+    const realFetch = globalThis.fetch;
+    const fetchSpy = vi.fn(async () => {
+      throw new Error("no HTTP allowed in this test");
+    });
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch;
+    try {
+      const result = await detectProfileChanges("paid", { nowMs: 1000 });
+      expect(result.changed).toBe(false);
+      expect(result.spawned).toBe(false);
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(populateDefaultProfileMock).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+      if (prevOr === undefined) delete process.env.OPENROUTER_API_KEY;
+      else process.env.OPENROUTER_API_KEY = prevOr;
+      if (prevPlugin === undefined) delete process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY;
+      else process.env.CLAUDE_PLUGIN_OPTION_OPENROUTER_API_KEY = prevPlugin;
+    }
+  });
   it("throttled: a second call within MIN_DETECT_INTERVAL_MS never re-fetches and never spawns", async () => {
     writeSettings(["active: free", "profiles:", ...FREE_PLACEHOLDER, ""].join("\n"));
     const fetchCatalog = vi.fn(async () => [] as RawCatalogModel[]);

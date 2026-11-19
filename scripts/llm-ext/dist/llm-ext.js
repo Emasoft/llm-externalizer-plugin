@@ -9900,6 +9900,9 @@ function resolveEnvValue(value) {
   }
   return value;
 }
+function openRouterDetectorKey() {
+  return resolveEnvValue(API_PRESETS["openrouter-remote"]?.defaultAuthEnv ?? "$OPENROUTER_API_KEY");
+}
 function isLocalUrl(url2) {
   return LOCAL_URL_PATTERN.test(url2);
 }
@@ -276052,7 +276055,7 @@ function buildEstimate(command, requestTokens2, model, local = false) {
   return { command, requests: requestTokens2.length, inputTokens, model: model.id, promptUsdPerMillion: model.promptUsdPerM, estimatedInputCostUsd: model.promptUsdPerM === null ? null : inputTokens * model.promptUsdPerM / 1e6, local };
 }
 function renderEstimateText(e) {
-  const lines = [`${e.command} --estimate: nothing was sent`];
+  const lines = [`${e.command} --estimate: no question was sent`];
   if (e.model === null) {
     lines.push("requests: 0 (this input is answered without a model)", "estimated input cost: 0 USD");
   } else {
@@ -287977,7 +287980,17 @@ function dynamicProfileGate(effective, toolName, opts = {}) {
           message: `paid profile is not benchmarked yet and today's paid-benchmark budget ($${cap.toFixed(2)}) is used up \u2014 it resumes tomorrow (UTC), or raise paid_benchmark_daily_cap_usd`
         };
       }
-      return { isError: true, message: paidBenchmarkInProgressMessage(nowMs) };
+      if (openRouterDetectorKey() === "") {
+        return {
+          isError: true,
+          message: "paid profile is not benchmarked yet, and $OPENROUTER_API_KEY is not set, so no benchmark can start: export it and re-run."
+        };
+      }
+      return {
+        isError: true,
+        message: paidBenchmarkInProgressMessage(nowMs),
+        ...paidBenchmarkStartableByRealCommand(nowMs) ? { reason: "paid-unpopulated" } : {}
+      };
     }
     return null;
   })();
@@ -288010,6 +288023,15 @@ function paidSweepThrottledUntilMs(nowMs) {
   } catch {
     return null;
   }
+}
+function paidBenchmarkStartableByRealCommand(nowMs) {
+  if (maintenanceDisabled()) return false;
+  try {
+    if (benchLockIsHeld(backgroundUpdateLockPathFor("paid"), nowMs)) return false;
+  } catch {
+    return false;
+  }
+  return paidSweepThrottledUntilMs(nowMs) === null;
 }
 function paidBenchmarkInProgressMessage(nowMs) {
   if (maintenanceDisabled()) {
@@ -294420,10 +294442,9 @@ included: ${resolved.files.length}   excluded: ${excluded.length}
   if (wantEstimate) {
     const gate = profileGateRefusal2(tool.name);
     if (gate) {
-      process.stderr.write(
-        gate.reason === "empty-pool-refreshable" ? "free profile: no usable free model yet (0 available), and nothing is populating the pool: an estimate starts no work. Run the command once without --estimate (it populates the free pool first, no cost), then re-run --estimate.\n" : `${gate.message}
-`
-      );
+      const estimateText = gate.reason === "empty-pool-refreshable" ? "free profile: no usable free model yet (0 available), and nothing is populating the pool: an estimate starts no work. Run the command once without --estimate (it populates the free pool first, no cost), then re-run --estimate.\n" : gate.reason === "paid-unpopulated" ? "paid profile: not benchmarked yet, and nothing is benchmarking it: an estimate starts no work. Run the command once without --estimate to start the paid benchmark (needs a valid OpenRouter key; about 15 minutes; it spends from the daily paid-benchmark budget), then re-run --estimate.\n" : `${gate.message}
+`;
+      process.stderr.write(estimateText);
       exitCommand(1);
     }
     await warmEstimatePricing2();

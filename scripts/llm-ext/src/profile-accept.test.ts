@@ -215,12 +215,12 @@ describe("main.ts ordering (real CLI entry)", () => {
   afterAll(() => rmSync(work, { recursive: true, force: true }));
   const settingsOf = (active: string, extra: string[]): string =>
     ["active: " + active, "profiles:", "  mine:", "    profile-type: paid", "    mode: remote", "    api: openrouter-remote", "    api_key: sk-test-literal", "    model: vendor/paid-model", "  myscout:", "    profile-type: scouting", "    mode: remote", "    api: openrouter-remote", "    api_key: sk-test-literal", "    model: vendor/paid-model", ...extra, ""].join("\n");
-  const run = (settings: string, args: string[], extraFiles: Record<string, string> = {}) => {
+  const run = (settings: string, args: string[], extraFiles: Record<string, string> = {}, extraEnv: Record<string, string> = {}) => {
     const cfg = mkdtempSync(join(tmpdir(), "llm-ext-pt03-cfg-"));
     const home = mkdtempSync(join(tmpdir(), "llm-ext-pt03-home-"));
     writeFileSync(join(cfg, "settings.yaml"), settings);
     for (const [name, content] of Object.entries(extraFiles)) writeFileSync(join(cfg, name), content);
-    const r = spawnSync("node", [bundle, ...args], { encoding: "utf8", timeout: 120_000, env: { PATH: process.env.PATH ?? "", HOME: home, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0" } });
+    const r = spawnSync("node", [bundle, ...args], { encoding: "utf8", timeout: 120_000, env: { PATH: process.env.PATH ?? "", HOME: home, LLM_EXT_CONFIG_DIR: cfg, LLM_EXT_INSTALL_RULE: "0", ...extraEnv } });
     return { status: r.status, out: `${r.stdout}${r.stderr}` };
   };
   it("bundles", async () => {
@@ -261,4 +261,22 @@ describe("main.ts ordering (real CLI entry)", () => {
     expect(r.out).toContain(`Profile 'f' (free): model '${id}' is a decisions model`);
   }, 120_000);
 
+  // TRDD-P10QMUW7: the paid gate text claims "is being benchmarked now", which is true only after a real command started the benchmark; --estimate starts nothing, so it must say what is true and what to run.
+  it("P10QMUW7: --estimate on a never-benchmarked paid profile says nothing is benchmarking it and to run the command once without --estimate", () => {
+    const s = ["active: paid", "allow_paid_models: true", "profiles:", "  paid:", "    mode: remote", "    api: openrouter-remote", "    model: placeholder/unpopulated-default-profile", ""].join("\n");
+    const r = run(s, ["llm", "ask", "--estimate", "--instructions", "x"], {}, { OPENROUTER_API_KEY: "dummy-not-a-key" }); // ubs:ignore dummy placeholder key, never sent: the paid gate only needs a non-empty $OPENROUTER_API_KEY (TRDD-P10QMUW7)
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("paid profile: not benchmarked yet, and nothing is benchmarking it: an estimate starts no work. Run the command once without --estimate to start the paid benchmark (needs a valid OpenRouter key; about 15 minutes; it spends from the daily paid-benchmark budget), then re-run --estimate.");
+    expect(r.out).not.toContain("being benchmarked now");
+  }, 120_000);
+
+  // TRDD-P10QMUW7: with no key the detached detector fetches no catalog and starts nothing (measured: real-paid-nokey.txt), so the paid gate refuses with a no-key message on the real path and under --estimate; neither may promise a benchmark.
+  it("P10QMUW7: --estimate on a never-benchmarked paid profile with no OpenRouter key says no key is set and does not promise a benchmark start", () => {
+    const s = ["active: paid", "allow_paid_models: true", "profiles:", "  paid:", "    mode: remote", "    api: openrouter-remote", "    model: placeholder/unpopulated-default-profile", ""].join("\n");
+    const r = run(s, ["llm", "ask", "--estimate", "--instructions", "x"]);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain("paid profile is not benchmarked yet, and $OPENROUTER_API_KEY is not set, so no benchmark can start: export it and re-run.");
+    expect(r.out).not.toContain("to start the paid benchmark");
+    expect(r.out).not.toContain("being benchmarked now");
+  }, 120_000);
 });

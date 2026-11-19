@@ -75,7 +75,7 @@ describe("classify --estimate (built CLI)", () => {
     const r = await run(args);
     expect(r.stderr).not.toContain("is not set");
     expect(r.code).toBe(0);
-    expect(r.stdout).toContain("classify filter --estimate: nothing was sent");
+    expect(r.stdout).toContain("classify filter --estimate: no question was sent");
     expect(r.stdout).toContain("estimated input tokens:");
     expect(requestsThatCost(r.sent)).toEqual([]);
     expect(r.authorized).toEqual([]);

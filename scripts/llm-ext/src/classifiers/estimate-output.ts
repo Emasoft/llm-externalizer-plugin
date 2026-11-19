@@ -23,7 +23,8 @@ export function buildEstimate(command: string, requestTokens: readonly number[],
 }
 
 export function renderEstimateText(e: EstimateReport): string {
-  const lines = [`${e.command} --estimate: nothing was sent`];
+  // WHY (TRDD-Z8LRK2DZ): "nothing was sent" read as "no network", but the estimate fetches the public decisions catalog and the endpoint prompt limit when the cache is cold; only the question is not sent.
+  const lines = [`${e.command} --estimate: no question was sent`];
   if (e.model === null) {
     lines.push("requests: 0 (this input is answered without a model)", "estimated input cost: 0 USD");
   } else {

@@ -968,6 +968,17 @@ export function resolveEnvValue(value: string | undefined): string {
   return value;
 }
 
+/**
+ * TRDD-P10QMUW7: the ONE place that names the credential the paid/free benchmark DETECTOR uses to fetch the OpenRouter
+ * catalog (profile-detector.ts defaultFetchOpenRouterCatalog) - the preset default, not a profile's own api_key.
+ * The paid gate (dynamic-maintainer.ts) asks this same function, so its "no key, no benchmark can start" refusal can
+ * never disagree with the detector. Measured: with it unset a real paid command started nothing (real-paid-nokey.txt).
+ * Returns "" when not resolvable.
+ */
+export function openRouterDetectorKey(): string {
+  return resolveEnvValue(API_PRESETS["openrouter-remote"]?.defaultAuthEnv ?? "$OPENROUTER_API_KEY");
+}
+
 // ── URL validation ──────────────────────────────────────────────────
 
 // EVERY alternative is anchored with `([:/]|$)`. Without it the private-IP

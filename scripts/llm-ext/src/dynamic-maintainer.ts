@@ -33,6 +33,7 @@ import {
   loadSettings,
   API_PRESETS,
   PLACEHOLDER_MODEL_ID,
+  openRouterDetectorKey,
   resolveEnvValue,
   // P6b-fix4 B1: both imported from the ONE owner. `chainModelIds` was a private
   // copy here; `validateProfile` is what the write guard below asks before
@@ -965,9 +966,13 @@ export interface DynamicGateResult {
   // background update and answers "retry later" (USER 2026-09-18: "Refuse,
   // retry later"; no command waits for it). Every other refusal (malformed profile,
   // forbidden tool, no credentials, maintenance disabled, catalog recently
-  // failed, unpopulated paid/local) must leave this undefined, so the
+  // failed, unpopulated local) must leave this undefined, so the
   // caller branches on structure, never on message text.
-  reason?: "empty-pool-refreshable";
+  // TRDD-P10QMUW7: "paid-unpopulated" is a second, display-only discriminant: the never-benchmarked paid
+  // profile when nothing is running, throttled or opted out. The dispatch pre-flight ignores it (a real
+  // command starts the paid benchmark through the detached detector, not through this gate); cli/main.ts
+  // --estimate keys on it to say that an estimate starts no benchmark.
+  reason?: "empty-pool-refreshable" | "paid-unpopulated";
 }
 
 /**
@@ -1302,7 +1307,22 @@ export function dynamicProfileGate(
       // and sent the unroutable placeholder id to OpenRouter as a raw 404 —
       // the exact failure the placeholder exists to make impossible to
       // mistake for a real model. Same semantics, now a gate row.
-      return { isError: true, message: paidBenchmarkInProgressMessage(nowMs) };
+      // TRDD-P10QMUW7: the detector that a real command spawns fetches the catalog with openRouterDetectorKey() and, with
+      // no key, returns [] and starts nothing (measured: real-paid-nokey.txt printed "being benchmarked now" below while
+      // nothing started). So without that key the true answer is this refusal, on the real path and under --estimate.
+      if (openRouterDetectorKey() === "") {
+        return {
+          isError: true,
+          message: "paid profile is not benchmarked yet, and $OPENROUTER_API_KEY is not set, so no benchmark can start: export it and re-run.",
+        };
+      }
+      // TRDD-P10QMUW7: reason set only when --estimate may say a real command starts the benchmark (see
+      // paidBenchmarkStartableByRealCommand); the real path ignores it. Message unchanged.
+      return {
+        isError: true,
+        message: paidBenchmarkInProgressMessage(nowMs),
+        ...(paidBenchmarkStartableByRealCommand(nowMs) ? { reason: "paid-unpopulated" as const } : {}),
+      };
     }
     return null;
   })();
@@ -1403,6 +1423,23 @@ function paidSweepThrottledUntilMs(nowMs: number): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * TRDD-P10QMUW7: true iff no benchmark is running, queued or opted out for `paid`, so a REAL command starts one
+ * (index.ts finally -> spawnDetachedDetector -> profile-detector.ts detectOnce -> populateDefaultProfile) and --estimate may
+ * say so. No credential check here: the paid branch refuses earlier, with its own true message, when openRouterDetectorKey()
+ * is empty, so this is only reached with a key. The 60 s per-profile detect throttle is not read, hence the estimate
+ * wording says "to start", never "will start". Never throws: an unreadable config dir yields false, the gate keeps its message.
+ */
+function paidBenchmarkStartableByRealCommand(nowMs: number): boolean {
+  if (maintenanceDisabled()) return false;
+  try {
+    if (benchLockIsHeld(backgroundUpdateLockPathFor("paid"), nowMs)) return false;
+  } catch {
+    return false;
+  }
+  return paidSweepThrottledUntilMs(nowMs) === null;
 }
 
 /** HEAD's paid "benchmark in progress" text, re-homed in the gate. The progress
