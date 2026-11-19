@@ -1186,6 +1186,8 @@ function unmarkedDynamicProfileNames(raw: string): string[] {
 export function loadSettings(): Settings | null {
   const settingsPath = getSettingsPath();
   try {
+    // WHY (TRDD-7LZI31WW, 2026-11-19): read the migration record BEFORE the file. The profile-type-written step writes the typed file and only then records the step, so reading the file first let a concurrent boot pair an untyped file with a record that says applied (E81g on, seen in the 14.7.6 publish gate in background-singleton.test.ts SG2). With the record first, a record that says applied means that writer had already renamed the typed file into place, and a record that says not applied keeps E81g off. Not covered here: an untyped file restored from a backup or synced from another machine while the record says applied; the next migration pass re-stamps it (benchmark/pick.ts, PT-02 lockout fix).
+    const profileTypesMigrated = isMigrationStepApplied(PROFILE_TYPE_STEP);
     if (!existsSync(settingsPath)) return null;
     const raw = readFileSync(settingsPath, "utf-8");
     // H10: Sanitize YAML output to strip __proto__ and prevent prototype pollution
@@ -1201,7 +1203,7 @@ export function loadSettings(): Settings | null {
       active_classifier: typeof parsed.active_classifier === "string" && parsed.active_classifier ? parsed.active_classifier : undefined,
       profiles: parsed.profiles || {},
       // PT-02: E81g turns on only once the migration has written the type into every profile (see profileTypesSettingsErrors); the migration record is the single source.
-      profileTypesMigrated: isMigrationStepApplied(PROFILE_TYPE_STEP),
+      profileTypesMigrated,
       // Absent / any non-true value <=> false: the safe (free) side. A YAML that
       // predates this key, or sets it to a typo, never accidentally enables paid.
       allow_paid_models: parsed.allow_paid_models === true,
