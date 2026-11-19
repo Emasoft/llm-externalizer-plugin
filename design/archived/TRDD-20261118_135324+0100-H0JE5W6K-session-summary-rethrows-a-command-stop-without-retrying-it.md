@@ -1,10 +1,10 @@
 ---
 trdd-id: H0JE5W6K
 title: session-summary rethrows a command stop without retrying it
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T13:53:24+0100
-updated: 2026-11-18T16:49:19+0100
+updated: 2026-11-19T01:01:32+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -29,6 +29,7 @@ GitHub issue 15 item 5 (verification: reports_dev/issue15-verify/20261118_134848
 - 2026-11-18T15:06:34+0100 — column → complete by main-agent@llm-externalizer-plugin. implemented in 3cb60045 and verified (driver.test.ts 85/85, until-done 15/15, driver-abort 4/4 one file at a time, tsc and eslint 0, mutation check fails as expected); acceptance boxes ticked or struck with reason; ships in 14.7.3; approved by the main agent under the USER delegation of 2026-11-18
 - 2026-11-18T16:32:47+0100 — column → complete by main-agent@llm-externalizer-plugin. already complete; archive pass (ZVS3IMKT reduced scope)
 - 2026-11-18T16:49:19+0100 — correction by main-agent@llm-externalizer-plugin: the 2026-11-18T16:32:47 line says archive pass; no archive happened, because release-via is publish; the card reaches published with the next release.
+- 2026-11-19T01:01:32+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.3 (ac3fcdef, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.3); implementation-commits verified ancestors of v14.7.3 by the main agent 2026-11-19.
 
 ## Verification
 
