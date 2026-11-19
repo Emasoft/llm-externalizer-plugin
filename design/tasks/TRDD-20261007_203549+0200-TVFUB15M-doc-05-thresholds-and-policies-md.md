@@ -4,7 +4,7 @@ title: DOC-05 thresholds-and-policies.md
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:49+0200
-updated: 2026-10-07T20:35:53+0200
+updated: 2026-11-19T10:15:56+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -54,3 +54,7 @@ read the code at card start
 ## Out of scope
 
 Command flag table (DOC-04).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: thresholds appear per command in classify.md. Remaining: the thresholds-and-policies file.

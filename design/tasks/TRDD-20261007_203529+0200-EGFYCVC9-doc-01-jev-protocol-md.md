@@ -4,7 +4,7 @@ title: DOC-01 jev-protocol.md
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:29+0200
-updated: 2026-10-07T20:35:33+0200
+updated: 2026-11-19T10:16:00+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -57,3 +57,7 @@ read the code at card start
 ## Out of scope
 
 Copies into the skills and the drift test (DOC-02); NOTICE (DOC-15).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19: nothing at HEAD 55269f3b. A draft exists only on the unmerged branch docs/prrd-silver-20261014 (not an ancestor of HEAD): scripts/llm-ext/docs-src/jev-protocol.md.

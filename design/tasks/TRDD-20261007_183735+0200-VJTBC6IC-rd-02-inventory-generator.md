@@ -4,7 +4,7 @@ title: RD-02 Inventory generator
 column: backburner
 status: tasked
 created: 2026-10-07T18:37:35+0200
-updated: 2026-10-07T18:40:28+0200
+updated: 2026-11-19T10:16:01+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -54,3 +54,7 @@ Runtime enforcement of profile types (PT-03); the README table (RD-20).
 ## Approval log
 
 - 2026-10-07T18:37:35+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+T6F52GB8 audit 2026-11-19: KEEP. src/doc-inventory.ts (read by the main agent) returns name lists only: no JSON, no CLI groups, skills, hooks or statusline, no per-command profile types or --estimate, no file:line, no disagreement list. Step 4 resolveScoutModel disagreement is reported fixed by PT-05 (mass_scouting/cli.ts:603, by VB, not re-read).

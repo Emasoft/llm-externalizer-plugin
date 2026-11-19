@@ -4,7 +4,7 @@ title: RD-15 README-vs-CLI test over the whole README
 column: backburner
 status: tasked
 created: 2026-10-07T18:37:38+0200
-updated: 2026-10-07T18:40:32+0200
+updated: 2026-11-19T10:15:59+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -50,3 +50,7 @@ Skill references and classify/browse commands (DOC-13).
 ## Approval log
 
 - 2026-10-07T18:37:38+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: doc-consistency.test.ts checks counts and one direction (README must name every CLI and slash command, :110-130). Remaining: flag and default assertions; unknown-command direction; blocked by RD-09, RD-10, RD-11.

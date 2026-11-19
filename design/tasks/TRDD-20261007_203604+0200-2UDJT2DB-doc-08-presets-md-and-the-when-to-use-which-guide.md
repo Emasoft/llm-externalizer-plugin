@@ -4,7 +4,7 @@ title: DOC-08 presets.md and the when-to-use-which guide
 column: backburner
 status: tasked
 created: 2026-10-07T20:36:04+0200
-updated: 2026-10-07T20:36:13+0200
+updated: 2026-11-19T10:15:57+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -56,3 +56,7 @@ read the code at card start
 ## Out of scope
 
 Preset code (SP-13).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: presets exist in code (catalog/check.ts). Remaining: presets.md and the when-to-use-which guide, with cost-study break-evens (no reports/jev-classifiers).

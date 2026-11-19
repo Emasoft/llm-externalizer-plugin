@@ -4,7 +4,7 @@ title: DW-02 Catalog diff on refresh
 column: backburner
 status: tasked
 created: 2026-10-07T20:29:32+0200
-updated: 2026-10-07T20:29:35+0200
+updated: 2026-11-19T10:15:57+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -56,3 +56,7 @@ The DW-01 event kinds; L0-07 catalog refresh. Read the code at card start.
 ## Out of scope
 
 Rerunning evaluations (DW-03).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: E104 box met for alias_target_change (system-one-fallback.ts:71-77 noteAliasTarget, system-one-fallback.test.ts:127-137, 14 pass). Remaining: catalog-refresh hook; canonical_slug_change, price_change and presence_change events (no non-test writer; l0/catalog.ts has no diff).

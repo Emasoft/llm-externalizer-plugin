@@ -4,7 +4,7 @@ title: DOC-06 errors-and-costs.md
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:53+0200
-updated: 2026-10-07T20:35:56+0200
+updated: 2026-11-19T10:15:57+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -54,3 +54,7 @@ read the code at card start
 ## Out of scope
 
 Retry and transport code (L0 cards).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: classify.md exit-code table; docs/setup-and-configuration.md:198-201 cost rule. Remaining: the errors-and-costs file with L0-01 classes.

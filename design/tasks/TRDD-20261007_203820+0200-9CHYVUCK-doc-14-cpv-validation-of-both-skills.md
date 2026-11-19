@@ -4,7 +4,7 @@ title: DOC-14 CPV validation of both skills
 column: backburner
 status: tasked
 created: 2026-10-07T20:38:20+0200
-updated: 2026-10-07T20:38:46+0200
+updated: 2026-11-19T10:16:01+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -56,3 +56,7 @@ read the code at card start
 ## Out of scope
 
 Skill content (DOC-03, DOC-09).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19: KEEP. Acceptance is a CPV run on the skills as they exist at HEAD; neither the classify nor the browse skill exists at HEAD. The 2026-10-16 CPV reports cover the branch drafts in the old nested layout.

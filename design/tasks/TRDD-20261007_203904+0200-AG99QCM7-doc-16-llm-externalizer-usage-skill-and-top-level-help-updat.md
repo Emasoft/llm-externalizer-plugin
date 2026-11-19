@@ -4,7 +4,7 @@ title: DOC-16 llm-externalizer-usage skill and top-level help updated
 column: backburner
 status: tasked
 created: 2026-10-07T20:39:04+0200
-updated: 2026-10-07T20:39:47+0200
+updated: 2026-11-19T10:15:59+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -57,3 +57,8 @@ read the code at card start
 ## Out of scope
 
 The new skills (DOC-03, DOC-09).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: classify is in help (cli/main.ts:502-506, launcher.ts GROUPS); cli-reference/SKILL.md:130 lists 16 classify decisions and references/models-and-settings.md:336 shows profile-type: classifier. Remaining: browse in help and skill waits on browse (BR-03, BR-08); CPV on the touched skill; confirm all five profile type names appear in cli-reference.
+The usage-skill part is obsolete: folded into cli-reference by F23GN7V3.

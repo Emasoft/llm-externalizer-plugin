@@ -4,7 +4,7 @@ title: DOC-10 Settings and profile docs
 column: backburner
 status: tasked
 created: 2026-10-07T20:36:25+0200
-updated: 2026-10-07T20:36:33+0200
+updated: 2026-11-19T10:15:57+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -55,3 +55,7 @@ read the code at card start
 ## Out of scope
 
 README sections (RD-17).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: docs/ has profile-type (setup-and-configuration.md) and the allow_paid_models scope at :198-201. Remaining: active_classifier and the five defaults list in docs/ (grep of docs/ for active_classifier and or-jev: 0 hits).

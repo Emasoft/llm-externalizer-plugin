@@ -4,7 +4,7 @@ title: PF-05 Classifier rows of acceptedProfileTypes
 column: backburner
 status: tasked
 created: 2026-10-07T19:31:16+0200
-updated: 2026-10-10T07:52:19+0200
+updated: 2026-11-19T10:15:58+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -70,3 +70,4 @@ The generic table and runtime check (PT-03), command implementations (C4 cards).
 2026-10-10 CORRECTION (commit 5f282fff message claimed 'the ONE existing profile-type refusal applies' for classify): wrong. The classifier-only rows made here are the DECLARATION / help surface; the enforcement is the runner's own selectClassifierProfile (classifiers/l2/profile.ts), because main.ts skips the general profile-type check for classify. A test tying the rows to the runner refusal landed in 1c08c7ff (TRDD-4Q1IVJOE).
 Parked in backburner: the remaining box ('browse run' decisions profile / --typing-profile) needs the 'browse run' command, which does not exist; revisit when it does (BR-07 TRDD-5D4X8KFN, BR-10 TRDD-FH0BQUZZ).
 2026-10-10T07:31:08+0200 current state: backburner. The earlier line "Left in dev" is superseded.
+T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: tools/definitions.ts:344-348 classifierProfileRows and :350 ACCEPTED_PROFILE_TYPES; definitions-classify.test.ts 22 pass. Remaining: browse run decisions profile and --typing-profile local/free/paid; no browse command in src; blocked by BR-07 5D4X8KFN and BR-10 FH0BQUZZ.

@@ -4,7 +4,7 @@ title: DOC-02 Copies + drift test
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:38+0200
-updated: 2026-10-07T20:35:43+0200
+updated: 2026-11-19T10:16:00+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -59,3 +59,7 @@ none stated in the plan; read the code at card start (awesome-jev `sync_skills.p
 ## Out of scope
 
 The rulebook text (DOC-01).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19: nothing at HEAD 55269f3b. A draft exists only on the unmerged branch docs/prrd-silver-20261014 (not an ancestor of HEAD): sync-jev-protocol.mjs, jev-protocol-drift.test.ts.

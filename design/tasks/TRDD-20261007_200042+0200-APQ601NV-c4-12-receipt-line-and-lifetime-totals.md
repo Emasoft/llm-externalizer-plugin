@@ -4,7 +4,7 @@ title: C4-12 Receipt line and lifetime totals
 column: backburner
 status: tasked
 created: 2026-10-07T20:00:42+0200
-updated: 2026-10-07T20:00:45+0200
+updated: 2026-11-19T10:26:46+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -53,13 +53,18 @@ To be listed at card start.
 
 ## Acceptance
 
-- [ ] qs receipt format (items, skipped, time, Jev tokens and cost, model, "~N Claude tokens not read (estimated)")
-- [ ] an estimate never used as chart data, only RD-06's measured numbers are
-- [ ] stderr under `--json`
+- [x] qs receipt format (items, skipped, time, Jev tokens and cost, model, "~N Claude tokens not read (estimated)")
+- [x] an estimate never used as chart data, only RD-06's measured numbers are
+- [x] stderr under `--json`
 - [ ] lifetime Jev totals in the existing usage history and stats
-- [ ] E132: input under ~1,000 tokens → runs, and the receipt notes Claude could read it directly for less (cost study break-even)
+- [x] E132: input under ~1,000 tokens → runs, and the receipt notes Claude could read it directly for less (cost study break-even)
 - [ ] definition of done as stated in plan §16 (design/plans/20261007_171500+0200-classifiers-profile-types-readme-plan-ZB41KG62.md): tests in the vitest include list, typecheck, lint and `npx eslint . --quiet` clean, full `npm test` green, no test doubles beyond the GlobalFetch seam, one commit with the TRDD id in its subject, WHY comments at non-obvious rules
 
 ## Out of scope
 
 The usage record (L1-10), README charts (RD-06).
+
+## Notes
+
+Evidence (verifier VA): receipt.ts:7 SMALL_INPUT_TOKENS, :74 renderReceipt; receipt.test.ts 15 pass incl. stderr under --json (:101), estimate not chart data (:110), lifetime totals (:125), E132 (:151); usage-history.ts:438 lifetimeJevTotalsIncremental.
+T6F52GB8 audit 2026-11-19: PARTLY. Box 4: the totals are computed from the usage history (usage-history.ts:438) but only the receipt prints them (receipt.ts:12 is the only non-test caller, main agent grep); the existing stats (stats-file.ts) do not show them, which plan D31 asks for.

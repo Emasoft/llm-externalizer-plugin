@@ -4,7 +4,7 @@ title: DOC-04 commands.md
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:46+0200
-updated: 2026-10-07T20:35:49+0200
+updated: 2026-11-19T10:15:56+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -55,3 +55,7 @@ read the code at card start
 ## Out of scope
 
 The check itself (DOC-13).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: classify.md has flag tables per command; --max_budget and --max-budget are both accepted (launcher.ts:138-139, classify-launch.test.ts:52). Remaining: commands.md in the classify skill, DOC-13 check.

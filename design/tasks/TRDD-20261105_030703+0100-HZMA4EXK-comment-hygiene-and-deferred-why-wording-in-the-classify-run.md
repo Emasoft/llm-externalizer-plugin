@@ -4,7 +4,7 @@ title: Comment hygiene and deferred WHY wording in the classify runner, spec and
 column: backburner
 status: tasked
 created: 2026-11-05T03:07:03+0100
-updated: 2026-11-05T04:00:47+0100
+updated: 2026-11-19T10:39:54+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -48,3 +48,8 @@ Source: reports_dev/ygf9yxf2/20261105_021126+0100-why-review-findings.md (gitign
 ## Approval log
 
 - 2026-11-05T03:07:03+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VA, not re-read by the main agent): PARTLY. Done: item 7 done in content; item 6 test split over run-decision.test.ts:273 and input-args.test.ts:281-282; items 8, 9 partial. Remaining: items 1 (run-decision.ts:245), 2 (:677), 3 (:647), 4 (catalog/spec.ts:95-96), 5 (shared-flags.ts:41 and :52), 10 (:263) and 11 (:217-218) open; 8, 9 partial; 6 optional.
+2026-11-19 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): all items closed. Items 1 to 5 and 8 to 11 in b9c307e2, each checked against the code by the main agent (commit body). Item 10 removed the unused RunRequest.defaultLabels instead of documenting it: no writer anywhere in the package, the only production RunRequest is built from argv. Item 11 behaviour question: settled by the 2026-11-18 16:14 ruling on TRDD-BUL4EEBP (kept as built), now cited in the comment. Items 6 and 7 done earlier (run-decision.test.ts:273, input-args.test.ts:281-282; 89461dc7); item 9 optional test not added, reason in the b9c307e2 body. npx tsc --noEmit and npx eslint . --quiet exit 0, run-decision.test.ts 72 pass. Waits for the full npm test at the 14.7.6 publish gate.

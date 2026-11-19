@@ -4,7 +4,7 @@ title: PF-06 settings commands for classifier profiles
 column: backburner
 status: tasked
 created: 2026-10-07T19:31:21+0200
-updated: 2026-11-18T16:53:24+0100
+updated: 2026-11-19T10:15:58+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -66,3 +66,4 @@ Profile docs (DOC-10), `settings new` (PT-08).
 ## Notes
 
 2026-11-18T16:53:22+0100 PF-02 (FFPDWWGN) closed with settingsCatalogErrors (classifiers/profile-checks.ts:109) ready and tested but uncalled; step 3 must call it.
+T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: settings group has show, profile, profiles, reset, status, scan-local (cli/launcher.ts); list and show are generic (index.ts:5645). Remaining: settings validate calling settingsCatalogErrors (profile-checks.ts:109 has no non-test caller); settings select for active_classifier; tests for classifier profiles in list and show.

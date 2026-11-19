@@ -4,7 +4,7 @@ title: DOC-15 NOTICE
 column: backburner
 status: tasked
 created: 2026-10-07T20:38:48+0200
-updated: 2026-10-07T22:27:39+0200
+updated: 2026-11-19T10:15:58+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -55,3 +55,7 @@ From SEC-01 (TRDD-JGJ948C8): sources that may be copied only with a NOTICE entry
 ## Out of scope
 
 The licence audit itself (SEC-01).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19 (verifier VB, not re-read by the main agent): PARTLY. Done: NOTICE has quicksilver and claude-jev entries; headers of extract.ts:2, compare.ts:2, review.ts:1, audit.ts:1, findings.ts:1 say the question wording is own. Remaining: Pleo2 entry if the preset labels are copied (classifiers/catalog/check.ts:1 says they come from it); jev-mcp and Moreno entries only if text is copied (the fixed reason-code vocabulary in review.ts is open); needs a one-line judge decision.

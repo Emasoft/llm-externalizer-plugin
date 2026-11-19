@@ -4,7 +4,7 @@ title: DOC-03 llm-externalizer-classify SKILL.md
 column: backburner
 status: tasked
 created: 2026-10-07T20:35:43+0200
-updated: 2026-10-07T20:35:46+0200
+updated: 2026-11-19T10:16:00+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -55,3 +55,7 @@ read the code at card start
 ## Out of scope
 
 References files (DOC-04…DOC-08); the rulebook (DOC-01).
+
+## Notes
+
+T6F52GB8 audit 2026-11-19: nothing at HEAD 55269f3b. A draft exists only on the unmerged branch docs/prrd-silver-20261014 (not an ancestor of HEAD): skills/llm-externalizer-classify/SKILL.md.
