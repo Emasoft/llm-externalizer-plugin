@@ -22,18 +22,20 @@ import { DECISION_SPECS } from './classifiers/catalog/index.js';
 import { PING_TOOL_NAME } from './classifiers/commands/ping-flags.js';
 import { limitsBlock } from './index.js';
 
-// COST-SAFETY (TRDD-e82f2c49): default resolveTestConfig now spawns the CLI
-// with a LOCAL, unreachable backend (127.0.0.1:1), so these integration tests
-// make ZERO OpenRouter calls — every LLM tool call fails fast on ECONNREFUSED,
-// which is exactly what they assert ("the CLI didn't crash"). NO requireLiveBackend.
+// COST-SAFETY (TRDD-e82f2c49, TRDD-CBOTP0DY): default resolveTestConfig spawns
+// the CLI with a LOCAL backend on a refused port (29871, see test-helpers.ts),
+// so these integration tests make ZERO OpenRouter calls — every LLM tool call
+// fails fast on ECONNREFUSED, which is exactly what they assert ("the CLI
+// didn't crash"). NO requireLiveBackend.
 const testConfig = resolveTestConfig({ testName: 'unit' });
 
 // The LLM backend is deliberately unreachable, so a real-call test only needs
 // to wait long enough for the call to fail, not the full production timeout.
 //
 // This budget must clear boot + the first model-reconcile (a fresh throwaway
-// config dir has no last-reconcile.json, so it is NOT throttled) + the capped
-// retry ladder. Measured ~13s; 20s leaves headroom on a loaded machine.
+// config dir has no last-reconcile.json, so it is NOT throttled) + the refused
+// retry budget. A refused call now ends in about 2 s; 20s leaves headroom on a
+// loaded machine.
 //
 // Do NOT tighten this back to 10s: `execFileAsync` SIGKILLs on timeout, which
 // surfaces as `exitCode: null` — indistinguishable from the CLI hanging, and it

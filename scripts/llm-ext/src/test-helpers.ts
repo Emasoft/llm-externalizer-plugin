@@ -72,14 +72,19 @@ export interface TestConfigOptions {
   requireLiveBackend?: boolean;
 }
 
-// ── Cost-safety: the default test backend (TRDD-e82f2c49) ────────────────
+// ── Cost-safety: the default test backend (TRDD-e82f2c49, TRDD-CBOTP0DY) ──
 // A LOCAL profile NEVER contacts openrouter.ai (local mode → local URL), and
-// port 1 is always connection-refused, so the default integration tests
-// fail-fast on ECONNREFUSED — free, no billing, regardless of the user's real
-// active profile. This restores index.test.ts's documented design ("connection
-// refused to localhost:1234") which had drifted to billing the real backend.
+// nothing listens on the test port, so the default integration tests fail fast
+// on ECONNREFUSED — free, no billing, regardless of the user's real active
+// profile. Port 29871: below both ephemeral ranges (macOS 49152+, Linux
+// 32768+) and off the fetch bad-ports list, so connect gives ECONNREFUSED and
+// the refused budget (2 tries) ends the call in ~2 s. NOT port 1: fetch rejects
+// it as a bad port ("bad port", no error code), classifyFailure sees no
+// ECONNREFUSED, each call runs the backoff ladder, and completion.ts repeats it
+// 4 times (~13 s). Residual risk: a local service listening on 29871 would
+// answer; local mode still never bills.
 const LOCAL_TEST_PROFILE_NAME = "test-local-unreachable";
-const LOCAL_TEST_URL = "http://127.0.0.1:1";
+const LOCAL_TEST_URL = "http://127.0.0.1:29871";
 const LOCAL_TEST_SETTINGS_YAML = [
   `active: ${LOCAL_TEST_PROFILE_NAME}`,
   "profiles:",
@@ -88,14 +93,13 @@ const LOCAL_TEST_SETTINGS_YAML = [
   "    api: generic-local",
   "    model: test-model",
   `    url: ${LOCAL_TEST_URL}`,
-  // Short timeout ON PURPOSE. This backend is DELIBERATELY unreachable, and the
-  // HTTP layer retries a network error 5 times with exponential backoff
-  // (~1.2 + 1.9 + 3.9 + 7.1 + 16.2 ≈ 30s) — but that ladder is capped by the
-  // profile's remaining time budget (provider/http.ts:40). Without this line the
-  // profile inherits the long default, every unreachable-backend test spends
-  // ~30s retrying something that can never succeed, and a test asserting "fails
-  // cleanly within 10s" gets SIGKILLed and reports a null exit code — which
-  // looks exactly like a hang.
+  // Short timeout ON PURPOSE. This backend is DELIBERATELY unreachable. A
+  // refused connection (ECONNREFUSED) stops after the REFUSED_TRIES=2 budget
+  // (~2 s), but any other network error runs the generic backoff ladder
+  // (~1.2 + 1.9 + 3.9 + 7.1 + 16.2 ≈ 30s), capped by the profile time budget
+  // (provider/http.ts:40). Without this line the profile inherits the long
+  // default and a test asserting "fails cleanly within 10s" gets SIGKILLed and
+  // reports a null exit code, which looks exactly like a hang.
   "    timeout: 5",
   "",
 ].join("\n");
