@@ -1,10 +1,10 @@
 ---
 trdd-id: 2P797UEK
 title: Benchmark logs a rejected API key as no candidate cleared the price ceiling
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T11:21:58+0100
-updated: 2026-11-19T11:57:34+0100
+updated: 2026-11-19T20:37:16+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -27,6 +27,7 @@ Found by the TRDD-0QQVTUCF trace (reports_dev/0qqvtucf/20261119_104754+0100-inva
 
 - 2026-11-19T11:21:58+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T11:57:34+0100 — column → complete by main-agent@llm-externalizer-plugin. fixed in 0cf82746; release via the next publish
+- 2026-11-19T20:37:16+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
 
 ## Acceptance
 

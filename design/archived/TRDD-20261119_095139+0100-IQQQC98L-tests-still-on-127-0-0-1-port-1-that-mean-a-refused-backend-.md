@@ -1,10 +1,10 @@
 ---
 trdd-id: IQQQC98L
 title: Tests still on 127.0.0.1 port 1 that mean a refused backend move to a refused port
-column: todo
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T09:51:39+0100
-updated: 2026-11-19T10:42:47+0100
+updated: 2026-11-19T20:49:45+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T09:51:39+0100
+implementation-commits: [55269f3b]
 ---
 
 # Tests still on 127.0.0.1 port 1 that mean a refused backend move to a refused port
@@ -24,8 +25,16 @@ After 354a9bbf (TRDD-3XKBS1YX) a url on a fetch-blocked port such as 1 stops at 
 ## Approval log
 
 - 2026-11-19T09:51:39+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T20:49:45+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
 
 ## Notes
 
 2026-11-19 main agent: done in 55269f3b: the 40 port-1 sites in 25 files were classified by reading each test; local-bench.test.ts and profile-flag-and-output-dir.test.ts moved to refused port 29871, test-helpers.ts HELP_TEST_SETTINGS_YAML kept on port 1 with a comment, the rest left (bad-port tests and urls never connected); per-file runs pass (commit body). Waits for the full npm test at the 14.7.6 publish gate.
 2026-11-19 main agent, correction to the note above: the classification of the 40 sites is the worker reading (reports_dev/iqqqc98l/), and these tests pass on either port, so they do not prove refused-port behaviour by themselves (55269f3b body).
+
+## Acceptance
+
+- [x] each port-1 site in the test tree classified: 40 sites in 25 files (count per card and 55269f3b body; 36 port-1 sites remain at 53a415e0)
+- [x] tests that mean a refused backend moved to port 29871 in local-bench.test.ts and profile-flag-and-output-dir.test.ts (55269f3b)
+- [x] test-helpers.ts HELP_TEST_SETTINGS_YAML kept on port 1 with a comment saying why (test-helpers.ts:350 at 53a415e0)
+- [x] full suite green at the 14.7.6 publish gate (release commit 53a415e0)

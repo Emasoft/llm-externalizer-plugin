@@ -1,10 +1,10 @@
 ---
 trdd-id: T229KMOU
 title: consumer-guidelines.md re-check against the current release
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T04:31:39+0100
-updated: 2026-11-19T09:37:21+0100
+updated: 2026-11-19T20:37:30+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -29,6 +29,7 @@ skills/llm-externalizer-cli-reference/references/consumer-guidelines.md line 3 s
 - 2026-11-19T04:43:41+0100 — column → dev by main-agent@llm-externalizer-plugin. consumer-guidelines.md rechecked against v14.7.4; header lines 3 and 5 and the Q1 session-compact clause edited
 2026-11-19T04:43:52+0100 main agent: worker report reports_dev/t229kmou/20261119_043816+0100-consumer-guidelines-recheck.md; lines 3 and 5 now name v14.7.4; Q1 profile-types bullet gained the 14.7.4 session-summary clause (source v14.7.4 session_summary/local-model.ts:354-355, commit 0e6fa5fb, first tag v14.7.4), added by the main agent after two harness reviews found line 3 overstated the check without it. Uncovered 14.7.3/14.7.4 behaviours listed in the report were judged outside the nine questions.
 - 2026-11-19T09:20:04+0100 — column → complete by main-agent@llm-externalizer-plugin. consumer-guidelines rechecked against v14.7.5; docs in a359ad12 and b9477168; published with the next release
+- 2026-11-19T20:37:30+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
 
 ## Notes
 

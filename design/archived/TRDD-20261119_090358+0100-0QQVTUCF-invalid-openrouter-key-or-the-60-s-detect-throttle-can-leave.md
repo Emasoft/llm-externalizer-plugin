@@ -1,10 +1,10 @@
 ---
 trdd-id: 0QQVTUCF
 title: Invalid OpenRouter key or the 60 s detect throttle can leave a real paid-profile run that starts no benchmark
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T09:03:58+0100
-updated: 2026-11-19T11:52:02+0100
+updated: 2026-11-19T20:37:09+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -29,6 +29,7 @@ Residual of TRDD-P10QMUW7 (commit 16426995, shipped in v14.7.5). Per the static 
 - 2026-11-19T11:44:06+0100 — column → complete. code done and verified: 5706e07d, b587bd26; release via the next publish
 - 2026-11-19T11:51:41+0100 — column → dev. back to dev to write the acceptance checklist the completion gate needs
 - 2026-11-19T11:52:02+0100 — column → complete. acceptance boxes met: 5706e07d, b587bd26; release via the next publish
+- 2026-11-19T20:37:09+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
 
 ## Notes
 

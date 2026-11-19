@@ -1,10 +1,10 @@
 ---
 trdd-id: EQ74E8S8
 title: publish.py says Working tree is unchanged after npm run build rewrote the tracked dist files
-column: backburner
-status: tasked
+column: superseded
+status: archived
 created: 2026-11-19T01:07:19+0100
-updated: 2026-11-19T01:07:19+0100
+updated: 2026-11-19T20:40:51+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T01:07:19+0100
+superseded-by: [EWU9OAYI]
 ---
 
 # publish.py says Working tree is unchanged after npm run build rewrote the tracked dist files
@@ -24,3 +25,4 @@ Found by the main agent during the 14.7.3 publish runs, verified by reading the 
 ## Approval log
 
 - 2026-11-19T01:07:19+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T20:40:51+0100 — SUPERSEDED by main-agent@llm-externalizer-plugin. duplicate of EWU9OAYI: same defect, publish.py line 944 prints Working tree is unchanged after run_checks npm run build rewrote the tracked dist files; EWU9OAYI covers it plus the dry-run and CPV-failure paths and has a testable acceptance list.

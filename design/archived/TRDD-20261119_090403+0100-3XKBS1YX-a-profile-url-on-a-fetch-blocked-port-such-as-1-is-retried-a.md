@@ -1,10 +1,10 @@
 ---
 trdd-id: 3XKBS1YX
 title: A profile url on a fetch-blocked port such as 1 is retried as four full ladders and reports only fetch failed
-column: complete
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T09:04:03+0100
-updated: 2026-11-19T09:51:47+0100
+updated: 2026-11-19T20:37:23+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -27,6 +27,7 @@ Found by the TRDD-CBOTP0DY timing measurement (report reports_dev/cbotp0dy-timin
 
 - 2026-11-19T09:04:03+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T09:51:47+0100 — column → complete by main-agent@llm-externalizer-plugin. fix in 354a9bbf; published with the next release
+- 2026-11-19T20:37:23+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
 
 ## Notes
 
