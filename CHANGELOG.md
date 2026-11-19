@@ -1,6 +1,52 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.7] - 2026-11-19
+
+### Changed
+
+- Ci(release): do not restore an npm cache in the release job; keep the uv cache with a recorded reason (TRDD-EWU9OAYI)
+
+
+### Documentation
+
+- Docs(trdd): file five cards from the 14.7.7 publish failure and the VBAJX5A1 review (TRDD-WKAEG5XM)
+
+- Docs(trdd): close EWU9OAYI, VBAJX5A1 and WYY3SPDX (TRDD-EWU9OAYI, TRDD-VBAJX5A1, TRDD-WYY3SPDX)
+
+- Docs(pick): correct the PT-02 comment for a restored file (TRDD-VBAJX5A1)
+
+- Docs(skill): add the exploratory label check 2 table to classify.md (TRDD-WYY3SPDX)
+
+- Docs(trdd): record label check 2 as void and exploratory, add a Markdown box to AVXXFSRR (TRDD-WYY3SPDX)
+
+- Docs(trdd): reopen EWU9OAYI box 2, file AVXXFSRR, amend WYY3SPDX build source
+
+- Docs(trdd): pre-register label check 2 for classify label --context (TRDD-WYY3SPDX)
+
+- Docs(trdd): FC2TX9VU note on the 14.7.6 CI runs and two caveats (TRDD-FC2TX9VU)
+
+- Docs(trdd): close 7LZI31WW as shipped in 14.7.6, file VBAJX5A1 for the windows it left (TRDD-7LZI31WW)
+
+- Docs(trdd): close nine cards shipped in 14.7.6, file YAESNPOO (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(boot): re-read settings.yaml after the boot migrations every time (TRDD-VBAJX5A1)
+
+- Fix(publish): name the tracked files the checks changed instead of claiming an unchanged tree (TRDD-EWU9OAYI)
+
+
+### Testing
+
+- Test: follow the boot migration into boot-settings.ts, write fake-child files atomically, time out git calls (TRDD-WKAEG5XM)
+
+- Test(publish): run the real build over a stale dist and check the working-tree report (TRDD-EWU9OAYI)
+
+- Test: the fixture WHY comment says what the ubs scan showed, not why (TRDD-FC2TX9VU)
+
+
 ## [14.7.6] - 2026-11-19
 
 ### Added
