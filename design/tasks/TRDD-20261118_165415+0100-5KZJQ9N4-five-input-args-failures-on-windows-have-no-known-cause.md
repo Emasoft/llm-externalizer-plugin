@@ -1,10 +1,10 @@
 ---
 trdd-id: 5KZJQ9N4
 title: Five input-args failures on Windows have no known cause
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T16:54:15+0100
-updated: 2026-11-18T16:54:15+0100
+updated: 2026-11-20T00:28:27+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: spike
@@ -34,3 +34,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 ## Approval log
 
 - 2026-11-18T16:54:15+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-20T00:28:27+0100 — column → todo by main-agent@llm-externalizer-plugin.

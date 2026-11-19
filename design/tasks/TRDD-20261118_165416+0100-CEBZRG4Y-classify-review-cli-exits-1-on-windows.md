@@ -1,10 +1,10 @@
 ---
 trdd-id: CEBZRG4Y
 title: classify-review CLI exits 1 on Windows
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T16:54:16+0100
-updated: 2026-11-18T16:54:16+0100
+updated: 2026-11-20T00:28:29+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -38,3 +38,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 ## Approval log
 
 - 2026-11-18T16:54:16+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-20T00:28:29+0100 — column → todo by main-agent@llm-externalizer-plugin.

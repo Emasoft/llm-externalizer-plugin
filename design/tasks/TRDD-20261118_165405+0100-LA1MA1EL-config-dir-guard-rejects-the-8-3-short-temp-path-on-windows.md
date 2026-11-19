@@ -1,10 +1,10 @@
 ---
 trdd-id: LA1MA1EL
 title: Config dir guard rejects the 8.3 short temp path on Windows
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T16:54:05+0100
-updated: 2026-11-18T16:54:05+0100
+updated: 2026-11-20T00:28:55+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -65,3 +65,8 @@ Failing tests (group, log line, file, test name, first error line; log order):
 ## Approval log
 
 - 2026-11-18T16:54:05+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-20T00:28:30+0100 — column → todo by main-agent@llm-externalizer-plugin.
+
+## Notes
+
+2026-11-20 (main agent read config.ts:895-922): getConfigDir resolves the config dir and homedir() with plain realpathSync and compares them by string prefix. On the Windows runner the temp dir is C:\Users\RUNNER~1\AppData\Local\Temp\..., the home folder in 8.3 short form, while home resolves to C:\Users\runneradmin, so the prefix check fails. INFERRED, not run: realpathSync.native returns the long name, which would fix group G1 (36 failures) without widening the allowlist. Map: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.

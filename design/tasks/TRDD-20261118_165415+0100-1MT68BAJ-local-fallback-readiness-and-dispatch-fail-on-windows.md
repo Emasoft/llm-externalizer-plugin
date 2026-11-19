@@ -1,10 +1,10 @@
 ---
 trdd-id: 1MT68BAJ
 title: Local fallback readiness and dispatch fail on Windows
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T16:54:15+0100
-updated: 2026-11-18T16:54:15+0100
+updated: 2026-11-20T00:36:55+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -42,8 +42,8 @@ Failing tests (group, log line, file, test name, first error line; log order):
 - G8 log 4213 src/local-fallback-not-ready.test.ts :: TRDD-WSPV40Y5: a ready local profile with no calibrated sizing for the tool changes nothing (LocalFallbackNotReady) > TRDD-WSPV40Y5 F2: the window that index.ts builds does NOT arm for a tool with no task kind (mass_scout: the send would be refused), and does for chat (control, same ready fixture) :: AssertionError: control: calibrated sizing for chat: expected false to be true // Object.is equality
 - G8 log 4232 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > readyLocalTarget: the control is ready; enabled false is not :: AssertionError: expected undefined to deeply equal { profile: 'local_llama', …(2) }
 - G8 log 4255 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > arm(): the control arms on a closed port; enabled false does not :: AssertionError: expected false to be true // Object.is equality
-- G7 log 4274 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > the completion layer, a server resetting every connection, window 2 s: the control ends in under 5 s; enabled false is still retrying after 4 s :: Error: Test timed out in 60000ms.
-- G8 log 4287 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > test "index.ts builds the dispatch window, and with enabled false it does not arm (the control does)" :: AssertionError: expected false to be true // Object.is equality
+- G7 log 4274 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > the completion layer, a server resetting every connection, window 2 s: the control ends in under 20 s; enabled false is still retrying after 4 s :: Error: Test timed out in 60000ms.
+- G8 log 4287 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > index.ts builds the dispatch window, and with enabled false it does not arm (the control does) :: AssertionError: expected false to be true // Object.is equality
 - G8 log 4306 src/local-fallback-setting.test.ts :: enabled: false at dispatch (free profile, a real closed port): the original remote error, no local send > control (key absent): the fallback is tried, its line names local_llama :: AssertionError: expected '[http-retry] Network error (attempt 1…' to contain 'the local fallback to profile \'local…'
 - G8 log 4328 src/local-fallback-setting.test.ts :: a pinned profile is the only one tried > readyLocalTarget: automatic picks local_llama; a pin to a ready my_llama returns my_llama :: AssertionError: expected undefined to be 'local_llama' // Object.is equality
 - G8 log 4347 src/local-fallback-setting.test.ts :: a pinned profile is the only one tried > readyLocalTarget: a pinned Locals profile is ready where Locals can run, and a fail-fast error elsewhere (TRDD-M4KERGEF F8) :: AssertionError: expected undefined to deeply equal { profile: 'my_mlx', …(2) }
@@ -61,9 +61,14 @@ Failing tests (group, log line, file, test name, first error line; log order):
 - G8 log 4558 src/network-give-up.test.ts :: the arming condition: ALL THREE (ready local target, trigger c, no genuine provider answer) > a genuine provider answer to the strict probe vetoes it (the provider is up, so this is not isolation) :: AssertionError: expected +0 to be 1 // Object.is equality
 - G8 log 4577 src/network-give-up.test.ts :: the arming condition: ALL THREE (ready local target, trigger c, no genuine provider answer) > sendReady true leaves the other conditions in force (armed on a closed port) :: AssertionError: expected false to be true // Object.is equality
 - G8 log 4596 src/network-give-up.test.ts :: the arming condition: ALL THREE (ready local target, trigger c, no genuine provider answer) > an arm that throws (TRDD-WSPV40Y5 F3) resolves false and writes exactly one stderr line naming the cause :: AssertionError: expected [] to have a length of 1 but got +0
-- G8 log 4615 src/network-give-up.test.ts :: the window at the HTTP layer (real servers, a real closed port, a real unresolvable name) > ARMED, resets on every attempt (ECONNRESET: no per-code verdict, 31 s of retries before): gives up at the window, in under 5 s :: AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
+- G8 log 4615 src/network-give-up.test.ts :: the window at the HTTP layer (real servers, a real closed port, a real unresolvable name) > ARMED, resets on every attempt (ECONNRESET: no per-code verdict, 31 s of retries before): gives up at the window, in under 20 s :: AssertionError: the given combination of arguments (undefined and string) is invalid for this assertion. You can use an array, a map, an object, a set, a string, or a weakset instead of a string
 - G8 log 4627 src/network-give-up.test.ts :: the window at the HTTP layer (real servers, a real closed port, a real unresolvable name) > UNARMED because the probe gets a genuine provider answer: the existing retries run, the window never ends the call :: AssertionError: the strict probe ran once and found the provider up: expected +0 to be 1 // Object.is equality
 
 ## Approval log
 
 - 2026-11-18T16:54:15+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-20T00:28:25+0100 — column → todo by main-agent@llm-externalizer-plugin.
+
+## Notes
+
+2026-11-20: three test titles in the failing-test list refreshed to the names of the current run (44598923287): the control entry and the network-give-up entry changed from under 5 s to under 20 s, and the test wrapper was removed from the index.ts entry. Source: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
