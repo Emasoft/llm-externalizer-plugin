@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDeadline, type Deadline } from './deadline.js';
 import { ClassifierError } from './errors.js';
 import { replayFetch, syntheticResponse, type RecordedReply } from './test-fetch.js';
-import { callDecisions, clampAttempts, parseRetryAfter, type DecisionsCall, type GlobalFetch } from './transport.js';
+import { KEY_URL, callDecisions, clampAttempts, fetchKeyUsage, parseRetryAfter, type DecisionsCall, type GlobalFetch } from './transport.js';
 
 const fixture = (name: string): RecordedReply =>
   JSON.parse(readFileSync(new URL(`../__fixtures__/p01/${name}.json`, import.meta.url), 'utf8')) as RecordedReply;
@@ -297,5 +297,71 @@ describe('callDecisions parseReply (the winning body is parsed once, by the call
   it('any other error from parseReply is a programming error and propagates unchanged', async () => {
     const bug = new TypeError('cannot read properties of undefined');
     await expect(callDecisions(call, { ...opts(replayFetch([fixture('dec-noul')]).fetch), parseReply: () => { throw bug; } })).rejects.toBe(bug);
+  });
+});
+
+// WHY: the key check moved from ping.ts into L0 (TRDD-MVT4DCHS); these tests pin its error paths and that only three numbers leave L0.
+describe('fetchKeyUsage (TRDD-MVT4DCHS)', () => {
+  const okReply = (body: string, status = 200): GlobalFetch => async () => new Response(body, { status });
+  const live = () => {
+    const d = createDeadline({ timeoutMs: 5000 });
+    deadlines.push(d);
+    return d;
+  };
+
+  it('a 200 reply returns exactly usage, limit and limit_remaining; the label never leaves L0', async () => {
+    const body = JSON.stringify({ data: { label: 'sk-or-v1-abc...xyz', usage: 1.5, limit: 10, limit_remaining: 8.5, is_free_tier: false } });
+    const r = await fetchKeyUsage(KEY, { deadline: live(), fetchImpl: okReply(body) });
+    expect(Object.keys(r).sort()).toEqual(['limit', 'limit_remaining', 'usage']);
+    expect(r).toEqual({ usage: 1.5, limit: 10, limit_remaining: 8.5 });
+  });
+
+  it('non-finite or missing numbers come back undefined', async () => {
+    const body = JSON.stringify({ data: { usage: '1', limit: null } });
+    const r = await fetchKeyUsage(KEY, { deadline: live(), fetchImpl: okReply(body) });
+    expect(Object.keys(r).sort()).toEqual(['limit', 'limit_remaining', 'usage']);
+    expect(r).toEqual({ usage: undefined, limit: undefined, limit_remaining: undefined });
+  });
+
+  it('a 200 reply that is not JSON is a bad-response ClassifierError "bad response: the key check reply is not valid JSON"', async () => {
+    const e = await failure(fetchKeyUsage(KEY, { deadline: live(), fetchImpl: okReply('<html>') }));
+    expect(e.class).toBe('bad-response');
+    expect(e.message).toBe('bad response: the key check reply is not valid JSON');
+  });
+
+  it('a 200 reply with no data object is a bad-response ClassifierError "bad response: the key check reply has no `data` object"', async () => {
+    for (const body of ['{"data": null}', '{}']) {
+      const e = await failure(fetchKeyUsage(KEY, { deadline: live(), fetchImpl: okReply(body) }));
+      expect(e.class, body).toBe('bad-response');
+      expect(e.message, body).toBe('bad response: the key check reply has no `data` object');
+    }
+  });
+
+  it('a 401 reply is the auth ClassifierError of classifyHttpError', async () => {
+    const e = await failure(fetchKeyUsage(KEY, { deadline: live(), fetchImpl: okReply(JSON.stringify({ error: { message: 'No auth credentials found', code: 401 } }), 401) }));
+    expect(e.class).toBe('auth');
+    expect(e.status).toBe(401);
+  });
+
+  it('sends one GET to KEY_URL with redirect "error" and the Bearer key', async () => {
+    const calls: { url: string; init: RequestInit }[] = [];
+    const fetchImpl: GlobalFetch = async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    };
+    await fetchKeyUsage(KEY, { deadline: live(), fetchImpl });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(KEY_URL);
+    expect(calls[0].init.method).toBe('GET');
+    expect(calls[0].init.redirect).toBe('error');
+    expect((calls[0].init.headers as Record<string, string>).Authorization).toBe(`Bearer ${KEY}`);
+  });
+
+  it('a fetch rejection with the deadline still live is rethrown unchanged (same object)', async () => {
+    const boom = new TypeError('fetch failed: ECONNRESET');
+    const fetchImpl: GlobalFetch = async () => {
+      throw boom;
+    };
+    await expect(fetchKeyUsage(KEY, { deadline: live(), fetchImpl })).rejects.toBe(boom);
   });
 });

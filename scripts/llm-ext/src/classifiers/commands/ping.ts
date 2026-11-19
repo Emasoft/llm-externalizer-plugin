@@ -1,12 +1,11 @@
 // C4-07 (TRDD-MVT4DCHS), plan §9 `classify ping`, §3 L4: a free key check plus one noul question, `--no-call` to skip the question.
 // WHY not a DecisionSpec: ping has no input, no thresholds, no projection and no envelope; running it through the generic runner would need a fake spec for each of those. It reuses the same pieces the runner uses: profile resolution, the environment key, the L0 transport and the redactor.
 import { commandStopExitCode, commandStopFlag, commandStopSignal, isCommandStopped, type StopExitCode } from "../../command-stop.js";
-import { OPENROUTER_ATTRIBUTION_HEADERS, throwIfStopped } from "../../provider/http.js";
-import { safeReadText } from "../../safe-body.js";
+import { throwIfStopped } from "../../provider/http.js";
 import { DeadlineError, createDeadline } from "../l0/deadline.js";
-import { ClassifierError, badResponseError, classifyHttpError } from "../l0/errors.js";
+import { ClassifierError, badResponseError } from "../l0/errors.js";
 import { parseDecisionsText } from "../l0/response.js";
-import { MAX_REPLY_BYTES, callDecisions, type GlobalFetch } from "../l0/transport.js";
+import { callDecisions, fetchKeyUsage, type GlobalFetch } from "../l0/transport.js";
 import { noul } from "../l1/questions.js";
 import { CTRL_C_EXIT_CODE, installCtrlC, type SignalSource } from "../l2/abort.js";
 import { exitCodeForError } from "../l2/attention.js";
@@ -18,9 +17,6 @@ import { PING_FLAGS } from "./ping-flags.js";
 import { answerWithLocalDecider, localOnlySettings } from "../l2/local-fallback.js";
 import { LOCAL_DECISION_API } from "../../config.js";
 import type { LocalDeciderDeps } from "../l2/local-decider.js";
-
-// WHY a constant here: the transport owns the decisions URLs (l0/transport.ts endpointUrl), but the key check is not a decisions call.
-export const KEY_URL = "https://openrouter.ai/api/v1/key";
 
 /** The overall budget of the local decider escalation of ping (ms). WHY exported: the test pins the wiring to this number. */
 export const PING_LOCAL_REQUEST_TIMEOUT_MS = 30000;
@@ -46,32 +42,13 @@ export type PingExit = 0 | 1 | 3 | 4 | 5 | StopExitCode | typeof CTRL_C_EXIT_COD
 const finite = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) ? v : undefined);
 
 /**
- * The free key check. WHY only numbers are read from the reply: the `label` OpenRouter returns is derived from the key text, so it is never printed or kept.
+ * The free key check. WHY only numbers are read from the reply: the `label` OpenRouter returns is derived from the key text, so it is never printed or kept (fetchKeyUsage in l0/transport.ts returns only the three numbers).
  * WHY redirect "error": the API never redirects, and following a 3xx would send the key to wherever it points (as the transport does).
  */
 async function checkKey(profile: ResolvedClassifierProfile, key: string, deps: PingDeps, signal: AbortSignal): Promise<string> {
   const deadline = createDeadline({ timeoutMs: profile.timeoutMs, signal });
   try {
-    let res: Response;
-    try {
-      res = await deps.fetch(KEY_URL, { method: "GET", redirect: "error", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION_HEADERS }, signal: deadline.signal });
-    } catch (e) {
-      deadline.throwIfDone();
-      throw e;
-    }
-    const text = await safeReadText(res, MAX_REPLY_BYTES);
-    if (!res.ok) throw classifyHttpError(res.status, res.headers, text);
-    let data: unknown;
-    try {
-      data = (JSON.parse(text) as { data?: unknown }).data;
-    } catch {
-      throw badResponseError("the key check reply is not valid JSON");
-    }
-    if (data === null || typeof data !== "object") throw badResponseError("the key check reply has no `data` object");
-    const d = data as Record<string, unknown>;
-    const usage = finite(d.usage);
-    const limit = finite(d.limit);
-    const left = finite(d.limit_remaining);
+    const { usage, limit, limit_remaining: left } = await fetchKeyUsage(key, { deadline, fetchImpl: deps.fetch });
     return `key check: ok (profile ${profile.name}, ${profile.apiKeyEnv} accepted; spent ${usage === undefined ? "unknown" : `${usage} USD`}, ${limit === undefined ? "no spend limit" : `limit ${limit} USD, ${left === undefined ? "remaining unknown" : `${left} USD left`}`})`;
   } finally {
     deadline.dispose();

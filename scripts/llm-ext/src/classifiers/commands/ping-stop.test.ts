@@ -9,12 +9,11 @@ import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Profile } from "../../config.js";
-import type { GlobalFetch } from "../l0/transport.js";
+import { KEY_URL, type GlobalFetch } from "../l0/transport.js";
 import { badResponseError } from "../l0/errors.js";
 import { exitCodeForError } from "../l2/attention.js";
 
 const KEY = "ping-stop-test-key-not-real";
-const KEY_URL = "https://openrouter.ai/api/v1/key";
 const DECIDER = "http://127.0.0.1:8000";
 const STOP = "--command_timeout: the command ran longer than 1 s and was stopped";
 const STOPPED_LINE = "llm-ext: classify ping was stopped (--command_timeout)";
@@ -74,7 +73,7 @@ async function drive(o: { governor: boolean; stopAt: StopAt; maxAttempts: number
     if (o.stopAt === "remote" && ev.remoteCalls === 1) stop();
     return new Response(JSON.stringify({ error: { code: 500, message: "remote-marker-boom" } }), { status: 500 });
   };
-  const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_STOP_KEY", max_attempts: o.maxAttempts, timeout_ms: 120_000, concurrency: 1 };
+  const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_STOP_KEY", max_attempts: o.maxAttempts, timeout_ms: 120_000, concurrency: 1 }; // ubs:ignore env-var reference, not a secret
   const out: string[] = [];
   const err: string[] = [];
   let held: Awaited<ReturnType<typeof gov.acquire>> | undefined;
@@ -139,7 +138,7 @@ async function driveRemoteFailure(o: { remote: "hang" | "500"; decider: DeciderM
     }
     return new Response(JSON.stringify({ error: { code: 500, message: "remote-marker-boom" } }), { status: 500 });
   };
-  const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_STOP_KEY", max_attempts: 1, timeout_ms: 1000, concurrency: 1 };
+  const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_STOP_KEY", max_attempts: 1, timeout_ms: 1000, concurrency: 1 }; // ubs:ignore env-var reference, not a secret
   const out: string[] = [];
   const err: string[] = [];
   const started = Date.now();

@@ -194,3 +194,44 @@ export async function callDecisions(call: DecisionsCall, opts: CallOptions): Pro
     }
   }
 }
+
+
+// WHY a constant next to the transport: every OpenRouter URL the classifiers call is owned by L0; the key check is a GET, not a decisions call, so it is not in endpointUrl.
+export const KEY_URL = 'https://openrouter.ai/api/v1/key';
+
+/** The only fields of the key reply that leave L0; each is a finite number or undefined. */
+export interface KeyUsage {
+  usage: number | undefined;
+  limit: number | undefined;
+  limit_remaining: number | undefined;
+}
+
+const finiteNumber = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+/**
+ * The free key check: one GET of KEY_URL, returning only the three numbers (spend, spend limit, limit left).
+ * WHY one attempt and no command-stop check (TRDD-O93LFMF3, as ping did before this moved here): the call is a free single GET, and the key check stays off the command-stop path on purpose: it must finish and report even when the command is stopping; the deadline composes Ctrl-C only.
+ * WHY only numbers are returned: the `label` OpenRouter sends is derived from the key text, so it and the rest of the reply never leave L0.
+ * WHY redirect "error": the API never redirects, and following a 3xx would send the key to wherever it points (as sendOnce does).
+ * A fetch rejection ends as deadline.throwIfDone() first, then the raw error is rethrown unchanged (the caller classifies it).
+ */
+export async function fetchKeyUsage(key: string, opts: { deadline: Deadline; fetchImpl: GlobalFetch }): Promise<KeyUsage> {
+  let res: Response;
+  try {
+    res = await opts.fetchImpl(KEY_URL, { method: 'GET', redirect: 'error', headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION_HEADERS }, signal: opts.deadline.signal });
+  } catch (e) {
+    opts.deadline.throwIfDone();
+    throw e;
+  }
+  const text = await safeReadText(res, MAX_REPLY_BYTES);
+  if (!res.ok) throw classifyHttpError(res.status, res.headers, text);
+  let data: unknown;
+  try {
+    data = (JSON.parse(text) as { data?: unknown }).data;
+  } catch {
+    throw badResponseError('the key check reply is not valid JSON');
+  }
+  if (data === null || typeof data !== 'object') throw badResponseError('the key check reply has no `data` object');
+  const d = data as Record<string, unknown>;
+  return { usage: finiteNumber(d.usage), limit: finiteNumber(d.limit), limit_remaining: finiteNumber(d.limit_remaining) };
+}

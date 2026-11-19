@@ -6,8 +6,8 @@ import type { Profile } from "../../config.js";
 import { classifyArgv, GROUPS } from "../../cli/launcher.js";
 import { buildTools } from "../../tools/definitions.js";
 import { __resetLocalFallbackForTests } from "../l2/local-fallback.js";
-import type { GlobalFetch } from "../l0/transport.js";
-import { KEY_URL, PING_LOCAL_REQUEST_TIMEOUT_MS, runPing } from "./ping.js";
+import { KEY_URL, type GlobalFetch } from "../l0/transport.js";
+import { PING_LOCAL_REQUEST_TIMEOUT_MS, runPing } from "./ping.js";
 import { PING_TOOL_NAME } from "./ping-flags.js";
 
 const KEY = "sk-or-v1-0123456789abcdef0123456789abcdef";
@@ -37,7 +37,7 @@ beforeEach(async () => {
     void readBody(req).then((body) => {
       seen.push({ method: req.method ?? "", url: req.url ?? "", auth: req.headers.authorization, body });
       const json = (status: number, v: unknown): void => { res.writeHead(status, { "content-type": "application/json" }); res.end(JSON.stringify(v)); };
-      if (req.headers.authorization !== `Bearer ${KEY}`) return json(401, { error: { code: 401, message: "No auth credentials found" } });
+      if (req.headers.authorization !== `Bearer ${KEY}`) return json(401, { error: { code: 401, message: "No auth credentials found" } }); // ubs:ignore the test server compares the fake test key, not a secret; timing is irrelevant
       if (req.method === "GET" && req.url === "/api/v1/key") return json(200, { data: { label: LABEL, usage: 1.5, limit: 10, limit_remaining: 8.5, is_free_tier: false } });
       if (req.method === "POST" && req.url === "/api/alpha/decisions") return json(200, { model: "typesafe/jev-1.13-20260917", answers, usage: { input_tokens: 292, output_tokens: 21, cost: 0.000012264 } });
       return json(404, { error: { code: 404, message: "no such route" } });
@@ -52,7 +52,7 @@ afterEach(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
-const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 } as unknown as Profile;
+const profile = { "profile-type": "classifier", api: "openrouter-remote", model: "typesafe/jev-1.13", api_key: "$PING_TEST_KEY", max_attempts: 1, timeout_ms: 5000, concurrency: 2 } as unknown as Profile; // ubs:ignore env-var reference, not a secret
 
 async function ping(argv: string[], profileFlag?: string) {
   const out: string[] = [];
