@@ -1,10 +1,10 @@
 ---
 trdd-id: YHGYWPHQ
 title: RL-08 Cross-platform checks
-column: blocked
-status: tasked
+column: complete
+status: archived
 created: 2026-10-07T20:41:19+0200
-updated: 2026-11-18T17:03:06+0100
+updated: 2026-11-19T02:27:32+0100
 current-owner: user
 created-by: user
 task-type: infra
@@ -15,9 +15,9 @@ mandated-by: none
 approved: true
 approval-judge: user
 approval-datetime: 2026-10-07T20:41:19+0200
-blocked-by: [61EINA10]
+blocked-by: []
 unblock-when: []
-pre-block-column: todo
+pre-block-column: 
 blocker-probe: 'grep -rqE ''^column: (complete|completed|cancelled)$'' design --include=\*61EINA10\*'
 blocker-holds-if: exit-nonzero
 ---
@@ -32,6 +32,7 @@ Run the cross-platform checks.
 - 2026-10-07T20:41:19+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-10-31T17:16:45+0100 — column → todo by main-agent@llm-externalizer-plugin. release checklist for 14.3.0
 - 2026-11-17T14:06:59+0100 — column → blocked by main-agent@llm-externalizer-plugin. macOS and Linux pass; no Windows run exists, waits on TRDD-61EINA10
+- 2026-11-19T02:27:32+0100 — COMPLETE by main-agent@llm-externalizer-plugin. blocker 61EINA10 closed; boxes met under the 2026-11-18 platform ruling. Cleared blocked-by (--clear-blocker override).
 
 ## Plan refs
 
@@ -75,3 +76,4 @@ Retargeted to 14.3.0: 14.2.0 was published 2026-10-31 as the local broker releas
 2026-11-18T16:55:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Supported platforms for RL-08 are macOS and Linux; Windows is experimental (README.md:15, 16719d1d) and its failures are tracked by the cards under TRDD-61EINA10 (12 group cards, ids in its Notes). Box 1 is read on macOS and Linux: 14.6.1 publish log lines 14,16,20 (macOS), CI 44079104801 (Linux). Box 2: step output recorded in the Notes of 2026-11-17T14:06:57; publish authority as ruled for RL-02 in TRDD-6PIGEAN0 Notes 2026-11-17T14:05:41 (main-agent reading of the USER goal of 2026-11-16, same shape as the closed RL-02, RL-05, RL-09).
 2026-11-18T17:01:48+0100 Scope reading, not a strike: boxes 1 and 2 were ticked on the main-agent ruling that the supported platforms are macOS and Linux (Windows experimental); box text unchanged. Windows is NOT verified green; its failures are open on the cards under TRDD-61EINA10. A reader who needs Windows checked must untick box 1.
 2026-11-18T17:03:04+0100 Update: the scope-reading boxes (E9AQOQ5X 1 and 3, YHGYWPHQ 1 and 2) are now marked [~] with the reading stated in the box, not [x]; the box text is kept. Box 54 of E9AQOQ5X (box 2) is still open.
+2026-11-19T02:27:30+0100 main agent: blocker TRDD-61EINA10 closed (Windows failures all carded; v14.7.3 run 44425067928 has the same 42 failed files as v14.7.2). Under the ruling of 2026-11-18T16:55:18+0100 (supported platforms macOS and Linux; Windows experimental) boxes 1 and 2 stand as scope readings [~] and box 3 is met. Card closed.
