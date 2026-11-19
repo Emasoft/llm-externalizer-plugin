@@ -849,7 +849,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  // WHY here: a classify command is parsed by the runner itself (kebab flags, `-o`, its own refusals), so the generic flag parser and the --estimate/--preview strip below must not see it; the runner refuses those two as unknown options.
+  // WHY here: a classify command is parsed by the runner itself (kebab flags, `-o`, its own refusals), so the generic flag parser and the --estimate/--preview strip below must not see it. The launcher handles the two dry-run flags instead: runClassifyCommand refuses --preview and hoists --estimate to the front of the runner argv; runClassifyPing refuses both (launcher.ts).
   const classifySpec = classifySpecFor(tool.name);
   // C4-07: ping is run like a decision (own parser, classifier profile, no estimate/preview/boot) but has no spec; every guard below reads this, not classifySpec.
   const isClassify = isClassifyTool(tool.name);
@@ -859,6 +859,7 @@ async function main(): Promise<void> {
   // global flag, not part of any tool's schema. The paid-mode rules/skills
   // tell agents to run this before every paid operation. Global boolean flags
   // stripped here MUST also be listed in GLOBAL_BOOLEAN_FLAGS (launcher.ts).
+  // WHY indexOf over all of `rest`: the flag is found anywhere in argv, including after a bare `--` (where it would otherwise be a file name); it is spliced out before parseFlags, which then rejects the leftover `--` (pinned in estimate-positional-cli.test.ts).
   const estimateIdx = isClassify ? -1 : rest.indexOf(DRY_RUN_FLAGS.estimate.flag);
   const wantEstimate = estimateIdx !== -1;
   if (wantEstimate) rest.splice(estimateIdx, 1);
@@ -867,6 +868,7 @@ async function main(): Promise<void> {
   // candidate's verdict — included, or excluded WITH the reason — via the
   // same walker the real run uses. Composes with --estimate (selection +
   // price in one dry-run). Zero LLM sends either way.
+  // WHY indexOf over all of `rest`: same as --estimate above, the flag is found anywhere in argv, including after a bare `--`.
   const previewIdx = isClassify ? -1 : rest.indexOf(DRY_RUN_FLAGS.preview.flag);
   const wantPreview = previewIdx !== -1;
   if (wantPreview) rest.splice(previewIdx, 1);

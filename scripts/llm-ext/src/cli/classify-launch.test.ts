@@ -314,13 +314,13 @@ describe("runClassifyCommand (filter spec, replayed replies)", () => {
       delete process.env.C403_Z_KEY;
     }
   });
-  it("--preview is refused as not available for classify yet, before any read or request", async () => {
+  it("--preview is refused as not supported by classify, before any read or request", async () => {
     const flag = "--preview";
     const s = serve(() => { throw new Error("must not be called"); });
     const { err, deps, stdin } = io(s.fetch);
     expect(await runClassifyCommand(filterSpec, [flag], "c", deps)).toBe(1);
     neverRead(stdin);
-    expect(err).toEqual([`llm-ext: ${flag} is not available for classify yet.`]);
+    expect(err).toEqual([`llm-ext: ${flag} is not supported by classify; use --estimate to price the run without sending a question to Jev.`]);
     expect(s.urls).toEqual([]);
   });
 });

@@ -186,7 +186,7 @@ export function classifyHelpNote(toolName: string): string | undefined {
 export async function runClassifyCommand(spec: AnySpec, argv: readonly string[], profileFlag: string | undefined, deps: ArgvDeps): Promise<ExitCode> {
   const unavailable = argv.find((t) => t === "--preview");
   if (unavailable !== undefined) {
-    deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
+    deps.stderr(`llm-ext: --preview is not supported by classify; use --estimate to price the run without sending a question to Jev.`);
     return 1;
   }
   const { runDecisionArgv } = await import("../classifiers/run-decision.js");
@@ -201,7 +201,7 @@ export async function runClassifyCommand(spec: AnySpec, argv: readonly string[],
 export async function runClassifyPing(argv: readonly string[], profileFlag: string | undefined, deps: PingDeps): Promise<PingExit> {
   const unavailable = argv.find((t) => t === "--estimate" || t === "--preview");
   if (unavailable !== undefined) {
-    deps.stderr(`llm-ext: ${unavailable} is not available for classify yet.`);
+    deps.stderr(`llm-ext: ${unavailable} is not supported by classify ping, which has no dry run; use --no-call to check the key without asking the question.`);
     return 1;
   }
   const { runPing } = await import("../classifiers/commands/ping.js");

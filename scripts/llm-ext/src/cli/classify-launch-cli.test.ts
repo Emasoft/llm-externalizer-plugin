@@ -141,10 +141,10 @@ describe("llm-ext classify (built CLI)", () => {
     expect(r.exitCode).toBe(3);
     expect(r.stdout).toBe("");
   });
-  it("--preview is refused as not available for classify yet", async () => {
+  it("--preview is refused as not supported by classify", async () => {
     const r = await run(["classify", "filter", "--preview", "--input", "@DIR/in.json"], { settings: SETTINGS });
     expect(r.exitCode).toBe(1);
-    expect(r.stderr).toContain("--preview is not available for classify yet.");
+    expect(r.stderr).toContain("--preview is not supported by classify; use --estimate to price the run without sending a question to Jev.");
   });
   it("a non-classify group's --help still loads the engine: the default settings file is created", async () => {
     const r = await run(["scan", "--help"]);

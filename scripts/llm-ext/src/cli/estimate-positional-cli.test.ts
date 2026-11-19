@@ -44,6 +44,18 @@ describe("llm-ext dry runs (built CLI)", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("included: 1");
   });
+  // Pins CURRENT behaviour (candidate defect, TRDD-FP2SAF4P item 1): main.ts strips the dry-run flag from anywhere in argv, even after a bare `--`, and parseFlags then rejects the leftover `--`, so the command exits 1 with no dry-run output instead of treating `--estimate` as a file name or running the dry run.
+  it.each([
+    [["scan_folder", "--folder_path", ".", "--", "--estimate"], "unknown flag -- for 'scan-folder'"],
+    [["scan", "folder", ".", "--", "--estimate"], "unknown flag -- for 'scan folder'"],
+    [["scan_folder", "--folder_path", ".", "--", "--preview"], "unknown flag -- for 'scan-folder'"],
+    [["scan", "folder", ".", "--", "--preview"], "unknown flag -- for 'scan folder'"],
+  ])("a dry-run flag after a bare `--` is consumed, then the `--` is rejected: %j", async (args, message) => {
+    const r = await run(args, PAID);
+    expect(r.code).toBe(1);
+    expect(r.stdout).toBe("");
+    expect(r.stderr).toContain(`llm-ext: ${message}. Run 'llm-ext`);
+  });
   // TRDD-OK1NN5RN: a repeated array flag used to keep only its last value.
   it("a repeated --input_files_paths keeps every file", async () => {
     const r = await run(["llm", "code", "--input_files_paths", "a.txt", "--input_files_paths", "b.txt", "--instructions", "x", "--preview"], PAID);
