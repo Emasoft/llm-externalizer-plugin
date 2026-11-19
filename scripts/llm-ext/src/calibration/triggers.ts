@@ -23,6 +23,8 @@ export interface ManagedProfileModels {
 export function managedProfileModels(profiles: Readonly<Record<string, Profile>>): Record<string, ManagedProfileModels> {
   const out: Record<string, ManagedProfileModels> = {};
   for (const [name, p] of Object.entries(profiles)) {
+    // GG44R65K: a non-map profile entry (`foo:` empty = null, `foo: 3`) is reported by the settings load (profileTypesSettingsErrors); skipping it here keeps `p.server` from throwing a TypeError on null before that report is seen.
+    if (p === null || typeof p !== "object") continue;
     if (p.server !== "managed" || (p.api !== "llamacpp-local" && p.api !== "locals-local")) continue;
     const models = [p.model, p.second_model, p.third_model].filter((m): m is string => typeof m === "string" && m !== "");
     out[name] = { engine: p.api === "locals-local" ? "locals" : "llama", models };

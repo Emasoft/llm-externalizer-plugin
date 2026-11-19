@@ -9,6 +9,7 @@ import { parse as parseYaml } from "yaml";
 import { tmpdir } from "./test-tmp-root.js";
 import { localProfileStepIds, migrateSettingsTo141, writeDynamicProfileSection, addProfileToSettings } from "./benchmark/pick.js";
 import { isMigrationStepApplied, markMigrationStepApplied } from "./default-profiles-state.js";
+import { managedProfileModels } from "./calibration/triggers.js";
 import {
   PROFILE_TYPE_STEP,
   DYNAMIC_PROFILE_NAMES,
@@ -18,7 +19,9 @@ import {
   getSettingsPath,
   loadSettings,
   profileTypesSettingsErrors,
+  settingsLevelErrors,
   shouldForceFreeMode,
+  validateSettings,
 } from "./config.js";
 
 let cfgDir: string;
@@ -171,7 +174,7 @@ describe("pt-02 writers: the other places llm-ext writes a profile also write it
   it("addProfileToSettings stamps the inferred type on a profile it adds (free by free_only, local by mode)", () => {
     writeFileSync(getSettingsPath(), "profiles: {}\n", "utf-8");
     // PT-04: `scouting` is a marked built-in now written only by writeDynamicProfileSection, so the by-name arm of the inference is covered in scouting-template.test.ts; a custom free_only profile covers the by-field arm here.
-    addProfileToSettings(getSettingsPath(), "my-free", { mode: "remote", api: "openrouter-remote", api_key: "$OPENROUTER_API_KEY", model: "vendor/m:free", free_only: true, free_models: ["vendor/m:free"] });
+    addProfileToSettings(getSettingsPath(), "my-free", { mode: "remote", api: "openrouter-remote", api_key: "$OPENROUTER_API_KEY", model: "vendor/m:free", free_only: true, free_models: ["vendor/m:free"] }); // ubs:ignore -- "$OPENROUTER_API_KEY" is an env-var placeholder, not a secret
     addProfileToSettings(getSettingsPath(), "my-local", { mode: "local", api: "generic-local", model: "m", url: "http://127.0.0.1:1" });
     const parsed = parseYaml(readFileSync(getSettingsPath(), "utf-8")) as { profiles: Record<string, { "profile-type"?: string }> };
     expect(parsed.profiles["my-free"]["profile-type"]).toBe("free");
@@ -252,4 +255,54 @@ describe("PT-02 profile-type backup dedupe", () => {
     expect(backups()).toHaveLength(1);
     expect(notices.join("\n")).not.toContain("was saved first");
   });
+});
+
+// GG44R65K: a profile entry that is not a YAML map used to be skipped silently, so the load passed unless it was the active profile.
+describe("GG44R65K non-map profile entries fail the load naming the profile", () => {
+  const SHAPES: Array<[string, string, string]> = [
+    ["null (empty value)", "  foo:", "null"],
+    ["a number", "  foo: 3", "number"],
+    ["a string", "  foo: \"x\"", "string"],
+    ["an array", "  foo: [1]", "array"],
+  ];
+  for (const recorded of [false, true]) {
+    for (const [label, line, got] of SHAPES) {
+      it(`${label}: error names the profile and says "is not a map" (profile-type migration recorded: ${recorded})`, () => {
+        writeFileSync(getSettingsPath(), SETTINGS.replace("  lmstudio:", `${line}\n  lmstudio:`), "utf-8");
+        if (recorded) markMigrationStepApplied(PROFILE_TYPE_STEP);
+        const errors = profileTypesSettingsErrors(loadSettings()!);
+        const mine = errors.filter((e) => e.startsWith("Profile 'foo' is not a map"));
+        expect(mine).toHaveLength(1);
+        expect(mine[0]).toContain(`(got ${got})`);
+        expect(errors.join("\n")).not.toContain("Profile 'foo' has no profile-type");
+      });
+    }
+  }
+
+  it("the settings-level load errors carry it too, and the calibration boot check no longer throws on a null entry", () => {
+    writeFileSync(getSettingsPath(), SETTINGS.replace("  lmstudio:", "  foo:\n  lmstudio:"), "utf-8");
+    const s = loadSettings()!;
+    expect(settingsLevelErrors(s).join("\n")).toContain("Profile 'foo' is not a map");
+    expect(() => managedProfileModels(s.profiles)).not.toThrow();
+  });
+
+  it("a fallback_to_local pin naming a null entry reports it as not a map instead of throwing", () => {
+    writeFileSync(getSettingsPath(), SETTINGS.replace("  lmstudio:", "  foo:\n  lmstudio:") + "fallback_to_local:\n  profile: foo\n", "utf-8");
+    expect(settingsLevelErrors(loadSettings()!).join("\n")).toContain("Profile 'foo' is not a map");
+  });
+
+  // validateSettings is the real load gate: the not-a-map error must reach it for a non-active profile (previously the load passed) and for the active one (previously only a misleading "missing required field"/"not found").
+  for (const [label, line] of [["null", "  foo:"], ["0", "  foo: 0"], ["an empty string", "  foo: \"\""], ["false", "  foo: false"], ["a number", "  foo: 3"], ["a string", "  foo: \"x\""], ["an array", "  foo: [1]"]] as const) {
+    it(`validateSettings fails with "is not a map" when the non-map ${label} entry is not active and when it is active`, () => {
+      const text = SETTINGS.replace("  lmstudio:", `${line}\n  lmstudio:`);
+      writeFileSync(getSettingsPath(), "active: lmstudio\n" + text, "utf-8");
+      const inactive = validateSettings(loadSettings()!);
+      expect(inactive.valid).toBe(false);
+      expect(inactive.errors.join("\n")).toContain("Profile 'foo' is not a map");
+      writeFileSync(getSettingsPath(), "active: foo\n" + text, "utf-8");
+      const active = validateSettings(loadSettings()!);
+      expect(active.valid).toBe(false);
+      expect(active.errors.join("\n")).toContain("Profile 'foo' is not a map");
+    });
+  }
 });

@@ -10182,7 +10182,11 @@ function validateClassifierProfile(name, profile) {
 function profileTypesSettingsErrors(settings, skip) {
   const errors = [];
   for (const [name, profile] of Object.entries(settings.profiles)) {
-    if (profile === null || typeof profile !== "object") continue;
+    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
+      const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
+      errors.push(`Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`);
+      continue;
+    }
     if (profile["profile-type"] === void 0) {
       if (settings.profileTypesMigrated === true) {
         errors.push(`Profile '${name}' has no profile-type. Add the line 'profile-type: <type>' to it by hand (one of ${PROFILE_TYPES.join(", ")}).`);
@@ -11227,7 +11231,7 @@ function appendLocalFallbackErrors(result, settings) {
   return errors.length === 0 ? result : { valid: false, errors: [...result.errors, ...errors] };
 }
 function isFallbackLocalProfile(profile) {
-  return profile !== void 0 && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
+  return profile !== void 0 && profile !== null && typeof profile === "object" && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
 }
 function fallbackToLocalErrors(raw, profiles, platform3, arch) {
   const known2 = FALLBACK_TO_LOCAL_KEYS.join(", ");
@@ -11302,6 +11306,9 @@ function validateSettings(settings) {
   const name = effectiveProfileName(settings);
   const profile = settings.profiles[name];
   if (!profile) {
+    if (name in settings.profiles) {
+      return { valid: false, errors: profileTypesSettingsErrors(settings).filter((e) => e.startsWith(`Profile '${name}' is not a map`)) };
+    }
     const available = Object.keys(settings.profiles);
     return {
       valid: false,
@@ -247738,6 +247745,7 @@ var init_runner3 = __esm({
 function managedProfileModels(profiles) {
   const out = {};
   for (const [name, p] of Object.entries(profiles)) {
+    if (p === null || typeof p !== "object") continue;
     if (p.server !== "managed" || p.api !== "llamacpp-local" && p.api !== "locals-local") continue;
     const models = [p.model, p.second_model, p.third_model].filter((m) => typeof m === "string" && m !== "");
     out[name] = { engine: p.api === "locals-local" ? "locals" : "llama", models };

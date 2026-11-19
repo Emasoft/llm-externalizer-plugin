@@ -1754,7 +1754,12 @@ export function validateClassifierProfile(name: string, profile: Profile): strin
 export function profileTypesSettingsErrors(settings: Settings, skip?: string): string[] {
   const errors: string[] = [];
   for (const [name, profile] of Object.entries(settings.profiles)) {
-    if (profile === null || typeof profile !== "object") continue;
+    // GG44R65K, fail fast: a profile entry that is not a YAML map (`foo: 3`, `foo: "x"`, an empty `foo:`, `foo: [1]`) can never be used. It used to be skipped here without a word, so the load passed unless `foo` was the active profile (and then the error did not say "not a map"). The check is not gated on `profileTypesMigrated` and not on `skip`: it runs on every load and for the effective profile too, because validateProfile never says what is really wrong with a non-map.
+    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
+      const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
+      errors.push(`Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`);
+      continue;
+    }
     if (profile["profile-type"] === undefined) {
       if (settings.profileTypesMigrated === true) {
         errors.push(`Profile '${name}' has no profile-type. Add the line 'profile-type: <type>' to it by hand (one of ${PROFILE_TYPES.join(", ")}).`);
@@ -3857,7 +3862,8 @@ const FALLBACK_TO_LOCAL_KEYS: readonly string[] = ["enabled", "profile"];
  * that passed validation but that readyLocalTarget can never return would silently switch the fallback off.
  */
 export function isFallbackLocalProfile(profile: Profile | undefined): boolean {
-  return profile !== undefined && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
+  // GG44R65K: a non-map entry (`foo:` = null) is reported by profileTypesSettingsErrors; without this guard `profile.server` threw a TypeError here, ahead of that report, when fallback_to_local.profile names it.
+  return profile !== undefined && profile !== null && typeof profile === "object" && profile.server === "managed" && (profile.api === "llamacpp-local" || profile.api === "locals-local");
 }
 
 /**
@@ -4023,6 +4029,10 @@ export function validateSettings(settings: Settings): ValidationResult {
   const name = effectiveProfileName(settings);
   const profile = settings.profiles[name];
   if (!profile) {
+    // GG44R65K: a falsy NON-MAP entry (`foo:` = null, `foo: 0`) is present in the file, so "not found" would be false; report what it really is. Truthy non-maps (3, "x", [1]) get the same error from profileTypesSettingsErrors below.
+    if (name in settings.profiles) {
+      return { valid: false, errors: profileTypesSettingsErrors(settings).filter((e) => e.startsWith(`Profile '${name}' is not a map`)) };
+    }
     const available = Object.keys(settings.profiles);
     // WHY (TRDD-G6XT3AY9 amendment): generic wording, not the `active:`-named
     // one -- see this function's docblock. A dangling `active:` legitimately
