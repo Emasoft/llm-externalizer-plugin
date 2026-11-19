@@ -1,10 +1,10 @@
 ---
 trdd-id: NGXUX45F
 title: SP-04 find (JSON candidates + qs file-line mode)
-column: testing
-status: tasked
+column: published
+status: archived
 created: 2026-10-07T19:48:45+0200
-updated: 2026-11-18T17:09:38+0100
+updated: 2026-11-19T04:06:46+0100
 current-owner: user
 created-by: user
 task-type: feature
@@ -34,6 +34,7 @@ The find (JSON candidates + qs file-line mode) decision as one catalog file: inp
 - 2026-10-10T03:11:58+0200 — column → dev by main-agent@llm-externalizer-plugin. USER 2026-10-09: complete the jev plan; wave-8 work committed
 - 2026-10-10T05:03:15+0200 — column → blocked by main-agent@llm-externalizer-plugin. only the live reply capture (O4MSZIG5) and the definition of done remain
 - 2026-10-31T12:11:54+0100 — column → dev by main-agent@llm-externalizer-plugin. only blocker was the O4MSZIG5 live capture; fixture o4 projects clean (live-capture.test.ts); definition of done still open Cleared blocked-by (--clear-blocker override).
+- 2026-11-19T04:06:46+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. all boxes ticked; code and WHY comments shipped in v14.7.3, full suite green at the v14.7.3 and v14.7.4 publish gates.
 
 ## Plan refs
 
@@ -100,3 +101,4 @@ CLI flags and output wiring (C4-01), the injection test suite (SEC-02).
 2026-11-18T15:56:01+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): TRDD-052F3ZC9 was ruled option A on 2026-11-18: the three call-through counting observers (l0/catalog.test.ts:10, l2/evidence.test.ts:89, catalog/findings.test.ts:233) are exempt pass-through observers, so the test-double clause of the definition of done is met for this card. be23be4a (subject names TRDD-NGXUX45F) moved the find renumber WHY above the code it explains. The definition-of-done box is NOT touched: the triage of 2026-11-18 (reports_dev/triage-20261118/testing-a/20261118_091044+0100-NGXUX45F.md) found WHY candidates still without a comment at find.ts :64 (CRLF split), :150 with :192 and :194 (u-index key coupling) and :185 (invalid return sets exists from the exists answer) at HEAD 54236bf8, which be23be4a does not cover, and the 2026-11-17 note requires find.ts to be read for uncommented rules. Next: add WHY comments there (a reason marked inferred counts as traceable, ruled on TRDD-BUL4EEBP), then restate the box. full suite: 14.6.1 publish run (tree 04d412ea); re-run by the 14.7.3 publish gate.
 2026-11-18T17:01:48+0100 Box 11 tick: the clause "tsc --noEmit exit 0 and npx eslint . --quiet exit 0 at HEAD ea68ff6a" is INHERITED from the main-agent run named in the box; the card writer did not re-run tsc or eslint (barred by the brief). ea68ff6a is a commit and an ancestor of HEAD f4db6726 (git cat-file, merge-base, 2026-11-18). The full-suite clause rests on the v14.7.2 publish gate lines 19-20 and the comment-only diffs of be23be4a and 3aa938e0, both read by the card writer.
 2026-11-18T17:09:37+0100 main agent check for box 11: at HEAD f4db6726 of dev/after-14.3.0 (it contains every commit named in the box, ea68ff6a included), with no source change in the working tree, npm run typecheck (tsc --noEmit) exited 0 and npm run lint (eslint src --max-warnings 0) exited 0 on 2026-11-18. The tsc and eslint clause of box 11 is now verified at HEAD, not only inherited.
+2026-11-19T04:06:42+0100 closing evidence (main agent, delegated by USER 2026-11-18, not an owner answer): the WHY-comment commits be23be4a and 3aa938e0 first ship in v14.7.3 (git tag --contains); find.ts and find.test.ts have no commit after v14.7.3 (git log v14.7.3..HEAD on both files prints nothing); the v14.7.4 publish gate ran npm test after the build with result OK (reports_dev/publish/20261119_025450+0100-14.7.4-publish.log lines 19-20), so the 'the 14.7.3 gate runs it again' clause of the definition-of-done box is met by the 14.7.3 and 14.7.4 gates. Every acceptance box is ticked; the card moves to published.
