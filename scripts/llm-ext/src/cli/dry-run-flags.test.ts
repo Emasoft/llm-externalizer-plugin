@@ -100,6 +100,7 @@ beforeAll(async () => {
   engineDeps = {
     resolveFiles: real.resolveFiles,
     fileSizeBytes: real.fileSizeBytes,
+    fileLineCount: real.fileLineCount,
     ensembleSlots: () => [{ id: "vendor/model-paid", maxOutput: 8000 }],
     pricingFor: () => ({ inputUsdPerM: 1, outputUsdPerM: 2 }),
     defaultMaxTokens: () => 4000,

@@ -77,6 +77,8 @@ export interface ScanFolderProcessOptions {
   onProgress?: ProgressFn;
   ensemble?: boolean;
   maxBytes?: number;
+  /** Prefix every line of the file with its 1-based number (line_numbers flag, TRDD-MI0UJQF1). */
+  lineNumbers?: boolean;
   modelOverride?: string;
   outputDir?: string;
   hqRequest?: HighQualityRequest;
@@ -136,6 +138,7 @@ export async function runScanFolder(
           answer_mode: sfRawMode,
           use_gitignore: sfUseGitignore,
           scan_secrets: sfScan,
+          line_numbers: sfLineNumbers,
         } = args as {
           folder_path: string;
           extensions?: string[];
@@ -148,6 +151,7 @@ export async function runScanFolder(
           answer_mode?: number;
           use_gitignore?: boolean;
           scan_secrets?: boolean;
+          line_numbers?: boolean;
           max_payload_kb?: number;
         };
         const sfUseEnsemble = deps.useEnsemble;
@@ -271,6 +275,7 @@ export async function runScanFolder(
                 // are intermediate (reports_dev); in mode 0 the per-file reports are the deliverable.
                 outputDir: mergePieceDir(deps.outputDir, sfMode !== 0),
                 hqRequest: deps.hqRequest,
+                lineNumbers: sfLineNumbers,
               });
               recentOutcomes.push(result.success);
               // Report per-file batch progress

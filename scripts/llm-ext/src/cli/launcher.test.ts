@@ -262,6 +262,18 @@ describe("resolveInvocation — global flag BEFORE the positional (self-audit F-
   });
 });
 
+
+describe("line_numbers (TRDD-MI0UJQF1) is a boolean input of the three file-reading tools", () => {
+  it("chat, scan_folder and high_quality_scan declare it; code_task does not", () => {
+    const propsOf = (name: string) =>
+      tools.find((t) => t.name === name)?.inputSchema?.properties as Record<string, { type?: string }> | undefined;
+    expect(propsOf("chat")?.line_numbers?.type).toBe("boolean");
+    expect(propsOf("scan_folder")?.line_numbers?.type).toBe("boolean");
+    expect(propsOf("high_quality_scan")?.line_numbers?.type).toBe("boolean");
+    expect(propsOf("code_task")?.line_numbers).toBeUndefined();
+  });
+});
+
 describe("suggestCommand — grouped-vs-flat top-level suggestions (defect 2)", () => {
   it("prefers group names when any are within threshold, never mixing in a flat name", () => {
     const hint = suggestCommand(

@@ -24,6 +24,7 @@
  */
 
 import { estimateTokens } from "./mass_scouting/cost-estimate.js";
+import { LINE_NUMBER_PREFIX_BYTES } from "./scan-pipeline.js";
 
 // ── Calibration constants ──────────────────────────────────────────────
 
@@ -74,6 +75,11 @@ export interface EstimateDeps {
   ): { files: string[]; error?: string };
   /** Size of one file on disk. Injected so tests never touch the real fs. */
   fileSizeBytes(path: string): number;
+  /**
+   * Lines the line_numbers flag numbers in one file (numberedLineCount in scan-pipeline.ts). Injected so the estimate stays pure;
+   * the production implementation is in buildEstimateDeps (index.ts) and counts an unreadable file as 0, as fileSizeBytes does.
+   */
+  fileLineCount(path: string): number;
   /**
    * The model slots the run would actually send to: ensemble slots in
    * remote-ensemble mode, else the single backend model. Never empty.
@@ -336,7 +342,8 @@ export function estimateToolRun(
     notes.push("no input files — instructions/input_files_content-only chat: one request per slot");
   }
 
-  const fileBytes = files.map((f) => deps.fileSizeBytes(f));
+  // line_numbers prefixes every line of each input file before it is sent, so the payload this run prices carries the prefix too.
+  const fileBytes = files.map((f) => deps.fileSizeBytes(f) + (args.line_numbers === true ? LINE_NUMBER_PREFIX_BYTES * deps.fileLineCount(f) : 0));
   const totalFileBytes = fileBytes.reduce((a, b) => a + b, 0);
 
   // Input tokens across the whole run (per slot): per-file tools re-send the

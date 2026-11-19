@@ -113,6 +113,7 @@ import {
   BREVITY_RULES,
   FILE_FORMAT_EXAMPLE,
   codeTaskSystemPrompt,
+  numberedLineCount,
 } from "./scan-pipeline.js";
 import {
   runSearchExistingImplementations,
@@ -2727,6 +2728,7 @@ async function robustPerFileProcess(
           maxBytes: opts.budgetBytes,
           modelOverride: opts.modelOverride,
           outputDir: opts.outputDir,
+          lineNumbers: opts.lineNumbers,
         });
         recentOutcomes.push(result.success);
         if (result.success) signalSuccess();
@@ -2906,6 +2908,13 @@ export function buildEstimateDeps(): import("./estimate.js").EstimateDeps {
         return statSync(path).size;
       } catch {
         return 0; // unreadable file costs nothing in the estimate; the run itself will fail loudly on it
+      }
+    },
+    fileLineCount(path) {
+      try {
+        return numberedLineCount(readFileSync(path, "utf-8"));
+      } catch {
+        return 0; // unreadable file costs nothing in the estimate; the run itself will fail loudly on it (same rule as fileSizeBytes)
       }
     },
     ensembleSlots(toolName) {
@@ -4168,17 +4177,19 @@ async function processFileCheck(
     options.redact,
     options.maxBytes,
     options.regexRedact,
+    undefined,
+    options.lineNumbers,
   );
   const lang = options.language || detectLang(filePath);
   // Derive line count from the already-read code block (avoid double file read)
   const fileLineCount = codeBlock.split("\n").length;
   const useEnsemble = options.ensemble !== false; // default true
 
-  const perFileUserContent = `${buildPreInstructions(true, "read")}Task: ${task}\n\n${codeBlock}`;
+  const perFileUserContent = `${buildPreInstructions(true, "read", options.lineNumbers)}Task: ${task}\n\n${codeBlock}`;
   const messages: ChatMessage[] = [
     {
       role: "system",
-      content: codeTaskSystemPrompt(lang),
+      content: codeTaskSystemPrompt(lang, options.lineNumbers),
     },
     {
       role: "user",

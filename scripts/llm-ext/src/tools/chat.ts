@@ -36,6 +36,7 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
     recursive: chatRecursive,
     follow_symlinks: chatFollowSymlinks,
     max_files: chatMaxFiles,
+    line_numbers: chatLineNumbers,
   } = args as {
     instructions?: string;
     instructions_files_paths?: string | string[];
@@ -55,6 +56,7 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
     recursive?: boolean;
     follow_symlinks?: boolean;
     max_files?: number;
+    line_numbers?: boolean;
   };
   // Ensemble ON for the openrouter backend and for a mode-local profile with two or more members (P8, ensembleAllowed)
   const useEnsemble = ensembleAllowed(backend, deps.activeResolved);
@@ -139,7 +141,8 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
   // Build prompt base: pre-instructions + unfenced instructions + optional fenced inline content
   const chatHasFiles = chatFilePaths.length > 0 || !!input_files_content;
   let promptBase =
-    buildPreInstructions(chatHasFiles, "read") + chatPrompt;
+    // WHY files only: inline input_files_content is fenced unnumbered, so the numbered-line rule must not be claimed for it.
+    buildPreInstructions(chatHasFiles, "read", chatLineNumbers === true && chatFilePaths.length > 0) + chatPrompt;
   if (input_files_content) {
     let inlineContent = input_files_content;
     if (chatRedact) inlineContent = redactSecrets(inlineContent).redacted;
@@ -214,6 +217,7 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
           redact: chatRedact, regexRedact: chatRegexRedact,
           onProgress, ensemble: useEnsemble,
           budgetBytes: chatBudgetBytes, toolName: "chat",
+          lineNumbers: chatLineNumbers,
           modelOverride, outputDir,
         });
         const lines = rpResult.succeeded.map((r) => r.reportPath ?? `DONE: ${r.filePath}`);
@@ -239,6 +243,7 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
             onProgress,
             ensemble: useEnsemble,
             maxBytes: chatBudgetBytes,
+            lineNumbers: chatLineNumbers,
             modelOverride, outputDir,
           });
         } catch (err) {
@@ -273,6 +278,7 @@ export async function handleChat(call: CaseCall, deps: Pick<CaseDeps, "DEFAULT_T
       chatRedact,
       chatBudgetBytes,
       chatRegexRedact,
+      chatLineNumbers,
     );
 
     // Collect results for this file group (merged-per-group output)

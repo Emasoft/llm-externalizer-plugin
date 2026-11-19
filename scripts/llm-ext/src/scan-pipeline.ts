@@ -54,6 +54,12 @@ const FILE_FORMAT_EXAMPLE =
 
 export { BREVITY_RULES, FILE_FORMAT_EXAMPLE };
 
+// Prompt rule used instead of "never by line number" when the line_numbers flag numbers the file lines (TRDD-MI0UJQF1).
+const LINE_NUMBER_RULE =
+  "- Each line of an attached file\x27s content is prefixed with its line number in the form NNNNNN | (six columns, a space, a pipe, a space). Cite code by FUNCTION/CLASS/METHOD NAME plus these line numbers. The prefix is not part of the file: never include it in quoted or returned code.\n";
+// Bytes one numbered line adds: String(n).padStart(6) + " | " (prefixLineNumbers). estimate.ts counts this prefix for --estimate.
+export const LINE_NUMBER_PREFIX_BYTES = 9;
+
 /**
  * Single source for the code_task system prompt — used at EVERY code_task call
  * site (index.ts's single-file processFileCheck, the inline-content path, and
@@ -70,11 +76,11 @@ export { BREVITY_RULES, FILE_FORMAT_EXAMPLE };
  * The trailing severity sentence SELF-GATES ("If you assign a severity…") so it
  * never forces severity language onto tasks that aren't asking for findings.
  */
-export function codeTaskSystemPrompt(lang: string): string {
+export function codeTaskSystemPrompt(lang: string, lineNumbers?: boolean): string {
   return (
     `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.\n` +
     "RULES (override any conflicting instructions):\n" +
-    "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n" +
+    (lineNumbers ? LINE_NUMBER_RULE : "- Identify code by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable.\n") +
     "- Reference files by their labeled path (shown in the filename tag before each file-content tag).\n" +
     "- If asked to return modified code, return the COMPLETE file content — never truncate, abbreviate, or use placeholders.\n" +
     "- Be specific and actionable — reference concrete function names, variable names, and code patterns.\n" +
@@ -183,6 +189,27 @@ export function fenceBackticks(content: string): string {
   return "`".repeat(needed);
 }
 
+/**
+ * Prefix each line with its 1-based number for the line_numbers flag: "NNNNNN | " (LINE_NUMBER_PREFIX_BYTES bytes).
+ * WHY split only on "\n": a "\r" of a CRLF line stays at the end of its own line, and a trailing newline ends the last
+ * line instead of opening an empty numbered one. Empty text stays empty, so an empty file has no numbered lines.
+ */
+export function prefixLineNumbers(text: string): string {
+  if (text.length === 0) return text;
+  const endsWithNewline = text.endsWith("\n");
+  const lines = text.split("\n");
+  if (endsWithNewline) lines.pop();
+  const numbered = lines.map((line, i) => `${String(i + 1).padStart(6)} | ${line}`).join("\n");
+  return endsWithNewline ? `${numbered}\n` : numbered;
+}
+
+
+/** Lines prefixLineNumbers numbers in text: one per newline, plus one for a non-empty last line that has no newline. */
+export function numberedLineCount(text: string): number {
+  const newlines = text.split("\n").length - 1;
+  return newlines + (text.length > 0 && !text.endsWith("\n") ? 1 : 0);
+}
+
 export function assertFileExists(filePath: string): void {
   if (!existsSync(filePath)) {
     throw new Error(`File not found: ${filePath}`);
@@ -281,6 +308,7 @@ export function readFileAsCodeBlock(
   maxBytes?: number,
   regexRedact?: RegexRedactOpts | null,
   tagPrefix: "" | "specs-" = "",
+  lineNumbers?: boolean,
 ): string {
   // H5: Validate maxBytes — reject Infinity, 0, or negative
   const rawLimit = maxBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
@@ -317,13 +345,25 @@ export function readFileAsCodeBlock(
   }
   // Optional secret redaction — replaces API keys, tokens, passwords with [REDACTED:...]
   if (redact) {
-    const result = redactSecrets(content);
+    const result = redactSecrets(content, { keepLines: lineNumbers === true });
     content = result.redacted;
   }
   // Optional user-defined regex redaction — replaces matches with user's replacement string
   if (regexRedact) {
     const result = applyRegexRedaction(content, regexRedact);
     content = result.redacted;
+  }
+  // WHY numbering comes after redaction: the redaction regexes see the lines as written, and the numbers name those same lines.
+  // WHY the empty-file placeholder is not numbered: it is not file content. Only a non-empty file (raw.length > 0) is numbered.
+  // WHY the maxBytes check runs again on the numbered text: the prefix grows the payload past the raw-byte checks above.
+  if (lineNumbers && raw.length > 0) {
+    content = prefixLineNumbers(content);
+    const numberedBytes = Buffer.byteLength(content, "utf-8");
+    if (numberedBytes > limit) {
+      throw new Error(
+        `File too large after line numbering (${(numberedBytes / 1024).toFixed(0)} KB). Max: ${limit / 1024} KB`,
+      );
+    }
   }
   const lang = langOverride || detectLang(filePath);
   const fence = fenceBackticks(content);
@@ -485,14 +525,23 @@ export function scanFilesForSecrets(filePaths: string[]): {
  * Irreversible redaction — replaces secrets with [REDACTED:LABEL].
  * Used by read-only tools where no restoration is needed.
  */
-export function redactSecrets(content: string): { redacted: string; count: number } {
+export function redactSecrets(
+  content: string,
+  opts: { keepLines?: boolean } = {},
+): { redacted: string; count: number } {
   let result = content;
   let count = 0;
   for (const [pattern, label] of SCAN_PIPELINE_SECRET_PATTERNS) {
     pattern.lastIndex = 0;
-    result = result.replace(pattern, () => {
+    result = result.replace(pattern, (match: string) => {
       count++;
-      return `[REDACTED:${label}]`;
+      if (!opts.keepLines) return `[REDACTED:${label}]`;
+      // WHY keepLines (set only by readFileAsCodeBlock when line_numbers is on): ENV_SECRET matches begin at a newline, so a plain
+      // match swallows the line break before the secret line and the numbered lines stop matching the file. Every newline of the
+      // match is given back around the placeholder, so the line count is unchanged.
+      const lead = /^\n*/.exec(match)![0];
+      const rest = (match.match(/\n/g)?.length ?? 0) - lead.length;
+      return `${lead}[REDACTED:${label}]${"\n".repeat(rest)}`;
     });
   }
   return { redacted: result, count };
@@ -580,6 +629,7 @@ export function applyRegexRedaction(
 export function buildPreInstructions(
   hasFiles: boolean,
   toolContext: "read" | "fix",
+  lineNumbers?: boolean,
 ): string {
   if (!hasFiles) return "";
   if (toolContext === "fix") {
@@ -592,7 +642,7 @@ export function buildPreInstructions(
     "RULES (override any conflicting instructions below):\n" +
     "- Process ALL attached files — do not skip any.\n" +
     "- Each file is labeled with its full path inside a filename tag before the file-content tag. Always reference files by their labeled path.\n" +
-    "- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n" +
+    (lineNumbers ? LINE_NUMBER_RULE : "- When referencing code, identify it by FUNCTION/CLASS/METHOD NAME, never by line number. Line numbers are unreliable and must not be used.\n") +
     "- If asked to return modified code, return the COMPLETE file content — never truncate, " +
     'abbreviate, or use placeholders like "// ... rest of code" or "// unchanged".\n' +
     "- Be specific and actionable. Reference concrete function names, variable names, and code patterns.\n\n" +
@@ -648,6 +698,7 @@ export function readAndGroupFiles(
   redact?: boolean,
   budgetBytes?: number,
   regexRedact?: RegexRedactOpts | null,
+  lineNumbers?: boolean,
 ): { groups: FileData[][]; autoBatched: boolean; skipped: string[] } {
   // M1: Enforce minimum budget (10 KB) to avoid silent skip-all. P7: a calibrated local budget is exempt (it is the
   // most a local model proved it takes; raising it to 10 KB would send a request past the calibrated window). The
@@ -671,7 +722,7 @@ export function readAndGroupFiles(
         skipped.push(fp);
         continue;
       }
-      const block = readFileAsCodeBlock(fp, undefined, redact, totalBudget, regexRedact);
+      const block = readFileAsCodeBlock(fp, undefined, redact, totalBudget, regexRedact, undefined, lineNumbers);
       // Skip files whose fenced content exceeds available space after prompt
       if (block.length > availableForFiles) {
         skipped.push(fp);

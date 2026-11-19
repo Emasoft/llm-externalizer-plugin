@@ -80,6 +80,7 @@ BATCHING (READ THIS): The LLM never sees your whole set of input files at once. 
 | `--input_files_paths` | oneOf | One or more absolute file paths. Accepts a single string OR an array. Files are read from... |
 | `--instructions` | string | Task instructions for the LLM. Placed BEFORE input-files content in the prompt. Be specific... |
 | `--instructions_files_paths` | oneOf | Path(s) to file(s) containing instructions (appended to instructions). |
+| `--line_numbers` | boolean | Prefix every file line with its 1-based number ("     1 | ") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload. |
 | `--max_files` | number | Maximum number of files to discover from folder_path. Default: 2500. |
 | `--max_payload_kb` | number | Max total payload per batch in KB (prompt + instructions + files). Default: 400. Must fit... |
 | `--max_retries` | number | Max retries per file when answer_mode=0 (per-file processing). Default: 1 (no retry). Set to... |

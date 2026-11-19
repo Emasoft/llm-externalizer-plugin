@@ -305,6 +305,11 @@ const scanFolderSchemaProps = {
     description:
       "Redact secrets before sending to LLM. DISCOURAGED: prefer moving secrets to .env files (gitignored).",
   },
+  line_numbers: {
+    type: "boolean" as const,
+    description:
+      "Prefix every file line with its 1-based number (\"     1 | \") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload.",
+  },
   use_gitignore: {
     type: "boolean" as const,
     description:
@@ -444,6 +449,11 @@ function buildToolsWithoutProfileTypes(limitsText: string) {
             type: "boolean",
             description:
               "Redact secrets before sending to LLM. Prevents leaking sensitive data to the remote service.",
+          },
+          line_numbers: {
+            type: "boolean",
+            description:
+              "Prefix every file line with its 1-based number (\"     1 | \") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload.",
           },
           answer_mode: answerModeSchema,
           max_retries: maxRetriesSchema,

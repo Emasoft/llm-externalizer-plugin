@@ -15,12 +15,14 @@ import {
   type EstimateDeps,
 } from "./estimate.js";
 import { foldOutputEwma } from "./usage-history.js";
+import { estimateTokens } from "./mass_scouting/cost-estimate.js";
 
 /** 4000-byte files → exactly 1000 tokens each under the bytes/4 model. */
 function deps(overrides: Partial<EstimateDeps> = {}): EstimateDeps {
   return {
     resolveFiles: () => ({ files: ["/a.ts", "/b.ts"] }),
     fileSizeBytes: () => 4000,
+    fileLineCount: () => 0,
     ensembleSlots: () => [{ id: "vendor/model-paid", maxOutput: 8000 }],
     pricingFor: () => ({ inputUsdPerM: 1, outputUsdPerM: 2 }),
     defaultMaxTokens: () => 4000,
@@ -258,6 +260,18 @@ describe("calibrated EXPECTED (task #188)", () => {
     const second = foldOutputEwma(first, 2000, 0.3);
     expect(second.n).toBe(2);
     expect(second.ewma).toBeCloseTo(0.3 * 2000 + 0.7 * 1000, 10);
+  });
+});
+
+
+describe("estimateToolRun: line_numbers (TRDD-MI0UJQF1) prices the numbered prefix", () => {
+  it("grows the input tokens by the token count of 9 bytes for each file line", () => {
+    const lines = 5;
+    const d = deps({ resolveFiles: () => ({ files: ["/five.txt"] }), fileLineCount: () => lines });
+    const plain = estimateToolRun("scan_folder", {}, d).rows[0];
+    const numbered = estimateToolRun("scan_folder", { line_numbers: true }, d).rows[0];
+    // fileSizeBytes is 4000 (a multiple of 4), so the difference is exactly estimateTokens(9 * lines).
+    expect(numbered.inputTokens - plain.inputTokens).toBe(estimateTokens(9 * lines));
   });
 });
 

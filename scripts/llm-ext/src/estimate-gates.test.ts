@@ -81,6 +81,7 @@ function gatedDeps(opts: {
   return {
     resolveFiles: () => ({ files: [] }),
     fileSizeBytes: () => 4000,
+    fileLineCount: () => 0,
     ensembleSlots: () => models.map((id) => ({ id, maxOutput: 8000 })),
     pricingFor: () => ({ inputUsdPerM: 0.5, outputUsdPerM: 1 }),
     defaultMaxTokens: () => 4000,

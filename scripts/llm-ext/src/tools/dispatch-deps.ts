@@ -66,6 +66,7 @@ export interface RobustPerFileOpts {
   batchId?: string;
   modelOverride?: string;
   outputDir?: string;
+  lineNumbers?: boolean; // prefix every file line with its number (line_numbers flag, TRDD-MI0UJQF1)
 }
 
 export interface RobustPerFileResult {
@@ -95,6 +96,7 @@ export interface ProcessOptions {
   modelOverride?: string; // skip ensemble, use this specific model (e.g. free mode)
   outputDir?: string; // custom output directory for reports
   hqRequest?: HighQualityRequest; // high_quality_scan provider/reasoning/cache (TRDD-DBUSM55E)
+  lineNumbers?: boolean; // prefix every line of each input file with its number (line_numbers flag, TRDD-MI0UJQF1)
 }
 
 export interface OpenRouterModelInfo {

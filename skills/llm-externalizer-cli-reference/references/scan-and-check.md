@@ -46,6 +46,7 @@ LIMITS:
 | `--folder_path` | string | (required) Absolute path to the folder to scan recursively. |
 | `--instructions` | string | What to look for or do with each file. |
 | `--instructions_files_paths` | oneOf | File(s) containing instructions. |
+| `--line_numbers` | boolean | Prefix every file line with its 1-based number ("     1 | ") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload. |
 | `--max_files` | number | Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans. |
 | `--max_payload_kb` | number | Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported. |
 | `--output_dir` | string | Absolute path to a custom output directory for reports. Default:... |
@@ -114,6 +115,7 @@ BATCHING (READ THIS): The LLM never sees your whole set of input files at once. 
 | `--folder_path` | string | (required) Absolute path to the folder to scan recursively. |
 | `--instructions` | string | What to look for or do with each file. |
 | `--instructions_files_paths` | oneOf | File(s) containing instructions. |
+| `--line_numbers` | boolean | Prefix every file line with its 1-based number ("     1 | ") so the report can cite exact lines. Default off (unnumbered, byte-exact). Adds about 9 bytes per line to the payload. |
 | `--max_files` | number | Maximum number of files to process (default: 2500). Safety limit to prevent runaway scans. |
 | `--max_payload_kb` | number | Max file size in KB per file. Default: 400. Files exceeding this are skipped and reported. |
 | `--output_dir` | string | Absolute path to a custom output directory for reports. Default:... |

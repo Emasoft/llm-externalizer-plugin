@@ -99,6 +99,18 @@ describe("errors name the invocation the user typed, not the flat command", () =
   });
 });
 
+
+describe("line_numbers is listed in the help of the two numbering tools", () => {
+  it.each([
+    ["llm", "ask"],
+    ["scan", "folder"],
+  ])("%s %s --help lists --line_numbers", async (group, action) => {
+    const r = await run([group, action, "--help", "--quiet"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain("--line_numbers");
+  });
+});
+
 describe("advertised examples clear HANDLER-level validation too", () => {
   // Regression: `llm-ext scan folder ./src` was printed as an Example by both
   // global and group help, passed parseFlags, and then died with "FAILED:

@@ -37,6 +37,9 @@ import {
   walkDir,
   sanitizeInputPath,
   redactSecrets,
+  codeTaskSystemPrompt,
+  buildPreInstructions,
+  prefixLineNumbers,
   type FileData,
 } from "./scan-pipeline.js";
 import { mkdirSync, realpathSync } from "node:fs";
@@ -417,6 +420,84 @@ describe("redactSecrets — ENV_SECRET and PEM_BLOCK are linear-time (TRDD-G49XP
     const pem = "-----BEGIN RSA " + "PRIVATE KEY-----\n" + "MIIEowIBAAKCAQEAx7Qz".repeat(160) + "\n-----END RSA " + "PRIVATE KEY-----";
     const r = redactSecrets("before\n" + pem + "\nafter");
     expect(r.redacted).toBe("before\n[REDACTED:PEM_BLOCK]\nafter");
+  });
+});
+
+
+describe("line_numbers (TRDD-MI0UJQF1): opt-in numbered file input", () => {
+  it("readFileAsCodeBlock without the flag returns the unnumbered block byte-for-byte", () => {
+    const p = join(root, "plain-off.txt");
+    writeFileSync(p, "alpha\nbeta\n");
+    expect(readFileAsCodeBlock(p, undefined, false, undefined, null, "", false)).toBe(
+      `<filename>\n${p}\n</filename>\n<file-content>\n\`\`\`\`text\nalpha\nbeta\n\n\`\`\`\`\n</file-content>`,
+    );
+  });
+
+  it("prefixLineNumbers writes a 6-column line number and a pipe before each line", () => {
+    expect(prefixLineNumbers("alpha\nbeta")).toBe("     1 | alpha\n     2 | beta");
+  });
+
+  it("prefixLineNumbers keeps a CR at the end of its own line", () => {
+    expect(prefixLineNumbers("x\r\ny\r\n")).toBe("     1 | x\r\n     2 | y\r\n");
+  });
+
+  it("prefixLineNumbers adds no numbered line for a trailing newline", () => {
+    expect(prefixLineNumbers("a\n")).toBe("     1 | a\n");
+  });
+
+  it("prefixLineNumbers returns empty text unchanged", () => {
+    expect(prefixLineNumbers("")).toBe("");
+  });
+
+  it("readFileAsCodeBlock with the flag numbers the file lines inside the fence", () => {
+    const p = join(root, "numbered-on.txt");
+    writeFileSync(p, "alpha\nbeta\n");
+    const block = readFileAsCodeBlock(p, undefined, false, undefined, null, "", true);
+    expect(block).toContain("````text\n     1 | alpha\n     2 | beta\n\n````");
+  });
+
+  it("an empty file keeps its placeholder and is not numbered", () => {
+    const p = join(root, "empty-on.txt");
+    writeFileSync(p, "");
+    const block = readFileAsCodeBlock(p, undefined, false, undefined, null, "", true);
+    expect(block).toContain("(empty file — 0 bytes)");
+    expect(block).not.toContain(" | ");
+  });
+
+  it("redaction runs before numbering: the secret is gone and the numbers still match the file lines", () => {
+    const p = join(root, "redact-on.txt");
+    writeFileSync(p, "first\n    API_KEY = \x27abcd1234efgh5678\x27\nlast\n");
+    const block = readFileAsCodeBlock(p, undefined, true, undefined, null, "", true);
+    expect(block).not.toContain("abcd1234efgh5678");
+    expect(block).toContain("     3 | last\n");
+  });
+
+  it("a file that fits the byte budget unnumbered is too large once numbered", () => {
+    const p = join(root, "budget-on.txt");
+    writeFileSync(p, "x\n".repeat(100)); // 200 bytes: exactly the budget
+    expect(readFileAsCodeBlock(p, undefined, false, 200, null)).toContain("<file-content>");
+    expect(() => readFileAsCodeBlock(p, undefined, false, 200, null, "", true)).toThrow(/too large after line numbering/);
+  });
+
+  it("redaction with line numbers off keeps the old joined text byte-for-byte", () => {
+    const p = join(root, "redact-off.txt");
+    writeFileSync(p, "first\n    API_KEY = \x27abcd1234efgh5678\x27\nlast\n");
+    expect(readFileAsCodeBlock(p, undefined, true, undefined, null, "", false)).toBe(
+      `<filename>\n${p}\n</filename>\n<file-content>\n\`\`\`\`text\nfirst[REDACTED:ENV_SECRET]\x27\nlast\n\n\`\`\`\`\n</file-content>`,
+    );
+  });
+  it("codeTaskSystemPrompt and buildPreInstructions are unchanged without the flag", () => {
+    expect(codeTaskSystemPrompt("typescript", false)).toBe(codeTaskSystemPrompt("typescript"));
+    expect(buildPreInstructions(true, "read", false)).toBe(buildPreInstructions(true, "read"));
+    expect(codeTaskSystemPrompt("typescript")).toContain("never by line number");
+    expect(buildPreInstructions(true, "read")).toContain("never by line number");
+  });
+
+  it("with the flag, both prompts state the numbered-line rule and drop the never-by-line-number bullet", () => {
+    for (const text of [codeTaskSystemPrompt("typescript", true), buildPreInstructions(true, "read", true)]) {
+      expect(text).toContain("NNNNNN | ");
+      expect(text).not.toContain("never by line number");
+    }
   });
 });
 

@@ -68,6 +68,7 @@ Every local model run (managed or a direct send to a server on this machine) is 
 - `--answer_mode` only controls report layout: 0 one report per file, 1 one per group, 2 a single merged report.
 - Group files with `---GROUP:id---` ... `---/GROUP:id---` markers in the file list to get one isolated report per group.
 - Secret handling flags: `--scan_secrets` (abort if secrets are found), `--redact_secrets`, `--redact_regex`.
+- Input shaping flag: `--line_numbers` on `llm ask`, `scan folder` and `scan quality` prefixes every file line with its number (`NNNNNN | `). Default off. About 9 bytes more per line.
 - Give `scout *`, `scan security`, `scan quality` a long timeout (about 20 minutes) or run them in the background.
 
 ## Limits and failure modes
