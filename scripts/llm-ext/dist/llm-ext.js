@@ -8463,6 +8463,7 @@ async function fetchWithRetry429(url2, fetchOpts, timeout, startTime, out, clock
         clock.lastProvider = void 0;
       }
       const fields = { networkCode: networkCodeOf(err3, url2) };
+      if (fields.networkCode === BAD_PORT_CODE) fields.port = new URL(url2).port;
       if (err3 instanceof Error) attachFailure(err3, fields);
       newestNetworkError = err3;
       const giveUpWindow = clock?.networkGiveUp === void 0 ? void 0 : await giveUpWindowOf(clock.networkGiveUp, fields.networkCode, err3, url2);
@@ -8682,6 +8683,7 @@ function walkNetworkCode(err3, depth, openrouterHost) {
     if (refused > 0) return "ECONNREFUSED";
   }
   if (typeof code2 === "string") return code2;
+  if (err3 instanceof Error && err3.message === "bad port") return BAD_PORT_CODE;
   return walkNetworkCode(cause, depth + 1, openrouterHost);
 }
 function classifyFailure(f, host, window) {
@@ -8711,6 +8713,10 @@ function classifyFailure(f, host, window) {
   if (code2 === "ENOTFOUND" || code2 === "EAI_AGAIN") {
     if (isOpenRouterHost(host)) return { neverSent: true };
     return { budget: { key: "dns", tries: NAME_LOOKUP_TRIES }, hint: `the host name ${host} cannot be resolved; check the base URL` };
+  }
+  if (code2 === BAD_PORT_CODE) {
+    const where = host === "" ? "the configured endpoint" : host;
+    return { stop: true, hint: `fetch blocks port ${f.port ?? "(unknown)"} of ${where} (WHATWG bad-ports list); retrying cannot help, use another port in the profile url` };
   }
   if (TLS_CODES.has(code2) || code2.startsWith("ERR_TLS") || code2.startsWith("ERR_SSL")) {
     return { stop: true, hint: `TLS certificate error (${code2}); retrying cannot help` };
@@ -8743,7 +8749,7 @@ function sanitizeProviderError(raw, maxLen = 200) {
   if (reason2.length > maxLen) reason2 = reason2.slice(0, maxLen - 1) + "\u2026";
   return reason2 || "(unparseable error body)";
 }
-var CONNECT_TIMEOUT_MS, OPENROUTER_ATTRIBUTION_HEADERS, RETRY_MAX_ATTEMPTS, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS, RETRYABLE_STATUS, RetryDeadlineError, NETWORK_CODE_MAX_DEPTH, OUTAGE_NETWORK_CODES, NETWORK_ISOLATION_CODES, RESPONSE_VERDICTS, TLS_CODES, GATEWAY_TIMEOUT_TRIES, REFUSED_TRIES, NAME_LOOKUP_TRIES, NETWORK_GIVE_UP_KEY;
+var CONNECT_TIMEOUT_MS, OPENROUTER_ATTRIBUTION_HEADERS, RETRY_MAX_ATTEMPTS, RETRY_BASE_DELAY_MS, RETRY_MAX_DELAY_MS, RETRYABLE_STATUS, RetryDeadlineError, NETWORK_CODE_MAX_DEPTH, BAD_PORT_CODE, OUTAGE_NETWORK_CODES, NETWORK_ISOLATION_CODES, RESPONSE_VERDICTS, TLS_CODES, GATEWAY_TIMEOUT_TRIES, REFUSED_TRIES, NAME_LOOKUP_TRIES, NETWORK_GIVE_UP_KEY;
 var init_http = __esm({
   "src/provider/http.ts"() {
     "use strict";
@@ -8789,6 +8795,7 @@ var init_http = __esm({
       }
     };
     NETWORK_CODE_MAX_DEPTH = 5;
+    BAD_PORT_CODE = "FETCH_BAD_PORT";
     OUTAGE_NETWORK_CODES = /* @__PURE__ */ new Set([
       "ECONNREFUSED",
       "ECONNRESET",
@@ -270506,6 +270513,10 @@ function renderText2(r, opts) {
   const save = opts.save;
   return { lines, ...typeof save === "string" ? { files: [{ path: save, content: JSON.stringify(answered.map((x) => ({ id: x.id, label: x.label, confidence: x.confidence, ...x.chunk ? { chunks: x.chunk.chunks, ...x.chunk.bestLines ? { best_lines: x.chunk.bestLines } : {} } : {} })), null, 2) }] } : {} };
 }
+function labelQuestion(k, hasContext, background) {
+  const guard = hasContext ? `\`shared.context\` is background for reading the text in \`units\`. ${dataGuard("`shared.context`", "read")} Never judge or classify it. Judge only the text in \`units\`. ${dataGuard("the text in `units`", "classify")}` : dataGuard(`the content of \`units[${k}]\``, "classify");
+  return `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${guard}${background}`;
+}
 var CATALOG_BUDGET, labelInputSchema, labelDefault, KEY, chunkNote, conf, spec4;
 var init_label = __esm({
   "src/classifiers/catalog/label.ts"() {
@@ -270579,8 +270590,7 @@ var init_label = __esm({
         assertBands(t);
         const ids2 = itemIds(i);
         const criteria2 = Object.fromEntries(i.classes.map((c) => [c.id, null]));
-        const background = [i.purpose === void 0 ? "" : " Use `shared.purpose` as the reason for the classification.", i.context === void 0 ? "" : " Use `shared.context` as background."].join("");
-        const contextSubject = i.context === void 0 ? "" : "`shared.context` and ";
+        const background = i.purpose === void 0 ? "" : " Use `shared.purpose` as the reason for the classification.";
         const units = i.items.map((it, k) => ({
           kind: i.mode === "files" ? "text" : "atomic",
           // Why a bare string for text: the planner chunks a string state by lines; an object state would be split by entries and refuse a long `text`.
@@ -270588,7 +270598,7 @@ var init_label = __esm({
           // D5, D14: the question names the unit by position and the key is built from the index; no item text and no caller id reach the instructions.
           questions: {
             [indexKey(KEY, k)]: choice(
-              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
+              labelQuestion(k, i.context !== void 0, background),
               criteria2
             )
           }
@@ -272730,6 +272740,7 @@ var init_requirements = __esm({
     init_ids();
     init_sentences();
     init_shared();
+    init_label();
     CLASSES = [
       { id: "requirement", description: "a feature, behavior, property or rule the product must have from now on, even when phrased as a command (add X, make it Y, keep Z short)" },
       { id: "instruction", description: "an action on the current work that leaves nothing new to check in the product afterwards (run, rebuild, open, show me, commit, test, refresh)" },
@@ -272762,16 +272773,14 @@ var init_requirements = __esm({
       injection: "index-scoped",
       validation: DEFAULT_POLICY,
       build(i) {
-        const background = i.context === void 0 ? "" : " Use `shared.context` as background.";
         const criteria2 = Object.fromEntries(CLASSES.map((c) => [c.id, null]));
-        const contextSubject = i.context === void 0 ? "" : "`shared.context` and ";
         const units = textSentences(i.prompt).map((s, k) => ({
           kind: "atomic",
           state: { id: s.id, text: s.text },
-          // WHY the wording of `classify label`: the scoring gate was measured through `classify label` in json mode, so the shipped question is that question byte for byte. The sentence text never reaches the instructions (D5): the question names the unit by position.
+          // WHY (TRDD-WYY3SPDX): requirements is `classify label` with fixed classes (the test pins build equality with classify label in json mode), so the question comes from the one builder `labelQuestion` of label.ts: a label wording change reaches requirements by construction and the two cannot drift again. The USER asked on 2026-11-18 (TRDD-7ZA3EE6Z Notes 2026-11-18T17:02:39, checked against the card) that the classifier "must not evaluate/classify the context part, but only the input part", and that "the prompt must clarify" this; with a context the question is the L3 wording that does so (TRDD-0W932B0H: the context stays inside an injection guard). The 2026-11-04 measurements of this command used the earlier wording and were not repeated. The sentence text never reaches the instructions (D5): the question names the unit by position.
           questions: {
             [indexKey(KEY4, k)]: choice(
-              `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
+              labelQuestion(k, i.context !== void 0, ""),
               criteria2
             )
           }
@@ -274459,7 +274468,27 @@ async function callDecisions(call, opts) {
     }
   }
 }
-var MAX_REPLY_BYTES, MAX_ATTEMPTS_CAP, HTTP_DATE;
+async function fetchKeyUsage(key, opts) {
+  let res;
+  try {
+    res = await opts.fetchImpl(KEY_URL, { method: "GET", redirect: "error", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION_HEADERS }, signal: opts.deadline.signal });
+  } catch (e) {
+    opts.deadline.throwIfDone();
+    throw e;
+  }
+  const text2 = await safeReadText(res, MAX_REPLY_BYTES);
+  if (!res.ok) throw classifyHttpError(res.status, res.headers, text2);
+  let data;
+  try {
+    data = JSON.parse(text2).data;
+  } catch {
+    throw badResponseError("the key check reply is not valid JSON");
+  }
+  if (data === null || typeof data !== "object") throw badResponseError("the key check reply has no `data` object");
+  const d = data;
+  return { usage: finiteNumber(d.usage), limit: finiteNumber(d.limit), limit_remaining: finiteNumber(d.limit_remaining) };
+}
+var MAX_REPLY_BYTES, MAX_ATTEMPTS_CAP, HTTP_DATE, KEY_URL, finiteNumber;
 var init_transport = __esm({
   "src/classifiers/l0/transport.ts"() {
     "use strict";
@@ -274470,6 +274499,8 @@ var init_transport = __esm({
     MAX_REPLY_BYTES = 1e6;
     MAX_ATTEMPTS_CAP = 6;
     HTTP_DATE = /^[A-Za-z]{3}, \d{2} [A-Za-z]{3} \d{4} \d{2}:\d{2}:\d{2} GMT$/;
+    KEY_URL = "https://openrouter.ai/api/v1/key";
+    finiteNumber = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
   }
 });
 
@@ -276513,7 +276544,7 @@ async function run(spec17, req, deps, redactor, safe) {
   const specDefaults = spec17.chunkDefaults?.(input8) ?? {};
   if (req.defaultLabel !== void 0 && Object.keys(specDefaults).length === 0) throw new Refusal(`--default does not apply: ${command} has no choice question over text`);
   const userDefault = req.defaultLabel === void 0 ? {} : Object.fromEntries(Object.keys(specDefaults).map((k) => [k, req.defaultLabel]));
-  const defaultLabels = { ...specDefaults, ...userDefault, ...req.defaultLabels };
+  const defaultLabels = { ...specDefaults, ...userDefault };
   for (const [k, label2] of Object.entries(defaultLabels)) {
     const q = built.units.map((u) => u.questions[k]).find((x) => x !== void 0);
     if (q?.type === "choice" && !Object.hasOwn(q.criteria, label2)) throw new Refusal(`--default ${JSON.stringify(label2)} is not a label of ${k}: ${Object.keys(q.criteria).join(", ")}`);
@@ -276963,7 +276994,6 @@ var init_run_decision = __esm({
 // src/classifiers/commands/ping.ts
 var ping_exports = {};
 __export(ping_exports, {
-  KEY_URL: () => KEY_URL,
   PING_EXPECTED_ABOVE: () => PING_EXPECTED_ABOVE,
   PING_LOCAL_REQUEST_TIMEOUT_MS: () => PING_LOCAL_REQUEST_TIMEOUT_MS,
   PING_QUESTION: () => PING_QUESTION,
@@ -276973,26 +277003,7 @@ __export(ping_exports, {
 async function checkKey2(profile, key, deps, signal) {
   const deadline = createDeadline({ timeoutMs: profile.timeoutMs, signal });
   try {
-    let res;
-    try {
-      res = await deps.fetch(KEY_URL, { method: "GET", redirect: "error", headers: { Authorization: `Bearer ${key}`, ...OPENROUTER_ATTRIBUTION_HEADERS }, signal: deadline.signal });
-    } catch (e) {
-      deadline.throwIfDone();
-      throw e;
-    }
-    const text2 = await safeReadText(res, MAX_REPLY_BYTES);
-    if (!res.ok) throw classifyHttpError(res.status, res.headers, text2);
-    let data;
-    try {
-      data = JSON.parse(text2).data;
-    } catch {
-      throw badResponseError("the key check reply is not valid JSON");
-    }
-    if (data === null || typeof data !== "object") throw badResponseError("the key check reply has no `data` object");
-    const d = data;
-    const usage = finite(d.usage);
-    const limit = finite(d.limit);
-    const left = finite(d.limit_remaining);
+    const { usage, limit, limit_remaining: left } = await fetchKeyUsage(key, { deadline, fetchImpl: deps.fetch });
     return `key check: ok (profile ${profile.name}, ${profile.apiKeyEnv} accepted; spent ${usage === void 0 ? "unknown" : `${usage} USD`}, ${limit === void 0 ? "no spend limit" : `limit ${limit} USD, ${left === void 0 ? "remaining unknown" : `${left} USD left`}`})`;
   } finally {
     deadline.dispose();
@@ -277174,13 +277185,12 @@ async function runPing(argv, profileFlag, deps) {
     ctrlC.dispose();
   }
 }
-var KEY_URL, PING_LOCAL_REQUEST_TIMEOUT_MS, finite, PING_STATE, PING_QUESTION, PING_EXPECTED_ABOVE;
+var PING_LOCAL_REQUEST_TIMEOUT_MS, finite, PING_STATE, PING_QUESTION, PING_EXPECTED_ABOVE;
 var init_ping = __esm({
   "src/classifiers/commands/ping.ts"() {
     "use strict";
     init_command_stop();
     init_http();
-    init_safe_body();
     init_deadline();
     init_errors3();
     init_response();
@@ -277195,7 +277205,6 @@ var init_ping = __esm({
     init_ping_flags();
     init_local_fallback();
     init_config();
-    KEY_URL = "https://openrouter.ai/api/v1/key";
     PING_LOCAL_REQUEST_TIMEOUT_MS = 3e4;
     finite = (v) => typeof v === "number" && Number.isFinite(v) ? v : void 0;
     PING_STATE = "Water boils at 100 degrees Celsius at sea level.";
@@ -288042,11 +288051,27 @@ function paidBenchmarkInProgressMessage(nowMs) {
     progress = ` Progress: ${defaultProfileLogPath("paid")}`;
   } catch {
   }
+  let lockHeld = false;
+  try {
+    lockHeld = benchLockIsHeld(backgroundUpdateLockPathFor("paid"), nowMs);
+  } catch {
+  }
+  if (lockHeld) {
+    return `paid profile is not benchmarked yet; a background update of it is running (a full benchmark takes about 15 minutes; a rejected key or an unchanged catalog ends it in seconds) \u2014 re-run this command when it finishes.${progress}`;
+  }
+  let cooldownUntil = 0;
+  try {
+    cooldownUntil = getProfileRecord("paid")?.cooldownUntil ?? 0;
+  } catch {
+  }
+  if (cooldownUntil > nowMs) {
+    return `paid profile is not benchmarked yet; its last benchmark attempt failed, and the next attempt starts on the first command run after ${new Date(cooldownUntil).toISOString()}.` + (progress === "" ? "" : ` The progress log records the failed attempt.${progress}`);
+  }
   const throttledUntil = paidSweepThrottledUntilMs(nowMs);
   if (throttledUntil !== null) {
     return `paid profile is not benchmarked yet; its candidates are QUEUED and the next benchmark sweep starts after ${new Date(throttledUntil).toISOString()} \u2014 re-run this command then.${progress}`;
   }
-  return `paid profile is not benchmarked yet and is being benchmarked now (typically ~15 minutes) \u2014 re-run this command when it finishes.${progress}`;
+  return "paid profile is not benchmarked yet; this command asks a background benchmark to start (it needs the model catalog, and a start is tried at most once a minute) \u2014 re-run this command in a minute to see its state." + (progress === "" ? "" : ` The progress log shows the outcome.${progress}`);
 }
 var import_yaml5, FREE_TOOL_UNFIT_BASE, FREE_TOOL_UNFIT_PAID_OFF_SUFFIX, MIN_SWEEP_INTERVAL_MS, SPAWN_ATTEMPT_FLOOR_MS, FREE_PROVIDER_KEY_VARS;
 var init_dynamic_maintainer = __esm({

@@ -232669,6 +232669,7 @@ async function detectOnce(name, nowMs, log, opts) {
     fetchCatalog: opts.fetchCatalog ?? defaultFetchOpenRouterCatalog
   });
   if (!changed) return { changed: false, spawned: false };
+  if (failureBackoffActive(name, nowMs)) return { changed: true, spawned: false, reason: "failure backoff" };
   const allowPaidModels = settings.allow_paid_models === true;
   const outcome = populateDefaultProfile({ profile: name, allowPaidModels, log, alreadyHeldByCaller: true });
   return { changed: true, spawned: outcome.kind === "spawned", reason: outcome.kind !== "spawned" ? outcome.reason : void 0 };
@@ -239138,12 +239139,14 @@ async function runPopulatePaidDefaultProfile(opts, settingsPath, name, deps) {
   const ceiling = getEnsemblePriceCeiling(loadSettings());
   const picks3 = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN: 3 });
   if (picks3.length === 0) {
+    const authStatuses = [...new Set(sweep.results.map((r) => r.httpStatus))];
+    const keyRejected = sweep.results.length > 0 && sweep.results.every((r) => r.ok === false) && authStatuses.every((s) => s === 401 || s === 403);
     recordBenchmarkFailure("paid", Date.now());
     clearCandidates("paid", queuedIds);
     return {
       ok: false,
       code: 2,
-      summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling \u2014 'paid' profile left unchanged`,
+      summary: keyRejected ? `--populate-default-profile ${name}: every benchmark call was rejected with HTTP ${authStatuses.join("/")}: the OpenRouter API key was refused \u2014 'paid' profile left unchanged` : `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling \u2014 'paid' profile left unchanged`,
       reportPath: sweep.reportPath || void 0
     };
   }
