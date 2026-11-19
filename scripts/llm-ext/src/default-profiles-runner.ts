@@ -447,7 +447,7 @@ export function profileUpdateRequestPending(profile: AnyProfileName): boolean {
 /** The failure backoff (recordBenchmarkFailure's cooldownUntil) is active:
  *  the profile's benchmark itself just FAILED, so re-running it now cannot
  *  help -- the one throttle even a pending request waits out. */
-function failureBackoffActive(profile: AnyProfileName, nowMs: number): boolean {
+export function failureBackoffActive(profile: AnyProfileName, nowMs: number): boolean {
   return nowMs < (getProfileRecord(profile)?.cooldownUntil ?? 0);
 }
 

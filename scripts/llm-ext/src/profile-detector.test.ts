@@ -52,7 +52,7 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import { detectProfileChanges, claimDetectThrottle, MIN_DETECT_INTERVAL_MS } from "./profile-detector.js";
 import { poolFingerprint } from "./default-profiles.js";
-import { updateDynamicProfileRecord, getDynamicProfileRecord } from "./default-profiles-state.js";
+import { updateDynamicProfileRecord, getDynamicProfileRecord, recordBenchmarkFailure } from "./default-profiles-state.js";
 import {
   requestProfileUpdate,
   backgroundUpdateLockPathFor,
@@ -292,6 +292,31 @@ describe("detectProfileChanges — fingerprint-only, never writes settings.yaml 
     expect(populateDefaultProfileMock.mock.calls[0][0].profile).toBe("free");
   });
 
+  it("TRDD-0QQVTUCF: a detected change inside the failure backoff spawns nothing (the cooldown recordBenchmarkFailure set is honoured)", async () => {
+    // WHY: the plain detection was the one automatic path that re-ran a failed benchmark inside its cooldown; this fails if detectOnce stops checking failureBackoffActive.
+    writeSettings(["active: free", "profiles:", ...FREE_PLACEHOLDER, ""].join("\n"));
+    const t0 = 1_000_000;
+    recordBenchmarkFailure("free", t0);
+    const fetchCatalog = async (): Promise<RawCatalogModel[]> => [
+      { id: "vendor/new:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+    ];
+    const result = await detectProfileChanges("free", { fetchCatalog, nowMs: t0 + 61_000 });
+    expect(result).toEqual({ changed: true, spawned: false, reason: "failure backoff" });
+    expect(populateDefaultProfileMock).not.toHaveBeenCalled();
+  });
+
+  it("TRDD-0QQVTUCF control: the same drift once the first 15-minute backoff has ended spawns the UPDATER", async () => {
+    writeSettings(["active: free", "profiles:", ...FREE_PLACEHOLDER, ""].join("\n"));
+    const t0 = 1_000_000;
+    recordBenchmarkFailure("free", t0);
+    const fetchCatalog = async (): Promise<RawCatalogModel[]> => [
+      { id: "vendor/new:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+    ];
+    const result = await detectProfileChanges("free", { fetchCatalog, nowMs: t0 + 15 * 60_000 + 61_000 });
+    expect(result.reason).not.toBe("failure backoff");
+    expect(populateDefaultProfileMock).toHaveBeenCalledTimes(1);
+    expect(populateDefaultProfileMock.mock.calls[0][0].profile).toBe("free");
+  });
   it("fix-queue 53 follow-up (row 53 review, S1): a fingerprint banked WITH a resolvable OPENROUTER_API_KEY and re-checked WITHOUT one, same catalog, reports NO change -- classPool no longer varies with this process's own credential env", async () => {
     const prevOr = process.env.OPENROUTER_API_KEY;
     try {

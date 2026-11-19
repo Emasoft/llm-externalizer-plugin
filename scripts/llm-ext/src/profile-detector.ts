@@ -67,6 +67,7 @@ import {
   populateDefaultProfile,
   backgroundUpdateLockPathFor,
   takeProfileUpdateRequest,
+  failureBackoffActive,
   clearProfileUpdateRequest,
   PROFILE_UPDATE_REQUESTED_ENV,
 } from "./default-profiles-runner.js";
@@ -494,6 +495,13 @@ async function detectOnce(
     fetchCatalog: opts.fetchCatalog ?? defaultFetchOpenRouterCatalog,
   });
   if (!changed) return { changed: false, spawned: false };
+  // WHY (TRDD-0QQVTUCF): the plain detection was the one automatic path that re-ran a failed benchmark inside its
+  // cooldown; the maintainer checks the cooldown unless forceSweep, and the requested-update paths check it in
+  // requestProfileUpdate and takeProfileUpdateRequest. recordBenchmarkFailure's doc: without the cooldown a failing
+  // profile retries on every command, billable for paid. Placed after the detector so the catalog fetch still
+  // refreshes the catalog cache; recordBenchmarkFailure keeps the old fingerprint, so the drift is retried once the
+  // cooldown ends. Only free and paid record failures, so local never waits here.
+  if (failureBackoffActive(name, nowMs)) return { changed: true, spawned: false, reason: "failure backoff" };
 
   const allowPaidModels = settings.allow_paid_models === true;
   // SG2 (per-profile singleton lock): this detector process is itself the
