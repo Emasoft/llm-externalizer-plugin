@@ -11,7 +11,7 @@
  *
  * Spawns the real compiled CLI (dist/llm-ext.js) against throwaway
  * settings.yaml / config dirs — no mocking of config.ts or main.ts. All
- * profiles are `mode: local` pointed at an unreachable port (127.0.0.1:1)
+ * profiles are `mode: local` pointed at a refused port (127.0.0.1:29871, not the fetch-blocked port 1: TRDD-IQQQC98L)
  * with a short timeout, so nothing here can hit the network or bill
  * OpenRouter (mirrors the cost-safety discipline in test-helpers.ts).
  */
@@ -35,14 +35,14 @@ const TWO_PROFILE_SETTINGS_YAML = [
   "    mode: local",
   "    api: generic-local",
   "    model: model-a",
-  "    url: http://127.0.0.1:1",
+  "    url: http://127.0.0.1:29871",
   "    timeout: 5",
   "    profile-type: local",
   "  prof-b:",
   "    mode: local",
   "    api: generic-local",
   "    model: model-b",
-  "    url: http://127.0.0.1:1",
+  "    url: http://127.0.0.1:29871",
   "    timeout: 5",
   "    profile-type: local",
   "",

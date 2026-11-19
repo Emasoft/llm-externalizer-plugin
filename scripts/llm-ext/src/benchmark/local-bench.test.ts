@@ -238,8 +238,8 @@ describe("benchmarkModelsSequentially + rankLocalModels (D7a)", () => {
     const baseUrl = await startServer(log, { good: { answer: "correct" } });
     const results = await benchmarkModelsSequentially(
       [
-        // Port 1: nothing listens there, so the connection is refused at once.
-        { baseUrl: "http://127.0.0.1:1", model: "ghost" },
+        // Refused port, not port 1 (TRDD-IQQQC98L): fetch rejects port 1 as a bad port with no ECONNREFUSED; 29871 is below the ephemeral ranges and off the bad-ports list (same port as the module-local LOCAL_TEST_URL const in test-helpers.ts, which is not exported).
+        { baseUrl: "http://127.0.0.1:29871", model: "ghost" },
         { baseUrl, model: "good" },
       ],
       { truth },

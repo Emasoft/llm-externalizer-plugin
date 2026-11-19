@@ -347,6 +347,7 @@ export async function runCli(
 // They each grew their own copy of it; this is the one copy.
 
 /** One local, unreachable profile. `prof-a` is asserted on by name. */
+// Port 1 on purpose (TRDD-IQQQC98L): a fetch-blocked port, so a stray request from a help suite stops at once instead of reaching a backend.
 const HELP_TEST_SETTINGS_YAML = [
   "active: prof-a",
   "profiles:",
