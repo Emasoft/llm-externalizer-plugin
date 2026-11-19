@@ -47,7 +47,7 @@ Result (exit 0, trimmed): `requirements` holds exactly `s3` "the loading screen 
 
 `classify requirements` does not group sentences. A requirement may be written over two sentences, and a list item and its explanation form one rule; step 1b does the grouping.
 
-To judge sentences one question at a time instead (for example "Is this sentence a lasting requirement?"), use `classify filter`, which also takes `--context FILE` (earlier messages as background, never scored; needs a release that includes TRDD-7ZA3EE6Z). Its wording passed live check 3 of TRDD-7ZA3EE6Z against Jev with file inputs and `--context`; it was not run with `--lines` or `--items`. Details and the request shape: `classify filter` in `references/classify.md`.
+To judge sentences one question at a time instead (for example "Is this sentence a lasting requirement?"), use `classify filter`, which also takes `--context FILE` (earlier messages as background, never scored; since 14.7.3). Its wording passed live check 3 of TRDD-7ZA3EE6Z against Jev with file inputs and `--context`; it was not run with `--lines` or `--items`. Details and the request shape: `classify filter` in `references/classify.md`.
 
 The caller builds `group-in.txt` from the JSON of 1a (no command does it): one line per entry of `decision.sentences` with id, label, confidence and text, as in the file below; mark `low confidence` when `accepted` is false.
 
