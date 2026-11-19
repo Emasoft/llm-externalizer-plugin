@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-19T20:54:17+0100
+updated: 2026-11-19T21:04:30+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -90,6 +90,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 2026-11-19T20:49:56+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): the approver main-agent@llm-externalizer-plugin on the 14.7.6 card moves (0QQVTUCF, 2P797UEK, 3XKBS1YX, T229KMOU, MVT4DCHS, W3ZU6DG5 to published; EQ74E8S8 superseded by EWU9OAYI; HZMA4EXK and IQQQC98L to published) is the main agent, who ordered the moves; a worker ran the commands. DoD check on MVT4DCHS and W3ZU6DG5 after archiving: the bodies of 4cb052e9 and d15a9308 record npx eslint . --quiet exit 0, their diffs add WHY code comments at the rules they explain (6 lines in 4cb052e9, 2 in d15a9308), and neither diff adds vi.mock, vi.fn, vi.spyOn or vi.stubGlobal.
 2026-11-19T20:52:53+0100 worker evidence for the HZMA4EXK and IQQQC98L moves to published (both archived): the 14.7.6 gate test.log (builds_dev/dev-after-14.3.0/reports_dev/publish/test.log, written 20:27 before the 20:42 release) shows 4 npm test stages passed: Tests 6671 passed 7 skipped; 222 passed 2 skipped; 12 passed; 1 passed. The archived cards refuse appends, so the evidence is recorded here.
 2026-11-19T20:54:16+0100 worker correction: the worker edit of the 20:49:56 line was wrong and is reverted; the worker WHY count had a faulty grep. Re-counted with grep -E on added lines containing WHY in git show --format= : 4cb052e9 has 6 (ping.ts 1, ping.test.ts or transport.test.ts 1, transport.ts 4), d15a9308 has 2 (the WHY (TRDD-W3ZU6DG5, plan D5) comment above the new describe blocks in label.test.ts and rank.test.ts); the 20:49:56 figures stand. Provenance of the suite evidence: test.log header npm run test of llm-externalizer@14.7.5 (package version before the 14.7.6 bump), written 20:27 after the gate-fix commits 8d63a8d4 and 51452d55 (19:47) and before cpv.log 20:28 and the release commit 20:29:43; publish.py went on to cpv and the release, so the test stage exited 0; all 4 stages show passed lines.
+2026-11-19T21:04:29+0100 main agent: after the 14.7.6 release. GitHub runs on release commit 53a415e0: CI, Release and Notify Marketplace succeeded; Windows failed with 195 failed tests in 42 files, the same 42 files and the same count as the 14.7.5 run (6449 passed against 6427, the new tests pass), so no Windows regression; the Windows failures are tracked by the Windows backburner cards (for example VQ0VEK3L, PX0X1JRD, A5J6E4JB, 1Y9UK5MK). Card commits after the release: 958bea12 (nine cards closed, YAESNPOO filed), f0fcaf28 (fixture comment), 5df40694 (7LZI31WW closed, VBAJX5A1 filed). Two caveats on 958bea12, whose message cannot be amended: IQQQC98L acceptance box 1 rests on the reproduced count of 40 port-1 sites in 25 files and a three-site sample, not a per-site re-check; the per-file test counts quoted in the message (6671, 222, 12 and 1 passed) come from a worker report, while the main agent read the publish output lines "$ npm test" and "OK: test" itself.
 
 ## Next
 
