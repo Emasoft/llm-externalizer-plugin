@@ -6,6 +6,11 @@ import tseslint from "typescript-eslint";
 export default [
   {
     ignores: [
+      // Root *.mjs files are deliberately NOT ignored (TRDD-B5BN44I8): they ship
+      // and run on every call (bin/llm-ext -> launcher.mjs -> data-dir.mjs,
+      // install-lock.mjs) or are the build and lint config, so they sit inside
+      // the gate. An install-lock.mjs bug was found only by a repo-wide run
+      // (fixed in c698c9ee).
       "dist/**",
       "node_modules/**",
       "coverage/**",
@@ -14,9 +19,9 @@ export default [
       // noise, and "fixing" a fixture to satisfy a rule changes the benchmark's
       // input and so its results.
       "benchmark-fixtures/**",
-      "*.js",
-      "*.mjs",
-      "*.cjs",
+      // Agent reports and scratch, not source.
+      "reports/**",
+      "reports_dev/**",
     ],
   },
   js.configs.recommended,

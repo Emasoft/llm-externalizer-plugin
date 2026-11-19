@@ -19,7 +19,7 @@
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:all": "vitest run",
     "test:watch": "vitest",
-    "lint": "eslint src --max-warnings 0",
+    "lint": "eslint . --max-warnings 0",
     "typecheck": "tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
