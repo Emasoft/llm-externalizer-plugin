@@ -1,6 +1,109 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.6] - 2026-11-19
+
+### Added
+
+- Feat(classify): label and requirements read --context as background, never classify it (TRDD-WYY3SPDX)
+
+
+### Changed
+
+- Build(dist): rebuild llm-ext.js and benchmark.js for the loadSettings read order (TRDD-7LZI31WW)
+
+- Build(dist): rebuild dist from the current source (TRDD-FC2TX9VU)
+
+
+### Documentation
+
+- Docs(trdd): FC2TX9VU note on 14.7.6 publish attempts 4 and 5 (TRDD-FC2TX9VU)
+
+- Docs(trdd): correct the count of widened retry-clock bounds on the goal card (TRDD-FC2TX9VU)
+
+- Docs(trdd): record the third 14.7.6 publish gate failure on the goal card (TRDD-FC2TX9VU)
+
+- Docs(trdd): add TRDD-7LZI31WW, loadSettings concurrent-boot race behind the 14.7.6 gate failure
+
+- Docs(trdd): open XIS2EGGK, the ECONNRESET give-up case stalls about 7 s in the full suite only (TRDD-XIS2EGGK)
+
+- Docs(trdd): record the 14.7.6 attempt 1 failures, open EWU9OAYI for the publish.py dirty-dist message (TRDD-FC2TX9VU, TRDD-EWU9OAYI)
+
+- Docs(trdd): record requirements check 1 verdict, open NHOPHWGA for the vague-imperative baseline (TRDD-WYY3SPDX)
+
+- Docs(reports): requirements check 1 verdict, keep the L3 wording (TRDD-WYY3SPDX)
+
+- Docs(trdd): MAWCGDTH blocked on the two local-model cards; current STATE for 1OOAH3LD and ZGSGGHQG (TRDD-MAWCGDTH, TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs(reports): card-worker reports and machine-neutral local-model audit (TRDD-MAWCGDTH, TRDD-1OOAH3LD, TRDD-ZGSGGHQG)
+
+- Docs(trdd): amendment 1 to requirements check 1, before any call (TRDD-WYY3SPDX)
+
+- Docs(reports): requirements check 1 blocked before any call; local-model card audit (TRDD-WYY3SPDX, TRDD-MAWCGDTH)
+
+- Docs(reports): add two card-worker reports; redact the volume name in four reports
+
+- Docs(trdd): pre-register requirements check 1; close 0QQVTUCF, 2P797UEK, T6F52GB8; add 4DFR9FTX, MAWCGDTH (TRDD-WYY3SPDX)
+
+- Docs(trdd): apply the T6F52GB8 rulings to NOTICE and five cards; add TRDD-2P797UEK (TRDD-T6F52GB8)
+
+- Docs(report): correct R1 and R10 of the T6F52GB8 final audit (TRDD-T6F52GB8)
+
+- Docs(report): T6F52GB8 final audit of the ZB41KG62 backburner children (TRDD-T6F52GB8)
+
+- Docs(trdd): T6F52GB8 audit, 9 cards published and archived, notes on 23 cards (TRDD-T6F52GB8)
+
+- Docs(trdd): close T229KMOU and 3XKBS1YX as complete, file IQQQC98L (TRDD-FC2TX9VU)
+
+- Docs(cli-reference): consumer guidelines match 14.7.5 (TRDD-T229KMOU)
+
+- Docs(trdd): archive the v14.7.5 cards and three ruled cards, file 0QQVTUCF and 3XKBS1YX (TRDD-FC2TX9VU)
+
+
+### Fixed
+
+- Fix(config): read the migration record before settings.yaml in loadSettings (TRDD-7LZI31WW)
+
+- Fix(benchmark): a rejected API key fails with a key message, not the price ceiling (TRDD-2P797UEK)
+
+- Fix(gate): the paid not-benchmarked message says what is really happening (TRDD-0QQVTUCF)
+
+- Fix(profiles): plain detection honours the failure cooldown (TRDD-0QQVTUCF)
+
+- Fix(provider): a fetch-blocked port stops at the first failure and names the port (TRDD-3XKBS1YX)
+
+
+### Miscellaneous
+
+- Chore(reports): move the 18 tracked reports to the main checkout reports/ folder (TRDD-FC2TX9VU)
+
+
+### Refactored
+
+- Refactor(classify): runner comment hygiene and drop the unused RunRequest.defaultLabels (TRDD-HZMA4EXK)
+
+- Refactor(classify): the ping key check goes through the L0 transport, behaviour unchanged (TRDD-MVT4DCHS)
+
+
+### Testing
+
+- Test: widen seven wall-clock bounds that fail on a loaded host (TRDD-FC2TX9VU)
+
+- Test(retry-clock): give the persistent-503 case 5 s after its deadline, not 1.5 s (TRDD-FC2TX9VU)
+
+- Test(retry-clock): widen five timing bounds that left little slack under host load (TRDD-FC2TX9VU)
+
+- Test(network-give-up): ECONNRESET give-up bound 20 s, within the PN0N4290 design (TRDD-FC2TX9VU, TRDD-XIS2EGGK)
+
+- Test(classify): injected item text leaves label and rank keys, wording and results unchanged (TRDD-W3ZU6DG5)
+
+- Test: tests meaning a refused backend use refused port 29871, not fetch-blocked port 1 (TRDD-IQQQC98L)
+
+- Test: say the refused test port is assumed free, not that nothing listens on it (TRDD-CBOTP0DY)
+
+- Test: the default unreachable test backend uses a refused port, not fetch-blocked port 1 (TRDD-CBOTP0DY)
+
+
 ## [14.7.5] - 2026-11-19
 
 ### Changed
