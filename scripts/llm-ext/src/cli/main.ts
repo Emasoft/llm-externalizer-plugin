@@ -978,6 +978,7 @@ async function main(): Promise<void> {
       exitCommand(1);
     }
     process.stdout.write(
+      // WHY (TRDD-HUBGO80N): the preview sends nothing: no request in any measured run, the preview branch only resolves files.
       `PREVIEW (dry-run — nothing was sent) — ${tool.name}\n` +
         `included: ${resolved.files.length}   excluded: ${excluded.length}\n`,
     );

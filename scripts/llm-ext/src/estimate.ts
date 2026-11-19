@@ -481,7 +481,8 @@ const usd = (v: number | null): string => (v === null ? "?" : `$${v.toFixed(4)}`
 /** Plain-terminal table — no UI, no color, greppable. */
 export function renderEstimate(e: ToolEstimate): string {
   const lines: string[] = [];
-  lines.push(`ESTIMATE (dry-run — nothing was sent) — ${e.tool}`);
+  // WHY (TRDD-HUBGO80N): "nothing was sent" was false, warmEstimatePricing() (cli/main.ts) runs first and sends GET <profile url>/v1/models with the profile key on every run (measured 2026-11-19 on a local-mode profile; remote by source, index.ts fetchOpenRouterModels); only the prompt and the file contents are not sent.
+  lines.push(`ESTIMATE (dry-run — no prompt was sent) — ${e.tool}`);
   lines.push(`files: ${e.files}   total requests: ${e.requests}`);
   for (const r of e.rows) {
     lines.push(

@@ -278,7 +278,8 @@ describe("estimateToolRun: line_numbers (TRDD-MI0UJQF1) prices the numbered pref
 describe("renderEstimate", () => {
   it("prints a greppable dry-run banner with expected and ceiling totals", () => {
     const out = renderEstimate(estimateToolRun("scan_folder", {}, deps()));
-    expect(out).toContain("ESTIMATE (dry-run — nothing was sent)");
+    expect(out).toContain("ESTIMATE (dry-run — no prompt was sent)");
+    expect(out).not.toContain("nothing was sent");
     expect(out).toMatch(/TOTAL: expected \$[0-9.]+, ceiling \$[0-9.]+/);
   });
 });

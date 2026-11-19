@@ -293376,7 +293376,7 @@ function estimateToolRun(toolName, args, deps) {
 var usd = (v) => v === null ? "?" : `$${v.toFixed(4)}`;
 function renderEstimate(e) {
   const lines = [];
-  lines.push(`ESTIMATE (dry-run \u2014 nothing was sent) \u2014 ${e.tool}`);
+  lines.push(`ESTIMATE (dry-run \u2014 no prompt was sent) \u2014 ${e.tool}`);
   lines.push(`files: ${e.files}   total requests: ${e.requests}`);
   for (const r of e.rows) {
     lines.push(
@@ -294427,6 +294427,7 @@ async function main() {
       exitCommand(1);
     }
     process.stdout.write(
+      // WHY (TRDD-HUBGO80N): the preview sends nothing: no request in any measured run, the preview branch only resolves files.
       `PREVIEW (dry-run \u2014 nothing was sent) \u2014 ${tool.name}
 included: ${resolved.files.length}   excluded: ${excluded.length}
 `
