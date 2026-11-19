@@ -1,10 +1,10 @@
 ---
 trdd-id: EWU9OAYI
 title: publish.py dry run leaves a rebuilt dist in the tree and says the tree is unchanged
-column: todo
+column: dev
 status: tasked
 created: 2026-11-19T13:27:01+0100
-updated: 2026-11-19T13:27:01+0100
+updated: 2026-11-19T21:33:20+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T13:27:01+0100
+implementation-commits: [cf77f1c9]
+release-via: publish
 ---
 
 # publish.py dry run leaves a rebuilt dist in the tree and says the tree is unchanged
@@ -24,3 +26,15 @@ publish.py validate (step 2, run_checks) runs npm run build, which rewrites the 
 ## Approval log
 
 - 2026-11-19T13:27:01+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T21:22:38+0100 — column → complete by main-agent@llm-externalizer-plugin. fixed in cf77f1c9, ships in the next release
+- 2026-11-19T21:30:22+0100 — column → dev by main-agent@llm-externalizer-plugin. box 2 reopened: the test uses a stand-in for the build, not a real stale dist; the fix itself is in cf77f1c9
+
+## Notes
+
+2026-11-19T21:22:36+0100 main agent: fixed in cf77f1c9. publish.py names every tracked file the checks changed (git diff --name-only -z HEAD in the repo root) at each stop after validate: validate failure, CPV failure, the dry-run exit and the three --check-only exits; "Working tree is unchanged." only when git says so; a rebuilt dist is called a regeneration to commit, with a quoted git restore for other files. Tests: tests/test_publish_reports_changed_files.py (real git, real report_working_tree and _run_publish), 11 passed with test_publish_runs_git_in_repo_root.py; ruff, ruff format --check, mypy clean. Acceptance (2) is met in a narrower form: run_checks is replaced by a function that rewrites the dist file, no test drives the real npm run build against a stale dist. scripts/publish.py is already in plugin.json cpv.pipeline.intentional_divergence.
+2026-11-19T21:33:19+0100 main agent: box 2 is open again (Approval log 21:30:22). The words "Acceptance (2) is met in a narrower form" in the 21:22:36 note are superseded: the narrower evidence does not meet box 2. Still missing: a test that drives the real npm run build against a stale dist.
+
+## Acceptance
+
+- [x] (1) a validate that changes tracked files ends with a message naming those files, never "Working tree is unchanged" (cf77f1c9)
+- [ ] (2) a test runs the check with a stale dist and asserts that message. Narrower evidence only: tests/test_publish_reports_changed_files.py (cf77f1c9) rewrites the dist file through a stand-in for run_checks; no test drives the real npm run build.
