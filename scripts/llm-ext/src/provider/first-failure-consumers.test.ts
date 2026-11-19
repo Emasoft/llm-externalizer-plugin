@@ -203,8 +203,10 @@ describe("429 ledger detail", () => {
   }, 60_000);
 });
 
-// WHY an array of lines, not a template literal: a comment cannot sit inside a template literal, and the api_key line carries the
-// ubs:ignore marker that the pre-commit hook message prescribes for a verified false positive.
+// WHY an array of lines, not a template literal: ubs's hardcoded-secrets rule refused the api_key line inside the template
+// literal (critical, 2026-11-19), and a YAML comment there is not a ubs:ignore marker. A scratch ubs scan of this array form
+// passed even without the marker, so the marker below suppresses nothing today; whether the array form or the escaped quotes
+// hides the key from the rule was not isolated. The marker records that the key is fake (TRDD-FC2TX9VU).
 const YAML = [
   "active: bare",
   "allow_paid_models: true",
