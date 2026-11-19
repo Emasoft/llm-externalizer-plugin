@@ -104,15 +104,19 @@ describe("retry clock — second review (TRDD-YG72CYY7 inc 1, N3 N6)", () => {
         return;
       }
       // Attempt 2 starts inside the window and answers 429 + Retry-After AFTER it closed.
+      // WHY 10 s window / 11 s reply (TRDD-FC2TX9VU): the window must exceed the worst attempt-1 round trip plus the
+      // maximum first backoff (1250 ms) under host load, or attempt 2 never starts and no Retry-After is ever seen.
+      // At a 1500 ms window the slack was 250 ms and the 14.7.6 publish gate failed at load about 100. Attempt 2
+      // starts at least 750 ms after t0, so an 11 s reply still lands after the 10 s window.
       setTimeout(() => {
         res.writeHead(429, { "Content-Type": "application/json", "Retry-After": "600" });
         res.end(ENVELOPE(429));
-      }, 1800);
+      }, 11_000);
     });
     const t0 = Date.now();
     const err = await chatCompletionWithRetry(
       MESSAGES,
-      { model: "m", deadlineAt: t0 + 1500 },
+      { model: "m", deadlineAt: t0 + 10_000 },
       depsFor(url),
     ).then(
       () => undefined,
@@ -177,7 +181,7 @@ describe("retry clock — second review (TRDD-YG72CYY7 inc 1, N3 N6)", () => {
 });
 
 describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => {
-  it("a persistent 503 stops near a 4 s deadline with RetryDeadlineError, its trail and the last error as cause", async () => {
+  it("a persistent 503 stops near a 6 s deadline with RetryDeadlineError, its trail and the last error as cause", async () => {
     const { url, requestCount } = await startServer((_n, res) => {
       res.writeHead(503, { "Content-Type": "application/json" });
       res.end(ENVELOPE(503));
@@ -185,7 +189,7 @@ describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => 
     const t0 = Date.now();
     const err = await chatCompletionWithRetry(
       MESSAGES,
-      { model: "m", deadlineAt: t0 + 4000 },
+      { model: "m", deadlineAt: t0 + 6000 },
       depsFor(url),
     ).then(
       () => undefined,
@@ -197,7 +201,8 @@ describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => 
     // Stopped by the clock, not by exhausting the 3-retry x 6-attempt counters
     // (that would take > 60 s): inside the window, and after at least 2 waits.
     expect(elapsed).toBeGreaterThan(2000);
-    expect(elapsed).toBeLessThan(4000 + 1500);
+    // WHY 6000 ms window (TRDD-FC2TX9VU): attempt 3 starts after both backoffs (2250-3750 ms); 4000 left about 250 ms of slack under host load, the 14.7.6 publish gate.
+    expect(elapsed).toBeLessThan(6000 + 1500);
     expect(e.trail.attempts).toBe(requestCount());
     expect(e.trail.attempts).toBeGreaterThanOrEqual(3);
     expect(e.trail.lastStatus).toBe(503);
@@ -218,16 +223,17 @@ describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => 
       setTimeout(() => {
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ choices: [{ message: { content: "late but whole" }, finish_reason: "stop" }] }));
-      }, 1800);
+      }, 11_000);
     });
     const t0 = Date.now();
     const result = await chatCompletionWithRetry(
       MESSAGES,
-      { model: "m", deadlineAt: t0 + 1500 },
+      { model: "m", deadlineAt: t0 + 10_000 },
       depsFor(url),
     );
     expect(result.content).toBe("late but whole");
-    expect(Date.now() - t0).toBeGreaterThan(1500);
+    // WHY 10 s window and 11 s reply (TRDD-FC2TX9VU): slack under host load, the 14.7.6 publish gate; the reply must still land after the window.
+    expect(Date.now() - t0).toBeGreaterThan(10_000);
   }, 30_000);
 
   it("a Retry-After beyond the window stops at once with a rate-limit verdict and the time to retry", async () => {
@@ -246,7 +252,8 @@ describe("chatCompletionWithRetry — retry clock (TRDD-YG72CYY7 inc 1)", () => 
     );
     expect(err).toBeInstanceOf(RetryDeadlineError);
     const e = err as RetryDeadlineError;
-    expect(Date.now() - t0).toBeLessThan(1500);
+    // WHY 10 s, not 1.5 s (TRDD-FC2TX9VU): this bound only limits one round trip, which can take over 1.5 s at the host load of the 14.7.6 publish gate. The early break is proven by requestCount 1, retryAt and the Rate limit message below, not by this bound: a 600 s Retry-After beyond the window breaks at once (provider/http.ts), and waitFitsClock would refuse such a wait anyway.
+    expect(Date.now() - t0).toBeLessThan(10_000);
     expect(requestCount()).toBe(1);
     expect(e.trail.lastStatus).toBe(429);
     expect(e.retryAt).toBeGreaterThan(t0 + 500_000);
@@ -375,11 +382,13 @@ describe("retry clock — review findings (TRDD-YG72CYY7 inc 1 fixes)", () => {
       res.destroy();
     });
     const t0 = Date.now();
-    const clock: RetryClock = { deadlineAt: t0 + 1800 };
+    // WHY 4000 ms window (TRDD-FC2TX9VU): slack under host load, the 14.7.6 publish gate; 1800 ms could end before attempt 2 started.
+    const clock: RetryClock = { deadlineAt: t0 + 4000 };
     await expect(
       fetchWithRetry429(`${url}/v1/chat/completions`, { method: "POST", body: "{}" }, 30_000, t0, undefined, clock),
     ).rejects.toThrow();
-    expect(clock.attempts).toBe(2);
+    // WHY >= 2 (TRDD-FC2TX9VU): under host load the 14.7.6 publish gate may start more attempts; each later one also gets a destroyed socket, so lastStatus is cleared whatever the count (http.ts catch block).
+    expect(clock.attempts).toBeGreaterThanOrEqual(2);
     expect(clock.lastStatus).toBeUndefined();
   }, 30_000);
 
