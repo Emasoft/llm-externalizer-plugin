@@ -1,10 +1,10 @@
 ---
 trdd-id: 7LZI31WW
 title: loadSettings pairs a stale untyped settings yaml with a migrated record under concurrent boots
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T14:27:46+0100
-updated: 2026-11-19T14:39:42+0100
+updated: 2026-11-19T20:57:34+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T14:27:46+0100
+implementation-commits: [8af77f16, 21341f5a]
 ---
 
 # loadSettings pairs a stale untyped settings yaml with a migrated record under concurrent boots
@@ -44,3 +45,15 @@ Diagnosis report (gitignored): reports_dev/diagnosis/20261119_142208+0100-bgsing
 ## Approval log
 
 - 2026-11-19T14:27:46+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T20:57:34+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.6, release commit 53a415e0, tag v14.7.6.
+
+## Notes
+
+2026-11-19T20:57:03+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): correction to the 14:39:31 residual sentence. A single process heals a restored or synced untyped file on the first boot: PT-02 is not gated on the record (pick.ts 2167), re-stamps the file and pushes the step (pick.ts 2202-2208, 2216), and index.ts re-reads before validation (index.ts 568-572). The windows that remain (two boots racing on such a file; an uninferable type on an already-migrated file; a failed write) are filed as TRDD-VBAJX5A1. The fix of this card shipped in 14.7.6 (8af77f16, dist 21341f5a).
+
+## Acceptance
+
+- [x] loadSettings reads the migration record before settings.yaml (8af77f16, ancestor of 53a415e0, confirmed with git merge-base --is-ancestor)
+- [x] dist rebuilt (21341f5a, ancestor of 53a415e0, confirmed with git merge-base --is-ancestor)
+- [x] full suite green at the 14.7.6 publish gate (publish.py attempt 6 passed the test stage before cpv and the release; recorded on TRDD-FC2TX9VU 2026-11-19T20:54:16)
+- [x] remaining windows filed as TRDD-VBAJX5A1
