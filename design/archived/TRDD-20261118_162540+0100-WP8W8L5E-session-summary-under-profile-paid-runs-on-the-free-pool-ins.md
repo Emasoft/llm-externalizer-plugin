@@ -1,10 +1,10 @@
 ---
 trdd-id: WP8W8L5E
 title: session summary under --profile paid runs on the free pool instead of the paid models
-column: publish
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T16:25:40+0100
-updated: 2026-11-19T01:40:35+0100
+updated: 2026-11-19T03:34:04+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -32,3 +32,8 @@ INFERRED from session_summary/handler.ts:109 and session_summary/local-model.ts:
 ## Approval log
 
 - 2026-11-18T16:25:40+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T03:34:04+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.4 (main-agent fact F1).
+
+## Notes
+
+2026-11-19T03:34:03+0100 main agent: shipped in v14.7.4 (commit 0e6fa5fb; F1)

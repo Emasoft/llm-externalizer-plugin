@@ -1,10 +1,10 @@
 ---
 trdd-id: MI0UJQF1
 title: Opt-in line-numbered file input so reports cite exact lines
-column: publish
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T16:25:41+0100
-updated: 2026-11-19T02:15:06+0100
+updated: 2026-11-19T03:33:55+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: feature
@@ -33,7 +33,9 @@ GitHub issue 16 item 6. 2026-11-18T16:25:40+0100 main agent ruling (delegated by
 
 - 2026-11-18T16:25:41+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T02:15:06+0100 — column → publish by main-agent@llm-externalizer-plugin. implemented and verified in 6e79df85; ships in 14.7.4
+- 2026-11-19T03:33:55+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.4 (main-agent fact F1).
 
 ## Notes
 
 2026-11-19T02:14:40+0100 main agent: implemented in commit 6e79df85 (flag line_numbers on llm ask, scan folder and scan quality; tests in scan-pipeline.test.ts, estimate.test.ts, cli/launcher.test.ts; docs rows in scan-and-check.md, session-and-llm.md, cli-conventions.md). cli/grouped-help-shape.test.ts needs the built CLI and runs at the build step before the 14.7.4 publish. Not covered by a test: the robust-path forwarding (max_retries greater than 1) and the fileLineCount error branch.
+2026-11-19T03:33:54+0100 main agent: shipped in v14.7.4 (commit 6e79df85; F1). cli/grouped-help-shape.test.ts is in the explicit include list (vitest.config.ts:97) and the publish full suite ran after the build and passed (log line 20), so the help test for llm ask and scan folder ran against the built CLI.

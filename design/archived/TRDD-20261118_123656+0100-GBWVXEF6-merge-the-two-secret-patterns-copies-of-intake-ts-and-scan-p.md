@@ -1,10 +1,10 @@
 ---
 trdd-id: GBWVXEF6
 title: Merge the two SECRET_PATTERNS copies of intake.ts and scan-pipeline.ts into one module
-column: todo
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T12:36:56+0100
-updated: 2026-11-18T16:24:38+0100
+updated: 2026-11-19T03:34:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -15,6 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T12:36:56+0100
+implementation-commits: [7ff32943, 273d8a29]
+release-via: publish
 ---
 
 # Merge the two SECRET_PATTERNS copies of intake.ts and scan-pipeline.ts into one module
@@ -24,6 +26,7 @@ security_scan/intake.ts and scan-pipeline.ts each hold a SECRET_PATTERNS list; t
 ## Approval log
 
 - 2026-11-18T12:36:56+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T03:34:25+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.3 (main-agent fact F2).
 
 ## Progress
 
@@ -32,10 +35,11 @@ security_scan/intake.ts and scan-pipeline.ts each hold a SECRET_PATTERNS list; t
 ## Acceptance
 
 - [x] one module exports the patterns and both callers import it: commit 7ff32943 creates scripts/llm-ext/src/secret-patterns.ts (SCAN_PIPELINE_SECRET_PATTERNS and INTAKE_SECRET_PATTERNS); grep finds secret-patterns referenced from security_scan/intake.ts and scan-pipeline.ts
-- [ ] their tests pass (card Done when): not run in this session (tests are barred here); commit 7ff32943 message says no behaviour change, by a worker before/after dump of every pattern
+- [x] their tests pass (card Done when): not run in this session (tests are barred here); commit 7ff32943 message says no behaviour change, by a worker before/after dump of every pattern
 - [x] the Python copy in scripts/diagnostics/dump-state.py no longer starts with the unbounded \s* that TRDD-G49XPDNI removed from the TypeScript copies: commit 273d8a29, dump-state.py line 42 now starts with ^[^\S\r\n]*; test tests/test_diagnostics.py test_dump_state_redact_keeps_blank_line_before_env_secret exists
 - [x] decide how the dump-state.py copy is kept in step with the one module (generated from it, or checked by a test): its comments now point at secret-patterns.ts as a mirror, and the only test is the blank-line behaviour test; no parity check or generator found this run
 
 ## Notes
 
 2026-11-18T16:24:37+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): dump-state.py is kept in step by hand, with neither a generator nor a parity test: it deliberately re-implements a smaller subset with no dependency on the TypeScript module (its module docstring says so), so a generated copy or an equality test would contradict that design; its comments name scripts/llm-ext/src/secret-patterns.ts as the source (273d8a29).
+2026-11-19T03:34:22+0100 main agent: box 2 met: both commits shipped in v14.7.3 (F2); the v14.7.4 publish full suite passed (log line 20), which includes the redaction tests of both callers, src/scan-pipeline.test.ts and src/security_scan/security_scan.test.ts (F4).
