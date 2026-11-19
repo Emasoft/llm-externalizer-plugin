@@ -4,7 +4,7 @@ title: ubs hardcoded-secrets rule misses keys inside string literals, so the pre
 column: todo
 status: tasked
 created: 2026-11-19T21:22:44+0100
-updated: 2026-11-19T21:33:21+0100
+updated: 2026-11-19T22:05:38+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -41,6 +41,7 @@ release-via: publish
 - [ ] the hook refuses a staged fake key in each form ubs passed (array element, single string, escaped template line), shown by a scratch commit per form
 - [ ] the existing test fixtures pass through an allowlist entry with a reason
 - [ ] a missing scanner fails the commit with a message naming it
+- [ ] a fake key in a staged Markdown or other non-code file is refused. The ubs gate scans no such file by design (UBS_ALLOW_NO_SCAN=1 in .githooks/pre-commit, comment: a commit that stages no scannable language is not a scan failure); commit d802a2d3 printed "UBS did not run any scanner: nothing was checked (this is NOT a pass)" and went through.
 
 ## Notes
 
