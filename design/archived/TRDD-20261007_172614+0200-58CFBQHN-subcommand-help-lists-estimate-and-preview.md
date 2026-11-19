@@ -1,10 +1,10 @@
 ---
 trdd-id: 58CFBQHN
 title: Subcommand help lists --estimate and --preview
-column: human_review
-status: tasked
+column: published
+status: archived
 created: 2026-10-07T17:26:14+0200
-updated: 2026-11-18T16:28:18+0100
+updated: 2026-11-19T04:09:33+0100
 current-owner: user
 created-by: user
 task-type: docs
@@ -24,7 +24,7 @@ implementation-commits: [ff1c2cf8, 153fe531, 3f38b3e4, 95f33824, 39fa8af3, 46963
 
 ## ⏵ STATE — READ THIS FIRST ON RESUME (authoritative; supersedes the body) — 2026-11-13
 
-NOW: step 1 (classify --estimate row, 153fe531) and step 2 (help lists only the dry-run flags each command accepts, e0d4fabe; gap cards 34608609; docs 1d2136de in README, the cluster-synonyms command and the CLI-reference SKILL.md) are committed; steps 1 and 2 are in the committed dist since dd283255 (2026-11-14) and their docs in the repo; none is in any release. HEAD has 19 known-red tests in profile-help-visibility.test.ts against the committed stale dist; they passed 45/45 against the uncommitted dist built at 23:34 in the main tree by a worker of the pre-clear session (npm run build, exit 0; a second build gave an identical dist diff; src then equal to HEAD, inferred from src unchanged at 23:41 and e0d4fabe committing it unchanged; built with local node_modules, which npm ci cannot reproduce while package-lock is out of sync, TRDD-NQMW9AK5), confirmed green on the committed dist dd283255 (TRDD-6XMCY4ZE): profile-help-visibility, dry-run-flags and classify-launch-cli run alone, 110/110 passed on 2026-11-14 (the 19 are in profile-help-visibility.test.ts). No acceptance box is ticked.
+NOW: CLOSED 2026-11-19, published. Boxes 1 and 3 ticked, box 2 struck as unmeetable and restated as box 3; the OWED list below moved to TRDD-FP2SAF4P. The rest of this block is history.
 BLOCKED: nothing; the rebuilt dist is committed (dd283255, TRDD-6XMCY4ZE complete, 2026-11-14).
 PENDING: a release after 14.2.0 for users to see steps 1 and 2 and their docs; box 2 rewording is the user decision (see 18:03 proposal).
 OWED: tests placing --estimate or --preview after -- on the flat and grouped path (classify is pinned by 87c34c1d; see TRDD-OZIIABLY); uncut-row and duplicate-row checks for the other 14 decision commands (classify filter is pinned by cdf751f9 and ebeab4fd, the other 14 were checked once by hand); classify.md --json rows missing from most decision tables; unmeasured "sends nothing" and "no API key needed" on classify.md line 3; builds not named at classify.md lines 459, 466 and 483 and requirements-pipeline.md line 46, and the unnamed binary in the boolean-flag paragraph (classify.md about line 7: measured on filter and requirements, build not named; it cannot be 14.2.0); the launcher text "--estimate is not available for classify yet" misleads (code); at publish replace the commit ids in classify.md lines 3 and 5 (153fe531, 9e036052) with the release number, rewrite the 14.2.0 availability notes (classify.md lines 5, 25, 27, 432 and the ping Release line; requirements-pipeline.md line 38) and the two "in no release yet" notes in SKILL.md line 25 and the release note in the classify ping routing row of SKILL.md, and recheck README line 117; llm cluster --estimate refusal not shown on the built CLI (the empty-free-pool check refused first; with a paid profile it was not run); measure classify ping --no_call on a build that includes ping (exit 0, no decision request): the SKILL.md routing row says --no_call sends no question from the help text, not from a measurement.
@@ -41,12 +41,13 @@ OPEN. llm-ext scan folder --help and llm-ext llm ask --help print no line contai
 
 Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 2026-10-07; part of the 14.1.0 release (TRDD-WBZJRSQB).
 2026-11-16T20:21:21+0100 main agent, measured on the installed 14.4.0 binary (temp HOME and config dir): llm-ext scan folder --help and llm-ext llm ask --help each list --estimate and --preview with one sentence (exit 0); llm summarize lists only --estimate and scan security neither, which matches DRY_RUN_SUPPORT (gaps TRDD-51JRJ3M6, TRDD-ZVZFKNLP). Steps 1 and 2 shipped in v14.3.0 (squash c4dc6bd5) and v14.4.0. Box 1 ticked on this evidence; box 2 wording stays the USER decision named in STATE; the OWED list in STATE is still open.
-- [ ] every model-sending command lists exactly the dry-run flags it accepts, with exemptions recorded; tests src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts (run before ticking)
+- [x] every model-sending command lists exactly the dry-run flags it accepts, with exemptions recorded; tests src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts (run before ticking)
 
 ## Approval log
 
 - 2026-10-07T17:26:14+0200 — MANDATE issued by user (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-16T20:21:22+0100 — column → human_review by main-agent@llm-externalizer-plugin. box 1 met on installed 14.4.0; box 2 rewording is a USER decision; OWED items in STATE still open
+- 2026-11-19T04:09:33+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. all live boxes ticked; dry-run flag help shipped in v14.3.0; box 3 tests green at the v14.7.4 publish gate.
 
 ## Notes
 
@@ -107,3 +108,4 @@ Source: GitHub issue 16 (owner-filed, 2026-10-03), verified at HEAD e4a927d2 on 
 2026-11-18T15:53:18+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): Box 2 struck: as worded it cannot be met (classify refuses --preview, classify ping has no dry run; note 2026-11-04). Replacement box added UNTICKED with the reworded form the 2026-11-04 audit proposed: it is implemented (src/cli/dry-run-flags.ts DRY_RUN_SUPPORT; src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts exist in v14.7.2, byte-identical to HEAD, triage B2) but the triage did not run those two test files, so it is not ticked; run them before ticking. This card is user-owned: the rewording is a main agent ruling under the delegation and the USER may veto it. The OWED list of the STATE block is carried by the new card TRDD-FP2SAF4P (docs).
 2026-11-18T16:25:31+0100 main agent check: dry-run-flags.test.ts 46/46 and profile-help-visibility.test.ts 45/45 at HEAD ea68ff6a, but profile-help-visibility spawns dist/llm-ext.js, which was built for v14.7.2 (37 source files changed since), so the box stays open until the 14.7.3 publish gate rebuilds dist and runs them.
 2026-11-18T16:28:17+0100 note writer (batch-2 worker): the 16:25 check note above (test counts, 37 changed files) was supplied by the main agent in the brief; the writer did not re-run it.
+2026-11-19T04:09:27+0100 closing evidence (main agent, delegated by USER 2026-11-18, not an owner answer): box 3 met. src/cli/dry-run-flags.test.ts and src/cli/profile-help-visibility.test.ts are in the explicit vitest include list (scripts/llm-ext/vitest.config.ts lines 91 and 89); the v14.7.4 publish gate built dist from the release tree and then ran npm test with result OK (reports_dev/publish/20261119_025450+0100-14.7.4-publish.log lines 17-20); no file under scripts/llm-ext/src or scripts/llm-ext/dist changed between v14.7.4 and HEAD (git log v14.7.4..HEAD on both paths prints nothing). Steps 1 and 2 shipped in v14.3.0 (note of 2026-11-16). The OWED list of the STATE block is carried by TRDD-FP2SAF4P. Card moves to published.
