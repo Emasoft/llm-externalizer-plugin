@@ -2070,6 +2070,16 @@ async function runPopulatePaidDefaultProfile(
     const ceiling = getEnsemblePriceCeiling(loadSettings());
     const picks3 = pickEnsembleByPriceCeiling(sweep.results, { priceCeilingUsdPerM: ceiling, topN: 3 });
     if (picks3.length === 0) {
+      // WHY: with an invalid key every call is rejected 401/403 (the catalog fetch still answers 200, so the run
+      // starts), every row is ok:false, and the ceiling filter then finds nothing — the old unconditional
+      // "no candidate cleared the price ceiling" sent the user to the ceiling instead of the key (TRDD-2P797UEK).
+      // Read the typed per-call httpStatus (runner.ts records it from the real response), never the log text;
+      // a real ceiling miss has rows with ok:true or non-auth failures, so it keeps the ceiling message.
+      const authStatuses = [...new Set(sweep.results.map((r) => r.httpStatus))];
+      const keyRejected =
+        sweep.results.length > 0 &&
+        sweep.results.every((r) => r.ok === false) &&
+        authStatuses.every((s) => s === 401 || s === 403);
       // Always banked under 'paid' — success is ALSO always banked under 'paid'
     // below, so a single key holds this profile's cooldown/fingerprint state.
     // Splitting success under one key and failure under another would let a
@@ -2081,7 +2091,9 @@ async function runPopulatePaidDefaultProfile(
       return {
         ok: false,
         code: 2,
-        summary: `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — 'paid' profile left unchanged`,
+        summary: keyRejected
+          ? `--populate-default-profile ${name}: every benchmark call was rejected with HTTP ${authStatuses.join("/")}: the OpenRouter API key was refused — 'paid' profile left unchanged`
+          : `--populate-default-profile ${name}: no candidate cleared the $${ceiling.toFixed(2)}/1M price ceiling — 'paid' profile left unchanged`,
         reportPath: sweep.reportPath || undefined,
       };
     }

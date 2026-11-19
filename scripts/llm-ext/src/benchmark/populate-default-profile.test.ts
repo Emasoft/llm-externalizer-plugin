@@ -1232,6 +1232,8 @@ describe("--populate-default-profile", () => {
 function startFakeOpenRouter(opts: {
   catalog: OpenRouterModel[];
   onCompletion: (callIndex: number, body: { model?: string }) => { promptTokens: number; completionTokens: number };
+  /** When set, every chat completion is answered with this HTTP error status (an auth rejection) instead of a result. */
+  completionStatus?: number;
 }): Promise<{ baseUrl: string; completionCalls: () => number; close: () => Promise<void> }> {
   let completionCalls = 0;
   const server: Server = createServer((req, res) => {
@@ -1246,6 +1248,11 @@ function startFakeOpenRouter(opts: {
       if (req.method === "POST" && req.url === "/api/v1/chat/completions") {
         const body = raw ? (JSON.parse(raw) as { model?: string }) : {};
         const idx = completionCalls++;
+        if (opts.completionStatus !== undefined) {
+          res.writeHead(opts.completionStatus, { "content-type": "application/json" });
+          res.end(JSON.stringify({ error: { message: "User not found.", code: opts.completionStatus } }));
+          return;
+        }
         const { promptTokens, completionTokens } = opts.onCompletion(idx, body);
         res.writeHead(200, { "content-type": "application/json" });
         res.end(
@@ -1510,6 +1517,107 @@ describe("paid sweep — per-call daily-spend booking (P5 §2.5 requirement 1/2)
   });
 });
 
+// TRDD-2P797UEK: an invalid key makes every benchmark call fail 401/403; the failure message must
+// name the rejected key, not the price ceiling. Real node:http server + the real runKeywordSweep.
+describe("paid populate — failure reason (TRDD-2P797UEK)", () => {
+  let cfg = "";
+  let prevCfgDir: string | undefined;
+  let prevApiKey: string | undefined;
+  let restoreFetch: (() => void) | undefined;
+
+  beforeEach(() => {
+    cfg = mkdtempSync(join("/tmp", "paid-populate-failure-reason-"));
+    prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfg;
+    prevApiKey = process.env.OPENROUTER_API_KEY;
+    process.env.OPENROUTER_API_KEY = "test-key";
+    writeFileSync(getSettingsPath(), SETTINGS, "utf-8");
+    setAllowPaidModels(true);
+    setActiveFreeOnly(false);
+  });
+
+  afterEach(() => {
+    restoreFetch?.();
+    restoreFetch = undefined;
+    if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+    else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+    if (prevApiKey === undefined) delete process.env.OPENROUTER_API_KEY;
+    else process.env.OPENROUTER_API_KEY = prevApiKey;
+    setAllowPaidModels(false);
+    resetCooldownCacheForTests();
+    rmSync(cfg, { recursive: true, force: true });
+  });
+
+  for (const status of [401, 403]) {
+    it(`every call rejected with HTTP ${status} fails with a key-rejected message, not the price-ceiling one`, async () => {
+      const catalog = [model("v/a", 0.05, 0.05), model("v/b", 0.05, 0.05)];
+      const server = await startFakeOpenRouter({
+        catalog,
+        completionStatus: status,
+        onCompletion: () => ({ promptTokens: 0, completionTokens: 0 }),
+      });
+      restoreFetch = redirectOpenRouterFetchTo(server.baseUrl);
+
+      const r = await withPaidBenchmarksAllowed(true, () =>
+        runPopulateDefaultProfilePhase({ ...baseOpts(), populateDefaultProfile: "paid" as const, includeIds: [], qualifyingTopN: null, reportPath: join(cfg, "report.md") }),
+      );
+      await server.close();
+
+      expect(server.completionCalls()).toBeGreaterThan(0);
+      expect(r.ok).toBe(false);
+      expect(r.summary).toContain(`every benchmark call was rejected with HTTP ${status}`);
+      expect(r.summary).toContain("API key was refused");
+      expect(r.summary).not.toMatch(/price ceiling/);
+      expect(getProfileRecord("paid")?.failCount).toBe(1);
+    });
+  }
+
+  it("a real ceiling miss (ok rows priced above the ceiling) keeps the price-ceiling message", async () => {
+    const deps: PopulateDefaultProfileDeps = {
+      // Seams: fetchCatalog gives the PRE-sweep catalog price (passes the requirement gate); the canned runSweep row below carries its own 2/2 price, which is what pickEnsembleByPriceCeiling reads against the 1.30 ceiling.
+      fetchCatalog: async () => [model("v/dear", 0.05, 0.05)],
+      runSweep: async (): Promise<SweepOutcome> => ({
+        dryRun: false,
+        candidates: 1,
+        baselines: 0,
+        results: [result({ modelId: "v/dear", inputDollarsPerMillion: 2, outputDollarsPerMillion: 2 })],
+        reportPath: "",
+        passers: 1,
+        total: 1,
+      }),
+    };
+
+    const r = await runPopulateDefaultProfilePhase({ ...baseOpts(), populateDefaultProfile: "paid" as const }, deps);
+
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/no candidate cleared the \$1\.30\/1M price ceiling/);
+    expect(r.summary).not.toMatch(/API key was refused/);
+  });
+
+  it("a 401 mixed with a non-auth failure is not a key rejection and keeps the price-ceiling message", async () => {
+    const deps: PopulateDefaultProfileDeps = {
+      fetchCatalog: async () => [model("v/a", 0.05, 0.05), model("v/b", 0.05, 0.05)],
+      runSweep: async (): Promise<SweepOutcome> => ({
+        dryRun: false,
+        candidates: 2,
+        baselines: 0,
+        results: [
+          result({ modelId: "v/a", ok: false, httpStatus: 401, error: "HTTP 401: User not found." }),
+          result({ modelId: "v/b", ok: false, httpStatus: 500, error: "HTTP 500: upstream" }),
+        ],
+        reportPath: "",
+        passers: 0,
+        total: 2,
+      }),
+    };
+
+    const r = await runPopulateDefaultProfilePhase({ ...baseOpts(), populateDefaultProfile: "paid" as const }, deps);
+
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/no candidate cleared the \$1\.30\/1M price ceiling/);
+    expect(r.summary).not.toMatch(/API key was refused/);
+  });
+});
 // D0 (TRDD-AL8GIZYA, plan item 2b): USER 2026-09-18 "no, manual is manual"
 // (TRDD-DS6OM3KX) — a model named explicitly via --include is manual and must
 // NOT be refused for price, even when it is priced above the ensemble ceiling.
