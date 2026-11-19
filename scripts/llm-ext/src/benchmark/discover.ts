@@ -685,7 +685,12 @@ export interface FreePoolResolution {
 export function resolveFreePool(
   configuredIds: readonly string[],
   catalog: readonly OpenRouterModel[],
-  opts: { autoDiscover: boolean; autoDiscoverTopN: number },
+  opts: {
+    autoDiscover: boolean;
+    autoDiscoverTopN: number;
+    /** Auto-discovered ids to leave out (models blocked by repeated "gone" verdicts). Applied ONLY to auto-discovered ids, never to configuredIds. */
+    exclude?: ReadonlySet<string>;
+  },
 ): FreePoolResolution {
   const pricePerMillion = (m: OpenRouterModel): { input: number; output: number } => ({
     input: parseFloat(m.pricing?.prompt ?? "NaN") * 1_000_000,
@@ -727,7 +732,10 @@ export function resolveFreePool(
     const zeroCost = filterModels(catalog, freeCriteria).filter((q) =>
       isZeroCostPriced(q.inputDollarsPerMillion, q.outputDollarsPerMillion),
     );
-    for (const q of rankByQualityIndex(zeroCost).slice(0, opts.autoDiscoverTopN)) {
+    // WHY (GitHub 15 item 3, TRDD-NC7873YO): a model with repeated "gone" verdicts answers every call with a 403 or 404, so it must not enter the pool. Blocked auto-discovered ids are cut BEFORE the top-N slice so they do not take a slot. A configured id is never cut (the seen check keeps it in the ranking), so it holds its slot exactly as before and a profile can never go dark through this filter.
+    const blocked = opts.exclude ?? new Set<string>();
+    const eligible = zeroCost.filter((q) => seen.has(q.id) || !blocked.has(q.id));
+    for (const q of rankByQualityIndex(eligible).slice(0, opts.autoDiscoverTopN)) {
       if (!seen.has(q.id)) {
         add(q.id);
         autoDiscovered.push(q.id);

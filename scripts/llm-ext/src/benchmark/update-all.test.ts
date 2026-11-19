@@ -29,6 +29,7 @@ import type { OpenRouterModel } from "./discover.js";
 import type { BenchmarkWorkload } from "./workload-types.js";
 import type { FetchImpl } from "../security_scan/judge.js";
 import { setActiveFreeOnly } from "../config.js";
+import { recordUnavailable, resetCooldownCacheForTests, resetRunUnusableForTests, GONE_EVICT_STRIKES } from "../free-rotation.js";
 
 // ── Catalog fixtures ────────────────────────────────────────────────────────
 
@@ -355,6 +356,27 @@ describe("--update-all", () => {
     expect(md).toContain("$0 by construction");
   });
 
+  it("--free leaves out an auto-discovered id blocked by repeated gone verdicts (GitHub 15 item 3)", async () => {
+    // A 403 that names the model is a gone verdict. GONE_EVICT_STRIKES of them persist an eviction, and the free phase must not write that id back into free_models.
+    const prevCfgDir = process.env.LLM_EXT_CONFIG_DIR;
+    process.env.LLM_EXT_CONFIG_DIR = cfg;
+    resetCooldownCacheForTests();
+    try {
+      for (let strike = 0; strike < GONE_EVICT_STRIKES; strike++) {
+        recordUnavailable("v/alpha:free", "API error 403 (openrouter): This model is only available on agentic harnesses", Date.now() - 10 * 60_000 + strike * 60_000);
+      }
+      const { deps } = spyDeps();
+      const r = await runUpdateAll(baseOpts({ mode: "free", budgetUsd: 0 }), deps);
+      expect(r.freePool?.pool).toEqual(["v/beta:free"]);
+      const doc = yamlParse(readFileSync(settingsPath, "utf-8"));
+      expect(doc.profiles.ens.free_models).toEqual(["v/beta:free"]);
+    } finally {
+      resetCooldownCacheForTests();
+      resetRunUnusableForTests();
+      if (prevCfgDir === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
+      else process.env.LLM_EXT_CONFIG_DIR = prevCfgDir;
+    }
+  });
   it("--free REFUSES to run when a configured free_models id is actually PRICED", async () => {
     // A "free" pool entry the catalog charges for would silently bill on every call.
     const { deps, toolCalls } = spyDeps();

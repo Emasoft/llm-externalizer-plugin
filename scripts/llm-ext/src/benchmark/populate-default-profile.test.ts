@@ -28,7 +28,7 @@ import { bookDailySpend, dailySpendPath } from "./daily-spend.js";
 // questions the old shape answered wrongly and silently.
 import { getSettingsPath, setAllowPaidModels, setActiveFreeOnly, resolveProfile, validateSettings, validateProfile, type Profile } from "../config.js";
 import { getProfileRecord, getDynamicProfileRecord } from "../default-profiles-state.js";
-import { GONE_EVICT_STRIKES, goneEvictedModels, recordUnavailable, resetCooldownCacheForTests } from "../free-rotation.js";
+import { GONE_EVICT_STRIKES, GONE_EVICT_TTL_MS, goneEvictedModels, recordAvailable, recordUnavailable, resetCooldownCacheForTests } from "../free-rotation.js";
 import { enqueueCandidates } from "../dynamic-candidates.js";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1086,6 +1086,29 @@ describe("--populate-default-profile", () => {
     expect(swept[0]).toContain("v/discovered-ok:free");
     expect(swept[0]).not.toContain("v/configured-evicted:free");
     expect(swept[0]).not.toContain("v/discovered-evicted:free");
+  });
+  // GitHub 15 item 3 (TRDD-NC7873YO): the persisted "gone" eviction that the free-pool resolution reads. Three gone verdicts evict a model, the eviction ends once its last strike is older than GONE_EVICT_TTL_MS, and a successful call heals it.
+  const GONE_403 = "API error 403 (openrouter): This model is only available on agentic harnesses";
+  const GONE_T0 = Date.parse("2026-11-19T10:00:00Z");
+  const GONE_MINUTE = 60_000;
+  // Records `runs` gone verdicts for one model, one a minute apart, the last one at `lastAt`.
+  const recordGoneRuns = (modelId: string, runs: number, lastAt: number): void => {
+    for (let run = 0; run < runs; run++) recordUnavailable(modelId, GONE_403, lastAt - (runs - 1 - run) * GONE_MINUTE);
+  };
+  it("a model with GONE_EVICT_STRIKES gone verdicts is reported as evicted", () => {
+    recordGoneRuns("blocked/model:free", GONE_EVICT_STRIKES, GONE_T0);
+    expect(goneEvictedModels(GONE_T0 + GONE_MINUTE).has("blocked/model:free")).toBe(true);
+  });
+  it("a record whose last strike is older than GONE_EVICT_TTL_MS is not reported", () => {
+    recordGoneRuns("aged/model:free", GONE_EVICT_STRIKES, GONE_T0);
+    expect(goneEvictedModels(GONE_T0 + GONE_MINUTE).has("aged/model:free")).toBe(true); // control: inside the window
+    expect(goneEvictedModels(GONE_T0 + GONE_EVICT_TTL_MS + GONE_MINUTE).has("aged/model:free")).toBe(false);
+  });
+  it("a successful call (recordAvailable) clears the eviction", () => {
+    recordGoneRuns("healed/model:free", GONE_EVICT_STRIKES, GONE_T0);
+    expect(goneEvictedModels(GONE_T0 + GONE_MINUTE).has("healed/model:free")).toBe(true);
+    recordAvailable("healed/model:free", GONE_T0 + 2 * GONE_MINUTE);
+    expect(goneEvictedModels(GONE_T0 + 3 * GONE_MINUTE).has("healed/model:free")).toBe(false);
   });
   // Same GitHub-15 item 3 rule when EVERY id is evicted: nothing is left to sweep, so the populate banks a benchmark failure and never calls the sweep.
   it("a pool whose every id is evicted sweeps nothing and banks a benchmark failure (GitHub-15 item 3)", async () => {

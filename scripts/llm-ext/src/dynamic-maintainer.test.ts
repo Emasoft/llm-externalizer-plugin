@@ -78,6 +78,7 @@ import {
   updateDynamicProfileRecord,
 } from "./default-profiles-state.js";
 import { catalogCachePath } from "./catalog-cache.js";
+import { GONE_EVICT_STRIKES, recordUnavailable, resetCooldownCacheForTests, resetRunUnusableForTests } from "./free-rotation.js";
 import { bookDailySpend } from "./benchmark/daily-spend.js";
 // P6b-fix3 S-4': the S-9 case now asserts the GATE's verdict against the
 // RELOADED document, which means reading it the way index.ts does.
@@ -2488,6 +2489,33 @@ describe("3c (review of 51a100c): the patch is on disk BEFORE the candidate is e
   });
 });
 
+describe("GitHub 15 item 3 (TRDD-NC7873YO): a catalog id with repeated gone verdicts is not queued", () => {
+  it("a blocked catalog arrival is left out of the free queue while a healthy arrival is still queued", async () => {
+    writeSettings(["active: free", "profiles:", ...FREE_PLACEHOLDER, ""].join("\n"));
+    seedBenchmarkPass(["vendor/healthy:free", "vendor/gone:free"]);
+    resetCooldownCacheForTests();
+    try {
+      for (let strike = 0; strike < GONE_EVICT_STRIKES; strike++) {
+        recordUnavailable("vendor/gone:free", "API error 403 (openrouter): This model is only available on agentic harnesses", Date.now() - 10 * 60_000 + strike * 60_000);
+      }
+      await withProviderKeys(() =>
+        maintainDynamicProfiles({
+          fetchCatalog: async () => [
+            { id: "vendor/healthy:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+            { id: "vendor/gone:free", pricing: { prompt: "0", completion: "0" }, context_length: 100_000 },
+          ],
+          log: noop,
+        }),
+      );
+    } finally {
+      resetCooldownCacheForTests();
+      resetRunUnusableForTests();
+    }
+    const freeCall = enqueueCandidatesCalls.find((c) => c.profile === "free");
+    expect(freeCall?.ids).toContain("vendor/healthy:free");
+    expect(freeCall?.ids).not.toContain("vendor/gone:free");
+  });
+});
 describe("row 80: paid arm order with a non-empty free_models slot", () => {
   // Row 80: `paid`'s isUnpopulated check (isPlaceholderProfile) keys on
   // `profile.model === PLACEHOLDER_MODEL_ID` for any non-free_only profile,

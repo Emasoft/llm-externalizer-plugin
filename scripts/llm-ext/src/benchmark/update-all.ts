@@ -31,6 +31,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { defaultScratchDir } from "../project-root.js";
+import { goneEvictedModels } from "../free-rotation.js";
 
 import {
   rankByQualityIndex,
@@ -378,7 +379,8 @@ export async function runUpdateAll(
       const { pool: discoveredPool, autoDiscovered, rejected } = resolveFreePool(
         opts.configuredFreeModels,
         catalog,
-        { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16 },
+        // GitHub 15 item 3 (TRDD-NC7873YO): auto-discovered ids with repeated gone verdicts stay out of the free pool.
+        { autoDiscover: true, autoDiscoverTopN: opts.qualifyingTopN ?? 16, exclude: goneEvictedModels() },
       );
       if (rejected.length > 0) {
         // Fail fast: a configured "free" id the catalog PRICES is a model that would

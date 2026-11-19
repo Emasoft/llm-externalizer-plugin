@@ -519,6 +519,32 @@ describe("benchmark/discover resolveFreePool (free-pool verify + auto-discovery,
   });
 });
 
+describe("benchmark/discover resolveFreePool exclude (GitHub 15 item 3, TRDD-NC7873YO)", () => {
+  const owl = makeModel({ id: "openrouter/owl-alpha", pricing: { prompt: "0", completion: "0" } });
+  const free = makeModel({ id: "vendor/x:free", pricing: { prompt: "0", completion: "0" } });
+
+  it("a blocked CONFIGURED id keeps its top-N slot, so the cap is not refilled past it", () => {
+    const r = resolveFreePool(["openrouter/owl-alpha"], [owl, free], {
+      autoDiscover: true,
+      autoDiscoverTopN: 1,
+      exclude: new Set(["openrouter/owl-alpha"]),
+    });
+    expect(r.pool).toEqual(["openrouter/owl-alpha"]); // configured and blocked: kept, and it holds the one slot
+    expect(r.autoDiscovered).toEqual([]); // vendor/x:free fills the slot only if the configured id were cut
+  });
+
+  it("drops a blocked auto-discovered id from the pool but keeps a blocked CONFIGURED id", () => {
+    const r = resolveFreePool(["openrouter/owl-alpha"], [owl, free], {
+      autoDiscover: true,
+      autoDiscoverTopN: 16,
+      exclude: new Set(["openrouter/owl-alpha", "vendor/x:free"]),
+    });
+    expect(r.pool).toContain("openrouter/owl-alpha"); // configured: a blocked id is still kept
+    expect(r.pool).not.toContain("vendor/x:free"); // auto-discovered and blocked: left out
+    expect(r.autoDiscovered).toEqual([]);
+  });
+});
+
 describe("benchmark/discover freeSuffixOnly (free_only send-eligibility filter — matches assertFreeOnlyModel)", () => {
   it("keeps ONLY the ':free'-suffixed id — a zero-cost ROUTER pseudo-model 'openrouter/free' is excluded", () => {
     // The exact regression: 'openrouter/free' is priced $0 so resolveFreePool auto-discovers

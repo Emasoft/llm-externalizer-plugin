@@ -818,6 +818,8 @@ async function main(): Promise<CliResult> {
     const { pool, autoDiscovered, rejected } = resolveFreePool(configured, freePoolCatalog, {
       autoDiscover: true,
       autoDiscoverTopN: opts.qualifyingTopN ?? 16,
+      // GitHub 15 item 3 (TRDD-NC7873YO): auto-discovered ids with repeated gone verdicts stay out of the bench free pool.
+      exclude: goneEvictedModels(),
     });
     if (rejected.length > 0) {
       throw new Error(
