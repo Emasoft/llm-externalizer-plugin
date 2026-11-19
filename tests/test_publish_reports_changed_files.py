@@ -29,7 +29,8 @@ DIST_FILE = "scripts/llm-ext/dist/llm-ext.js"
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    # timeout: a hung git would stall the publish gate (ubs py.security.subprocess-timeout).
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, timeout=120)
 
 
 @pytest.fixture
@@ -37,7 +38,7 @@ def repo(tmp_path, monkeypatch):
     """Clean release repo with a committed dist file; cwd is an unrelated directory."""
     repo = tmp_path / "release"
     repo.mkdir()
-    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True, timeout=120)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     (repo / ".claude-plugin").mkdir()

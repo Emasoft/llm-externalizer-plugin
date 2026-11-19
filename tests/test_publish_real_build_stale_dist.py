@@ -29,7 +29,8 @@ DIST_FILE = "scripts/llm-ext/dist/llm-ext.js"
 
 
 def _git(repo: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+    # timeout: a hung git would stall the publish gate (ubs py.security.subprocess-timeout).
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True, timeout=120)
 
 
 # WHY unmarked (no slow/integration marker): the publish gate, ci.yml and release.yml all run
@@ -49,6 +50,7 @@ def test_real_build_of_stale_dist_is_named_not_reported_unchanged(tmp_path, caps
         ["git", "-C", str(_ROOT), "archive", "--format=tar", "HEAD", "scripts/llm-ext"],
         check=True,
         capture_output=True,
+        timeout=120,
     ).stdout
     with tarfile.open(fileobj=io.BytesIO(archive)) as tar:
         tar.extractall(repo, filter="data")
@@ -59,7 +61,7 @@ def test_real_build_of_stale_dist_is_named_not_reported_unchanged(tmp_path, caps
     # Symlink, not a copy (184 MB). The .gitignore pattern below has no trailing slash: "node_modules/" does not match a symlink.
     (mcp_dir / "node_modules").symlink_to(real_modules, target_is_directory=True)
     (repo / ".gitignore").write_text("node_modules\nreports_dev\n", encoding="utf-8")
-    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True)
+    subprocess.run(["git", "init", "-b", "main", str(repo)], check=True, capture_output=True, timeout=120)
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
     _git(repo, "add", "-A")

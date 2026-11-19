@@ -132,9 +132,13 @@ describe("free-model rotation coverage — every LLM send path can rotate", () =
     // announcing "your previous version was saved" about a file the user never
     // touched. Both calls are correct in isolation; only their order is not.
     const index = read("index.ts");
-    const migrateAt = index.indexOf("migrateProfileSections(getSettingsPath()");
+    // TRDD-VBAJX5A1: the migrations live in boot-settings.ts; index.ts calls loadSettingsAfterMigrations() from the settings-loading IIFE.
+    const boot = read("boot-settings.ts");
+    const bootMigrateAt = boot.indexOf("migrateProfileSections(getSettingsPath()");
+    const migrateAt = index.indexOf("loadSettingsAfterMigrations()");
     const preflightAt = index.indexOf("// P6b dynamic-profile pre-flight BEGIN");
-    expect(migrateAt, "index.ts must call migrateProfileSections at boot").toBeGreaterThan(-1);
+    expect(bootMigrateAt, "boot-settings.ts must call migrateProfileSections").toBeGreaterThan(-1);
+    expect(migrateAt, "index.ts must call loadSettingsAfterMigrations at boot").toBeGreaterThan(-1);
     expect(preflightAt).toBeGreaterThan(-1);
     expect(
       migrateAt,

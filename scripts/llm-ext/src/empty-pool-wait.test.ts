@@ -94,14 +94,19 @@ function installMarker(
   // foreground wait reads (dynamic-profiles-state.json lastBenchmarkAt), as the real benchmark child does.
   const populate = `
 const cfg = process.env.LLM_EXT_CONFIG_DIR;
-fs.writeFileSync(path.join(cfg, "settings.yaml"), ${JSON.stringify(FREE_POPULATED_POOL)});
-fs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json"), JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: Date.now(), poolFingerprint: "x", modelIds: ["vendor/free-a:free"], failCount: 0 } } }));`;
+fs.writeFileSync(path.join(cfg, "settings.yaml.tmp"), ${JSON.stringify(FREE_POPULATED_POOL)});
+fs.renameSync(path.join(cfg, "settings.yaml.tmp"), path.join(cfg, "settings.yaml"));
+fs.writeFileSync(path.join(cfg, "dynamic-profiles-state.json.tmp"), JSON.stringify({ version: 1, profiles: { free: { lastBenchmarkAt: Date.now(), poolFingerprint: "x", modelIds: ["vendor/free-a:free"], failCount: 0 } } }));
+fs.renameSync(path.join(cfg, "dynamic-profiles-state.json.tmp"), path.join(cfg, "dynamic-profiles-state.json"));`;
   writeFileSync(
     marker.script,
+    // Write then rename (atomic): records() lists *.json while children still run, and a half-written file failed JSON.parse in the 14.7.7 publish gate.
     `const fs = require("node:fs");
 const path = require("node:path");
-fs.writeFileSync(path.join(${JSON.stringify(dir)}, process.pid + ".json"),
-  JSON.stringify({ argv: process.argv.slice(2), requested: process.env.LLM_EXT_PROFILE_UPDATE_REQUESTED ?? null }));${mode === "populate" ? populate : ""}
+const rec = path.join(${JSON.stringify(dir)}, process.pid + ".json");
+fs.writeFileSync(rec + ".tmp",
+  JSON.stringify({ argv: process.argv.slice(2), requested: process.env.LLM_EXT_PROFILE_UPDATE_REQUESTED ?? null }));
+fs.renameSync(rec + ".tmp", rec);${mode === "populate" ? populate : ""}
 setTimeout(() => process.exit(0), ${holdMs});
 `,
   );
