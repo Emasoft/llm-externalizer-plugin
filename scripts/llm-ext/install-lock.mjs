@@ -54,9 +54,11 @@ export async function withInstallLock(dataDir, timeoutMs, fn) {
         }
       }
       if (Date.now() - start > timeoutMs) {
+        // WHY cause: the last EEXIST failure is kept on the timeout error, so a caller sees which mkdir kept failing (eslint preserve-caught-error).
         throw new Error(
           `timed out after ${timeoutMs}ms waiting for install lock at ${lockPath} ` +
             `(another process is installing; remove the dir manually if it is stale)`,
+          { cause: err },
         );
       }
       await new Promise((r) => setTimeout(r, 1000));
