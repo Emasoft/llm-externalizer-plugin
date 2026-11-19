@@ -856,6 +856,43 @@ def sync_package_lock_version(lock_path: Path, new_version: str) -> None:
     )
 
 
+def changed_tracked_files(repo_root: Path) -> list[str]:
+    """Tracked files that differ from HEAD in repo_root (untracked files are not checked).
+
+    `-z` gives raw NUL-separated paths with no quoting of odd names. A rename is reported
+    as its new path only; the restore hint in report_working_tree is meant for files the
+    checks modified (a rebuilt dist), not for renames, which the checks never make.
+    """
+    diff = run(["git", "diff", "--name-only", "-z", "HEAD"], cwd=str(repo_root))
+    return [name for name in diff.stdout.split("\0") if name]
+
+
+def report_working_tree(repo_root: Path) -> None:
+    """Tell the operator the true state of the tree after validate (TRDD-EWU9OAYI).
+
+    WHY: run_checks runs `npm run build`, which rewrites the tracked
+    scripts/llm-ext/dist files whenever they are stale against the source, and
+    nothing restores them. The old failure message said "Working tree is
+    unchanged" regardless, which was false, and the next run then stopped at
+    the pre-flight dirty-tree check with no hint where the changes came from.
+    The report must be derived from git, never asserted. A changed dist is a
+    regeneration from the source, so committing it is the usual fix: restoring
+    it leaves dist stale and the next run rebuilds it again.
+    """
+    changed = changed_tracked_files(repo_root)
+    if not changed:
+        print("Working tree is unchanged.", file=sys.stderr)
+        return
+    names = ", ".join(changed)
+    restore = " ".join(shlex.quote(name) for name in changed)
+    print(f"The checks changed {len(changed)} tracked file(s): {names}", file=sys.stderr)
+    print(
+        "If they are rebuilt scripts/llm-ext/dist files, commit them (they are regenerated from the source); "
+        f"to discard instead: git restore {restore}. Untracked files are not checked.",
+        file=sys.stderr,
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description="Publish a new release")
     group = parser.add_mutually_exclusive_group()
@@ -899,10 +936,13 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print("\n── Check-only mode ──")
         if not run_checks(repo_root):
             print("ERROR: checks failed — see reports_dev/publish/.", file=sys.stderr)
+            report_working_tree(repo_root)
             sys.exit(1)
         if not run_cpv_validation(repo_root):
+            report_working_tree(repo_root)
             sys.exit(1)
         print("All checks passed.")
+        report_working_tree(repo_root)
         return
 
     # ── 1. Pre-flight: working tree must be clean ──
@@ -932,8 +972,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ── 2. Validate — FIRST thing after pre-flight ──
     # MANDATORY. Every check runs on the CURRENT code (no version bump
     # yet), so the validation result reflects the exact state being
-    # released. If anything fails, publish aborts without touching any
-    # file and the working tree is guaranteed untouched.
+    # released. If anything fails, publish aborts before any version, changelog
+    # or release-commit step. The checks themselves may still rewrite tracked
+    # files (npm run build regenerates scripts/llm-ext/dist), so every stop
+    # point calls report_working_tree instead of assuming the tree is untouched.
     #
     # Order matters: validation must pass BEFORE we compute the next
     # version or generate the changelog. There's no point determining
@@ -941,10 +983,11 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
     if not run_checks(repo_root):
         print("ERROR: validation failed. Aborting.", file=sys.stderr)
-        print("Working tree is unchanged — fix the issues and re-run.", file=sys.stderr)
+        report_working_tree(repo_root)
         sys.exit(1)
     if not run_cpv_validation(repo_root):
         print("ERROR: CPV validation failed. Aborting.", file=sys.stderr)
+        report_working_tree(repo_root)
         sys.exit(1)
     print("  All checks passed")
     print()
@@ -993,6 +1036,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print("[DRY RUN] All checks passed.")
         print(f"[DRY RUN] Would bump {current} -> {new_version}")
         print(f"[DRY RUN] Would generate CHANGELOG.md, sync version, commit, tag {tag} + {resolver_tag}, push")
+        report_working_tree(repo_root)
         return
 
     # ── 4. Generate CHANGELOG.md via git-cliff ──
