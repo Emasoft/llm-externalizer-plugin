@@ -5,7 +5,8 @@ import { DEFAULT_POLICY } from "../l1/validate.js";
 import type { ChoiceAnswer } from "../l1/validate-choice.js";
 import { indexKey } from "../l2/ids.js";
 import { splitSentences, type Sentence } from "../l2/sentences.js";
-import { dataGuard, isBlank, renumberByPosition } from "./shared.js";
+import { isBlank, renumberByPosition } from "./shared.js";
+import { labelQuestion } from "./label.js";
 import type { Answers, BuiltUnit, DecisionSpec, Thresholds } from "./spec.js";
 
 // WHY the four descriptions are constants copied verbatim from the round-3 pre-registration of TRDD-S5KOOT2S: the scoring gate (held-out F1 0.961) was measured with exactly this wording, so any rewording is an unmeasured spec.
@@ -75,18 +76,15 @@ export const spec: DecisionSpec<RequirementsInput, RequirementsResult> = {
   injection: "index-scoped",
   validation: DEFAULT_POLICY,
   build(i) {
-    const background = i.context === undefined ? "" : " Use `shared.context` as background.";
     // Why null criteria: the descriptions live once in shared state; repeating them in every sentence's question would multiply the cost by the sentence count.
     const criteria = Object.fromEntries(CLASSES.map((c) => [c.id, null]));
-    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
-    const contextSubject = i.context === undefined ? "" : "`shared.context` and ";
     const units: BuiltUnit[] = textSentences(i.prompt).map((s, k) => ({
       kind: "atomic",
       state: { id: s.id, text: s.text },
-      // WHY the wording of `classify label`: the scoring gate was measured through `classify label` in json mode, so the shipped question is that question byte for byte. The sentence text never reaches the instructions (D5): the question names the unit by position.
+      // WHY (TRDD-WYY3SPDX): requirements is `classify label` with fixed classes (the test pins build equality with classify label in json mode), so the question comes from the one builder `labelQuestion` of label.ts: a label wording change reaches requirements by construction and the two cannot drift again. The USER asked on 2026-11-18 (TRDD-7ZA3EE6Z Notes 2026-11-18T17:02:39, checked against the card) that the classifier "must not evaluate/classify the context part, but only the input part", and that "the prompt must clarify" this; with a context the question is the L3 wording that does so (TRDD-0W932B0H: the context stays inside an injection guard). The 2026-11-04 measurements of this command used the earlier wording and were not repeated. The sentence text never reaches the instructions (D5): the question names the unit by position.
       questions: {
         [indexKey(KEY, k)]: choice(
-          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
+          labelQuestion(k, i.context !== undefined, ""),
           criteria,
         ),
       },

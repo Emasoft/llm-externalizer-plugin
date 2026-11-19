@@ -691,7 +691,8 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
 // TRDD-WYY3SPDX increment A: `classify label --context FILE` (the same flag as `classify requirements`; `classify filter` has it too since TRDD-7ZA3EE6Z).
 type CtxBody = { state: { shared: { context: string | null } }; questions: Record<string, { instructions: string }> };
 const ctxBodies = (s: ReturnType<typeof serveLabel>): CtxBody[] => s.bodies as unknown as CtxBody[];
-const CTX_SENTENCE = "Use `shared.context` as background.";
+// TRDD-WYY3SPDX label check 1 (2026-11-18): label and requirements use the L3 wording (one builder, labelQuestion in label.ts), which opens the context block with this sentence.
+const LABEL_CTX_SENTENCE = "`shared.context` is background for reading the text in `units`.";
 const CTX_TEXT = "Earlier the user asked for a dark mode toggle and a faster login page.";
 
 describe("label --context FILE (TRDD-WYY3SPDX)", () => {
@@ -707,7 +708,7 @@ describe("label --context FILE (TRDD-WYY3SPDX)", () => {
       expect(body.state.shared.context).toBe(CTX_TEXT);
       const questions = Object.values(body.questions);
       expect(questions.length).toBeGreaterThan(0);
-      for (const q of questions) expect(q.instructions).toContain(CTX_SENTENCE);
+      for (const q of questions) expect(q.instructions).toContain(LABEL_CTX_SENTENCE);
     }
   });
 
@@ -851,7 +852,7 @@ describe("requirements --context FILE at argv level (TRDD-WYY3SPDX)", () => {
     expect(s.bodies.length).toBeGreaterThan(0);
     for (const body of ctxBodies(s)) {
       expect(body.state.shared.context).toBe(CTX_TEXT);
-      for (const q of Object.values(body.questions)) expect(q.instructions).toContain(CTX_SENTENCE);
+      for (const q of Object.values(body.questions)) expect(q.instructions).toContain(LABEL_CTX_SENTENCE);
     }
   });
 });

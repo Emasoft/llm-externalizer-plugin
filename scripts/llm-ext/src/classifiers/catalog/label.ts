@@ -152,6 +152,18 @@ function renderText(r: LabelResult, opts: RenderOptions): TextRender {
   const save = opts.save;
   return { lines, ...(typeof save === "string" ? { files: [{ path: save, content: JSON.stringify(answered.map((x) => ({ id: x.id, label: x.label, confidence: x.confidence, ...(x.chunk ? { chunks: x.chunk.chunks, ...(x.chunk.bestLines ? { best_lines: x.chunk.bestLines } : {}) } : {}) })), null, 2) }] } : {}) };
 }
+
+// The one source of the question text of `classify label` (and of `classify requirements`, which is label with fixed classes): a wording change reaches both by construction.
+// `background` is the trailing sentence the caller adds (label: the purpose sentence; requirements: ""), "" for none.
+// WHY (TRDD-WYY3SPDX label check 1, 2026-11-18): the old text told the model to classify shared.context, against the USER design of 2026-11-18 (context in its own block, never judged). The L3 wording reads it as background and never judges it; it drifted less on 4 of 12 gated cells and more on 1, and both builds missed bar (b) on J3 with an unrelated context, so the docs caveat stays. Without a context the text is unchanged.
+// TRDD-0W932B0H: shared.context holds untrusted earlier messages, so it stays inside an injection guard (here dataGuard(..., "read")).
+export function labelQuestion(k: number, hasContext: boolean, background: string): string {
+  const guard = hasContext
+    ? `\`shared.context\` is background for reading the text in \`units\`. ${dataGuard("`shared.context`", "read")} Never judge or classify it. Judge only the text in \`units\`. ${dataGuard("the text in `units`", "classify")}`
+    : dataGuard(`the content of \`units[${k}]\``, "classify");
+  return `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${guard}${background}`;
+}
+
 export const spec: DecisionSpec<LabelInput, LabelResult> = {
   id: "label",
   // IN-02: no leading positional (the classes come from the flags); each file is one text unit (mode files, E117) and the planner chunks long ones.
@@ -186,9 +198,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
     const ids = itemIds(i);
     // Why null criteria: the descriptions live once in shared state; repeating them in every item's question would multiply the cost by the item count.
     const criteria = Object.fromEntries(i.classes.map((c) => [c.id, null]));
-    const background = [i.purpose === undefined ? "" : " Use `shared.purpose` as the reason for the classification.", i.context === undefined ? "" : " Use `shared.context` as background."].join("");
-    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
-    const contextSubject = i.context === undefined ? "" : "`shared.context` and ";
+    const background = i.purpose === undefined ? "" : " Use `shared.purpose` as the reason for the classification.";
     const units: BuiltUnit[] = i.items.map((it, k) => ({
       kind: i.mode === "files" ? "text" : "atomic",
       // Why a bare string for text: the planner chunks a string state by lines; an object state would be split by entries and refuse a long `text`.
@@ -196,7 +206,7 @@ export const spec: DecisionSpec<LabelInput, LabelResult> = {
       // D5, D14: the question names the unit by position and the key is built from the index; no item text and no caller id reach the instructions.
       questions: {
         [indexKey(KEY, k)]: choice(
-          `Which class in \`shared.classes\` best describes \`units[${k}]\`? Answer with the class id. ${dataGuard(`${contextSubject}the content of \`units[${k}]\``, "classify")}${background}`,
+          labelQuestion(k, i.context !== undefined, background),
           criteria,
         ),
       },
