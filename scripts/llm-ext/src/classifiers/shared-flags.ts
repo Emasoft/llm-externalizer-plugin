@@ -38,7 +38,7 @@ export type InputFlag =
 export type BooleanInputFlag = Extract<InputFlag, { type: "boolean" }>;
 
 
-// Help sentences checked against l2/inputs.ts: --items 332-337, --lines pushLines 328-330, --ext 354 (file loop only), --limit 325, --max-bytes 146/305 (named file and stdin refused) and 373 (walked file skipped), --follow-symlinks 223-231 and 356-362.
+// Help sentences checked against collectInputs and its helpers in l2/inputs.ts (named by symbol, not line, so they cannot go stale): --items (the opts.items branch, parseItems), --lines (pushLines), --ext (the exts filter in the file loop only), --limit (push), --max-bytes (readNamed for a named file or an --items file, stdinText for stdin, and the size skip of a walked file in the file loop), --follow-symlinks (walk, entries, expand and the follow branch in the file loop).
 export const INPUT_FLAGS: readonly InputFlag[] = [
   { flag: "--items", property: "items", type: "string", option: "items", help: "JSONL file of items ({\"id\",\"text\"} per line, or plain lines); - reads stdin." },
   { flag: "--lines", property: "lines", type: "boolean", option: "lines", help: "Judge each non-blank line of every input as its own item (ids name:N)." },
@@ -47,6 +47,3 @@ export const INPUT_FLAGS: readonly InputFlag[] = [
   { flag: "--max-bytes", property: "max_bytes", type: "number", option: "maxBytes", help: "Files over this many bytes are skipped and listed; an --items file or stdin over it is refused. A whole number from 1 to 104857600 (the 100 MB cap)." },
   { flag: "--follow-symlinks", property: "follow_symlinks", type: "boolean", option: "followSymlinks", help: "Read the targets of symlinks instead of skipping the links; a broken link or a target outside the allowed roots is still skipped and listed." },
 ];
-
-
-// Help sentences checked against l2/inputs.ts: --items 331-335, --lines pushLines 326-328, --ext 354 (file loop only), --limit 325, --max-bytes 146/305 (named file, stdin refused) and 373 (walked file skipped), --follow-symlinks 223-231 and 356-362.

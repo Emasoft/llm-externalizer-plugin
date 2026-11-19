@@ -92,8 +92,7 @@ export interface SpecFlag {
   type?: "boolean" | "number";
   /** IN-07: true = an output option, not an input: the value goes to `renderText` under `field` and never into the JSON input (filter --no-collapse, --save). WHY: the input schema is strict, and a display option must not be accepted or refused by it. */
   render?: true;
-  /** Not called for a boolean flag: the runner sets the field to true itself (run-decision.ts); kept required so a value flag cannot omit it without a cast. */
-  /** Turns the raw value (or file text) into the field value; throws InputError, whose message names the flag. */
+  /** Turns the raw value (or file text) into the field value; throws InputError, whose message names the flag. Not called for a boolean flag: the runner sets the field to true itself (run-decision.ts); kept required so a value flag cannot omit it without a cast. */
   parse(raw: string): unknown;
 }
 

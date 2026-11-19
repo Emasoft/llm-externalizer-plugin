@@ -62,8 +62,6 @@ export interface RunRequest {
   maxQuestionsPerRequest?: number;
   /** `--default <label>`: the default label of every choice question over text; wins over the spec's chunkDefaults for all its keys (plan §5 "--default, else the last label"). */
   defaultLabel?: string;
-  /** Internal, per question key (users cannot know the keys); applied after defaultLabel. */
-  defaultLabels?: Record<string, string>;
   /** -o: directory for the JSON report (same text as stdout, D10). */
   outputDir?: string;
   strictExit?: boolean;
@@ -141,7 +139,7 @@ function failureCode(m: MergedReply): ExitCode | undefined {
   // WHY a fixed order and not the first failure: which request failed first is a race; the most actionable class wins: 3 (key/credits) > 4 (rejected) > 5 (failed after retries).
   const codes = m.failures.flatMap((f) => (f.error === undefined ? [] : [exitCodeForError(f.error)]));
   const worst = ([3, 4, 5] as const).find((c) => codes.includes(c));
-  // WHY 5: a failure without an error object (the fatal request itself, and the fatal, aborted, stopped and budget kinds that runPlan in l2/fan-out.ts records) has no class to map, and a run with any failure must not reach exitCodeForRun, which returns 0 or 1.
+  // WHY 5, a last resort: a failure without an error object (the fatal request itself, and the fatal, aborted, stopped and budget kinds that runPlan in l2/fan-out.ts records) has no class to map. Today none reaches this line: aborted and stopped/budget set m.aborted and m.stopped above, and a fatal run is thrown by conclude before failureCode is called. It stays because both callers need an answer: the Refusal of a failed whole-result run would default to exit 1, and the exitCodeForRun call returns only 0 or 1, so a failed run could exit 0.
   return worst ?? (m.failures.length > 0 ? 5 : undefined);
 }
 
@@ -174,7 +172,7 @@ export async function runDecision<I, R>(spec: DecisionSpec<I, R>, req: RunReques
     return await run(spec, req, deps, redactor, safe);
   } catch (e) {
     if (e instanceof Refusal) return { exitCode: e.code, cause: safe(e.message) };
-    // WHY exit 1: PolicyError, IdError and InputError each mark a refused flag value, id or input (CLI exit 1, their class docs); any other throw is a bug and is rethrown below.
+    // WHY exit 1: PolicyError, IdError and InputError each mark a refused flag value, id or input (CLI exit 1, their class docs); any other throw is a bug and is rethrown below. Like a Refusal, they return no envelope: only the exit code and the redacted message (cause).
     if (e instanceof PolicyError || e instanceof IdError || e instanceof InputError) return { exitCode: 1, cause: safe(e.message) };
     // WHY a fresh Error without `cause`: a bug's message, stack or cause chain may carry the key (an upstream error text), and whatever prints the exception prints all of them.
     const bug = new Error(safe(e instanceof Error ? e.message : String(e)));
@@ -214,8 +212,8 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   let usedOtherModel = false;
   // WHY a closure over the run's state: the empty plan (E65) and the planned run end the same way (project, envelope, report, exit code); two copies could drift.
   const conclude = (merged: MergedReply): RunOutcome<R> => {
-    // WHY a refusal with the transport's own message and remedy: a fatal failure is run-wide and reported once, and its error maps straight to an exit code (FatalFailure in l2/fan-out.ts).
-    // WHY nothing is projected on a fatal failure (inferred): a fatal class (FATAL_CLASSES in l2/fan-out.ts: auth, payment, key-limit, not-found, in-flight-budget) ends the whole run, so there is nothing meaningful to project; fan-out keeps the answers of a per-item spec (it drops them only for a whole-result one), but conclude does not use them.
+    // WHY a refusal with the failure's own message and remedy: a fatal failure is run-wide and reported once, and its error maps straight to an exit code (FatalFailure in l2/fan-out.ts).
+    // WHY nothing is projected on a fatal failure (main agent ruling of 2026-11-18 on TRDD-BUL4EEBP, behaviour kept as built): a fatal class (FATAL_CLASSES in l2/fan-out.ts: auth, payment, key-limit, not-found, in-flight-budget) has a cause the other requests share, so the run cannot be trusted as complete and ends with the fatal exit code (fail fast), even for a per-item spec; fan-out keeps the answers of a per-item spec (it drops them only for a whole-result one), but conclude does not use them.
     if (merged.fatal !== null) {
       const f = merged.fatal;
       throw new Refusal(`${f.message}${f.remedy_hint ? ` ${f.remedy_hint}` : ""}`, exitCodeForError(f.error));
@@ -242,7 +240,7 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
         warnings.push(warning("save_failed", `cannot save ${f.path}: ${(e as Error).message}`));
       }
     }
-    // WHY degraded is always empty: the ZB41KG62 plan's decision D1 names two source fallbacks (the decide --hook defer and browse's keyword query), and neither is built; a model fallback is reported as answered_by.
+    // WHY degraded is always empty: this runner replaces no source (degrade() in l2/warnings.ts has no production caller, and this is the only buildEnvelope call); a fallback to another model is not a degraded record, it is reported as answered_by.
     const envelope = buildEnvelope({ decision, replies: merged.replies, warnings: [...warnings, ...merged.warnings], degraded: [], stopped: merged.stopped, ...(usedOtherModel ? { answeredBy: merged.answeredBy } : {}) });
     const text = safe(renderEnvelope(envelope));
     const reportPath = reportDir === undefined ? undefined : writeReport(reportDir, spec.id, text);
@@ -260,8 +258,8 @@ async function run<I, R>(spec: DecisionSpec<I, R>, req: RunRequest, deps: RunDep
   const specDefaults = spec.chunkDefaults?.(input) ?? {};
   if (req.defaultLabel !== undefined && Object.keys(specDefaults).length === 0) throw new Refusal(`--default does not apply: ${command} has no choice question over text`);
   const userDefault = req.defaultLabel === undefined ? {} : Object.fromEntries(Object.keys(specDefaults).map((k) => [k, req.defaultLabel!]));
-  // WHY this order: --default beats the spec's chunkDefaults for all their keys, and the internal per-key defaultLabels apply last (RunRequest JSDoc on defaultLabel and defaultLabels).
-  const defaultLabels: Record<string, string> = { ...specDefaults, ...userDefault, ...req.defaultLabels };
+  // WHY this order: --default beats the spec's chunkDefaults for all their keys (plan §5 "--default, else the last label"; RunRequest JSDoc on defaultLabel).
+  const defaultLabels: Record<string, string> = { ...specDefaults, ...userDefault };
   // WHY here: runPlan refuses a label that is not the question's only as a plain Error, which would surface as a bug instead of a refusal.
   for (const [k, label] of Object.entries(defaultLabels)) {
     const q = built.units.map((u) => u.questions[k]).find((x) => x !== undefined);
@@ -642,9 +640,9 @@ export interface ArgvDeps extends RunDeps {
 }
 
 
+// WHY the INPUT_FLAGS are parsed for every spec: a spec without `cli` must answer "does not take file inputs yet" (input-args.ts), not "unknown option"; only the tool schema is limited to specs with `cli`.
 const VALUE_FLAGS = new Set<string>([...SHARED_FLAGS, ...INPUT_FLAGS].filter((f) => f.type !== "boolean").map((f) => f.flag));
 
-// WHY the INPUT_FLAGS are parsed for every spec: a spec without `cli` must answer "does not take file inputs yet" (input-args.ts), not "unknown option"; only the tool schema is limited to specs with `cli`.
 /**
  * Parses `--input file.json` (else JSON on stdin), the shared flags and the spec's own threshold flags, runs, prints, returns the exit code.
  * WHY threshold flags are read from spec.thresholds: the spec is the only place that knows them (plan §4), so a new threshold needs no runner change.
@@ -674,7 +672,7 @@ export async function runDecisionArgv<I, R>(spec: DecisionSpec<I, R>, argv: stri
     if (raw === "--") { positionals.push(...argv.slice(k + 1)); break; }
     if (raw === "-" || !raw.startsWith("-")) { positionals.push(raw); continue; }
     // WHY this deliberately deviates from qs.mjs:64-77 (which takes any single-dash token as a file name): a mistyped `-top 3` would become an input path and, with a real file named so, a paid question. A path that really starts with "-" is given after `--`.
-    // WHY -o is exempt: it is the only short flag SHARED_FLAGS declares (the report directory), so a short flag added there must be exempted here too; every other single-dash token reaching this line is refused.
+    // WHY -o is exempt: it is the only short flag declared anywhere the parser looks (SHARED_FLAGS, INPUT_FLAGS and the spec flags), so a short flag added to any of the three must be exempted here too, and launcher.ts classifyArgv, which special-cases -o, must learn it; every other single-dash token reaching this line is refused.
     if (!raw.startsWith("--") && raw !== "-o") {
       const twin = `-${raw.split("=")[0]}`;
       return fail(`unknown option ${raw}${isKnownFlag(twin) ? ` (did you mean ${twin}?)` : ""}`);
@@ -720,7 +718,7 @@ export async function runDecisionArgv<I, R>(spec: DecisionSpec<I, R>, argv: stri
     } else {
       const n = number(flag, value);
       if (n === undefined) return 1;
-      // WHY one branch per flag (TRDD-LFTQCFUX): a trailing else made the one remaining number flag set --chunk-chars, so --max-questions-per-request would have silently changed the chunk size; a number flag with no branch now stops the parser.
+      // WHY one branch per flag (TRDD-LFTQCFUX): a trailing else made the one remaining number flag set --chunk-chars, so --max-questions-per-request would have silently changed the chunk size; a number flag with no branch now stops the parser. A new SHARED_FLAGS value flag needs its own branch: a number flag needs one here, a string flag one in the chain above (reaching this else it is parsed as a number, so a text value is refused as "needs a number" and a numeric one throws the internal error below).
       if (flag === "--max-budget") req.maxBudgetUsd = n;
       else if (flag === "--chunk-chars") req.chunkChars = n;
       else if (flag === "--max-questions-per-request") req.maxQuestionsPerRequest = n;
