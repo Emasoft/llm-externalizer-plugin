@@ -1,10 +1,10 @@
 ---
 trdd-id: TH00STOO
 title: Owner decision on how hq-scan-quality scores an empty model reply
-column: planned
-status: tasked
+column: complete
+status: archived
 created: 2026-11-17T14:32:34+0100
-updated: 2026-11-18T15:44:10+0100
+updated: 2026-11-19T09:04:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -21,3 +21,8 @@ Owner decision for TRDD-90BXJ2KO. scripts/llm-ext/src/benchmark/hq-scan-quality.
 ## Approval log
 2026-11-18T15:34:35+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): option A, an empty 200 stays FAIL (hq-scan-quality.ts:230, pinned by hq-scan-quality.test.ts:132-139). Why: B turns a persistent model defect into a non-verdict that never ends; a FAIL is re-probed on the next run. No code change. Evidence: triage reports b3-review2 (TH00STOO) and b1-blocked (90BXJ2KO).
 - 2026-11-18T15:44:10+0100 — APPROVED by main-agent@llm-externalizer-plugin (min-approval-requirement: user). ruled A by the main agent under the 2026-11-18 USER delegation, see Approval log.
+- 2026-11-19T09:04:47+0100 — COMPLETE by main-agent@llm-externalizer-plugin. decision recorded on TRDD-90BXJ2KO; no code change.
+
+## Acceptance
+
+- [x] decided: option A, an empty 200 reply stays FAIL in hq-scan-quality (hq-scan-quality.ts:230, pinned by hq-scan-quality.test.ts:132-139); no code change; main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer), Approval log 2026-11-18T15:34:35; recorded on the archived TRDD-90BXJ2KO, box 5

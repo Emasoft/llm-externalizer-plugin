@@ -1,10 +1,10 @@
 ---
 trdd-id: T6F52GB8
 title: Audit the backburner children of ZB41KG62 one card at a time
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T16:42:19+0100
-updated: 2026-11-18T16:42:19+0100
+updated: 2026-11-19T09:10:10+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -26,3 +26,4 @@ Audit the 89 backburner children of TRDD-ZB41KG62 one card at a time. Verdict pe
 ## Approval log
 
 - 2026-11-18T16:42:19+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-19T09:10:10+0100 — column → todo by main-agent@llm-externalizer-plugin. next drain item of TRDD-ZB41KG62; the RL-01 strike of 2026-11-19 points the open plan cards at this audit

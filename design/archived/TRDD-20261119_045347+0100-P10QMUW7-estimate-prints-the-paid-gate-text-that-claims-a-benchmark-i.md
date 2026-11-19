@@ -1,10 +1,10 @@
 ---
 trdd-id: P10QMUW7
 title: --estimate prints the paid gate text that claims a benchmark is running
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T04:53:47+0100
-updated: 2026-11-19T05:48:39+0100
+updated: 2026-11-19T09:04:41+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T04:53:47+0100
 implementation-commits: [16426995]
+release-via: publish
 ---
 
 # --estimate prints the paid gate text that claims a benchmark is running
@@ -26,7 +27,15 @@ cli/main.ts:996-1005 (the --estimate branch) prints profileGateRefusal's message
 
 - 2026-11-19T04:53:47+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T05:48:39+0100 — column → dev. landed in 16426995 (main agent)
+- 2026-11-19T09:04:41+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.5 (release commit f0766476).
 
 ## Notes
 
 2026-11-19T05:48:35+0100 main agent: done in 16426995. (a) The never-benchmarked paid gate (dynamic-maintainer.ts dynamicProfileGate) sets reason paid-unpopulated only when no paid sweep is running, queued or opted out (paidBenchmarkStartableByRealCommand); cli/main.ts --estimate then prints "paid profile: not benchmarked yet, and nothing is benchmarking it: an estimate starts no work. Run the command once without --estimate to start the paid benchmark (needs a valid OpenRouter key; about 15 minutes; it spends from the daily paid-benchmark budget), then re-run --estimate." Where a sweep is running, queued or opted out the old gate text is already true and is kept. (b) With $OPENROUTER_API_KEY and the plugin option unset the gate refuses with "paid profile is not benchmarked yet, and $OPENROUTER_API_KEY is not set, so no benchmark can start: export it and re-run." on the real path and under --estimate; gate and detector read the key through config.ts openRouterDetectorKey. Static trace, not run (worker report reports_dev/p10-trace/20261119_053811+0100-paid-nokey-trace.md; the load-bearing lines re-read by the main agent): the benchmark child reads its key only from those two variables (benchmark/index.ts resolveApiKey 145-153, preflight 274-282, called in main() at 654 before the populate dispatch at 906), so with no key no paid request starts, also with a fresh catalog cache or a profile api_key. Residual: a present but invalid key, and the 60 s per-profile detect throttle, can still leave a real run that starts nothing. Tests (worker runs, counts and the six P10QMUW7 test names checked by the main agent in the captures): dynamic-maintainer 74/74, profile-accept 25/25, profile-detector 22/22, config 227/227. Open: release at the next publish.
+2026-11-19T08:42:15+0100 worker: git merge-base --is-ancestor 16426995 v14.7.5 exit 0 (the only implementation commit); shipped in v14.7.5 (release commit f0766476, published 2026-11-19, main agent fact). NOT moved: trddgrep move P10QMUW7 published --approver main-agent@llm-externalizer-plugin exit 2, 'P10QMUW7 has NO acceptance checklist, so archiving it as published would record a completion that proves nothing'. Column stays dev; needs a checklist (main agent decision) before the move.
+
+## Acceptance
+
+- [x] under --estimate, the never-benchmarked paid profile with no paid sweep running, queued or opted out prints that nothing is benchmarking it and that one real run without --estimate starts the benchmark (commit 16426995, with tests); where a sweep is running, queued or opted out the old text is true and kept
+- [~] the open question (does the real command start the paid benchmark) is answered only in part, by code trace: the gate sets paid-unpopulated only when no paid sweep is running, queued or opted out, and with OPENROUTER_API_KEY and the plugin option unset it refuses and names the missing key (16426995); a real run with a valid key was not run, because tests never use a paid key; the rest is carded as TRDD-0QQVTUCF
+- [x] shipped in v14.7.5: 16426995 is an ancestor of the tag (main agent 2026-11-19); release commit f0766476

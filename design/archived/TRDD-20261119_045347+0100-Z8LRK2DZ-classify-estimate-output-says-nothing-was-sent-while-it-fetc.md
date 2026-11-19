@@ -1,10 +1,10 @@
 ---
 trdd-id: Z8LRK2DZ
 title: classify --estimate output says nothing was sent while it fetches the catalog
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T04:53:47+0100
-updated: 2026-11-19T05:48:38+0100
+updated: 2026-11-19T09:04:41+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T04:53:47+0100
 implementation-commits: [16426995]
+release-via: publish
 ---
 
 # classify --estimate output says nothing was sent while it fetches the catalog
@@ -26,7 +27,16 @@ The classify --estimate output starts 'classify <action> --estimate: nothing was
 
 - 2026-11-19T04:53:47+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T05:48:38+0100 — column → dev. landed in 16426995 (main agent)
+- 2026-11-19T09:04:41+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.5 (release commit f0766476).
 
 ## Notes
 
 2026-11-19T05:48:35+0100 main agent: done in 16426995. renderEstimateText (classifiers/estimate-output.ts) now prints "classify <action> --estimate: no question was sent"; the tests that asserted the old text (live-capture, run-decision, classify-launch, classify-review-cli, classify-stdin-cli) and the classify.md:24 and SKILL.md:151 paragraphs follow, with "nothing was sent" dated to 14.7.4 and earlier ("the release after 14.7.4" is rewritten to the release number at publish, FP2SAF4P item 8). Worker build, lint and tsc exit 0; after the later ubs:ignore comment edit (profile-accept.test.ts:267) tsc exit 0 by the report of the worker that made the edit, and lint exit 0 in a later worker re-run; commit hook UBS critical 0. Open: release at the next publish. Follow-up card: TRDD-HUBGO80N (the two non-classify dry-run headers).
+2026-11-19T08:41:43+0100 worker: git merge-base --is-ancestor 16426995 v14.7.5 exit 0 (the only implementation commit). Shipped in v14.7.5 (release commit f0766476, published 2026-11-19, main agent fact). The move to published was attempted and refused; see the next line.
+2026-11-19T08:42:01+0100 worker: CORRECTION of the previous line: the card was NOT moved. trddgrep move Z8LRK2DZ published --approver main-agent@llm-externalizer-plugin exit 2: 'Z8LRK2DZ has NO acceptance checklist, so archiving it as published would record a completion that proves nothing'. Column stays dev; needs a checklist (main agent decision) before the move.
+
+## Acceptance
+
+- [x] classify --estimate prints 'classify <action> --estimate: no question was sent' instead of 'nothing was sent' (renderEstimateText in classifiers/estimate-output.ts, commit 16426995)
+- [x] the tests and the classify.md and SKILL.md paragraphs that quoted the old line follow the new text (16426995); the docs date 'nothing was sent' to 14.7.4 and earlier and name 14.7.5 (211655ad)
+- [x] shipped in v14.7.5: 16426995 is an ancestor of the tag (git merge-base --is-ancestor, main agent 2026-11-19); release commit f0766476

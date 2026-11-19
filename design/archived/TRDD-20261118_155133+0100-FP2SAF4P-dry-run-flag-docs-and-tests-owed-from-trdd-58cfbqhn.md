@@ -1,10 +1,10 @@
 ---
 trdd-id: FP2SAF4P
 title: Dry-run flag docs and tests owed from TRDD-58CFBQHN
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-18T15:51:33+0100
-updated: 2026-11-19T05:48:31+0100
+updated: 2026-11-19T09:04:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: docs
@@ -15,7 +15,8 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T15:51:33+0100
-implementation-commits: [4c1ab0c2, 9e43c164, 48bdcdc3]
+implementation-commits: [4c1ab0c2, 9e43c164, 48bdcdc3, 8dae0ca1, 211655ad]
+release-via: publish
 ---
 
 # Dry-run flag docs and tests owed from TRDD-58CFBQHN
@@ -26,6 +27,7 @@ Owed after the TRDD-58CFBQHN dry-run flag work (B2 triage, 2026-11-18): (1) test
 
 - 2026-11-18T15:51:33+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T04:12:49+0100 — column → dev by main-agent@llm-externalizer-plugin. items 1, 3 and 4 in progress (worker, 2026-11-19)
+- 2026-11-19T09:04:44+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.5 (release commit f0766476).
 
 ## Notes
 
@@ -37,3 +39,17 @@ Owed after the TRDD-58CFBQHN dry-run flag work (B2 triage, 2026-11-18): (1) test
 2026-11-19T04:54:34+0100 main agent: follow-up cards filed from items 6 and 9: item 9 as P10QMUW7 (--estimate prints the paid gate text that claims a benchmark is running); item 6 as Z8LRK2DZ (classify --estimate says nothing was sent while it fetches the catalog).
 2026-11-19T05:04:18+0100 main agent: (6), (9), (10), (12), (13) done in the working tree, to be committed with this note (docs worker report reports_dev/fp2saf4p-docs/20261119_045905+0100-docs-6-9-10-12-13.md and its addendum): (6) classify.md:24, SKILL.md:151, classify.md:524, consumer-guidelines.md question 9 and cli-conventions.md:28 now say --estimate sends no question to Jev and needs no API key but is not offline (catalog and endpoint-limit fetch unless cached, exit 5 when the catalog fetch fails); the product line "nothing was sent" is kept and explained, its wording is TRDD-Z8LRK2DZ; (10) classify.md ping section has a paragraph on --no_call (key needed and one authenticated GET on a remote profile, neither on local-decision); (9) cli-conventions.md:28 gives the measured llm cluster --estimate refusal; (12) every --output_dir row and the rule-check table follow the help text; (13) the rows cut with ... in classify.md (58 table rows, plus the rule-check --default row marked truncated by --help) are written whole from the source help literals (the main agent spot-checked four against shared-flags.ts and catalog/filter.ts). main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): the about 162 cut rows in the other references are tool-definition descriptions whose cut at about 100 characters is the documented convention of cli-conventions.md:34, so they stay as they are. Also fixed: cli-conventions.md said the 15 classify decision commands; it now gives 15 in 14.3.0 and 16 since 14.7.0. Open on this card: item 7 recheck and item 8 at publish.
 2026-11-19T05:48:31+0100 main agent: (7) done in 9e43c164 (docs worker report reports_dev/fp2saf4p/20261119_042252+0100-fp2saf4p-docs-2-7-8.md): each measurement that named no build now says "a development build after 14.2.0" (5 places in classify.md, 2 in requirements-pipeline.md, 2 in SKILL.md, counted by the main agent), with 14.3.0 named as the first release where the behaviour ships; the tie rests on v14.2.0 refusing classify --estimate and lacking classify requirements and ping. The boolean-flag paragraph (classify.md:28, SKILL.md:155) also says "a development build after 14.2.0"; only its exact build is unknown. git log -S shows the phrase entered only in 9e43c164. Open on this card: item 8 at publish.
+2026-11-19T08:42:47+0100 main agent: item 8 rechecked before the release: no 153fe531, 9e036052 or 'no release yet' text is left in the skill docs or README (only the marker definition in consumer-guidelines.md:5); the 14.2.0 mentions left (classify.md 26, 28, 472, 524, 532, 666; requirements-pipeline.md 32, 38, 92; SKILL.md 153, 155) are dated history of 14.2.0 and development builds; README:117 says the dry runs send no model request, which holds (the estimate's /v1/models fetch is not a model request). The 'release after 14.7.4' wording was rewritten to 14.7.5 in 211655ad. 2026-11-19T08:42:47+0100 worker: git grep -nE '153fe531|9e036052|no release yet|release after 14\.7\.4' v14.7.5 -- skills README.md: only hit consumer-guidelines.md:5 (the marker definition). git merge-base --is-ancestor 4c1ab0c2, 9e43c164 and 48bdcdc3 v14.7.5: all exit 0. All items (1-13) are done. NOT moved: trddgrep move FP2SAF4P published --approver main-agent@llm-externalizer-plugin exit 2, 'FP2SAF4P has NO acceptance checklist, so archiving it as published would record a completion that proves nothing'. Column stays dev; needs a checklist (main agent decision) before the move.
+2026-11-19T08:42:51+0100 worker: precision on the previous line: 'all items (1-13) are done' means items 1-10, 12 and 13 per the notes above; item 11 was moved to TRDD-23J3NYW8 (note of 2026-11-19T04:19:35+0100).
+
+## Acceptance
+
+- [x] item 1: tests pin --estimate or --preview after a bare -- on the flat and grouped path (4c1ab0c2; the behaviour itself changed later in TRDD-23J3NYW8)
+- [x] item 2: classify.md --json rows added to the decision tables (9e43c164, 37 rows)
+- [x] items 3 and 4: the classify --preview and classify ping refusal texts are true, and the development-build wording is replaced (4c1ab0c2)
+- [x] item 5: one uncut --estimate help row pinned for each of the 15 decision commands other than filter (48bdcdc3)
+- [x] items 6, 9, 10, 12 and 13: the docs say what --estimate and ping --no-call send, give the measured llm cluster --estimate refusal, and write the decision-table rows whole from the help text (8dae0ca1)
+- [x] item 7: every measurement names its build (9e43c164)
+- [x] item 8: no 153fe531, 9e036052, no-release-yet or release-after-14.7.4 text is left in skills/ or README.md at v14.7.5 except the marker definition in consumer-guidelines.md:5 (git grep, main agent 2026-11-19; rewrite in 211655ad)
+- [~] item 11: not done here; moved to TRDD-23J3NYW8, which shipped in v14.7.5
+- [x] shipped in v14.7.5: 4c1ab0c2, 9e43c164, 48bdcdc3, 8dae0ca1 and 211655ad are ancestors of the tag (main agent 2026-11-19); release commit f0766476

@@ -1,10 +1,10 @@
 ---
 trdd-id: M2H4RJVQ
 title: Owner ratification of R1 and R4 and the scope of BL44BC32
-column: planned
-status: tasked
+column: complete
+status: archived
 created: 2026-11-04T13:40:52+0100
-updated: 2026-11-18T15:44:08+0100
+updated: 2026-11-19T09:04:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -21,6 +21,7 @@ Three coordinator readings await the owner (recorded on TRDD-ZB41KG62): R1 (2026
 ## Approval log
 2026-11-18T15:34:35+0100 main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): R1 ACCEPT: a commit body plus implementation-commits meets the commit-subject clause; history is never rewritten. R4 ACCEPT, both halves: the readStdin half is moot (S3QEQBYV complete, every readStdin site passes a real ended stream); a throwing never-called seam (extract.test.ts:539-540) is an injected sink that asserts non-use. BL44BC32 scope: OUT for 4Q1IVJOE (its commits add no spy; the index.test.ts spies blame 4bdd9b1b). Evidence: triage reports b1-blocked (4Q1IVJOE, XZZ2NSWY) and b3-review2 (M2H4RJVQ).
 - 2026-11-18T15:44:08+0100 — APPROVED by main-agent@llm-externalizer-plugin (min-approval-requirement: user). ruled by the main agent under the 2026-11-18 USER delegation, see Approval log.
+- 2026-11-19T09:04:50+0100 — COMPLETE by main-agent@llm-externalizer-plugin. rulings recorded; no card waits on this card.
 
 ## Notes
 
@@ -37,3 +38,8 @@ Three coordinator readings await the owner (recorded on TRDD-ZB41KG62): R1 (2026
 2026-11-04T14:14:40+0100 the decision predicates committed in 0a3e7c7c contained spaces, which drift's grammar (^decision:\S+$) treats as malformed; that failed safe (cards stayed blocked); they are replaced by single-token predicates.
 2026-11-04T14:14:40+0100 cards owning R4-reliant lines outside the seven blocked cards: MVT4DCHS, 17FAR6HF, BH78CSJO, APQ601NV, G168KDE1, LMS3JT0C (all backburner, not closed, on 2026-11-04) and V8Q20MLW (complete); if R4 is rejected without TRDD-S3QEQBYV, their test-doubles clause is unmet.
 2026-11-04T14:27:17+0100 once the owner answers the BL44BC32 scope question, the agent removes M2H4RJVQ from 4Q1IVJOE's blocked-by together with its decision predicate: drift releases a blocked-by id only when that card reaches a done column, and this proposal may never reach one.
+
+## Acceptance
+
+- [x] R1 ACCEPT, R4 ACCEPT and the BL44BC32 scope OUT for TRDD-4Q1IVJOE, by main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer), Approval log 2026-11-18T15:34:35
+- [x] no card waits on this card: no blocked-by or unblock-when line in design/tasks or design/proposals names M2H4RJVQ (grep, main agent 2026-11-19)

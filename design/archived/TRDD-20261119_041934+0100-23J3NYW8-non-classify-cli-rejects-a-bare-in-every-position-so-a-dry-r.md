@@ -1,10 +1,10 @@
 ---
 trdd-id: 23J3NYW8
 title: Non-classify CLI rejects a bare -- in every position so a dry-run flag after it is consumed and the command fails
-column: dev
-status: tasked
+column: published
+status: archived
 created: 2026-11-19T04:19:34+0100
-updated: 2026-11-19T06:15:50+0100
+updated: 2026-11-19T09:04:42+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-19T04:19:34+0100
 implementation-commits: [0319488e]
+release-via: publish
 ---
 
 # Non-classify CLI rejects a bare -- in every position so a dry-run flag after it is consumed and the command fails
@@ -26,9 +27,17 @@ Measured by the main agent on 2026-11-19, built CLI at commit 4c1ab0c2, temp HOM
 
 - 2026-11-19T04:19:34+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-19T06:07:46+0100 — column → dev. landed in 0319488e (main agent)
+- 2026-11-19T09:04:42+0100 — PUBLISHED by main-agent@llm-externalizer-plugin. shipped in v14.7.5 (release commit f0766476).
 
 ## Notes
 
 2026-11-19T04:24:07+0100 scope correction and full-capture re-measurement (main agent, 2026-11-19): the first body said every non-classify command; only scan folder, scan_folder and llm ask were run. Code scope: parseFlags is called once, at scripts/llm-ext/src/cli/main.ts line 876, for every non-classify tool that reaches that dispatch; commands handled before line 876 were not checked. Re-run on the built CLI at 4c1ab0c2 with the PAID test settings of estimate-positional-cli.test.ts, stdout and stderr captured to separate files and read whole: controls 'llm ask <file> --instructions x --estimate' and 'scan folder <dir> --estimate' exit 0 and print the ESTIMATE block; 'scan folder -- <dir> --estimate', 'scan folder -- <dir>', 'scan_folder -- --folder_path <dir> --estimate', 'llm ask -- <file> --instructions x --estimate', 'scan folder <dir> --estimate --' and 'scan folder <dir> -- --preview' each exit 1 with empty stdout, and the last stderr line is 'llm-ext: unknown flag -- for <invocation>'.
 2026-11-19T06:07:45+0100 main agent: done in 0319488e. Ruling (main agent, under the USER delegation of 2026-11-18, "solve all issues yourself. i need results."; not an owner answer): a bare -- is refused by name, not supported as the POSIX end of options, because every input of these commands is a named flag, a grouped command positional is turned into its flag by the launcher before parseFlags runs, support would need the launcher positional capture to take every token after --, and classify keeps its own -- handling (run-decision.ts). parseFlags (cli/main.ts:299-302) now dies with "a bare '--' is not supported by '<command>': its inputs are named flags (plus the positional argument, where the command has one), so remove the '--'. Run 'llm-ext <command> --help' to see its parameters."; estimate-positional-cli.test.ts pins it in six positions (the four old cases, scan folder -- ., llm ask -- a.txt --instructions x) and asserts the old text is gone; cli-conventions.md:27 says so (the old message is in the v14.3.0 and v14.7.4 sources, checked by the main agent). Worker: build, tsc, lint exit 0, the test file 15/15, and a bare -- on 12 more commands (settings status, models server-status, scout list-fieldsets, llm cluster, session compact, seven legacy verbs) prints the new message with exit 1. Commit hook UBS critical 0 (2 warnings on unchanged lines main.ts:205 and :857). Open: "the release after 14.7.4" in cli-conventions.md is rewritten to the real version at publish.
 2026-11-19T06:15:50+0100 main agent: the publish-time rewrite of cli-conventions.md:27 also replaces "earlier releases print" with "14.3.0 and 14.7.4 print": only those two release sources were checked, not the versions between them. Commit 0319488e gives the ruling without the full form; the full form is: main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer). A fresh trddgrep validate after the move (58 rows) has no row naming this card (main agent).
+2026-11-19T08:42:18+0100 worker: git merge-base --is-ancestor 0319488e v14.7.5 exit 0 (the only implementation commit); shipped in v14.7.5 (release commit f0766476, published 2026-11-19, main agent fact). NOT moved: trddgrep move 23J3NYW8 published --approver main-agent@llm-externalizer-plugin exit 2, '23J3NYW8 has NO acceptance checklist, so archiving it as published would record a completion that proves nothing'. Column stays dev; needs a checklist (main agent decision) before the move.
+
+## Acceptance
+
+- [x] decided: a bare -- is refused by name, not supported as the end of options (main agent ruling (delegated by USER 2026-11-18, "solve all issues yourself. i need results."; not an owner answer); reasons in the Notes line of 2026-11-19T06:07:45)
+- [x] parseFlags (cli/main.ts) dies with a message that names the bare '--' as not supported, and estimate-positional-cli.test.ts pins it in six positions and asserts the old 'unknown flag --' text is gone (commit 0319488e)
+- [x] shipped in v14.7.5: 0319488e is an ancestor of the tag (main agent 2026-11-19); release commit f0766476
