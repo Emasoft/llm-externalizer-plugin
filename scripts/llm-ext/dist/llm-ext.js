@@ -9982,6 +9982,7 @@ function unmarkedDynamicProfileNames(raw) {
 function loadSettings() {
   const settingsPath = getSettingsPath();
   try {
+    const profileTypesMigrated = isMigrationStepApplied(PROFILE_TYPE_STEP);
     if (!existsSync6(settingsPath)) return null;
     const raw = readFileSync6(settingsPath, "utf-8");
     const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
@@ -9996,7 +9997,7 @@ function loadSettings() {
       active_classifier: typeof parsed.active_classifier === "string" && parsed.active_classifier ? parsed.active_classifier : void 0,
       profiles: parsed.profiles || {},
       // PT-02: E81g turns on only once the migration has written the type into every profile (see profileTypesSettingsErrors); the migration record is the single source.
-      profileTypesMigrated: isMigrationStepApplied(PROFILE_TYPE_STEP),
+      profileTypesMigrated,
       // Absent / any non-true value <=> false: the safe (free) side. A YAML that
       // predates this key, or sets it to a typo, never accidentally enables paid.
       allow_paid_models: parsed.allow_paid_models === true,
