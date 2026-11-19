@@ -73,6 +73,19 @@ describe("llm-ext classify (built CLI)", () => {
     expect(r.stdout).not.toContain("--preview");
     expect(r.left).toEqual([]);
   });
+
+  // WHY (TRDD-FP2SAF4P item 5): ebeab4fd pinned the uncut --estimate row and a single row only for classify filter, leaving the other 15 decision commands unguarded against a cut or doubled row (cli/main.ts firstLine cuts a long row with "...").
+  it.each([
+    "verify", "screen", "label", "rank", "find", "decide", "compare", "extract", "audit", "review", "check", "findings", "test-output", "requirements", "rule-check",
+  ])("classify %s --help lists the uncut --estimate row exactly once and never --preview", async (action) => {
+    const r = await run(["classify", action, "--help"]);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/--estimate\s+\[boolean\] Dry run: print the estimated input cost \(an estimate, not a ceiling\); nothing is sent to Jev\./);
+    expect(r.stdout.match(/--estimate\s+\[boolean\]/g)).toHaveLength(1);
+    expect(r.stdout).not.toContain("--preview");
+    expect(r.left).toEqual([]);
+  });
+
   it("classify extract --help no longer says it is not usable from the command line", async () => {
     const r = await run(["classify", "extract", "--help"]);
     expect(r.stdout).not.toContain("Not usable from the command line yet");
