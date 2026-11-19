@@ -1,8 +1,8 @@
 # Guidelines for projects that call the llm-ext CLI
 
-For a project whose Claude session, scripts, hooks or CI run `llm-ext`. Nine questions, each answered as imperative guidance plus the reason. The statements and release markers were checked against the source at the tag v14.7.4, the latest release; no installed CLI was run.
+For a project whose Claude session, scripts, hooks or CI run `llm-ext`. Nine questions, each answered as imperative guidance plus the reason. The statements and release markers were checked against the source at the tag v14.7.5, the latest release; no installed CLI was run.
 
-Marker: "(since X)" means the behaviour is in release X and later; X is the first tag whose source has it, dated by tag and not by commit ancestry or CHANGELOG section. "(next release after 14.7.4: TRDD-xxxx)" means it is in the committed source after the v14.7.4 tag but in no release yet. "(planned, not in this release: TRDD-xxxx)" means it is only designed or still in progress. If `llm-ext --version` prints less than the version in a "(since ...)" marker, do not rely on that behaviour; do not rely on a "next release" or "planned" behaviour until a release is documented to carry it. Live `llm-ext <group> <action> --help` always wins over this file.
+Marker: "(since X)" means the behaviour is in release X and later; X is the first tag whose source has it, dated by tag and not by commit ancestry or CHANGELOG section. "(next release after 14.7.5: TRDD-xxxx)" means it is in the committed source after the v14.7.5 tag but in no release yet. "(planned, not in this release: TRDD-xxxx)" means it is only designed or still in progress. If `llm-ext --version` prints less than the version in a "(since ...)" marker, do not rely on that behaviour; do not rely on a "next release" or "planned" behaviour until a release is documented to carry it. Live `llm-ext <group> <action> --help` always wins over this file.
 
 ## 1. Which profile to pass, and the missing `active:` key
 
