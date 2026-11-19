@@ -435,6 +435,8 @@ export async function fetchWithRetry429(
       }
       // Attached before every rethrow and the sleep: the code of the NEWEST failure rides on the error.
       const fields: FailureFields = { networkCode: networkCodeOf(err, url) };
+      // TRDD-3XKBS1YX: classifyFailure reads only the host name, so the port of a fetch-blocked url rides on the fields for its hint.
+      if (fields.networkCode === BAD_PORT_CODE) fields.port = new URL(url).port;
       if (err instanceof Error) attachFailure(err, fields);
       newestNetworkError = err;
       // The verdict is taken at the FIRST failure, before the clock starts and before any sleep.
@@ -654,6 +656,8 @@ export interface FailureFields {
   providerRaw?: string;
   retryAfterMs?: number;
   networkCode?: string;
+  /** TRDD-3XKBS1YX: the url port, set only with networkCode BAD_PORT_CODE, so the verdict hint can name it. */
+  port?: string;
   final?: "stop" | "budget";
   hint?: string;
   /** One-line OpenRouter provider-state text (inc 4), set only for a provider-side status on the primary OpenRouter host; read by the classifier, never by message/trail. */
@@ -781,6 +785,9 @@ export function httpFailureFields(res: Response, text: string): FailureFields {
 
 const NETWORK_CODE_MAX_DEPTH = 5;
 
+/** Not a system code: the marker networkCodeOf returns for fetch bad-port rejections (TRDD-3XKBS1YX); in no retry/isolation set. */
+export const BAD_PORT_CODE = "FETCH_BAD_PORT";
+
 /**
  * The system error code behind a failed fetch. undici wraps it as
  * `TypeError: fetch failed` with the code on `.cause`; node's happy-eyeballs
@@ -846,6 +853,10 @@ function walkNetworkCode(err: unknown, depth: number, openrouterHost: boolean): 
     if (refused > 0) return "ECONNREFUSED";
   }
   if (typeof code === "string") return code;
+  // TRDD-3XKBS1YX: fetch rejects a WHATWG bad-ports port (1, 6000, 10080, ...) with TypeError "fetch failed" whose cause is
+  // Error "bad port" with NO code (measured on node 20.5.1, 22.23.4 and 26.12.1), so the exact message is the only discriminator: a
+  // different Error that happened to say "bad port" would be misread, accepted because the walk is already inside a fetch failure chain.
+  if (err instanceof Error && err.message === "bad port") return BAD_PORT_CODE;
   return walkNetworkCode(cause, depth + 1, openrouterHost);
 }
 
@@ -924,6 +935,12 @@ export function classifyFailure(f: FailureFields, host: string, window?: GiveUpW
     // A DNS failure cannot bill (neverSent) and may heal within the window only for the real service.
     if (isOpenRouterHost(host)) return { neverSent: true };
     return { budget: { key: "dns", tries: NAME_LOOKUP_TRIES }, hint: `the host name ${host} cannot be resolved; check the base URL` };
+  }
+  // TRDD-3XKBS1YX: fetch itself refuses the port before any connect, so every retry fails the same way: stop at once and name the
+  // port. Without this the code-less error took the generic backoff ladder, 4 times in completion.ts (about 13 s), then only "fetch failed".
+  if (code === BAD_PORT_CODE) {
+    const where = host === "" ? "the configured endpoint" : host;
+    return { stop: true, hint: `fetch blocks port ${f.port ?? "(unknown)"} of ${where} (WHATWG bad-ports list); retrying cannot help, use another port in the profile url` };
   }
   if (TLS_CODES.has(code) || code.startsWith("ERR_TLS") || code.startsWith("ERR_SSL")) {
     return { stop: true, hint: `TLS certificate error (${code}); retrying cannot help` };

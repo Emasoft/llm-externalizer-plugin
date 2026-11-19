@@ -13,8 +13,9 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chatCompletionSimple, chatCompletionJSON } from "./completion.js";
+import { chatCompletionSimple, chatCompletionJSON, chatCompletionWithRetry } from "./completion.js";
 import {
+  BAD_PORT_CODE,
   classifyFailure,
   computeBackoffMs,
   consumesAttempt,
@@ -147,6 +148,19 @@ describe("classifyFailure verdict table", () => {
     expect(code).toBe("ENOTFOUND");
     expect(classifyFailure({ networkCode: code }, "openrouter.ai")).toEqual({ neverSent: true });
     expect(classifyFailure({ networkCode: "EAI_AGAIN" }, "api.openrouter.ai")).toEqual({ neverSent: true });
+  });
+
+  it("TRDD-3XKBS1YX: a fetch bad-port rejection (code-less cause \"bad port\") maps to a stop verdict whose hint names host and port; other code-less errors keep {}", () => {
+    const badPort = new TypeError("fetch failed", { cause: new Error("bad port") });
+    const code = networkCodeOf(badPort, "http://127.0.0.1:1/v1");
+    expect(code).toBe(BAD_PORT_CODE);
+    const v = classifyFailure({ networkCode: code, port: "1" }, "127.0.0.1");
+    expect(v.stop).toBe(true);
+    expect(v.hint).toContain("port 1 of 127.0.0.1");
+    // An ordinary code-less error is no bad port: no code, no verdict.
+    const plain = new TypeError("fetch failed", { cause: new Error("something else") });
+    expect(networkCodeOf(plain, "http://127.0.0.1:1/v1")).toBeUndefined();
+    expect(classifyFailure({ networkCode: networkCodeOf(plain, "http://127.0.0.1:1/v1") }, "127.0.0.1")).toEqual({});
   });
 
   it("D7 gives an attempt back only when a clock bounds the call", () => {
@@ -291,6 +305,27 @@ describe("fetchWithRetry429 consumes the verdict at the first failure", () => {
     expect(failureOf(err)?.networkCode).toBe("ECONNREFUSED");
   });
 
+});
+
+describe("a fetch-blocked port stops at the first failure (TRDD-3XKBS1YX)", () => {
+  it("real fetch to 127.0.0.1:1: 1 attempt, final=stop, hint names the port", async () => {
+    const clock: RetryClock = {};
+    const err = await caught(fetchWithRetry429("http://127.0.0.1:1/x", { method: "POST", body: "{}" }, 60_000, Date.now(), undefined, clock));
+    expect(failureOf(err)?.networkCode).toBe(BAD_PORT_CODE);
+    expect(failureOf(err)?.final).toBe("stop");
+    expect(failureOf(err)?.hint).toContain("port 1 of 127.0.0.1");
+    expect(clock.attempts).toBe(1);
+  });
+});
+
+describe("a fetch-blocked port ends the outer completion.ts retry loop too (TRDD-3XKBS1YX)", () => {
+  it("chatCompletionWithRetry to 127.0.0.1:1 throws the stop error well inside the 13 s the 4 ladders took, hint on the error", async () => {
+    const started = Date.now();
+    const err = await caught(chatCompletionWithRetry(MESSAGES, { model: "m", deadlineAt: Date.now() + 60_000 }, depsFor("http://127.0.0.1:1")));
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(failureOf(err)?.final).toBe("stop");
+    expect(failureOf(err)?.hint).toContain("port 1 of 127.0.0.1");
+  }, 20_000);
 });
 
 describe("TLS errors stop at the first failure", () => {
