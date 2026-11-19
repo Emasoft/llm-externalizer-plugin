@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-19T01:36:14+0100
+updated: 2026-11-19T04:03:00+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -78,6 +78,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 2026-11-19T01:10:01+0100 worker note, recorded here because NL2012O9, 09905HDI and H0JE5W6K were moved to published and archived on 2026-11-19 before their Approval-log line could be appended (archived cards refuse every write). The line they should carry: 'column → published by main-agent@llm-externalizer-plugin. shipped in v14.7.3 (release commit ac3fcdef, tags v14.7.3 and llm-externalizer--v14.7.3, release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.3, published 2026-11-19T00:57+0100); every implementation-commits SHA verified an ancestor of v14.7.3 (NL2012O9 21699151 and 0a682690; 09905HDI and H0JE5W6K 3cb60045) per the worker's git merge-base --is-ancestor check on 2026-11-19'.
 2026-11-19T01:18:36+0100 main agent corrections (written by worker): (a) the note of 2026-11-19T01:08:40 says the main agent is filing a CPV issue about reports/; none was filed because CPV issues 274 and 275 already cover it. The RC-164 false positive on vitest breadcrumbs was filed as CPV issue 281. (b) Commit e3f8fe54 states 'every implementation commit is an ancestor of v14.7.3 (merge-base check)' as a main-agent fact; the merge-base checks were run by the worker, not repeated by the main agent. (c) CI for ac3fcdef (checked by the main agent 2026-11-19): Release success, Notify Marketplace success, Windows failure (Windows stays experimental, TRDD-61EINA10), Linux CI still running at the time of this note.
 2026-11-19T01:36:14+0100 v14.7.3 (ac3fcdef): CI and Release green, Notify Marketplace green, Windows failed (experimental, TRDD-61EINA10). Status comments posted on GitHub 15 (issuecomment-6995802802) and 16 (issuecomment-6995803110); both issues stay open until 14.7.4. WP8W8L5E fix committed as 0e6fa5fb.
+2026-11-19T04:02:59+0100 main agent: v14.7.4 published 2026-11-19 (release commit 91601633; publish log reports_dev/publish/20261119_025450+0100-14.7.4-publish.log, all gates OK, line 411 Published v14.7.4). GitHub runs on 91601633: CI success, Release success, Notify Marketplace success, Windows failure (experimental; its 195 failing test names are identical to the v14.7.3 set, all carded under TRDD-61EINA10). Installed plugin updated to 14.7.4 (claude plugin update); llm-ext --version prints 14.7.4 from a plain terminal. GitHub issues #15 and #16 closed with item-by-item comments. Cards closed after the release: WP8W8L5E, MI0UJQF1, NC7873YO, GBWVXEF6, YRRZJ5UH, 7B7TAQGD, 0W932B0H, 7ZA3EE6Z, 61EINA10, YHGYWPHQ. Open, waiting on USER decisions: WYY3SPDX (label --context wording, check 1 missed bar b for both builds), DRRUTC2M, DS6OM3KX, M2H4RJVQ, TH00STOO.
 
 ## Next
 
