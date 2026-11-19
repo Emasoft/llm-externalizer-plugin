@@ -329,6 +329,16 @@ def require_tools() -> None:
         sys.exit(1)
 
 
+def run_build_check(repo_root: Path) -> bool:
+    """Run the full build check (tsc --noEmit + esbuild bundle) in scripts/llm-ext.
+
+    WHY: extracted from run_checks so a test can run the real build step against a
+    temp repo with a stale dist, instead of a stand-in (TRDD-EWU9OAYI).
+    """
+    mcp_dir = str(repo_root / "scripts" / "llm-ext")
+    return _run_check("build", ["npm", "run", "build"], mcp_dir, repo_root)
+
+
 def run_checks(repo_root: Path) -> bool:
     """Run every mandatory check on the plugin. Fail-fast on any error.
 
@@ -396,7 +406,7 @@ def run_checks(repo_root: Path) -> bool:
 
     # 4. Full build — esbuild bundle, catches runtime import errors and
     # bundler issues that tsc --noEmit doesn't see.
-    if not _run_check("build", ["npm", "run", "build"], mcp_dir, repo_root):
+    if not run_build_check(repo_root):
         return False
 
     # 5. Tests — all must pass. No flakes allowed, no skips allowed.
