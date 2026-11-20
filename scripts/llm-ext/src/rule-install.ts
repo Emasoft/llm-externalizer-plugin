@@ -101,7 +101,8 @@ export interface RuleInstallResult {
  *  write outside the allowed roots. */
 function canonical(p: string): string {
   try {
-    return realpathSync(p);
+    // TRDD-LA1MA1EL: native returns the long on-disk form on Windows (plain realpathSync keeps 8.3 short names such as RUNNER~1), so it matches the homedir() root below.
+    return realpathSync.native(p);
   } catch {
     const parent = dirname(p);
     if (parent === p) return p;
@@ -115,7 +116,7 @@ function underAllowedRoot(dir: string): boolean {
   const d = canonical(dir);
   const roots: string[] = [];
   try {
-    roots.push(realpathSync(homedir()));
+    roots.push(realpathSync.native(homedir()));
   } catch {
     roots.push(homedir());
   }
@@ -126,7 +127,7 @@ function underAllowedRoot(dir: string): boolean {
   // correctly on every platform (e.g. Windows %TEMP%, where "/tmp" doesn't exist).
   const tmp = tmpdir();
   try {
-    roots.push(realpathSync(tmp));
+    roots.push(realpathSync.native(tmp));
   } catch {
     roots.push(tmp);
   }

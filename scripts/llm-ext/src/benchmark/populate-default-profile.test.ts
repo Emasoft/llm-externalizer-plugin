@@ -1512,7 +1512,7 @@ describe("paid sweep — per-call daily-spend booking (P5 §2.5 requirement 1/2)
     // macOS) — comparing the raw strings would false-fail on every macOS run.
     // This one assertion carries the test: it failed red on the HEAD archive
     // (pre-fix resolveMainRoot() falls back to process.cwd(), not cfgReal).
-    const cfgReal = realpathSync(cfg);
+    const cfgReal = realpathSync.native(cfg); // native, like getConfigDir() (TRDD-LA1MA1EL)
     expect(sweep!.reportPath.startsWith(cfgReal + "/")).toBe(true);
   });
 });

@@ -228,7 +228,8 @@ export function sanitizeInputPath(filePath: string): string {
   // separately, which let an attacker craft `/tmp/../private/tmp/...` to
   // skip the resolved-prefix check on the macOS realpath form.
   const realpathSafe = (p: string): string => {
-    try { return realpathSync(p); } catch { return p; }
+    // TRDD-LA1MA1EL: native, so the cwd/home/tmp roots and the candidate path share the long Windows form (plain realpathSync keeps 8.3 short names).
+    try { return realpathSync.native(p); } catch { return p; }
   };
   const cwdReal = realpathSafe(resolve(process.cwd()));
   const homeReal = realpathSafe(
@@ -239,7 +240,7 @@ export function sanitizeInputPath(filePath: string): string {
   // and is a symlink we want the link target's identity to be checked. The
   // leaf-symlink rejection below still applies, so this is defense in depth.
   const resolvedReal = (() => {
-    try { return realpathSync(resolved); } catch { return resolved; }
+    try { return realpathSync.native(resolved); } catch { return resolved; }
   })();
   // Cross-platform sep handling — the previous version concatenated a
   // forward-slash separator unconditionally, which made every path on

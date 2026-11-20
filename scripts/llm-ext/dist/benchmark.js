@@ -8625,7 +8625,7 @@ function localsModelErrors(where, models, managed) {
 }
 function assertNotRealConfigDirUnderTest(dir, env) {
   if (!env.VITEST) return;
-  const canonical = (p) => existsSync6(p) ? realpathSync(p) : resolve(p);
+  const canonical = (p) => existsSync6(p) ? realpathSync.native(p) : resolve(p);
   const realDefault = canonical(join4(userInfo().homedir, ".llm-externalizer"));
   if (canonical(dir) === realDefault) {
     throw new Error(
@@ -8637,7 +8637,7 @@ function getConfigDir() {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join4(homedir3(), ".llm-externalizer"));
   function resolveDeepestExisting(p) {
     try {
-      return realpathSync(p);
+      return realpathSync.native(p);
     } catch {
     }
     const parent = join4(p, "..");
@@ -8649,14 +8649,14 @@ function getConfigDir() {
   assertNotRealConfigDirUnderTest(dir, process.env);
   const home = (() => {
     try {
-      return realpathSync(homedir3());
+      return realpathSync.native(homedir3());
     } catch {
       return homedir3();
     }
   })();
   const tmpCanonical = (() => {
     try {
-      return realpathSync("/tmp");
+      return realpathSync.native("/tmp");
     } catch {
       return "/tmp";
     }
@@ -221327,7 +221327,7 @@ function sanitizeInputPath(filePath) {
   const resolved = resolve4(filePath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync2.native(p);
     } catch {
       return p;
     }
@@ -221339,7 +221339,7 @@ function sanitizeInputPath(filePath) {
   const tmpReal = realpathSafe(resolve4("/tmp"));
   const resolvedReal = (() => {
     try {
-      return realpathSync2(resolved);
+      return realpathSync2.native(resolved);
     } catch {
       return resolved;
     }

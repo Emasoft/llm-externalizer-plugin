@@ -323,7 +323,7 @@ describe("config dir handling", () => {
   it("honors LLM_EXT_CONFIG_DIR for the history path", () => {
     // getConfigDir() canonicalizes via realpathSync (e.g. /tmp → /private/tmp on
     // macOS), so compare against the realpath-resolved expectation.
-    expect(getHistoryPath()).toBe(join(realpathSync(tmp), "history.log"));
+    expect(getHistoryPath()).toBe(join(realpathSync.native(tmp), "history.log")); // native, like getConfigDir() (TRDD-LA1MA1EL)
   });
 });
 

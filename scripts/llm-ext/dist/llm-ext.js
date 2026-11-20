@@ -9847,7 +9847,7 @@ function localsModelErrors(where, models, managed) {
 }
 function assertNotRealConfigDirUnderTest(dir, env) {
   if (!env.VITEST) return;
-  const canonical2 = (p) => existsSync6(p) ? realpathSync(p) : resolve(p);
+  const canonical2 = (p) => existsSync6(p) ? realpathSync.native(p) : resolve(p);
   const realDefault = canonical2(join4(userInfo().homedir, ".llm-externalizer"));
   if (canonical2(dir) === realDefault) {
     throw new Error(
@@ -9859,7 +9859,7 @@ function getConfigDir() {
   const raw = resolve(process.env.LLM_EXT_CONFIG_DIR || join4(homedir3(), ".llm-externalizer"));
   function resolveDeepestExisting(p) {
     try {
-      return realpathSync(p);
+      return realpathSync.native(p);
     } catch {
     }
     const parent = join4(p, "..");
@@ -9871,14 +9871,14 @@ function getConfigDir() {
   assertNotRealConfigDirUnderTest(dir, process.env);
   const home = (() => {
     try {
-      return realpathSync(homedir3());
+      return realpathSync.native(homedir3());
     } catch {
       return homedir3();
     }
   })();
   const tmpCanonical = (() => {
     try {
-      return realpathSync("/tmp");
+      return realpathSync.native("/tmp");
     } catch {
       return "/tmp";
     }
@@ -13707,7 +13707,7 @@ function sanitizeInputPath(filePath) {
   const resolved = resolve3(filePath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync2.native(p);
     } catch {
       return p;
     }
@@ -13719,7 +13719,7 @@ function sanitizeInputPath(filePath) {
   const tmpReal = realpathSafe(resolve3("/tmp"));
   const resolvedReal = (() => {
     try {
-      return realpathSync2(resolved);
+      return realpathSync2.native(resolved);
     } catch {
       return resolved;
     }
@@ -288255,7 +288255,7 @@ function resolveClaudeRulesDir() {
 }
 function canonical(p) {
   try {
-    return realpathSync9(p);
+    return realpathSync9.native(p);
   } catch {
     const parent = dirname23(p);
     if (parent === p) return p;
@@ -288266,7 +288266,7 @@ function underAllowedRoot(dir) {
   const d = canonical(dir);
   const roots = [];
   try {
-    roots.push(realpathSync9(homedir7()));
+    roots.push(realpathSync9.native(homedir7()));
   } catch {
     roots.push(homedir7());
   }
@@ -288275,7 +288275,7 @@ function underAllowedRoot(dir) {
   }
   const tmp = tmpdir4();
   try {
-    roots.push(realpathSync9(tmp));
+    roots.push(realpathSync9.native(tmp));
   } catch {
     roots.push(tmp);
   }
@@ -288749,7 +288749,7 @@ function reloadSettingsFromDisk() {
     );
     return { ok: false, error: parseError };
   }
-  const newSettings = { ...freshSettings, active: effectiveProfileName(activeSettings) };
+  const newSettings = { ...freshSettings, active: effectiveProfileName(settingsLoadFailed ? freshSettings : activeSettings) };
   {
     const verdict = evaluateSettingsValidity(newSettings);
     if (!verdict.valid) {
@@ -288760,10 +288760,12 @@ function reloadSettingsFromDisk() {
       return { ok: false, error: verdict.error };
     }
   }
+  settingsLoadFailed = false;
   applyNewSettings(newSettings);
   return { ok: true, error: "" };
 }
 function repairInvalidActiveGeneratedProfile() {
+  if (settingsLoadFailed) return "";
   const effective = effectiveProfileName(activeSettings);
   if (effective !== "free" && effective !== "paid") return "";
   if (inlineRegeneratedThisProcess.has(effective)) {
@@ -288844,6 +288846,7 @@ function applyNewSettings(newSettings) {
 }
 function overrideActiveProfile(name, source = "default") {
   profileSelectionSource = source;
+  if (settingsLoadFailed) return { ok: false, error: settingsError };
   const builtinLocalNames = new Set(builtinLocalProfiles().map((b) => b.name));
   const userProfiles = Object.fromEntries(Object.entries(activeSettings.profiles).filter(([n]) => n === name || !builtinLocalNames.has(n)));
   if (source === "default" && hasNoTextProfile(userProfiles)) {
@@ -291901,7 +291904,7 @@ function writeBootBanner() {
   process.stderr.write(`Session log: ${LOG_FILE}
 `);
 }
-var localSizingMemo, SETTINGS_FILE, settingsValid, settingsError, activeSettings, activeResolved, profileSelectionSource, DEFAULT_OPENROUTER_RPS, DEFAULT_MAX_IN_FLIGHT_REMOTE, DEFAULT_TEMPERATURE, SOFT_TIMEOUT_MS, FALLBACK_CONTEXT_LENGTH, MODEL_CACHE_TTL_MS, RELOAD_VERSION, currentBackend, inlineRegeneratedThisProcess, openRouterModelCache, openRouterCacheTime, cachedRateLimitConfig, rateLimitCacheTime, session, creditExhausted, forceFreeByMasterSwitch, _activeRequests, _activeRequestsDrained, SESSION_ID, SESSION_START, LOG_DIR, LOG_FILE, STATS_FILE, providerDeps, OUTAGE_PROBE_TIMEOUT_MS, ProviderOutageError, SERVICE_LEVEL_STATUS_RE, NON_TRANSIENT_4XX_RE, RECONCILE_SKIP_TOOLS, scoutingOnlyTools, ServiceAbortError, LocalFallbackRefusedError, LocalFallbackNotReady, localFallbackLatch, LLM_TOOLS_SET, _booted;
+var localSizingMemo, SETTINGS_FILE, settingsValid, settingsError, settingsLoadFailed, activeSettings, activeResolved, profileSelectionSource, DEFAULT_OPENROUTER_RPS, DEFAULT_MAX_IN_FLIGHT_REMOTE, DEFAULT_TEMPERATURE, SOFT_TIMEOUT_MS, FALLBACK_CONTEXT_LENGTH, MODEL_CACHE_TTL_MS, RELOAD_VERSION, currentBackend, inlineRegeneratedThisProcess, openRouterModelCache, openRouterCacheTime, cachedRateLimitConfig, rateLimitCacheTime, session, creditExhausted, forceFreeByMasterSwitch, _activeRequests, _activeRequestsDrained, SESSION_ID, SESSION_START, LOG_DIR, LOG_FILE, STATS_FILE, providerDeps, OUTAGE_PROBE_TIMEOUT_MS, ProviderOutageError, SERVICE_LEVEL_STATUS_RE, NON_TRANSIENT_4XX_RE, RECONCILE_SKIP_TOOLS, scoutingOnlyTools, ServiceAbortError, LocalFallbackRefusedError, LocalFallbackNotReady, localFallbackLatch, LLM_TOOLS_SET, _booted;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
@@ -291977,6 +291980,7 @@ var init_index = __esm({
     SETTINGS_FILE = getSettingsPath();
     settingsValid = false;
     settingsError = "";
+    settingsLoadFailed = false;
     activeSettings = (() => {
       try {
         ensureSettingsExist();
@@ -291985,6 +291989,7 @@ var init_index = __esm({
         settingsError = `Failed to load settings: ${err3 instanceof Error ? err3.message : String(err3)}
 
 Settings file: ${SETTINGS_FILE}`;
+        settingsLoadFailed = true;
         process.stderr.write(`[llm-externalizer] \u26A0 ${settingsError}
 `);
         return generateDefaultSettings();
@@ -292007,6 +292012,7 @@ Settings file: ${SETTINGS_FILE}`;
     }
     activeResolved = (() => {
       const targetName = effectiveProfileName(activeSettings);
+      if (settingsLoadFailed) return null;
       const verdict = evaluateSettingsValidity(activeSettings);
       if (!verdict.valid) {
         settingsError = `${verdict.error}

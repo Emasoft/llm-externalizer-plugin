@@ -881,7 +881,8 @@ export const API_PRESETS: Record<string, ApiPreset> = {
  */
 export function assertNotRealConfigDirUnderTest(dir: string, env: NodeJS.ProcessEnv): void {
   if (!env.VITEST) return;
-  const canonical = (p: string): string => (existsSync(p) ? realpathSync(p) : resolve(p));
+  // TRDD-LA1MA1EL: native on both sides, same long-name form as getConfigDir() (plain realpathSync keeps 8.3 short names on Windows).
+  const canonical = (p: string): string => (existsSync(p) ? realpathSync.native(p) : resolve(p));
   const realDefault = canonical(join(userInfo().homedir, ".llm-externalizer"));
   if (canonical(dir) === realDefault) {
     throw new Error(
@@ -898,8 +899,15 @@ export function getConfigDir(): string {
   // Without this, mkdirSync(dir, { recursive: true }) follows symlinks in the
   // existing prefix while the guard sees only the unresolved string, allowing
   // directory creation outside allowed paths.
+  // WHY realpathSync.native (TRDD-LA1MA1EL): plain realpathSync keeps 8.3 short names on Windows
+  // (the runner temp dir is C:\Users\RUNNER~1\... while homedir() is C:\Users\runneradmin), so the
+  // string-prefix check below rejected a config dir that really is under home. The native variant
+  // (GetFinalPathNameByHandle on Windows, realpath(3) elsewhere) returns the long on-disk form, so
+  // both sides of the comparison must use it. No case-insensitive compare is needed: the compared
+  // prefixes are resolved by native too (home exists; /tmp may not on Windows, where the literal "/tmp" fallback is kept and can only match a literal-"/tmp" dir), so on-disk case agrees on both sides; only the
+  // non-existing tail keeps the caller's case, and the tail is never part of the compared prefix. (INFERRED from the Node/Windows API behaviour, not exercised on Windows: only the Windows CI run can confirm it.)
   function resolveDeepestExisting(p: string): string {
-    try { return realpathSync(p); } catch { /* p doesn't exist */ }
+    try { return realpathSync.native(p); } catch { /* p doesn't exist */ }
     const parent = join(p, "..");
     if (parent === p) return p; // filesystem root
     const resolvedParent = resolveDeepestExisting(parent);
@@ -911,8 +919,8 @@ export function getConfigDir(): string {
   // M8: Path traversal guard — config dir must be under homedir() or /tmp.
   // Resolve home and /tmp through symlinks so the comparison uses canonical paths
   // (e.g. /tmp → /private/tmp on macOS; homedir() may also be a symlink).
-  const home = (() => { try { return realpathSync(homedir()); } catch { return homedir(); } })();
-  const tmpCanonical = (() => { try { return realpathSync("/tmp"); } catch { return "/tmp"; } })();
+  const home = (() => { try { return realpathSync.native(homedir()); } catch { return homedir(); } })();
+  const tmpCanonical = (() => { try { return realpathSync.native("/tmp"); } catch { return "/tmp"; } })();
   const sep = process.platform === "win32" ? "\\" : "/";
   const underHome = dir.startsWith(home + sep) || dir === home;
   const underTmp = dir.startsWith(tmpCanonical + sep) || dir === tmpCanonical;

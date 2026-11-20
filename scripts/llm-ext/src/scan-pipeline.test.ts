@@ -523,9 +523,9 @@ describe("sanitizeInputPath — rejection names the allowed roots (TRDD-1FJAUVBU
     }
     // The refusal must come from the traversal check, not be absent because cwd is an ancestor of /etc.
     expect(message).toContain("Path traversal blocked");
-    expect(message).toContain(realpathSync(process.cwd()));
+    expect(message).toContain(realpathSync.native(process.cwd())); // sanitizeInputPath resolves natively (TRDD-LA1MA1EL)
     expect(message).toContain(fakeHome);
-    expect(message).toContain(realpathSync("/tmp"));
+    expect(message).toContain(realpathSync.native("/tmp"));
     expect(message).toMatch(/parent directory/);
     expect(message).toMatch(/copy/);
   });
