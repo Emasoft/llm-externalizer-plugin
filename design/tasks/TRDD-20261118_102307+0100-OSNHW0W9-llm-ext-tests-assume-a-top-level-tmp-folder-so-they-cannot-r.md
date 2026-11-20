@@ -4,7 +4,7 @@ title: llm-ext tests assume a top-level tmp folder, so they cannot run on Window
 column: todo
 status: tasked
 created: 2026-11-18T10:23:07+0100
-updated: 2026-11-20T02:06:52+0100
+updated: 2026-11-20T02:45:08+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -33,3 +33,5 @@ Found 2026-11-18 by the first Windows CI run (TRDD-61EINA10, run on v14.7.1). Th
 2026-11-18T16:54:35+0100 Run 44305836777 G1 (36 tests) config dir outside allowed paths (RUNNER~1); G1 shares the config guard (config.ts:918-921) with this card but has its own card, TRDD-LA1MA1EL; verify after the fix, else keep both.
 2026-11-20 (main agent read config.ts:895-922): getConfigDir resolves the config dir and homedir() with plain realpathSync and compares them by string prefix. On the Windows runner the temp dir is C:\Users\RUNNER~1\AppData\Local\Temp\..., the home folder in 8.3 short form, while home resolves to C:\Users\runneradmin, so the prefix check fails. INFERRED, not run: realpathSync.native returns the long name, which would fix group G1 (36 failures) without widening the allowlist. Map: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
 2026-11-20: shares the inferred cause with TRDD-LA1MA1EL (G1); whether it is one defect and whether fix 9315510b works are unverified until the next Windows CI run.
+[2026-11-20T02:42:32+0100] windows.yml creates the top-level /tmp with node before the unit tests (stopgap), so a literal "/tmp" works on the Windows runner; the repo fix this card tracks would remove that step. Report: reports_dev/la1ma1el/20261120_023212+0100-hermetic-portable.md (status PARTIAL; the Windows result of test 1 is UNVERIFIED). Counts by its regex heuristic: 141 test files mention /tmp (345 hits). A = 116 files with a same-line filesystem call on literal "/tmp" and no win32 mention; B = 25 files with /tmp in strings only; C = 13 files that mention win32. C1 (win32-mentioning files with an unguarded /tmp call, per the report; paths relative to llm-ext/src/): bench-spawn.test.ts:55-56; governor/governor.test.ts:352-353 and :587-588; network-give-up.test.ts:54 (helper, call sites not read); tools/settings-copy.test.ts:10.
+[2026-11-20T02:45:04+0100] Correction to the windows.yml note above, verified: windows.yml is not in this checkout (HEAD has only ci.yml, release.yml, notify-marketplace.yml). It exists at commit 2fc59306 (branch dev/after-14.3.0, not an ancestor of HEAD) as .github/workflows/windows.yml. Its stopgap step "Create the top-level /tmp the unit tests assume" is at lines 101-105 (node -e mkdirSync('/tmp') at line 105); the unit tests run at lines 114-117. Whether a literal "/tmp" works on the Windows runner is UNVERIFIED: no run result was read.

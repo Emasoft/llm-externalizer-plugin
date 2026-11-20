@@ -4,7 +4,7 @@ title: CLI test that discover, get_settings, list_profiles and profile run after
 column: todo
 status: tasked
 created: 2026-11-20T02:00:33+0100
-updated: 2026-11-20T02:01:20+0100
+updated: 2026-11-20T02:41:58+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -30,3 +30,7 @@ FBWXV4JF (6f1089eb, archived) refuses work commands after a settings load that t
 ## Acceptance
 
 - [ ] a test runs the built CLI with settings.yaml made a directory and asserts discover (or get_settings) exits 0 and a work command exits non-zero naming 'Failed to load settings'
+
+## Notes
+
+[2026-11-20T02:41:51+0100] the card's premise "discover (or get_settings) exits 0" was wrong for show and status (both exit 1 with a diagnostic) and hid a bug for profiles and profile (exit 0 with an error text); the ruling and the fix are in TRDD-8DMLEAW8; this card keeps the built-CLI test.
