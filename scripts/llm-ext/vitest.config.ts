@@ -31,6 +31,8 @@ export default defineConfig({
       'src/profile-type-migration.test.ts',
       // TRDD-VBAJX5A1: the boot path re-reads settings.yaml after the migrations even when another process changed it; real files in a temp llm-ext-* config dir.
       'src/boot-settings.test.ts',
+      // TRDD-Y7G1ZRBG: settings.yaml read retries only the Windows sharing-violation codes; a read error never regenerates the file.
+      'src/settings-read-retry.test.ts',
       // TRDD-SZ7TO9FW inc 1: the unified verdict module over the six benchmark stores; real files in a temp llm-ext-* dir.
       'src/profiles/verdicts.test.ts',
       // TRDD-SZ7TO9FW increment 2: the pure resolution chain (the include list is explicit).

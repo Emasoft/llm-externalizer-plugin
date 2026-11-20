@@ -8717,14 +8717,37 @@ function unmarkedDynamicProfileNames(raw) {
     return [];
   }
 }
+function sleepSync2(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function readSettingsFileRetrying(settingsPath, read = (p) => (settingsReadSeam.read ?? ((q) => readFileSync6(q, "utf-8")))(p), sleep2 = (ms) => (settingsReadSeam.sleep ?? sleepSync2)(ms), retryTransient = settingsReadSeam.retryTransient ?? process.platform === "win32") {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return read(settingsPath);
+    } catch (err) {
+      const code = err.code;
+      if (!retryTransient || attempt >= SETTINGS_READ_RETRY_DELAYS_MS.length || typeof code !== "string" || !TRANSIENT_READ_CODES.has(code)) throw err;
+      sleep2(SETTINGS_READ_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+function parseSettingsText(raw) {
+  const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
+  return parsed && typeof parsed === "object" ? parsed : null;
+}
 function loadSettings() {
   const settingsPath = getSettingsPath();
   try {
     const profileTypesMigrated = isMigrationStepApplied(PROFILE_TYPE_STEP);
-    if (!existsSync6(settingsPath)) return null;
-    const raw = readFileSync6(settingsPath, "utf-8");
-    const parsed = JSON.parse(JSON.stringify((0, import_yaml.parse)(raw)));
-    if (!parsed || typeof parsed !== "object") return null;
+    let raw;
+    try {
+      raw = readSettingsFileRetrying(settingsPath);
+    } catch (readErr) {
+      if (readErr.code === "ENOENT") return null;
+      throw readErr;
+    }
+    const parsed = parseSettingsText(raw);
+    if (!parsed) return null;
     return {
       // WHY (TRDD-G6XT3AY9): active: is a live selector again -- this is the
       // raw value effectiveProfileName()/validateSettings() read. undefined
@@ -9895,7 +9918,7 @@ function assertFreeOnlyModel(freeOnly, billable, model, isFreeProvider = false) 
     );
   }
 }
-var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, LOCAL_DECISION_API, GENERATED_MARKER, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_PRICE_CEILING_USD_PER_M, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
+var import_yaml, QUANT_TIERS, HIGH_QUALITY_MODEL_DEFAULTS, VALID_HQ_REASONING, rosettaArm64Probe, API_PRESETS, OPENROUTER_PLUGIN_OPTION_ENV, USER_CONFIG_ENV_MAP, LOCAL_TERM, LOCAL_URL_PATTERN, SETTINGS_READ_RETRY_DELAYS_MS, TRANSIENT_READ_CODES, settingsReadSeam, DYNAMIC_PROFILE_NAMES, MARKED_PROFILE_NAMES, DEFAULT_PROFILE_NAME, DYNAMIC_GENERATED_KEYS, DYNAMIC_USER_OWNED_KEYS, SELECTION_ALLOWED_KEYS, PROFILE_TYPES, PROFILE_TYPE_FIELDS, BUILTIN_TYPE_BY_NAME, BUILTIN_PROFILE_NAMES, PROFILE_TYPE_STEP, OPENROUTER_PROVIDER_KEYS, OPENROUTER_TRACE_KEYS, LOCAL_DECISION_API, GENERATED_MARKER, DEFAULT_ENSEMBLE_PRICE_CEILING_USD_PER_M, DEFAULT_PAID_DAILY_CAP_USD, DEFAULT_SCOUT_PRICE_CEILING_USD_PER_M, DEFAULT_SCOUT_ACCURACY_TARGET_BYTES, DEFAULT_SCOUT_ACCURACY_THRESHOLD, PLACEHOLDER_MODEL_ID, FREE_POOL_SEED, _activeFreeOnly, _activeRoutesFor, _activeBackendBillable;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
@@ -10073,6 +10096,9 @@ var init_config = __esm({
       ].join("|"),
       "i"
     );
+    SETTINGS_READ_RETRY_DELAYS_MS = [10, 20, 40, 60, 70];
+    TRANSIENT_READ_CODES = /* @__PURE__ */ new Set(["EPERM", "EBUSY", "EACCES"]);
+    settingsReadSeam = {};
     DYNAMIC_PROFILE_NAMES = ["free", "paid", "local"];
     MARKED_PROFILE_NAMES = [...DYNAMIC_PROFILE_NAMES, "scouting", "or-jev"];
     DEFAULT_PROFILE_NAME = "free";

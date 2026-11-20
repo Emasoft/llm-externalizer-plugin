@@ -1188,6 +1188,67 @@ function unmarkedDynamicProfileNames(raw: string): string[] {
 }
 
 /**
+ * Delays between the attempts of readSettingsFileRetrying (total 200 ms, so 6 attempts).
+ * WHY (TRDD-Y7G1ZRBG): on Windows a read that lands while another llm-ext process renames its temp file over settings.yaml
+ * (writeSettingsAtomic) can fail for a few milliseconds with a sharing violation (EPERM, EBUSY or EACCES). loadSettings turns
+ * any read error into null, and since TRDD-VBAJX5A1 / TRDD-FBWXV4JF a null at boot refuses every work request, and
+ * ensureSettingsExist would even take the null for a corrupt file and replace it with defaults. POSIX renames are atomic, so
+ * there the first attempt always wins.
+ */
+export const SETTINGS_READ_RETRY_DELAYS_MS: readonly number[] = [10, 20, 40, 60, 70];
+const TRANSIENT_READ_CODES: ReadonlySet<string> = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/** Test seam (TRDD-Y7G1ZRBG): lets a test drive the real loadSettings / ensureSettingsExist through the Windows retry path on any platform. Production never sets it. */
+export const settingsReadSeam: {
+  read?: (p: string) => string;
+  sleep?: (ms: number) => void;
+  retryTransient?: boolean;
+} = {};
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Read settings.yaml as utf-8, retrying ONLY the transient sharing-violation codes (EPERM, EBUSY, EACCES) over at most
+ * SETTINGS_READ_RETRY_DELAYS_MS. Any other error (ENOENT, EISDIR, ...) and the last transient error after the final attempt
+ * propagate unchanged: no fallback value, nothing swallowed (TRDD-Y7G1ZRBG).
+ */
+export function readSettingsFileRetrying(
+  settingsPath: string,
+  read: (p: string) => string = (p) => (settingsReadSeam.read ?? ((q) => readFileSync(q, "utf-8")))(p),
+  sleep: (ms: number) => void = (ms) => (settingsReadSeam.sleep ?? sleepSync)(ms),
+  // WHY gated on win32: POSIX renames are atomic, so there an EPERM/EACCES is a real permission error; retrying it would only block the event loop 200 ms per loadSettings call (many callers) for the same failure.
+  retryTransient: boolean = settingsReadSeam.retryTransient ?? process.platform === "win32",
+): string {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return read(settingsPath);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (!retryTransient || attempt >= SETTINGS_READ_RETRY_DELAYS_MS.length || typeof code !== "string" || !TRANSIENT_READ_CODES.has(code)) throw err;
+      sleep(SETTINGS_READ_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
+/**
+ * The one parse step of settings.yaml text, shared by loadSettings and ensureSettingsExist so both agree on what "does not parse" means (TRDD-Y7G1ZRBG).
+ * Throws on invalid YAML; returns null when the document is not a mapping/object. H10: the JSON round trip strips __proto__ (prototype pollution).
+ */
+function parseSettingsText(raw: string): ReturnType<typeof JSON.parse> | null {
+  const parsed = JSON.parse(JSON.stringify(yamlParse(raw)));
+  return parsed && typeof parsed === "object" ? parsed : null;
+}
+
+function settingsTextIsCorrupt(raw: string): boolean {
+  try {
+    return parseSettingsText(raw) === null;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Load settings.yaml from the config directory.
  * Returns null if the file doesn't exist or can't be parsed.
  */
@@ -1196,11 +1257,17 @@ export function loadSettings(): Settings | null {
   try {
     // WHY (TRDD-7LZI31WW, 2026-11-19): read the migration record BEFORE the file. The profile-type-written step writes the typed file and only then records the step, so reading the file first let a concurrent boot pair an untyped file with a record that says applied (E81g on, seen in the 14.7.6 publish gate in background-singleton.test.ts SG2). With the record first, a record that says applied means that writer had already renamed the typed file into place, and a record that says not applied keeps E81g off. Not covered here: an untyped file restored from a backup or synced from another machine while the record says applied; the next migration pass re-stamps it (benchmark/pick.ts, PT-02 lockout fix).
     const profileTypesMigrated = isMigrationStepApplied(PROFILE_TYPE_STEP);
-    if (!existsSync(settingsPath)) return null;
-    const raw = readFileSync(settingsPath, "utf-8");
+    // WHY (TRDD-Y7G1ZRBG): no existsSync pre-check: it swallows every error and answers false, and on Windows it may do so while another process renames its temp file over settings.yaml, which would turn that window into a silent null. A missing file is ENOENT from the read itself (null, as before); retry only the Windows sharing-violation codes, see SETTINGS_READ_RETRY_DELAYS_MS.
+    let raw: string;
+    try {
+      raw = readSettingsFileRetrying(settingsPath);
+    } catch (readErr) {
+      if ((readErr as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw readErr;
+    }
     // H10: Sanitize YAML output to strip __proto__ and prevent prototype pollution
-    const parsed = JSON.parse(JSON.stringify(yamlParse(raw)));
-    if (!parsed || typeof parsed !== "object") return null;
+    const parsed = parseSettingsText(raw);
+    if (!parsed) return null;
     return {
       // WHY (TRDD-G6XT3AY9): active: is a live selector again -- this is the
       // raw value effectiveProfileName()/validateSettings() read. undefined
@@ -2593,7 +2660,8 @@ export function ensureSettingsExist(): Settings {
     process.stderr.write(
       `[llm-externalizer] Generated default settings at ${settingsPath}\n`,
     );
-  } else if (!loadSettings()) {
+  } else if (settingsTextIsCorrupt(readSettingsFileRetrying(settingsPath))) {
+    // WHY (TRDD-Y7G1ZRBG): corrupt means the file WAS READ and does not parse. The old test, `!loadSettings()`, was also true for a failed READ (a Windows sharing violation that outlasts the retry, a permission error), and that regenerated a good settings.yaml with defaults behind a backup the user never needed. A read error now propagates unchanged from the read above (fail fast; the boot catch sets settingsLoadFailed), and the file is left untouched.
     // File exists but is corrupt/unparseable. Back it up BEFORE writing a
     // fresh one — never destroy data we could not read; the user's hand-
     // written profiles may still be recoverable by hand from the backup.
