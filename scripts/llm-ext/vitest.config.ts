@@ -45,6 +45,8 @@ export default defineConfig({
       'src/boot-reload-validity.test.ts',
       // TRDD-FBWXV4JF: a settings load that throws at boot refuses every request (never serves on the generated default profile); real index.ts import, real dispatch.
       'src/boot-failed-settings.test.ts',
+      // TRDD-I6KUI1X6: after a failed boot load no settings.yaml writer persists the generated default document; real index.ts import, real files in a temp llm-ext-* dir.
+      'src/boot-default-settings-writers.test.ts',
       'src/parallel-repair.test.ts',
       // P6c-b: doc/config guard — the README/configuration-guide facts about
       // profile selection, the free/paid dynamic profiles and the free-unfit
