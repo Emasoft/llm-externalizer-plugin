@@ -5394,6 +5394,9 @@ async function dispatchCallToolInner(
             get settingsValid() {
               return settingsValid;
             },
+            get settingsLoadFailed() {
+              return settingsLoadFailed;
+            },
           },
         );
 
@@ -5579,10 +5582,13 @@ async function dispatchCallToolInner(
         // EFFECTIVE profile's resolved settings to stdout, so the user sees
         // them without opening a file — then ALSO copy the raw settings.yaml
         // to the output dir (unchanged prior behaviour) for manual editing.
-        const summary = formatActiveProfileSummary(
+        // WHY (TRDD-LFWV2DKG): same as list_profiles — a failed boot load stays an error even when the file is readable again; the formatter re-reads the disk.
+        if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
+        const summaryResult = formatActiveProfileSummary(
           effectiveProfileName(activeSettings),
           getProfileSelectionSource(),
         );
+        const summary = summaryResult.text;
         try {
           const raw = readFileSync(SETTINGS_FILE, "utf-8");
           // TRDD-PNU8XECB: a copy of settings.yaml is tool configuration (it can name keys and private
@@ -5594,6 +5600,8 @@ async function dispatchCallToolInner(
           const keptNote = keptPath === undefined ? "" : `\nPrevious differing copy kept as: ${keptPath}`;
           return {
             content: [{ type: "text", text: `${summary}\n\nFull settings file copied to: ${copyPath}${keptNote}` }],
+            // WHY (TRDD-8DMLEAW8): a dangling active: or an unresolvable profile still gets the copy the user needs to fix the file, and stays an error (non-zero exit).
+            isError: summaryResult.isError,
           };
         } catch (err) {
           // Resolved-profile summary still printed even when the copy fails
@@ -5632,8 +5640,13 @@ async function dispatchCallToolInner(
         // profile in settings.yaml, one line each, with a `*` marker on the
         // EFFECTIVE one for this invocation. Read-only — never mutates
         // settings.yaml.
+        // WHY (TRDD-LFWV2DKG): the boot load can fail while settings.yaml is readable again by now (transient lock/read error); the formatter re-reads the disk and would
+        // then list the user's file as if the boot had loaded it. A failed boot load is an error whatever the file holds now.
+        if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
+        const listed = formatProfilesList(effectiveProfileName(activeSettings));
         return {
-          content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }],
+          content: [{ type: "text", text: listed.text }],
+          isError: listed.isError,
         };
       }
 
@@ -5642,6 +5655,9 @@ async function dispatchCallToolInner(
         // settings.yaml + 'reset') — see the tool description. This case only
         // ever reads activeSettings.profiles / the effective profile name; it
         // never writes settings.yaml.
+        // WHY (TRDD-LFWV2DKG): after a failed settings load activeSettings is the generated default; `--show <name>` or the list would resolve and print
+        // that in-memory default as if it were the user's configuration. Fail fast with the same error the gate and boot use.
+        if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
         const profileNames = Object.keys(activeSettings.profiles);
         if (profileNames.length === 0) {
           // Fail fast: an empty profiles map is a configuration error, not "no
@@ -5706,8 +5722,10 @@ async function dispatchCallToolInner(
 
         // Default: list every profile, one line each (single source of truth
         // shared with `settings profiles` / `list_profiles` — config.ts).
+        const listed = formatProfilesList(effectiveProfileName(activeSettings));
         return {
-          content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }],
+          content: [{ type: "text", text: listed.text }],
+          isError: listed.isError,
         };
       }
 

@@ -49,6 +49,8 @@ export default defineConfig({
       'src/boot-failed-settings.test.ts',
       // TRDD-I6KUI1X6: after a failed boot load no settings.yaml writer persists the generated default document; real index.ts import, real files in a temp llm-ext-* dir.
       'src/boot-default-settings-writers.test.ts',
+      // TRDD-LFWV2DKG: the gate-exempt tools stay errors after a failed boot load even when settings.yaml is readable again; real index.ts import, real dispatch.
+      'src/boot-failed-settings-exempt-tools.test.ts',
       'src/parallel-repair.test.ts',
       // P6c-b: doc/config guard — the README/configuration-guide facts about
       // profile selection, the free/paid dynamic profiles and the free-unfit
@@ -105,6 +107,8 @@ export default defineConfig({
       'src/cli/grouped-help-shape.test.ts',
       // readAllFrom (TRDD-S3QEQBYV): real-stream stdin reader.
       'src/cli/read-all.test.ts',
+      // TRDD-LFWV2DKG: built CLI end to end with a settings.yaml whose load throws.
+      'src/cli/failed-settings-cli.test.ts',
       // Cost-safety guard — default test backend must never bill (TRDD-e82f2c49).
       'src/test-helpers.test.ts',
       'src/grouping.test.ts',

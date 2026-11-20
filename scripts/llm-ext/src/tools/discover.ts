@@ -13,7 +13,7 @@ import { readCandidates } from "../dynamic-candidates.js";
 import { detectLMStudio } from "../provider/lmstudio.js";
 import type { CaseCall, CaseDeps, ToolResult } from "./dispatch-deps.js";
 
-export async function handleDiscover(call: CaseCall, deps: Pick<CaseDeps, "FALLBACK_CONTEXT_LENGTH" | "LOG_FILE" | "SETTINGS_FILE" | "SOFT_TIMEOUT_MS" | "activeFreePool" | "activeResolved" | "activeSettings" | "fetchOpenRouterModels" | "getContextLength" | "getProfileSelectionSource" | "getRateLimitConfig" | "isFreeModeActive" | "listModelsRaw" | "providerDeps" | "resolveDefaultMaxTokens" | "session" | "settingsError" | "settingsValid">): Promise<ToolResult> {
+export async function handleDiscover(call: CaseCall, deps: Pick<CaseDeps, "FALLBACK_CONTEXT_LENGTH" | "LOG_FILE" | "SETTINGS_FILE" | "SOFT_TIMEOUT_MS" | "activeFreePool" | "activeResolved" | "activeSettings" | "fetchOpenRouterModels" | "getContextLength" | "getProfileSelectionSource" | "getRateLimitConfig" | "isFreeModeActive" | "listModelsRaw" | "providerDeps" | "resolveDefaultMaxTokens" | "session" | "settingsError" | "settingsLoadFailed" | "settingsValid">): Promise<ToolResult> {
   const { backend } = call;
   const { LOG_FILE, SETTINGS_FILE, activeFreePool, fetchOpenRouterModels, getContextLength, getProfileSelectionSource, getRateLimitConfig, isFreeModeActive, listModelsRaw, providerDeps, resolveDefaultMaxTokens, session } = deps;
   const parts: string[] = [];
@@ -24,9 +24,10 @@ export async function handleDiscover(call: CaseCall, deps: Pick<CaseDeps, "FALLB
     parts.push(deps.settingsError);
     parts.push(`\nSettings file: ${SETTINGS_FILE}`);
     parts.push(`Session log: ${LOG_FILE}`);
-    // Show available profiles even when not configured
+    // Show available profiles even when not configured -- but not after a failed settings load: activeSettings is then the generated default
+    // document, and listing its profile names would present them as the user's (WHY, TRDD-LFWV2DKG). A file that loaded but failed validation is listed.
     const profileNames = Object.keys(deps.activeSettings.profiles);
-    if (profileNames.length > 0) {
+    if (!deps.settingsLoadFailed && profileNames.length > 0) {
       parts.push(`\nAvailable profiles: ${profileNames.join(", ")}`);
     }
     // Show available API presets

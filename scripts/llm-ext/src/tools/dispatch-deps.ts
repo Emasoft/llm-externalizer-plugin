@@ -124,6 +124,8 @@ export interface CaseDeps {
   readonly activeSettings: Settings;
   readonly settingsValid: boolean;
   readonly settingsError: string;
+  /** True when the boot settings load threw: activeSettings is then the generated default, not the user's file (TRDD-LFWV2DKG). */
+  readonly settingsLoadFailed: boolean;
   readonly FALLBACK_CONTEXT_LENGTH: number;
   readonly SOFT_TIMEOUT_MS: number;
   SETTINGS_FILE: string;
