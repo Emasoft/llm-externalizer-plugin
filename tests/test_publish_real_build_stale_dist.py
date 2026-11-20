@@ -116,5 +116,5 @@ def test_real_build_without_node_modules_fails_and_writes_the_log(tmp_path, caps
     assert publish.run_build_check(repo) is False
     assert "build failed" in capsys.readouterr().err
     log = (repo / "reports_dev" / "publish" / "build.log").read_text(encoding="utf-8")
-    # WHY: a bare "not found" matches unrelated failures; only the missing @types/node (TS2688) or a missing tsc names the missing dependency.
-    assert re.search(r"TS2688.*'node'", log) or re.search(r"\btsc\b[^\n]*not found", log), log
+    # WHY: a bare "not found" matches unrelated failures. The shell's missing-command wording is "sh: tsc: command not found" (bash/zsh sh) or "sh: 1: tsc: not found" (dash); the pattern "tsc: (command )?not found" matches both and not a tsc message about a missing file. Only the missing @types/node (TS2688) or a missing tsc names the missing dependency.
+    assert re.search(r"TS2688.*'node'", log) or re.search(r"\btsc: (?:command )?not found", log), log
