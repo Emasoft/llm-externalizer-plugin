@@ -10179,12 +10179,17 @@ function validateClassifierProfile(name, profile) {
   }
   return errors;
 }
+function nonMapProfileError(name, profile) {
+  if (profile !== null && typeof profile === "object" && !Array.isArray(profile)) return void 0;
+  const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
+  return `Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`;
+}
 function profileTypesSettingsErrors(settings, skip) {
   const errors = [];
   for (const [name, profile] of Object.entries(settings.profiles)) {
-    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
-      const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
-      errors.push(`Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`);
+    const notMap = nonMapProfileError(name, profile);
+    if (notMap !== void 0) {
+      errors.push(notMap);
       continue;
     }
     if (profile["profile-type"] === void 0) {
@@ -11693,6 +11698,11 @@ Settings file is present but its 'profiles' map is empty.`;
   for (const profileName of profileNames) {
     const profile = settings.profiles[profileName];
     const marker = profileName === name ? "* " : "  ";
+    const notMap = nonMapProfileError(profileName, profile);
+    if (notMap !== void 0) {
+      lines.push(`${marker}${notMap}`);
+      continue;
+    }
     const owner = isDynamicProfileName(profileName) ? " [machine-managed]" : "";
     let modelSummary;
     if (isUnpopulatedDefaultProfile(profileName, profile)) {
@@ -12401,13 +12411,14 @@ async function selectionCatalogErrors(input8, loadCatalog) {
 async function profileCatalogErrors(settings, name, fetch2, options = {}) {
   const profile = settings.profiles[name];
   if (profile === void 0) throw new Error(`profileCatalogErrors: profile '${name}' is not defined`);
+  if (nonMapProfileError(name, profile) !== void 0) return [];
   const model = profile.model;
   if (typeof model !== "string" || model.length === 0) return [];
   return selectionCatalogErrors({ name, type: inferProfileType(name, profile), model, fetch: fetch2, endpoint: profile.endpoint, ...options });
 }
 async function selectedChatProfileErrors(settings, name, accepted, fetch2, options = {}) {
   const profile = settings.profiles[name];
-  if (accepted === ANY_PROFILE_TYPE || profile === void 0) return [];
+  if (accepted === ANY_PROFILE_TYPE || profile === void 0 || nonMapProfileError(name, profile) !== void 0) return [];
   const type = inferProfileType(name, profile);
   if (type === "classifier" || !accepted.includes(type)) return [];
   return profileCatalogErrors(settings, name, fetch2, options);
@@ -277523,7 +277534,7 @@ function readyLocalTarget(settings, configDir, o = {}) {
   const names2 = setting.profile !== void 0 ? [setting.profile] : [...locals ? ["locals-mlx"] : [], "local_llama"];
   for (const name of names2) {
     const profile = settings.profiles[name];
-    if (profile === void 0 || profile.server !== "managed") continue;
+    if (profile === void 0 || nonMapProfileError(name, profile) !== void 0 || profile.server !== "managed") continue;
     const engine = localEngineOf(profile.api);
     if (engine === null) continue;
     if (engine === "locals" && !locals) continue;
@@ -286884,7 +286895,7 @@ async function resolveSessionSummaryChain(s) {
     write(`[llm-externalizer] session-summary: runs on free OpenRouter models and managed local models only; the models of profile '${s.active.name}' are not used
 `);
   }
-  const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => profiles[n] !== void 0 ? [resolveProfile(n, profiles[n])] : []);
+  const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => nonMapProfileError(n, profiles[n]) === void 0 ? [resolveProfile(n, profiles[n])] : []);
   const pick3 = pickLocalSummaryTargets(candidates, s.slotCtx);
   for (const note of pick3.notes) write(`[llm-externalizer] session-summary: ${note}
 `);

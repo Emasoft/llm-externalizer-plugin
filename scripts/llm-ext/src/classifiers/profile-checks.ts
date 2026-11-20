@@ -1,5 +1,5 @@
 // PF-02 (plan §8): checks that need the decisions catalog, run when a profile is selected and in `settings validate`; loading settings never calls these.
-import { inferProfileType, type ProfileType, type Settings } from "../config.js";
+import { inferProfileType, nonMapProfileError, type ProfileType, type Settings } from "../config.js";
 import { ANY_PROFILE_TYPE } from "../profile-accept.js";
 import { loadDecisionsCatalog, readCachedDecisionsCatalog, type DecisionsModel } from "./l0/catalog.js";
 import { resolveModel } from "./l0/model.js";
@@ -74,6 +74,8 @@ export async function profileCatalogErrors(
 ): Promise<string[]> {
   const profile = settings.profiles[name];
   if (profile === undefined) throw new Error(`profileCatalogErrors: profile '${name}' is not defined`);
+  // GG44R65K: a non-map entry (`foo:` = null) is reported by the settings load (nonMapProfileError); skipping it here keeps `profile.model` from throwing a TypeError on null. settingsCatalogErrors reaches this check for every profile.
+  if (nonMapProfileError(name, profile) !== undefined) return [];
   const model: unknown = profile.model;
   if (typeof model !== "string" || model.length === 0) return [];
   // WHY no endpoint guard: a value outside the union is reported by validateClassifierProfile (config.ts, run by validateProfile and by resolveClassifierProfile); only === "systemone" is acted on here.
@@ -94,7 +96,8 @@ export async function selectedChatProfileErrors(
   options: SelectionCheckOptions = {},
 ): Promise<string[]> {
   const profile = settings.profiles[name];
-  if (accepted === ANY_PROFILE_TYPE || profile === undefined) return [];
+  // GG44R65K: a non-map entry (`foo:` = null) is reported by the settings load; inferProfileType would read `profile["profile-type"]` on null and throw a TypeError.
+  if (accepted === ANY_PROFILE_TYPE || profile === undefined || nonMapProfileError(name, profile) !== undefined) return [];
   const type = inferProfileType(name, profile);
   if (type === "classifier" || !accepted.includes(type)) return [];
   return profileCatalogErrors(settings, name, fetch, options);

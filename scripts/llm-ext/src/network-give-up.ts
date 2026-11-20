@@ -8,7 +8,7 @@ import { delimiter, isAbsolute, join } from "node:path";
 import type { BrokerEngine } from "./broker/protocol.js";
 import { snapshotWeightFiles, ggufShards } from "./calibration/fingerprint.js";
 import { readRecordStatus } from "./calibration/record.js";
-import { fallbackToLocalSetting, isDynamicProfileName, localsPlatformSupported, networkGiveUpErrors, type ResolvedProfile, type Settings } from "./config.js";
+import { fallbackToLocalSetting, isDynamicProfileName, localsPlatformSupported, networkGiveUpErrors, nonMapProfileError, type ResolvedProfile, type Settings } from "./config.js";
 import { freeFailureCause, isNetworkIsolation } from "./free-failure-cause.js";
 import { localEngineOf } from "./local-input-budget.js";
 import { hfCacheDir, parseManagedModel } from "./local-llama-server.js";
@@ -247,7 +247,8 @@ export function readyLocalTarget(settings: Settings, configDir: string, o: Ready
   const names = setting.profile !== undefined ? [setting.profile] : [...(locals ? ["locals-mlx"] : []), "local_llama"];
   for (const name of names) {
     const profile = settings.profiles[name];
-    if (profile === undefined || profile.server !== "managed") continue;
+    // GG44R65K: a non-map entry (`local_llama:` empty = null) is reported by the settings load; `profile.server` on null threw a TypeError here, on the failure path of a live request, when the automatic candidate list reaches it.
+    if (profile === undefined || nonMapProfileError(name, profile) !== undefined || profile.server !== "managed") continue;
     const engine = localEngineOf(profile.api);
     if (engine === null) continue;
     // TRDD-M4KERGEF: the platform gate is per ENGINE, so a pinned Locals profile is not tried where Locals cannot run; for the

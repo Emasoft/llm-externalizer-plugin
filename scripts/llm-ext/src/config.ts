@@ -1743,6 +1743,16 @@ export function validateClassifierProfile(name: string, profile: Profile): strin
 }
 
 /**
+ * GG44R65K: the load error for a profile entry that is not a YAML map (`foo: 3`, `foo: "x"`, an empty `foo:`, `foo: [1]`), or undefined for a map.
+ * WHY one helper: the load (profileTypesSettingsErrors) and the `settings profiles` list (formatProfilesList) must say the same thing, and the list must not read fields of the entry.
+ */
+export function nonMapProfileError(name: string, profile: unknown): string | undefined {
+  if (profile !== null && typeof profile === "object" && !Array.isArray(profile)) return undefined;
+  const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
+  return `Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`;
+}
+
+/**
  * Settings-level profile-type errors for EVERY profile (a typo in a profile
  * that is not selected must still fail the load): E81g when `profileTypesMigrated`
  * is set, plus E81d/E113 for every profile except `skip`, which validateProfile
@@ -1754,10 +1764,10 @@ export function validateClassifierProfile(name: string, profile: Profile): strin
 export function profileTypesSettingsErrors(settings: Settings, skip?: string): string[] {
   const errors: string[] = [];
   for (const [name, profile] of Object.entries(settings.profiles)) {
-    // GG44R65K, fail fast: a profile entry that is not a YAML map (`foo: 3`, `foo: "x"`, an empty `foo:`, `foo: [1]`) can never be used. It used to be skipped here without a word, so the load passed unless `foo` was the active profile (and then the error did not say "not a map"). The check is not gated on `profileTypesMigrated` and not on `skip`: it runs on every load and for the effective profile too, because validateProfile never says what is really wrong with a non-map.
-    if (profile === null || typeof profile !== "object" || Array.isArray(profile)) {
-      const got = profile === null ? "null" : Array.isArray(profile) ? "array" : typeof profile;
-      errors.push(`Profile '${name}' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got}). Fix or delete it in settings.yaml.`);
+    // GG44R65K, fail fast: a profile entry that is not a YAML map can never be used. It used to be skipped here without a word, so the load passed unless `foo` was the active profile (and then the error did not say "not a map"). The check is not gated on `profileTypesMigrated` and not on `skip`: it runs on every load and for the effective profile too, because validateProfile never says what is really wrong with a non-map.
+    const notMap = nonMapProfileError(name, profile);
+    if (notMap !== undefined) {
+      errors.push(notMap);
       continue;
     }
     if (profile["profile-type"] === undefined) {
@@ -4815,6 +4825,12 @@ export function formatProfilesList(effectiveName?: string): string {
   for (const profileName of profileNames) {
     const profile = settings.profiles[profileName];
     const marker = profileName === name ? "* " : "  ";
+    // GG44R65K: a non-map entry (`foo:` = null, `foo: 3`) is reported by the settings load; reading `profile.free_only` on null threw a TypeError here, so the list printed nothing at all. Print the same wording as the load and go on with the other profiles.
+    const notMap = nonMapProfileError(profileName, profile);
+    if (notMap !== undefined) {
+      lines.push(`${marker}${notMap}`);
+      continue;
+    }
     const owner = isDynamicProfileName(profileName) ? " [machine-managed]" : "";
 
     // An unpopulated default profile must NOT print its sentinel model id.

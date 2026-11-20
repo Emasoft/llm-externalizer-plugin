@@ -26,7 +26,7 @@
  * calibration wait, stderr) is injected, so the selection is tested against real temp dirs with no network.
  */
 
-import { resolveProfile, type Profile, type ResolvedProfile } from "../config.js";
+import { nonMapProfileError, resolveProfile, type Profile, type ResolvedProfile } from "../config.js";
 import type { BrokerEngine } from "../broker/protocol.js";
 import { engineOf } from "../calibration/commands.js";
 import { resolveRequestOptions } from "../provider/request-options.js";
@@ -354,7 +354,8 @@ export async function resolveSessionSummaryChain<D>(s: SessionSummaryChainSeams<
   if (s.active !== null && !s.active.isLocal && !s.active.freeOnly) {
     write(`[llm-externalizer] session-summary: runs on free OpenRouter models and managed local models only; the models of profile '${s.active.name}' are not used\n`);
   }
-  const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => (profiles[n] !== undefined ? [resolveProfile(n, profiles[n])] : []));
+  // GG44R65K: nonMapProfileError is undefined only for a map, so it also covers the missing entry; a null entry (`local_llama:` empty) passed the old `!== undefined` test and resolveProfile threw a TypeError on it. The settings load reports the entry.
+  const candidates = localOnly && s.active !== null ? [s.active] : LOCAL_SUMMARY_PROFILES.flatMap((n) => (nonMapProfileError(n, profiles[n]) === undefined ? [resolveProfile(n, profiles[n])] : []));
   const pick = pickLocalSummaryTargets(candidates, s.slotCtx);
   for (const note of pick.notes) write(`[llm-externalizer] session-summary: ${note}\n`);
   const locals = localOnly || s.minContext === undefined ? pick.targets : [];

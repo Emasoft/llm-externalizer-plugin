@@ -335,4 +335,27 @@ describe("row 75 — the placeholder exemption is gated on settingsLevelErrors, 
     const mod = await loadFreshIndex(UNMARKED_PAID_YAML);
     expect(mod.__getBootStateForTests()).toEqual({ settingsValid: false, activeResolved: false });
   });
+
+  // GG44R65K: an empty `free:` (null) is the one non-map entry that shouldBootDespiteInvalidActiveProfile -> isPlaceholderProfile would throw on, because `free` is a dynamic name. evaluateSettingsValidity must never ask it: the not-a-map error is settings-level, so boot refuses with it instead of crashing, and a reload reports it.
+  it("(iv) a null `free:` active entry (a hand-authored reserved name) fails boot, does not crash, and a reload of it is rejected", async () => {
+    const NULL_FREE_YAML = ["active: free", "profiles:", "  free:", ""].join("\n");
+    const mod = await loadFreshIndex(FRESH_INSTALL_YAML);
+    expect(mod.__getBootStateForTests()).toEqual({ settingsValid: true, activeResolved: true });
+    writeSettings(NULL_FREE_YAML);
+    const rejected = mod.__reloadSettingsFromDiskForTests();
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error).toContain("settings.yaml defines 'free' by hand");
+    const booted = await loadFreshIndex(NULL_FREE_YAML);
+    expect(booted.__getBootStateForTests()).toEqual({ settingsValid: false, activeResolved: false });
+  });
+
+  // GG44R65K: the non-reserved case: an empty active `foo:` has no reserved-name refusal to hide behind, so the not-a-map error alone must stop boot and the reload. This test pins only the boot state and the "is not a map" message; it stays green without the settingsLevelErrors gate (a non-dynamic name never reaches the null read), the gate itself is pinned by (iv).
+  it("(v) a null non-reserved active entry fails boot and reload with the not-a-map error", async () => {
+    const NULL_FOO_YAML = ["active: foo", "profiles:", "  foo:", ""].join("\n");
+    const booted = await loadFreshIndex(NULL_FOO_YAML);
+    expect(booted.__getBootStateForTests()).toEqual({ settingsValid: false, activeResolved: false });
+    const rejected = booted.__reloadSettingsFromDiskForTests();
+    expect(rejected.ok).toBe(false);
+    expect(rejected.error).toContain("Profile 'foo' is not a map");
+  });
 });

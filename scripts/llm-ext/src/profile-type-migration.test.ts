@@ -10,9 +10,15 @@ import { tmpdir } from "./test-tmp-root.js";
 import { localProfileStepIds, migrateSettingsTo141, writeDynamicProfileSection, addProfileToSettings } from "./benchmark/pick.js";
 import { isMigrationStepApplied, markMigrationStepApplied } from "./default-profiles-state.js";
 import { managedProfileModels } from "./calibration/triggers.js";
+import { profileCatalogErrors, selectedChatProfileErrors, settingsCatalogErrors } from "./classifiers/profile-checks.js";
+import { readyLocalTarget } from "./network-give-up.js";
+import { resolveClassifierProfile } from "./classifiers/l2/profile.js";
+import { resolveSessionSummaryChain } from "./session_summary/local-model.js";
 import {
   PROFILE_TYPE_STEP,
   DYNAMIC_PROFILE_NAMES,
+  formatProfilesList,
+  resolveProfile,
   builtinProfileType,
   renderDefaultSettingsYaml,
   unpopulatedDefaultProfile,
@@ -305,4 +311,107 @@ describe("GG44R65K non-map profile entries fail the load naming the profile", ()
       expect(active.errors.join("\n")).toContain("Profile 'foo' is not a map");
     });
   }
+});
+
+// GG44R65K follow-up: the consumers that still read fields of a non-map entry after the load reported it.
+describe("GG44R65K non-map profile entries do not crash the settings list or the catalog checks", () => {
+  const NO_NETWORK = async (): Promise<Response> => {
+    throw new Error("no network call expected for a non-map entry");
+  };
+  const withNullEntry = (): void => {
+    writeFileSync(getSettingsPath(), "active: lmstudio\n" + SETTINGS.replace("  lmstudio:", "  foo:\n  lmstudio:"), "utf-8");
+  };
+
+  it("formatProfilesList prints the null entry as not a map and still lists the other profiles", () => {
+    withNullEntry();
+    let text = "";
+    expect(() => {
+      text = formatProfilesList("lmstudio");
+    }).not.toThrow();
+    expect(text).toContain("Profile 'foo' is not a map");
+    expect(text).toContain("(got null)");
+    expect(text).toContain("lmstudio");
+  });
+
+  for (const [label, line, got] of [["a number", "  foo: 3", "number"], ["an array", "  foo: [1]", "array"]] as const) {
+    it(`formatProfilesList names ${label} entry as not a map (got ${got})`, () => {
+      writeFileSync(getSettingsPath(), "active: lmstudio\n" + SETTINGS.replace("  lmstudio:", `${line}\n  lmstudio:`), "utf-8");
+      expect(formatProfilesList("lmstudio")).toContain(`Profile 'foo' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got})`);
+    });
+  }
+
+  it("profileCatalogErrors skips a null entry instead of throwing", async () => {
+    withNullEntry();
+    await expect(profileCatalogErrors(loadSettings()!, "foo", NO_NETWORK)).resolves.toEqual([]);
+  });
+
+  it("selectedChatProfileErrors skips a null entry instead of throwing", async () => {
+    withNullEntry();
+    await expect(selectedChatProfileErrors(loadSettings()!, "foo", ["free", "paid", "local"], NO_NETWORK)).resolves.toEqual([]);
+  });
+
+  // model-reconcile.ts:560 and free-rotation.ts:449 call resolveProfile on a truthy active entry; a scalar must fail with a plain Error (free-rotation catches it, model-reconcile's caller reports it), not with a property-of-null TypeError.
+  it("resolveProfile on a scalar or array entry throws a plain Error naming the api preset, not a TypeError", () => {
+    for (const bad of [3, "x", [1]]) {
+      let caught: unknown;
+      try {
+        resolveProfile("foo", bad as never);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(Error);
+      expect(caught).not.toBeInstanceOf(TypeError);
+      expect((caught as Error).message).toContain("Unknown api preset");
+    }
+  });
+
+  it("settingsCatalogErrors walks every profile of a file with a null entry without throwing", async () => {
+    withNullEntry();
+    await expect(settingsCatalogErrors(loadSettings()!, NO_NETWORK)).resolves.toEqual([]);
+  });
+
+  // index.ts evaluateSettingsValidity reads this null active entry and hands it to shouldBootDespiteInvalidActiveProfile only when settingsLevelErrors is empty; the dynamic name `free` is the one case where that call would throw on null.
+  it("a null active entry under a dynamic profile name is a settings-level error, so the boot exemption never sees it", () => {
+    writeFileSync(getSettingsPath(), "active: free\n" + SETTINGS.replace("  lmstudio:", "  free:\n  lmstudio:"), "utf-8");
+    expect(settingsLevelErrors(loadSettings()!).join("\n")).toContain("Profile 'free' is not a map");
+  });
+
+  it("readyLocalTarget skips a null local_llama / locals-mlx entry instead of throwing", () => {
+    writeFileSync(getSettingsPath(), "active: lmstudio\nfallback_to_local:\n  enabled: true\n" + SETTINGS.replace("  lmstudio:", "  local_llama:\n  locals-mlx:\n  lmstudio:"), "utf-8");
+    expect(readyLocalTarget(loadSettings()!, cfgDir)).toBeUndefined();
+  });
+
+  it("resolveClassifierProfile on a null entry returns an error result instead of throwing", () => {
+    withNullEntry();
+    let result: ReturnType<typeof resolveClassifierProfile> | undefined;
+    expect(() => {
+      result = resolveClassifierProfile({ settings: loadSettings()!, profileFlag: "foo", command: "classify" });
+    }).not.toThrow();
+    expect(result?.ok).toBe(false);
+  });
+
+  it("resolveSessionSummaryChain skips a null local_llama / locals-mlx entry instead of throwing a TypeError", async () => {
+    writeFileSync(getSettingsPath(), "active: lmstudio\n" + SETTINGS.replace("  lmstudio:", "  local_llama:\n  locals-mlx:\n  lmstudio:"), "utf-8");
+    let caught: unknown;
+    try {
+      await resolveSessionSummaryChain({
+        active: null,
+        profiles: loadSettings()!.profiles,
+        dir: cfgDir,
+        slotCtx: (n) => n,
+        selectRemote: async () => [],
+        depsFor: () => {
+          throw new Error("no local model expected");
+        },
+        startCalibrationRunner: async () => undefined,
+        waitForCalibration: async () => undefined,
+        write: () => undefined,
+      });
+    } catch (e) {
+      caught = e;
+    }
+    // With no usable candidate the chain ends on the "no model" Error of the remote step; a TypeError would mean the null entry was read.
+    expect(caught).toBeInstanceOf(Error);
+    expect(caught).not.toBeInstanceOf(TypeError);
+  });
 });
