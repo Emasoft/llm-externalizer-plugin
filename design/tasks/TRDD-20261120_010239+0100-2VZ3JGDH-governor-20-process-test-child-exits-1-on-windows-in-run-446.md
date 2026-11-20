@@ -4,7 +4,7 @@ title: governor 20 process test child exits 1 on Windows in run 44637570018 with
 column: todo
 status: tasked
 created: 2026-11-20T01:02:39+0100
-updated: 2026-11-20T01:02:47+0100
+updated: 2026-11-20T01:26:59+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-20T01:02:39+0100
+implementation-commits: [fcffd407]
 ---
 
 # governor 20 process test child exits 1 on Windows in run 44637570018 with stderr never captured
@@ -37,6 +38,11 @@ Not related to Y7G1ZRBG: that card is the boot re-read, which no child runs.
 
 ## Acceptance
 
-- [ ] governor.test.ts collects every child's stderr (drain the pipe at governor.test.ts:608) and prints it, with the exit code, when a child exits non-zero, so a failing run names the cause
+- [x] governor.test.ts collects every child's stderr (drain the pipe at governor.test.ts:608) and prints it, with the exit code, when a child exits non-zero, so a failing run names the cause
 - [ ] The cause of the exit 1 is named from a captured stderr, and then either fixed where the stderr points or recorded as a load flake with its evidence
 - [ ] The 20 processes test passes on the next three Windows CI runs
+
+## Notes
+
+2026-11-20 correction: the test is absent from the 14.7.6 failure list by name (run 44598923287); for runs 44481380800, 44444699567, 44425067928 and 44305836777 only equal totals of 195 are known, plus two fail-title checks, so 'passed in five runs' is partly inferred. Only a failing Windows run will show the children's stderr; a passing run names nothing.
+fcffd407 drains every child's stderr and prints index, code, signal and stderr of each failing child. By the worker's report, a scratch copy of the real test with child 3 forced to exit 1 printed the whole multi-line stderr; the main agent did not see that run.
