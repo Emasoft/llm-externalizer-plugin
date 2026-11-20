@@ -452,6 +452,10 @@ const SETTINGS_FILE = getSettingsPath();
 // discover return an error asking the user to configure settings.yaml.
 let settingsValid = false;
 let settingsError = "";
+// TRDD-FBWXV4JF: true while the settings load threw at boot and activeSettings is the GENERATED default, not the user's document. The generated
+// placeholder `free` is exempt from validation, so without this flag boot, the CLI's default overrideActiveProfile and the dispatch repair would all
+// treat that default as a real configuration and serve requests on it. Cleared only by a reload that accepts a document read from disk.
+let settingsLoadFailed = false;
 
 /**
  * Whether boot should proceed despite `validation` (validateSettings on the
@@ -539,6 +543,7 @@ let activeSettings: Settings = (() => {
     return loadSettingsAfterMigrations();
   } catch (err) {
     settingsError = `Failed to load settings: ${err instanceof Error ? err.message : String(err)}\n\nSettings file: ${SETTINGS_FILE}`;
+    settingsLoadFailed = true;
     process.stderr.write(`[llm-externalizer] ⚠ ${settingsError}\n`);
     return generateDefaultSettings();
   }
@@ -575,6 +580,9 @@ let activeResolved: ResolvedProfile | null = (() => {
   // consistent with everything downstream instead of re-deriving
   // "omitted -> free" locally.
   const targetName = effectiveProfileName(activeSettings);
+  // WHY (TRDD-FBWXV4JF): the load threw and activeSettings is the generated default, whose placeholder `free` the validity verdict below would
+  // exempt: settingsValid would become true and the NOT CONFIGURED gate would not fire. Stay invalid; settingsError already holds the cause.
+  if (settingsLoadFailed) return null;
   // P6c-a2b (fix-queue review S1 + 57): evaluateSettingsValidity is the ONE
   // verdict boot/reloadSettingsFromDisk/overrideActiveProfile/applyNewSettings
   // all compute identically now -- see its docblock. Before this, each of the
@@ -830,7 +838,9 @@ function reloadSettingsFromDisk(): SettingsReloadResult {
   // profiles mid-invocation (Phase 5 design (e) site 7) just because the user
   // edited `active:` on disk while the process was running. `active:` is a
   // live selector for a NEW invocation, not for one already under way.
-  const newSettings: Settings = { ...freshSettings, active: effectiveProfileName(activeSettings) };
+  // WHY (TRDD-FBWXV4JF): after a failed boot load the in-memory active profile is the generated default's, not the user's; the first successful read
+  // of the file is the user's own document, so its `active:` is the selection (effectiveProfileName(freshSettings) applies the same default).
+  const newSettings: Settings = { ...freshSettings, active: effectiveProfileName(settingsLoadFailed ? freshSettings : activeSettings) };
 
   // Validate before applying — through evaluateSettingsValidity (P6c-a2b: fix-
   // queue 57 + review S1), the SAME verdict boot/overrideActiveProfile/
@@ -854,6 +864,8 @@ function reloadSettingsFromDisk(): SettingsReloadResult {
     }
   }
 
+  // The document was read from disk and validated above: it replaces the generated default, so the boot load failure (TRDD-FBWXV4JF) is over.
+  settingsLoadFailed = false;
   // applyNewSettings always returns true ("the swap was applied"), so there is
   // no error shape to translate here.
   applyNewSettings(newSettings);
@@ -879,6 +891,9 @@ const inlineRegeneratedThisProcess = new Set<string>();
  * saying the repair was attempted and why it did not help.
  */
 function repairInvalidActiveGeneratedProfile(): string {
+  // WHY (TRDD-FBWXV4JF): after a failed settings load activeSettings is the generated default, not the file; repairing from it would rewrite the
+  // user's settings.yaml from a document that was never read. The load error stands until a reload reads the file.
+  if (settingsLoadFailed) return "";
   const effective = effectiveProfileName(activeSettings);
   if (effective !== "free" && effective !== "paid") return "";
   // The profile the call will use: overrideActiveProfile (--profile) rewrites
@@ -1068,6 +1083,9 @@ export function overrideActiveProfile(
   source: "flag" | "default" = "default",
 ): { ok: true } | { ok: false; error: string } {
   profileSelectionSource = source;
+  // WHY (TRDD-FBWXV4JF): after a failed settings load activeSettings is the generated default. Applying it would mark settings valid and clear
+  // settingsError (cli/main.ts calls this for every command, default source included), so the gate would serve requests on that default.
+  if (settingsLoadFailed) return { ok: false, error: settingsError };
   // WHY (TRDD-OE27RD7I 0a regression fix): a COMPLETELY empty profiles map
   // (first run, or a hand-edit that wiped the map to `{}`) has no existing
   // profile for `active:` to meaningfully dangle a reference to -- the

@@ -43,6 +43,8 @@ export default defineConfig({
       // evaluateSettingsValidity, the shared verdict index.ts's four call
       // sites now route through.
       'src/boot-reload-validity.test.ts',
+      // TRDD-FBWXV4JF: a settings load that throws at boot refuses every request (never serves on the generated default profile); real index.ts import, real dispatch.
+      'src/boot-failed-settings.test.ts',
       'src/parallel-repair.test.ts',
       // P6c-b: doc/config guard — the README/configuration-guide facts about
       // profile selection, the free/paid dynamic profiles and the free-unfit
