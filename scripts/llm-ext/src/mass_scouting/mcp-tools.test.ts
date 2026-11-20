@@ -437,6 +437,10 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
   // dispatch never touches the network.
   const ORIG_CFG = process.env.LLM_EXT_CONFIG_DIR;
   const ORIG_PROJ = process.env.CLAUDE_PROJECT_DIR;
+  // TRDD-5D50HBXA: test-hermetic-config.ts sets these for every test; this suite asserts the CLAUDE_PROJECT_DIR
+  // default, so it unsets them for its own duration and restores them.
+  const ORIG_OUT = process.env.LLM_EXT_OUTPUT_DIR;
+  const ORIG_SCR = process.env.LLM_EXT_SCRATCH_DIR;
   let tmp: string;
 
   const catalog: OpenRouterModel[] = [
@@ -458,6 +462,8 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     // defaultOutputDir() (project-root.ts), which caches its result after
     // the first call — reset so this test's own CLAUDE_PROJECT_DIR is what
     // gets resolved, not a value cached by an earlier test in this run.
+    delete process.env.LLM_EXT_OUTPUT_DIR;
+    delete process.env.LLM_EXT_SCRATCH_DIR;
     _resetDefaultOutputDirCache();
     writeFileSync(
       join(tmp, "settings.yaml"),
@@ -478,6 +484,10 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     else delete process.env.LLM_EXT_CONFIG_DIR;
     if (ORIG_PROJ !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG_PROJ;
     else delete process.env.CLAUDE_PROJECT_DIR;
+    if (ORIG_OUT !== undefined) process.env.LLM_EXT_OUTPUT_DIR = ORIG_OUT;
+    else delete process.env.LLM_EXT_OUTPUT_DIR;
+    if (ORIG_SCR !== undefined) process.env.LLM_EXT_SCRATCH_DIR = ORIG_SCR;
+    else delete process.env.LLM_EXT_SCRATCH_DIR;
     rmSync(tmp, { recursive: true, force: true });
   });
 
@@ -513,6 +523,10 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
   // never touches the network. No settings.yaml needed (profile-independent).
   const ORIG_CFG = process.env.LLM_EXT_CONFIG_DIR;
   const ORIG_PROJ = process.env.CLAUDE_PROJECT_DIR;
+  // TRDD-5D50HBXA: test-hermetic-config.ts sets these for every test; this suite asserts the CLAUDE_PROJECT_DIR
+  // default, so it unsets them for its own duration and restores them.
+  const ORIG_OUT = process.env.LLM_EXT_OUTPUT_DIR;
+  const ORIG_SCR = process.env.LLM_EXT_SCRATCH_DIR;
   let tmp: string;
 
   const model = (id: string): OpenRouterModel => ({
@@ -532,6 +546,8 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     // defaultOutputDir() (project-root.ts), which caches its result after
     // the first call — reset so this test's own CLAUDE_PROJECT_DIR is what
     // gets resolved, not a value cached by an earlier test in this run.
+    delete process.env.LLM_EXT_OUTPUT_DIR;
+    delete process.env.LLM_EXT_SCRATCH_DIR;
     _resetDefaultOutputDirCache();
   });
   afterEach(() => {
@@ -539,6 +555,10 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     else delete process.env.LLM_EXT_CONFIG_DIR;
     if (ORIG_PROJ !== undefined) process.env.CLAUDE_PROJECT_DIR = ORIG_PROJ;
     else delete process.env.CLAUDE_PROJECT_DIR;
+    if (ORIG_OUT !== undefined) process.env.LLM_EXT_OUTPUT_DIR = ORIG_OUT;
+    else delete process.env.LLM_EXT_OUTPUT_DIR;
+    if (ORIG_SCR !== undefined) process.env.LLM_EXT_SCRATCH_DIR = ORIG_SCR;
+    else delete process.env.LLM_EXT_SCRATCH_DIR;
     rmSync(tmp, { recursive: true, force: true });
   });
 

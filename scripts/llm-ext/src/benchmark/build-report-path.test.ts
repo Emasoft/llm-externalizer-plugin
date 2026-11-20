@@ -23,6 +23,9 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
   const prevProjectDir = process.env.CLAUDE_PROJECT_DIR;
   const prevConfigDir = process.env.LLM_EXT_CONFIG_DIR;
   const prevOutputDir = process.env.LLM_EXT_OUTPUT_DIR;
+  // TRDD-5D50HBXA: test-hermetic-config.ts now sets LLM_EXT_SCRATCH_DIR for every test; this test asserts the
+  // project-root default, so it must unset it for its own duration and restore it after.
+  const prevScratchDir = process.env.LLM_EXT_SCRATCH_DIR;
 
   // c9b: reset in beforeEach too, not just afterEach — a PRECEDING test file
   // in the same vitest worker can leave defaultOutputDir()'s module-level
@@ -39,6 +42,8 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
     else process.env.LLM_EXT_CONFIG_DIR = prevConfigDir;
     if (prevOutputDir === undefined) delete process.env.LLM_EXT_OUTPUT_DIR;
     else process.env.LLM_EXT_OUTPUT_DIR = prevOutputDir;
+    if (prevScratchDir === undefined) delete process.env.LLM_EXT_SCRATCH_DIR;
+    else process.env.LLM_EXT_SCRATCH_DIR = prevScratchDir;
     _resetDefaultOutputDirCache();
   });
 
@@ -50,6 +55,7 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
     try {
       delete process.env.LLM_EXT_CONFIG_DIR;
       delete process.env.LLM_EXT_OUTPUT_DIR;
+      delete process.env.LLM_EXT_SCRATCH_DIR;
       process.env.CLAUDE_PROJECT_DIR = fakeRoot;
       _resetDefaultOutputDirCache();
 

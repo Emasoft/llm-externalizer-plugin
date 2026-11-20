@@ -48,6 +48,8 @@ function runBench(args: string[], env: Record<string, string>) {
   // cli-contract.test.ts already does for OPENROUTER_API_KEY.
   const fullEnv: Record<string, string | undefined> = { ...process.env, ...env };
   delete fullEnv.LLM_EXT_OUTPUT_DIR;
+  // TRDD-5D50HBXA: same for the scratch root, which test-hermetic-config.ts now sets for every test.
+  delete fullEnv.LLM_EXT_SCRATCH_DIR;
   return spawnSync(process.execPath, [BENCH_JS, ...args], {
     encoding: "utf-8",
     env: fullEnv,

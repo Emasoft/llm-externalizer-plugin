@@ -29,6 +29,8 @@ import { afterAll } from "vitest";
 
 let createdDir: string | null = null;
 let createdGovernorDir: string | null = null;
+let createdScratchDir: string | null = null;
+let createdOutputDir: string | null = null;
 
 if (!process.env.LLM_EXT_CONFIG_DIR) {
   // Name must NOT match /llm[-_]?ext/i — that is the leak marker
@@ -45,6 +47,21 @@ if (!process.env.LLM_EXT_GOVERNOR_DIR) {
   process.env.LLM_EXT_GOVERNOR_DIR = createdGovernorDir;
 }
 
+// WHY (TRDD-5D50HBXA): defaultScratchDir() / defaultOutputDir() (project-root.ts) fall back to
+// <CLAUDE_PROJECT_DIR or cwd>/reports_dev/llm-externalizer and <...>/reports/llm-externalizer. A test that reaches
+// get_settings (settings_edit.yaml), a benchmark or a report writer without its own LLM_EXT_SCRATCH_DIR /
+// LLM_EXT_OUTPUT_DIR therefore wrote into the REAL project's report folders (settings_edit.yaml re-written
+// 2026-11-20 by single-file runs). Same isolation as cfgiso-/goviso-: two fresh dirs, removed in afterAll.
+// Each root gets its own dir so scratch and final-report writes stay separable; tests that exercise the default
+// resolution delete or set these variables themselves. Name must NOT match /llm[-_]?ext/i (leak marker).
+if (!process.env.LLM_EXT_SCRATCH_DIR) {
+  createdScratchDir = mkdtempSync(join("/tmp", "scriso-"));
+  process.env.LLM_EXT_SCRATCH_DIR = createdScratchDir;
+}
+if (!process.env.LLM_EXT_OUTPUT_DIR) {
+  createdOutputDir = mkdtempSync(join("/tmp", "outiso-"));
+  process.env.LLM_EXT_OUTPUT_DIR = createdOutputDir;
+}
 // A suite running in parallel, or a 2-core runner, sits over the default limits, and with no CPU floor every job would wait
 // for as long as it stays there. A test about the limits sets its own strict ones.
 process.env.LLM_EXT_GOVERNOR_CPU_LIMIT_PCT ??= "100";
@@ -57,6 +74,16 @@ afterAll(() => {
     delete process.env.LLM_EXT_CONFIG_DIR;
     rmSync(createdDir, { recursive: true, force: true });
     createdDir = null;
+  }
+  if (createdScratchDir) {
+    delete process.env.LLM_EXT_SCRATCH_DIR;
+    rmSync(createdScratchDir, { recursive: true, force: true });
+    createdScratchDir = null;
+  }
+  if (createdOutputDir) {
+    delete process.env.LLM_EXT_OUTPUT_DIR;
+    rmSync(createdOutputDir, { recursive: true, force: true });
+    createdOutputDir = null;
   }
   if (createdGovernorDir) {
     delete process.env.LLM_EXT_GOVERNOR_DIR;
