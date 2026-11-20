@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import re
 import shutil
 import subprocess
 import tarfile
@@ -90,7 +91,6 @@ def test_real_build_of_stale_dist_is_named_not_reported_unchanged(tmp_path, caps
     assert "stale: not produced" not in dist.read_text(encoding="utf-8")
 
 
-
 def test_real_build_without_node_modules_fails_and_writes_the_log(tmp_path, capsys):
     """run_build_check over a tree with no node_modules returns False and build.log names the missing dependency."""
     assert shutil.which("npm") is not None, (
@@ -110,10 +110,11 @@ def test_real_build_without_node_modules_fails_and_writes_the_log(tmp_path, caps
     # "dependencies not installed" tree. run_build_check has no branch for it (TRDD-VQKH92OI premise was wrong);
     # this covers only the generic _run_check failure path, so the log must name the missing dependency,
     # otherwise any unrelated build failure would pass: TS2688 when a global tsc is on PATH (tsc cannot find
-    # @types/node), "not found" when it is not.
+    # @types/node), "tsc ... not found" when it is not.
     assert not (repo / "scripts" / "llm-ext" / "node_modules").exists()
 
     assert publish.run_build_check(repo) is False
     assert "build failed" in capsys.readouterr().err
     log = (repo / "reports_dev" / "publish" / "build.log").read_text(encoding="utf-8")
-    assert "TS2688" in log or "not found" in log, log
+    # WHY: a bare "not found" matches unrelated failures; only the missing @types/node (TS2688) or a missing tsc names the missing dependency.
+    assert re.search(r"TS2688.*'node'", log) or re.search(r"\btsc\b[^\n]*not found", log), log
