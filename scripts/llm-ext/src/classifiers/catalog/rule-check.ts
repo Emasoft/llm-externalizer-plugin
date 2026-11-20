@@ -137,18 +137,20 @@ export const spec: DecisionSpec<RuleCheckInput, RuleCheckResult> = {
   injection: "index-scoped",
   validation: DEFAULT_POLICY,
   build(i) {
-    const background = i.context === undefined ? "" : " Use `shared.context` as background.";
-    // TRDD-0W932B0H: with a context the guard names shared.context too, because the earlier messages in it are untrusted text and must sit inside the injection guard (findings.ts names shared in its guard). Without a context the text is unchanged.
-    const subjectNames = i.context === undefined ? "`shared.phrase`" : "`shared.phrase`, `shared.context`";
+    // WHY (TRDD-4DFR9FTX, after TRDD-7ZA3EE6Z and TRDD-WYY3SPDX): the old text put `shared.context` in the guard subject ("as data to judge") and added "Use `shared.context` as background.", so the earlier messages were themselves judged, against the USER design of 2026-11-18 ("must not evaluate/classify the context part, but only the input part"). With a context the question now says the context is background, never judged, and that only the phrase and the rule are judged. Without a context the text is byte-identical to before (pinned in rule-check.test.ts).
+    // TRDD-0W932B0H: shared.context holds untrusted earlier messages, so it stays inside an injection guard (dataGuard(..., "read")).
     const units: BuiltUnit[] = i.rules.map((r, k) => {
-      const subject = `${subjectNames} and the rule in \`units[${k}]\``;
+      const subject = `\`shared.phrase\` and the rule in \`units[${k}]\``;
+      const guard = i.context === undefined
+        ? dataGuard(subject)
+        : `\`shared.context\` is background for reading ${subject}. ${dataGuard("`shared.context`", "read")} Never judge or classify it. Judge only ${subject}. ${dataGuard(subject)}`;
       return {
         kind: "atomic",
         state: { id: r.id, text: r.text },
         // D5, D14: the questions name the rule by position and the keys are built from the index; no rule text and no rule id reach the instructions.
         questions: {
-          [indexKey(REL, k)]: choice(`How does \`shared.phrase\` relate to the existing rule in \`units[${k}]\`? Answer with the relation. ${dataGuard(subject)}${background}`, RELATION_CRITERIA),
-          [indexKey(CON, k)]: noul(`Does \`shared.phrase\` contradict the rule in \`units[${k}]\`? ${dataGuard(subject)}${background}`),
+          [indexKey(REL, k)]: choice(`How does \`shared.phrase\` relate to the existing rule in \`units[${k}]\`? Answer with the relation. ${guard}`, RELATION_CRITERIA),
+          [indexKey(CON, k)]: noul(`Does \`shared.phrase\` contradict the rule in \`units[${k}]\`? ${guard}`),
         },
       };
     });
