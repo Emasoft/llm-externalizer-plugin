@@ -1,10 +1,10 @@
 ---
 trdd-id: 5SGTYL11
 title: ubs taint analysis ends partial when config.ts and index.ts are staged together
-column: backburner
+column: todo
 status: tasked
 created: 2026-11-18T15:21:30+0100
-updated: 2026-11-18T15:21:30+0100
+updated: 2026-11-20T03:43:44+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: refactor
@@ -24,3 +24,8 @@ Measured 2026-11-18 14:55 (TN8OUZ50 commit, ubs 5.5.26): staging scripts/llm-ext
 ## Approval log
 
 - 2026-11-18T15:21:30+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+- 2026-11-20T03:43:44+0100 — column → todo. occurred again 2026-11-20, next after the publish
+
+## Notes
+
+2026-11-20T03:43:42+0100 main agent (via card worker): occurred again 2026-11-20: the settings fix had to be committed in two commits (89d7c5d8, 63ea0b0d); measured with ubs 5.5.26: config.ts+index.ts+discover.ts+dispatch-deps.ts partial; config.ts+active-precedence.test.ts complete. Not done before 14.7.8 because splitting a 5000-line file is its own structural refactor (dead code first, separate commit, full suite); moved to todo so it is next after the publish.

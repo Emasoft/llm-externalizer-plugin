@@ -614,6 +614,26 @@ Second live check, a genuinely new phrase against the 25 PRRD rules (`the CLI mu
 
 Limits: a rule is compared one pair at a time, so two rules that together make the phrase a duplicate are not seen; confidences vary a little between runs of the same input (r2 above: 0.40 and 0.42 in two runs); the updated-version case was not reproduced for r2 in these n=2 runs, which is a sample and not a rate.
 
+Measured effect of `--context` on `classify rule-check` (rule-check check 1, TRDD-4DFR9FTX, 2026-11-20, remote typesafe/jev-1.14-20261014; the model id was the same in all 300 calls). Two builds were compared: O, the wording before the change (commit 309e046c, which tells the model to judge `shared.context` as data and to "use it as background"), and N, the new wording (commit 4feffcfc, which tells the model that the context is background for reading, never to judge or classify it, and to judge only the phrase and the rule). Without a context both builds send the same request. Rules R1 "Every API response must be returned as JSON.", R2 "Passwords must be at least 12 characters long.", R3 "Release builds must be signed before upload." in every call. Items: P1 "Yes, make it 16." (a referent item, not an update of R2 without a context); P2 "Passwords need a minimum length of 12 characters." (duplicate of R2); P3 "Passwords must be at least 14 characters long." (updated version of R2); P4 "The office closes at 6 pm on Fridays." (new); P5 "Passwords may be only 6 characters long." (conflict with R2). Arms: A no context; N "User: I like hiking on weekends."; U "User: Can you recommend a good pizza place nearby?"; M "User: Passwords must be at least 12 characters long." (equals R2); K "User: Release builds do not need to be signed before upload." (contradicts R3); F "Assistant: Do you want the minimum password length raised from 12 to 16?" (decides P1). 5 runs per cell, 5 items x 6 arms x 5 runs x 2 builds = 300 calls, one at a time, in one fixed-seed shuffled order (seed 20261120); 300 valid, 0 failed, 0 retries. Cell verdict: the modal outcome over 5 runs; conflict: runs with `conflict` true out of 5. These are counts of 5 runs per cell, not rates.
+
+Pre-registered bars for N (all three passed): (a) in arm F, P1 is `updated_version` R2; (b) for P2 to P5, arms N, U, M and K keep the arm-A verdict and conflict flag, and the count of runs matching arm A differs by at most 1 of 5; (c) in arms N, U and K, P1 is not `updated_version` R2. For O, reported and not gated: (a) pass, (c) pass, (b) fail on one cell: P4 in arm K had `conflict` true in 2 of 5 runs (matching runs 3 of 5, arm A 5 of 5; the verdict stayed `new`). Both builds were valid (every arm-A item came out as expected). The pre-registered outcome was that N stays, and N stays: the USER design of 2026-11-18 is that the classifier must not evaluate the context. A pass is read as the gated bars only; it is not evidence that no unrelated context changes a score.
+
+| item | arm | O verdict, conflict runs | N verdict, conflict runs |
+|---|---|---|---|
+| P1 | A, no context | uncertain 5, 0/5 | uncertain 5, 0/5 |
+| P1 | N, hiking | new 5, 0/5 | uncertain (new 2, uncertain 3), 0/5 |
+| P1 | U, pizza | new 5, 0/5 | new 5, 0/5 |
+| P1 | M, equals R2 | updated_version R2 5, 0/5 | updated_version R2 5, 0/5 |
+| P1 | K, contradicts R3 | uncertain 5, 5/5 | uncertain 5, 0/5 |
+| P1 | F, decides the referent | updated_version R2 5, 0/5 | updated_version R2 5, 0/5 |
+| P2 | A, N, U, M, K | duplicate R2 5, 0/5 in each arm | duplicate R2 5, 0/5 in each arm |
+| P2 | F | duplicate R2 3, uncertain 2, 0/5 | duplicate R2 5, 0/5 |
+| P3 | all six arms | updated_version R2 5, 5/5 in each arm | updated_version R2 5, 5/5 in each arm |
+| P4 | A, N, U, M, F | new 5, 0/5 in each arm | new 5, 0/5 in each arm |
+| P4 | K | new 5, 2/5 | new 5, 0/5 |
+| P5 | all six arms | updated_version R2 5, 5/5 in each arm | updated_version R2 5, 5/5 in each arm |
+
+Read from the table: in arm K the context contradicts R3, and O raised `conflict` on P4 in 2 of 5 runs and on P1 in 5 of 5 runs, N on neither. P1 under the hiking context (arm N) moved from `uncertain` to a split of `new` 2 and `uncertain` 3 with N, and to `new` 5 with O (arm A was `uncertain` 5 in both builds). Only P1 changed its verdict under an unrelated or contradicting context; P2 to P5 kept their arm-A verdicts in N, U, M and K for both builds.
 ### Request JSON shapes (`--input` of `classify filter`, `label`, `find`)
 
 This section comes from live runs and the source, not from --help. All schemas are strict where marked; ids, when given, must be unique, and in json mode must match `^[A-Za-z0-9_-]{1,64}$` (`l2/ids.ts`; a missing id is its position). All paths below are under `scripts/llm-ext/src/classifiers/`. Each shape below was run live through `--input <file> --json` (exit 0) unless noted.
