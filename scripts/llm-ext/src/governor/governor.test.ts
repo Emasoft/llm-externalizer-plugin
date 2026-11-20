@@ -601,11 +601,21 @@ describe("real processes", () => {
     for (const child of children.splice(0)) {
       if (child.exitCode === null && child.signalCode === null && child.pid) process.kill(child.pid, "SIGKILL");
     }
+    stderrOf.clear();
     rmSync(root, { recursive: true, force: true });
   });
 
+  // TRDD-2VZ3JGDH: Windows run 44637570018 had two of the 20 children exit 1 and the cause was lost, because the piped stderr was never read.
+  // Every child's stderr is drained here (an undrained pipe could also block a child that fills it) so a failing test can print it.
+  const stderrOf = new Map<ChildProcess, { text: string; closed: Promise<void> }>();
   function start(...args: string[]): ChildProcess {
     const child = spawn(process.execPath, [bundle, ...args], { stdio: ["ignore", "ignore", "pipe"], env: { ...process.env } });
+    const captured = { text: "", closed: new Promise<void>((resolve) => child.once("close", () => resolve())) };
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      captured.text += chunk;
+    });
+    stderrOf.set(child, captured);
     children.push(child);
     return child;
   }
@@ -661,6 +671,11 @@ describe("real processes", () => {
     await watch;
     const elapsedMs = Date.now() - t0;
 
+    // TRDD-2VZ3JGDH: a non-zero child prints its index, code, signal and stderr (the failing array), then the original every-code-is-0 assertion runs unchanged.
+    // Bounded: the exit codes are already in, so a stderr pipe some other process still holds must not hold the diagnostic back until the test timeout.
+    await Promise.race([Promise.all(procs.map((p) => stderrOf.get(p)?.closed)), new Promise((resolve) => setTimeout(resolve, 3000))]);
+    const failed = procs.flatMap((p, index) => ((codes[index] ?? null) === 0 ? [] : [{ index, code: codes[index] ?? null, signal: p.signalCode, stderr: stderrOf.get(p)?.text ?? "" }]));
+    expect(failed).toEqual([]);
     expect(codes).toEqual(Array(count).fill(0));
     type Event = { event: string; round: number; at: number; t: number; resources: string[]; child: number };
     const events = files.flatMap((file, child) =>
