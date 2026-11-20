@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
   DEFAULT_PROFILE_NAME,
@@ -192,7 +192,7 @@ describe("active: precedence -- --profile flag > active: > built-in default (TRD
       effectiveProfileName(idx.getActiveSettings()),
       idx.getProfileSelectionSource(),
     );
-    expect(summary).toMatch(/nosuch/);
+    expect(summary.text).toMatch(/nosuch/);
   });
 
   it("case 4c: active: \"\" (empty string) => missing => free", async () => {
@@ -254,6 +254,33 @@ describe("TRDD-OE27RD7I 14.1-C2 §3b — shouldFailProfileSelection truth table 
     await idx.boot();
     for (const tool of ["discover", "get_settings", "list_profiles", "profile"] as const) {
       await expect(idx.dispatchCallTool(tool, {})).resolves.toBeDefined();
+    }
+  });
+
+  // Proves a dangling active: still returns the settings copy, stays an error, and copies the file get_settings reads into a scratch dir this test owns.
+  it("get_settings on a dangling active: copies settings.yaml and returns isError (TRDD-8DMLEAW8)", async () => {
+    const yaml = ["active: nosuch", "profiles:", STATIC_PROFILE_A].join("\n");
+    const scratch = mkdtempSync(join("/tmp", "llm-ext-active-scratch-"));
+    const prevScratch = process.env.LLM_EXT_SCRATCH_DIR;
+    process.env.LLM_EXT_SCRATCH_DIR = scratch;
+    try {
+      const idx = await loadFreshIndex(yaml);
+      await idx.boot();
+      const r = await idx.dispatchCallTool("get_settings", {});
+      const text = r.content.map((c) => c.text ?? "").join("\n");
+      expect(r.isError).toBe(true);
+      expect(text).toContain("not found");
+      const copyPath = /Full settings file copied to: (\S+)/.exec(text)?.[1] ?? "";
+      expect(copyPath.startsWith(scratch)).toBe(true);
+      // The copy must equal the file on disk when get_settings runs. Boot can rewrite settings.yaml through its migrations, so the file on disk, not the yaml this test wrote, is the reference.
+      const configDir = process.env.LLM_EXT_CONFIG_DIR;
+      if (configDir === undefined) throw new Error("loadFreshIndex must set LLM_EXT_CONFIG_DIR");
+      const onDisk = readFileSync(join(configDir, "settings.yaml"), "utf-8");
+      expect(readFileSync(copyPath, "utf-8")).toBe(onDisk);
+    } finally {
+      if (prevScratch === undefined) delete process.env.LLM_EXT_SCRATCH_DIR;
+      else process.env.LLM_EXT_SCRATCH_DIR = prevScratch;
+      rmSync(scratch, { recursive: true, force: true });
     }
   });
 

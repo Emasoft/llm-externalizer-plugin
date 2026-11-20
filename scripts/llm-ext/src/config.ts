@@ -4811,6 +4811,12 @@ export function formatResolvedProfileLines(
   return lines;
 }
 
+/** Text of the two settings-show formatters plus whether it reports a failure (TRDD-LFWV2DKG): callers map isError to a non-zero exit. */
+export interface FormattedProfileText {
+  text: string;
+  isError: boolean;
+}
+
 /**
  * `settings show` (TRDD settings-rename, requirement B): the EFFECTIVE
  * profiles resolved configuration, ready to print to stdout. Reads
@@ -4830,17 +4836,20 @@ export function formatResolvedProfileLines(
 export function formatActiveProfileSummary(
   effectiveName?: string,
   source: "flag" | "default" = "default",
-): string {
+): FormattedProfileText {
   const settingsPath = getSettingsPath();
   if (!existsSync(settingsPath)) {
-    return (
-      `No settings file found at ${settingsPath}.\n` +
-      `It is created automatically the first time any llm-ext command runs.`
-    );
+    return {
+      text:
+        `No settings file found at ${settingsPath}.\n` +
+        `It is created automatically the first time any llm-ext command runs.`,
+      isError: false,
+    };
   }
   const settings = loadSettings();
   if (!settings) {
-    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+    // WHY (TRDD-LFWV2DKG): the failure used to be text only, so callers exited 0 on it.
+    return { text: `Failed to read/parse ${settingsPath}. Check YAML syntax.`, isError: true };
   }
   const name = effectiveName ?? effectiveProfileName(settings);
   const profile = settings.profiles[name];
@@ -4851,20 +4860,27 @@ export function formatActiveProfileSummary(
     source === "flag" ? "--profile" : settings.active !== undefined ? "active:" : "built-in default";
   const header = `Effective profile: ${name} (source: ${sourceLabel})`;
   if (!profile) {
-    return [
-      header,
-      `Effective profile '${name}' not found in ${settingsPath}.`,
-      `Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`,
-    ].join("\n");
+    return {
+      text: [
+        header,
+        `Effective profile '${name}' not found in ${settingsPath}.`,
+        `Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`,
+      ].join("\n"),
+      isError: true,
+    };
   }
   try {
     const resolved = resolveProfile(name, profile);
-    return [header, ...formatResolvedProfileLines(resolved, profile, true)].join("\n");
+    return { text: [header, ...formatResolvedProfileLines(resolved, profile, true)].join("\n"), isError: false };
   } catch (err) {
-    return [
-      header,
-      `Failed to resolve effective profile '${name}': ${err instanceof Error ? err.message : String(err)}`,
-    ].join("\n");
+    // WHY (TRDD-LFWV2DKG): a profile that cannot be resolved is a failure; text with exit 0 was the bug (same for the not-found branch above).
+    return {
+      text: [
+        header,
+        `Failed to resolve effective profile '${name}': ${err instanceof Error ? err.message : String(err)}`,
+      ].join("\n"),
+      isError: true,
+    };
   }
 }
 
@@ -4876,24 +4892,30 @@ export function formatActiveProfileSummary(
  * mutates it. Never throws: a missing file is reported plainly instead (it
  * is created automatically the first time any llm-ext command runs).
  */
-export function formatProfilesList(effectiveName?: string): string {
+export function formatProfilesList(effectiveName?: string): FormattedProfileText {
   const settingsPath = getSettingsPath();
   if (!existsSync(settingsPath)) {
-    return (
-      `No settings file found at ${settingsPath}.\n` +
-      `It is created automatically the first time any llm-ext command runs.`
-    );
+    return {
+      text:
+        `No settings file found at ${settingsPath}.\n` +
+        `It is created automatically the first time any llm-ext command runs.`,
+      isError: false,
+    };
   }
   const settings = loadSettings();
   if (!settings) {
-    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+    // WHY (TRDD-LFWV2DKG): the failure used to be text only, so callers exited 0 on it.
+    return { text: `Failed to read/parse ${settingsPath}. Check YAML syntax.`, isError: true };
   }
   const profileNames = Object.keys(settings.profiles);
   if (profileNames.length === 0) {
-    return (
-      `No profiles defined in ${settingsPath}.\n` +
-      `Settings file is present but its 'profiles' map is empty.`
-    );
+    // WHY (TRDD-LFWV2DKG): an empty profiles map is a configuration error (the profile tool treats it as one); text with exit 0 was the bug.
+    return {
+      text:
+        `No profiles defined in ${settingsPath}.\n` +
+        `Settings file is present but its 'profiles' map is empty.`,
+      isError: true,
+    };
   }
   const name = effectiveName ?? effectiveProfileName(settings);
   const lines = [`Settings file: ${settingsPath}`, ""];
@@ -4953,7 +4975,7 @@ export function formatProfilesList(effectiveName?: string): string {
       "allow_paid_models is true.",
     );
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), isError: false };
 }
 
 /**

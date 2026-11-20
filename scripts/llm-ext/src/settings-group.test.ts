@@ -239,11 +239,11 @@ describe("missing settings.yaml — graceful message, never a crash", () => {
       // src/index.ts would — this is the only way to genuinely observe the
       // missing-file path.
       const { formatProfilesList, formatActiveProfileSummary } = await import("./config.js");
-      const profilesText = formatProfilesList();
+      const profilesText = formatProfilesList().text;
       expect(profilesText).toMatch(/No settings file found/);
       expect(profilesText).toMatch(/created automatically/);
 
-      const summaryText = formatActiveProfileSummary();
+      const summaryText = formatActiveProfileSummary().text;
       expect(summaryText).toMatch(/No settings file found/);
       expect(summaryText).toMatch(/created automatically/);
 
@@ -265,7 +265,7 @@ describe("settings profiles — machine-managed vs user, and unpopulated renderi
     try {
       writeFileSync(join(dir, "settings.yaml"), yaml);
       const { formatProfilesList } = await import("./config.js");
-      return formatProfilesList();
+      return formatProfilesList().text;
     } finally {
       if (prev === undefined) delete process.env.LLM_EXT_CONFIG_DIR;
       else process.env.LLM_EXT_CONFIG_DIR = prev;

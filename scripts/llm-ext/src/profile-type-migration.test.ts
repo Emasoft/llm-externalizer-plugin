@@ -326,7 +326,7 @@ describe("GG44R65K non-map profile entries do not crash the settings list or the
     withNullEntry();
     let text = "";
     expect(() => {
-      text = formatProfilesList("lmstudio");
+      text = formatProfilesList("lmstudio").text;
     }).not.toThrow();
     expect(text).toContain("Profile 'foo' is not a map");
     expect(text).toContain("(got null)");
@@ -336,7 +336,7 @@ describe("GG44R65K non-map profile entries do not crash the settings list or the
   for (const [label, line, got] of [["a number", "  foo: 3", "number"], ["an array", "  foo: [1]", "array"]] as const) {
     it(`formatProfilesList names ${label} entry as not a map (got ${got})`, () => {
       writeFileSync(getSettingsPath(), "active: lmstudio\n" + SETTINGS.replace("  lmstudio:", `${line}\n  lmstudio:`), "utf-8");
-      expect(formatProfilesList("lmstudio")).toContain(`Profile 'foo' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got})`);
+      expect(formatProfilesList("lmstudio").text).toContain(`Profile 'foo' is not a map: every entry under profiles: must be a YAML mapping of fields (got ${got})`);
     });
   }
 

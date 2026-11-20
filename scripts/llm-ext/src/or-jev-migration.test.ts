@@ -74,7 +74,7 @@ describe("PF-04: a file without or-jev gets the template, once", () => {
     run();
     const raw = readFileSync(getSettingsPath(), "utf-8");
     const root = readRoot();
-    expect(root.profiles["or-jev"]).toMatchObject({ "profile-type": "classifier", api: "openrouter-remote", model: "~typesafe/jev-latest", api_key: "$OPENROUTER_API_KEY" });
+    expect(root.profiles["or-jev"]).toMatchObject({ "profile-type": "classifier", api: "openrouter-remote", model: "~typesafe/jev-latest", api_key: "$OPENROUTER_API_KEY" }); // ubs:ignore -- "$OPENROUTER_API_KEY" is an env-var placeholder the migration writes, not a secret
     expect(root.active_classifier).toBe("or-jev");
     expect(raw).toContain(`# ${GENERATED_MARKER}`);
     // comment-preserving: the user's comments survive
@@ -303,7 +303,7 @@ describe("PF-04 review: the classifier profile never counts as a text profile", 
   it("the listing prints the type for classifier and scouting rows (never 'undefined'), keeps the effective marker and the legend", () => {
     writeFileSync(getSettingsPath(), "profiles:\n  scouting:\n    profile-type: scouting\n    mode: remote\n    api: openrouter-remote\n    model: vendor/scout\n", "utf-8");
     run();
-    const text = formatProfilesList("or-jev");
+    const text = formatProfilesList("or-jev").text;
     expect(text).not.toContain("undefined");
     expect(text).toContain("* or-jev — classifier / openrouter-remote — ~typesafe/jev-latest");
     expect(text).toContain("  scouting — scouting / openrouter-remote — vendor/scout");
