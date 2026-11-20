@@ -18,15 +18,16 @@ describe("hermetic suite: getConfigDir() isolation", () => {
   });
 
   it("resolves under /tmp (config.ts's own allowlist root) during the suite", () => {
+    // TRDD-LA1MA1EL: native realpath and sep, as in config.ts: on Windows /tmp is the drive-root tmp folder, and a "/" test never matches a backslash path.
     const tmpCanonical = (() => {
       try {
-        return realpathSync("/tmp");
+        return realpathSync.native("/tmp");
       } catch {
         return "/tmp";
       }
     })();
     const dir = getConfigDir();
-    expect(dir === tmpCanonical || dir.startsWith(tmpCanonical + "/")).toBe(true);
+    expect(dir === tmpCanonical || dir.startsWith(tmpCanonical + sep)).toBe(true);
   });
 });
 
@@ -100,7 +101,9 @@ describe("getConfigDir() path guard (TRDD-YUML4ISF)", () => {
   const osTmpReal = realpathSync.native(osTmpdir());
   // sep, not "/": on Windows the roots use backslashes, and a "/" test would never see os.tmpdir() under home (TRDD-LA1MA1EL).
   const under = (p: string, root: string): boolean => p === root || p.startsWith(root + sep);
-  const osTmpAllowed = under(osTmpReal, realpathSync.native("/tmp")) || under(osTmpReal, realpathSync.native(homedir()));
+  // TRDD-LA1MA1EL: /tmp does not exist on Windows, so an unguarded realpathSync.native("/tmp") throws at collection and fails the file; the literal "/tmp" fallback matches config.ts.
+  const tmpRoot = (() => { try { return realpathSync.native("/tmp"); } catch { return "/tmp"; } })();
+  const osTmpAllowed = under(osTmpReal, tmpRoot) || under(osTmpReal, realpathSync.native(homedir()));
   it.skipIf(osTmpAllowed)(
     "rejects a config folder under the real os.tmpdir() (skipped when os.tmpdir() is under /tmp or $HOME, e.g. Linux CI)",
     () => {
