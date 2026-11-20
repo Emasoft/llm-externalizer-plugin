@@ -4,7 +4,7 @@ title: Local fallback readiness and dispatch fail on Windows
 column: todo
 status: tasked
 created: 2026-11-18T16:54:15+0100
-updated: 2026-11-20T00:36:55+0100
+updated: 2026-11-20T04:47:25+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -43,7 +43,7 @@ Failing tests (group, log line, file, test name, first error line; log order):
 - G8 log 4232 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > readyLocalTarget: the control is ready; enabled false is not :: AssertionError: expected undefined to deeply equal { profile: 'local_llama', …(2) }
 - G8 log 4255 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > arm(): the control arms on a closed port; enabled false does not :: AssertionError: expected false to be true // Object.is equality
 - G7 log 4274 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > the completion layer, a server resetting every connection, window 2 s: the control ends in under 20 s; enabled false is still retrying after 4 s :: Error: Test timed out in 60000ms.
-- G8 log 4287 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > index.ts builds the dispatch window, and with enabled false it does not arm (the control does) :: AssertionError: expected false to be true // Object.is equality
+- G8 log 4287 src/local-fallback-setting.test.ts :: enabled: false gates readyLocalTarget: no ready target, so the window does not arm (same ready fixture as the control) > test "index.ts builds the dispatch window, and with enabled false it does not arm (the control does)" :: AssertionError: expected false to be true // Object.is equality
 - G8 log 4306 src/local-fallback-setting.test.ts :: enabled: false at dispatch (free profile, a real closed port): the original remote error, no local send > control (key absent): the fallback is tried, its line names local_llama :: AssertionError: expected '[http-retry] Network error (attempt 1…' to contain 'the local fallback to profile \'local…'
 - G8 log 4328 src/local-fallback-setting.test.ts :: a pinned profile is the only one tried > readyLocalTarget: automatic picks local_llama; a pin to a ready my_llama returns my_llama :: AssertionError: expected undefined to be 'local_llama' // Object.is equality
 - G8 log 4347 src/local-fallback-setting.test.ts :: a pinned profile is the only one tried > readyLocalTarget: a pinned Locals profile is ready where Locals can run, and a fail-fast error elsewhere (TRDD-M4KERGEF F8) :: AssertionError: expected undefined to deeply equal { profile: 'my_mlx', …(2) }
@@ -72,3 +72,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 ## Notes
 
 2026-11-20: three test titles in the failing-test list refreshed to the names of the current run (44598923287): the control entry and the network-give-up entry changed from under 5 s to under 20 s, and the test wrapper was removed from the index.ts entry. Source: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
+2026-11-20T04:47:25+0100 main agent (written by worker): the test wrapper on the index.ts entry (log 4287) is restored. 62f5c817 removed it when it refreshed the titles; CPV rule RC-164 then read '> index.ts' as a shell redirect and stopped the 14.7.8 publish (CPV issue 281, open). Keep the wrapper until issue 281 is fixed. Mechanical change, no fact changed.
