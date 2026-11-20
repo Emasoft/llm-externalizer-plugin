@@ -4,7 +4,7 @@ title: Local fallback readiness and dispatch fail on Windows
 column: todo
 status: tasked
 created: 2026-11-18T16:54:15+0100
-updated: 2026-11-20T04:47:25+0100
+updated: 2026-11-20T05:05:12+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -73,3 +73,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 
 2026-11-20: three test titles in the failing-test list refreshed to the names of the current run (44598923287): the control entry and the network-give-up entry changed from under 5 s to under 20 s, and the test wrapper was removed from the index.ts entry. Source: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
 2026-11-20T04:47:25+0100 main agent (written by worker): the test wrapper on the index.ts entry (log 4287) is restored. 62f5c817 removed it when it refreshed the titles; CPV rule RC-164 then read '> index.ts' as a shell redirect and stopped the 14.7.8 publish (CPV issue 281, open). Keep the wrapper until issue 281 is fixed. Mechanical change, no fact changed.
+2026-11-20T05:05:10+0100 main agent correction: the note above ends 'Mechanical change, no fact changed'. The wrapper restore is mechanical, but the note itself adds a guardrail (keep the wrapper until CPV issue 281 is fixed), which is why updated: was bumped (commit 94ba99e5).
