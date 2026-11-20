@@ -11679,48 +11679,63 @@ function formatResolvedProfileLines(resolved, profile, isActive) {
 function formatActiveProfileSummary(effectiveName, source = "default") {
   const settingsPath = getSettingsPath();
   if (!existsSync6(settingsPath)) {
-    return `No settings file found at ${settingsPath}.
-It is created automatically the first time any llm-ext command runs.`;
+    return {
+      text: `No settings file found at ${settingsPath}.
+It is created automatically the first time any llm-ext command runs.`,
+      isError: false
+    };
   }
   const settings = loadSettings();
   if (!settings) {
-    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+    return { text: `Failed to read/parse ${settingsPath}. Check YAML syntax.`, isError: true };
   }
   const name = effectiveName ?? effectiveProfileName(settings);
   const profile = settings.profiles[name];
   const sourceLabel = source === "flag" ? "--profile" : settings.active !== void 0 ? "active:" : "built-in default";
   const header = `Effective profile: ${name} (source: ${sourceLabel})`;
   if (!profile) {
-    return [
-      header,
-      `Effective profile '${name}' not found in ${settingsPath}.`,
-      `Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`
-    ].join("\n");
+    return {
+      text: [
+        header,
+        `Effective profile '${name}' not found in ${settingsPath}.`,
+        `Available profiles: ${Object.keys(settings.profiles).join(", ") || "(none)"}`
+      ].join("\n"),
+      isError: true
+    };
   }
   try {
     const resolved = resolveProfile(name, profile);
-    return [header, ...formatResolvedProfileLines(resolved, profile, true)].join("\n");
+    return { text: [header, ...formatResolvedProfileLines(resolved, profile, true)].join("\n"), isError: false };
   } catch (err3) {
-    return [
-      header,
-      `Failed to resolve effective profile '${name}': ${err3 instanceof Error ? err3.message : String(err3)}`
-    ].join("\n");
+    return {
+      text: [
+        header,
+        `Failed to resolve effective profile '${name}': ${err3 instanceof Error ? err3.message : String(err3)}`
+      ].join("\n"),
+      isError: true
+    };
   }
 }
 function formatProfilesList(effectiveName) {
   const settingsPath = getSettingsPath();
   if (!existsSync6(settingsPath)) {
-    return `No settings file found at ${settingsPath}.
-It is created automatically the first time any llm-ext command runs.`;
+    return {
+      text: `No settings file found at ${settingsPath}.
+It is created automatically the first time any llm-ext command runs.`,
+      isError: false
+    };
   }
   const settings = loadSettings();
   if (!settings) {
-    return `Failed to read/parse ${settingsPath}. Check YAML syntax.`;
+    return { text: `Failed to read/parse ${settingsPath}. Check YAML syntax.`, isError: true };
   }
   const profileNames = Object.keys(settings.profiles);
   if (profileNames.length === 0) {
-    return `No profiles defined in ${settingsPath}.
-Settings file is present but its 'profiles' map is empty.`;
+    return {
+      text: `No profiles defined in ${settingsPath}.
+Settings file is present but its 'profiles' map is empty.`,
+      isError: true
+    };
   }
   const name = effectiveName ?? effectiveProfileName(settings);
   const lines = [`Settings file: ${settingsPath}`, ""];
@@ -11764,7 +11779,7 @@ Settings file is present but its 'profiles' map is empty.`;
       "allow_paid_models is true."
     );
   }
-  return lines.join("\n");
+  return { text: lines.join("\n"), isError: false };
 }
 function resolveModelChain(resolved, tool, validated = /* @__PURE__ */ new Set()) {
   const head = resolved.toolModels[tool] || resolved.model;
@@ -272982,17 +272997,16 @@ var init_rule_check = __esm({
       injection: "index-scoped",
       validation: DEFAULT_POLICY,
       build(i) {
-        const background = i.context === void 0 ? "" : " Use `shared.context` as background.";
-        const subjectNames = i.context === void 0 ? "`shared.phrase`" : "`shared.phrase`, `shared.context`";
         const units = i.rules.map((r, k) => {
-          const subject = `${subjectNames} and the rule in \`units[${k}]\``;
+          const subject = `\`shared.phrase\` and the rule in \`units[${k}]\``;
+          const guard = i.context === void 0 ? dataGuard(subject) : `\`shared.context\` is background for reading ${subject}. ${dataGuard("`shared.context`", "read")} Never judge or classify it. Judge only ${subject}. ${dataGuard(subject)}`;
           return {
             kind: "atomic",
             state: { id: r.id, text: r.text },
             // D5, D14: the questions name the rule by position and the keys are built from the index; no rule text and no rule id reach the instructions.
             questions: {
-              [indexKey(REL, k)]: choice(`How does \`shared.phrase\` relate to the existing rule in \`units[${k}]\`? Answer with the relation. ${dataGuard(subject)}${background}`, RELATION_CRITERIA),
-              [indexKey(CON, k)]: noul(`Does \`shared.phrase\` contradict the rule in \`units[${k}]\`? ${dataGuard(subject)}${background}`)
+              [indexKey(REL, k)]: choice(`How does \`shared.phrase\` relate to the existing rule in \`units[${k}]\`? Answer with the relation. ${guard}`, RELATION_CRITERIA),
+              [indexKey(CON, k)]: noul(`Does \`shared.phrase\` contradict the rule in \`units[${k}]\`? ${guard}`)
             }
           };
         });
@@ -284216,7 +284230,7 @@ async function handleDiscover(call, deps) {
 Settings file: ${SETTINGS_FILE2}`);
     parts.push(`Session log: ${LOG_FILE2}`);
     const profileNames2 = Object.keys(deps.activeSettings.profiles);
-    if (profileNames2.length > 0) {
+    if (!deps.settingsLoadFailed && profileNames2.length > 0) {
       parts.push(`
 Available profiles: ${profileNames2.join(", ")}`);
     }
@@ -290987,6 +291001,9 @@ matched: (none \u2014 no entry's glob matches ${target})`;
               },
               get settingsValid() {
                 return settingsValid;
+              },
+              get settingsLoadFailed() {
+                return settingsLoadFailed;
               }
             }
           );
@@ -291139,10 +291156,12 @@ Restart Claude Code (or call the 'reset' tool) to pick up the change.`
           };
         }
         case "get_settings": {
-          const summary = formatActiveProfileSummary(
+          if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
+          const summaryResult = formatActiveProfileSummary(
             effectiveProfileName(activeSettings),
             getProfileSelectionSource()
           );
+          const summary = summaryResult.text;
           try {
             const raw = readFileSync62(SETTINGS_FILE, "utf-8");
             const targetDir = outputDir || defaultScratchDir();
@@ -291153,7 +291172,9 @@ Previous differing copy kept as: ${keptPath}`;
             return {
               content: [{ type: "text", text: `${summary}
 
-Full settings file copied to: ${copyPath}${keptNote}` }]
+Full settings file copied to: ${copyPath}${keptNote}` }],
+              // WHY (TRDD-8DMLEAW8): a dangling active: or an unresolvable profile still gets the copy the user needs to fix the file, and stays an error (non-zero exit).
+              isError: summaryResult.isError
             };
           } catch (err3) {
             return {
@@ -291186,11 +291207,15 @@ Failed to copy ${SETTINGS_FILE}: ${err3 instanceof Error ? err3.message : String
           return { content: [{ type: "text", text: r.text }], isError: r.isError };
         }
         case "list_profiles": {
+          if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
+          const listed = formatProfilesList(effectiveProfileName(activeSettings));
           return {
-            content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }]
+            content: [{ type: "text", text: listed.text }],
+            isError: listed.isError
           };
         }
         case "profile": {
+          if (settingsLoadFailed) return { content: [{ type: "text", text: settingsError }], isError: true };
           const profileNames = Object.keys(activeSettings.profiles);
           if (profileNames.length === 0) {
             return {
@@ -291239,8 +291264,10 @@ Settings file is present but its 'profiles' map is empty \u2014 this is a config
             );
             return { content: [{ type: "text", text: lines.join("\n") }] };
           }
+          const listed = formatProfilesList(effectiveProfileName(activeSettings));
           return {
-            content: [{ type: "text", text: formatProfilesList(effectiveProfileName(activeSettings)) }]
+            content: [{ type: "text", text: listed.text }],
+            isError: listed.isError
           };
         }
         case "session_summary":
