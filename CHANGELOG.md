@@ -1,6 +1,77 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.8] - 2026-11-20
+
+### Changed
+
+- Build(dist): rebuild llm-ext.js from 2471676d (TRDD-8DMLEAW8, TRDD-LFWV2DKG, TRDD-4DFR9FTX)
+
+- Ci(release): turn off the uv cache in the release job (TRDD-YLTYAQUU)
+
+
+### Documentation
+
+- Docs(trdd): correct two claims of 94ba99e5 on 88IBHLIS and 1MT68BAJ (TRDD-88IBHLIS)
+
+- Docs(trdd): restore the 1MT68BAJ test wrapper CPV needs, file 88IBHLIS (TRDD-FC2TX9VU)
+
+- Docs(trdd): close 8DMLEAW8, LFWV2DKG, 5D50HBXA and 4DFR9FTX; rule-check check 1 tables; open NL4MGJVA
+
+- Docs(trdd): close I6KUI1X6; add 8DMLEAW8; notes on Y7G1ZRBG, LFWV2DKG, OSNHW0W9
+
+- Docs(trdd): close FBWXV4JF; link fixes to LA1MA1EL, OSNHW0W9, YLTYAQUU; add XTKTCSU6, LFWV2DKG
+
+- Docs(trdd): close GG44R65K, VQKH92OI, DNSW16LW; link fcffd407 to 2VZ3JGDH
+
+- Docs(trdd): file 2VZ3JGDH, the governor 20-process test that newly fails on Windows in 14.7.7 (TRDD-2VZ3JGDH)
+
+- Docs(trdd): close WKAEG5XM after the green 14.7.7 gate, file three cards, move the Windows cards to todo (TRDD-WKAEG5XM)
+
+
+### Fixed
+
+- Fix(settings): failed settings diagnostics exit non-zero, 2 of 2 (TRDD-8DMLEAW8, TRDD-LFWV2DKG)
+
+- Fix(settings): settings formatters flag failures as errors, 1 of 2 (TRDD-8DMLEAW8, TRDD-LFWV2DKG)
+
+- Fix(classify): rule-check reads --context as background, never judges it (TRDD-4DFR9FTX)
+
+- Fix(config): retry transient settings reads on Windows; regenerate only on a parse failure (TRDD-Y7G1ZRBG)
+
+- Fix(config): compare config-dir roots in their native long form (TRDD-LA1MA1EL, TRDD-OSNHW0W9)
+
+- Fix(index): a settings load that throws at boot refuses work requests (TRDD-FBWXV4JF)
+
+- Fix: no consumer reads fields of a profile entry that is not a map (TRDD-GG44R65K)
+
+- Fix(config): a profile entry that is not a map fails the settings load naming it (TRDD-GG44R65K)
+
+
+### Miscellaneous
+
+- Chore(reports): move the rule-check report out of the worktree reports folder (TRDD-4DFR9FTX)
+
+
+### Testing
+
+- Test(e2e): bound file 1 remote attempts, not the command wall time (TRDD-WPH1158N)
+
+- Test(hermetic): isolate the scratch and report roots in every test (TRDD-5D50HBXA)
+
+- Test(config-dir): make the hermetic /tmp checks portable to Windows (TRDD-LA1MA1EL)
+
+- Test: no settings.yaml writer persists the default document after a failed boot load (TRDD-I6KUI1X6)
+
+- Test(publish): match only the shell missing-command line for tsc (TRDD-VQKH92OI)
+
+- Test(publish): require the missing dependency by name in the no-node_modules build log (TRDD-VQKH92OI)
+
+- Test(governor): print each failing child's stderr in the 20-process test (TRDD-2VZ3JGDH)
+
+- Test(publish): a real build with no node_modules fails and its log names the missing dependency (TRDD-VQKH92OI, TRDD-DNSW16LW)
+
+
 ## [14.7.7] - 2026-11-19
 
 ### Changed
