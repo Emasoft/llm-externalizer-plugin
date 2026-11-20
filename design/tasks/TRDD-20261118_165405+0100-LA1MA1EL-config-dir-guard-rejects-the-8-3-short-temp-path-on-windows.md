@@ -4,7 +4,7 @@ title: Config dir guard rejects the 8.3 short temp path on Windows
 column: todo
 status: tasked
 created: 2026-11-18T16:54:05+0100
-updated: 2026-11-20T00:28:55+0100
+updated: 2026-11-20T01:54:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -16,6 +16,7 @@ approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-18T16:54:05+0100
 parent-trdd: 61EINA10
+implementation-commits: [9315510b]
 ---
 
 # Config dir guard rejects the 8.3 short temp path on Windows
@@ -70,3 +71,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 ## Notes
 
 2026-11-20 (main agent read config.ts:895-922): getConfigDir resolves the config dir and homedir() with plain realpathSync and compares them by string prefix. On the Windows runner the temp dir is C:\Users\RUNNER~1\AppData\Local\Temp\..., the home folder in 8.3 short form, while home resolves to C:\Users\runneradmin, so the prefix check fails. INFERRED, not run: realpathSync.native returns the long name, which would fix group G1 (36 failures) without widening the allowlist. Map: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
+2026-11-20: 9315510b switches getConfigDir, assertNotRealConfigDirUnderTest, rule-install.ts and sanitizeInputPath to realpathSync.native on both sides of the home/temp comparison. INFERRED to fix the 8.3 short-name mismatch (RUNNER~1 vs runneradmin); not run on Windows. Stays open until a Windows CI run shows the G1 tests green. Known gap: the first test in src/config-dir-hermetic.test.ts ("resolves under /tmp") still uses plain realpathSync("/tmp") and a "/" separator, and the osTmpReal block was not reviewed for Windows.
