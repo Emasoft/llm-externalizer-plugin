@@ -15,9 +15,13 @@ jobs:
   release:
     runs-on: ubuntu-latest
     # Cold-install ceiling: `uvx --from git+…` clones and builds CPV from
-    # source on a COLD runner (12-20 min). The uv cache below makes every run
-    # after the first fast, but the first cold build must fit under this cap.
-    # Do NOT lower below 25.
+    # source on a COLD runner. Measured: the last 30 Release runs took 2m11s to
+    # 4m36s wall time (25 green: same range; wall time = run updatedAt minus
+    # createdAt, not job duration). Cold-run figure is INFERRED, not confirmed:
+    # v14.1.0 ran 57 days after v13.6.0 (cache possibly evicted, not confirmed)
+    # and took 3m29s. The uv cache is OFF in this job (TRDD-YLTYAQUU), so
+    # EVERY run is cold and must fit under this cap. The 25 min floor is kept
+    # because a worst-case cold build is not measured. Do NOT lower below 25.
     timeout-minutes: 30
     permissions:
       contents: write       # create the release + upload assets
@@ -30,12 +34,14 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
-        # enable-cache keys an actions/cache on UV_CACHE_DIR so the cold
-        # `uvx --from git+…` build of CPV is paid ONCE per lockfile/runner.
+        # TRDD-YLTYAQUU: enable-cache is false on purpose. A release job must not
+        # restore a uv cache another run wrote (zizmor cache-poisoning: a poisoned
+        # cache could reach the published artifacts). Cost: CPV is built cold on
+        # every release (measured: 2m11s-4m36s wall time over the last 30 runs;
+        # the cold-run figure is inferred, cache eviction not confirmed in the log).
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
         with:
-          # zizmor cache-poisoning (audit confidence Low) accepted here: only the owner pushes main and tags, and a cold CPV build costs 12-20 min per release.
-          enable-cache: true
+          enable-cache: false
 
       - name: Set up Python
         run: uv python install 3.12
