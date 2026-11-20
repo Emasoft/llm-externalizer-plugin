@@ -124,7 +124,7 @@ export async function fetchWithTimeout(
  *   - Max 5 retries (6 total attempts), capped by remaining time budget
  *   - Gives up immediately if remaining time < 2s (not enough for a useful retry)
  */
-const RETRY_MAX_ATTEMPTS = 5;
+export const RETRY_MAX_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 1000;
 const RETRY_MAX_DELAY_MS = 30_000;
 export const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
