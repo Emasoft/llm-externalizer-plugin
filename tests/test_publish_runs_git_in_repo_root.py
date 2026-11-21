@@ -61,7 +61,7 @@ def two_repos(tmp_path, monkeypatch):
 
 def _dry_run(release: Path) -> None:
     args = argparse.Namespace(
-        patch=False, minor=False, major=False, set=VERSION, dry_run=True, check_only=False
+        patch=False, minor=False, major=False, set=VERSION, dry_run=True, check_only=False, promote=None
     )
     publish._run_publish(
         args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
@@ -141,6 +141,8 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     _git(release, "add", "-A")
     _git(release, "commit", "-m", "feat: add manifest")
     caller_head = _git(caller, "rev-parse", "HEAD").stdout.strip()
+    _git(release, "tag", "-a", "stale", "-m", "Reachable but unrelated tag")
+    _git(release, "config", "push.followTags", "true")
 
     stub_bin = tmp_path / "stub-bin"
     stub_bin.mkdir()
@@ -149,6 +151,10 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", f"{stub_bin}{os.pathsep}{os.environ['PATH']}")
     monkeypatch.chdir(caller)
     monkeypatch.setattr(publish, "run_checks", lambda root: True)
+    # The fixture uses a real local remote, not the production GitHub destination.
+    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
+    monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
+    monkeypatch.setattr(publish, "_run_check", lambda *args: True)
     monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
 
     real_run = publish.run
@@ -162,7 +168,7 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
 
     monkeypatch.setattr(publish, "run", recording_run)
     args = argparse.Namespace(
-        patch=False, minor=False, major=False, set=VERSION, dry_run=False, check_only=False
+        patch=False, minor=False, major=False, set=VERSION, dry_run=False, check_only=False, promote=None
     )
     publish._run_publish(
         args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
@@ -176,6 +182,9 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     assert _git(release, "log", "-1", "--format=%s").stdout.strip() == f"chore(release): {TAG}"
     assert _git(caller, "rev-parse", "HEAD").stdout.strip() == caller_head
     assert _git(caller, "tag", "--list").stdout.strip() == ""
+    candidate = _git(release, "rev-parse", "HEAD").stdout.strip()
+    remote_refs = _git(remote, "for-each-ref", "--format=%(objectname) %(refname)").stdout.splitlines()
+    assert remote_refs == [f"{candidate} refs/heads/release-candidates/{candidate}"]
 
 
 

@@ -62,7 +62,7 @@ def _rebuild_dist(root: Path) -> None:
 
 
 def _dry_run(repo: Path) -> None:
-    args = argparse.Namespace(patch=False, minor=False, major=False, set=VERSION, dry_run=True, check_only=False)
+    args = argparse.Namespace(patch=False, minor=False, major=False, set=VERSION, dry_run=True, check_only=False, promote=None)
     publish._run_publish(args, repo, repo / ".claude-plugin" / "plugin.json", repo / "CHANGELOG.md")
 
 

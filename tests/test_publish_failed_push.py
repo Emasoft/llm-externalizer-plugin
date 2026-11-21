@@ -21,8 +21,8 @@ PATH with a logging script, and the test asserts it is never invoked.
 
 from __future__ import annotations
 
-import argparse
 import importlib.util
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -116,86 +116,28 @@ def publish_repo(tmp_path, monkeypatch):
     return repo, remote, gh_log
 
 
-def test_failed_push_is_non_destructive(publish_repo, monkeypatch, capsys):
-    """Push rejected by the remote: publisher exits 1 with local work intact.
-
-    Snapshot of the working repo state before the push is taken at the
-    moment the publisher creates the release tags (the commit the push
-    carries); after the failure the test compares against it.
-    """
+def test_failed_push_is_non_destructive(publish_repo, monkeypatch):
+    """A rejected atomic push preserves the candidate and both local tags."""
     repo, remote, gh_log = publish_repo
-    base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    manifest = repo / ".claude-plugin" / "plugin.json"
+    manifest.write_text(json.dumps({"name": "test-plugin", "version": RELEASE_VERSION}), encoding="utf-8")
+    _git(repo, "add", ".claude-plugin/plugin.json")
+    _git(repo, "commit", "-m", f"chore(release): {TAG}")
+    candidate = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _git(remote, "fetch", str(repo), f"{candidate}:{publish.candidate_ref(candidate)}")
+    # Test the real Git transaction; the external release gates are separate.
+    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
+    monkeypatch.setattr(publish, "verify_windows_run", lambda *args: None)
+    monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
+    before = _git(remote, "show-ref").stdout
 
-    # Patch the two heavy gates (full check suite / CPV) — they are not the
-    # code under test. Everything else (git, git-cliff, the push itself) is
-    # REAL, executed by the actual publisher code.
-    monkeypatch.setattr(publish, "run_checks", lambda root: True)
-    monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        publish.promote_candidate(repo, manifest, repo / "CHANGELOG.md", candidate, 1)
 
-    real_run = publish.run
-    captured: dict = {}
-
-    def instrumented_run(cmd, *, check=True, capture=True, cwd=None, env=None):
-        if cmd[:3] == ["npm", "run", "build"]:
-            # Step 6 dist rebuild is a real npm invocation against a repo
-            # with no package.json — out of scope; dist/llm-ext.js is
-            # pre-seeded with the version string.
-            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-        if cmd[:3] == ["git", "tag", "-a"]:
-            # Pre-push snapshot: HEAD at the moment the release tags are
-            # created — the release commit the push will carry.
-            captured["pre_push_head"] = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout.strip()
-        return real_run(cmd, check=check, capture=capture, cwd=cwd, env=env)
-
-    monkeypatch.setattr(publish, "run", instrumented_run)
-
-    args = argparse.Namespace(
-        patch=False,
-        minor=False,
-        major=False,
-        set=RELEASE_VERSION,
-        dry_run=False,
-        check_only=False,
-    )
-    with pytest.raises(SystemExit) as excinfo:
-        publish._run_publish(
-            args,
-            repo,
-            repo / ".claude-plugin" / "plugin.json",
-            repo / "CHANGELOG.md",
-        )
-    assert excinfo.value.code == 1
-
-    err = capsys.readouterr().err
-    assert "Release commit and both tags are preserved locally" in err
-    assert "Remote refs may be partially updated" in err
-    assert "REJECTED-BY-TEST-HOOK" in err  # original push stderr surfaced
-    assert "Rolling back" not in err
-
-    release_sha = captured["pre_push_head"]
-    # HEAD unchanged from the pre-push release commit; its parent is the
-    # pre-publish base and the message is the release commit's.
-    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    assert head == release_sha
-    assert _git(repo, "rev-parse", "HEAD~1").stdout.strip() == base_sha
-    assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == f"chore(release): {TAG}"
-
-    # Both tags survive, annotated, and point at the release commit.
-    for t in (TAG, RESOLVER_TAG):
-        assert _git(repo, "rev-parse", "--verify", t, check=False).returncode == 0
-        assert _git(repo, "cat-file", "-t", t).stdout.strip() == "tag"  # annotated
-        assert _git(repo, "rev-parse", f"{t}^{{commit}}").stdout.strip() == release_sha
-
-    # No reset in HEAD's reflog — nothing was undone.
-    reflog = _git(repo, "reflog", "HEAD").stdout
-    assert "reset" not in reflog
-
-    # The GitHub-release step (11) is unreachable on push failure: the gh
-    # stub never logged a single invocation.
+    assert excinfo.value.cmd[:3] == ["git", "push", "--atomic"]
+    assert _git(remote, "show-ref").stdout == before
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == candidate
+    for name in (TAG, RESOLVER_TAG):
+        assert _git(repo, "cat-file", "-t", name).stdout.strip() == "tag"
+        assert _git(repo, "rev-parse", f"{name}^{{commit}}").stdout.strip() == candidate
     assert not gh_log.exists()

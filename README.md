@@ -1732,28 +1732,18 @@ Additional maintainer-only tooling:
 - **`git-cliff`** — auto-computes the next version and regenerates `CHANGELOG.md` from Conventional Commits (pulled in by `publish.py`)
 
 ```bash
-# Auto-bump version from Conventional Commits, run all gates, push tag + release
-python3 scripts/publish.py
+# Auto-bump from Conventional Commits; add --patch, --minor, --major, or --set VERSION to override.
+uv run scripts/publish.py --prepare
+
+# After the dispatched Windows run succeeds, use its ID and the candidate SHA from prepare.
+uv run scripts/publish.py --promote RUN_ID --candidate SHA
+
+# Preview a version or run validation without publishing.
+uv run scripts/publish.py --dry-run
+uv run scripts/publish.py --check-only
 ```
 
-```bash
-# Force a specific bump
-python3 scripts/publish.py --patch
-python3 scripts/publish.py --minor
-python3 scripts/publish.py --major
-```
-
-```bash
-# Dry-run preview (still runs all checks)
-python3 scripts/publish.py --dry-run
-```
-
-```bash
-# Used by the pre-push hook — runs checks, exits, no mutations
-python3 scripts/publish.py --check-only
-```
-
-`publish.py` runs **9 mandatory validation gates** before any tag or push: `npm ci`, `npm run typecheck`, `npm run lint`, `npm run build`, `npm test`, `ruff check`, `shellcheck`, `plugin.json` schema, `claude plugin validate`. All must pass with zero errors.
+Prepare validates the versioned commit, pushes only its candidate branch, and starts Windows CI. Promotion requires that exact commit and a successful Windows unit job, reruns local validation, and pushes main and both release tags atomically. If a push fails, inspect retained refs before retrying. Dry-run and check-only may rebuild tracked files but never push or tag.
 
 `npm test` is **offline and free** — it never makes a real LLM call. Real-LLM (live) tests are opt-in behind `LIVE_TESTS=1` + `OPENROUTER_API_KEY`. See [`scripts/llm-ext/TESTING.md`](scripts/llm-ext/TESTING.md).
 

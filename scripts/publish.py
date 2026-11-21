@@ -1,38 +1,17 @@
 #!/usr/bin/env python3
-"""Publish a new release: bump version, update changelog, tag, push, create GitHub release.
+"""Prepare a release candidate and promote it after Windows CI passes.
 
 Usage:
-    uv run scripts/publish.py              # bump chosen by git-cliff from commit types
-    uv run scripts/publish.py --patch      # 3.2.0 -> 3.2.1
-    uv run scripts/publish.py --minor      # 3.2.0 -> 3.3.0
-    uv run scripts/publish.py --major      # 3.2.0 -> 4.0.0
-    uv run scripts/publish.py --set 4.0.0  # explicit version
-    uv run scripts/publish.py --dry-run    # preview without changes
-    uv run scripts/publish.py --check-only # run full check suite only
+    uv run scripts/publish.py --prepare [--patch | --minor | --major | --set VERSION]
+    uv run scripts/publish.py --promote RUN_ID --candidate SHA
+    uv run scripts/publish.py --check-only
+    uv run scripts/publish.py --dry-run
 
-Push policy:
-    Direct `git push` is REFUSED by the pre-push hook (.githooks/pre-push).
-    The only path to push is this script. The hook uses PROCESS ANCESTRY
-    (walks parent PIDs via `ps`) to verify publish.py is the caller — not
-    a lock file, not an env var, nothing spoofable. Since subprocess.run
-    spawns git as a child of this script's Python interpreter, publish.py
-    will be the grandparent of the hook whenever the push comes from here.
-    The hook is local config (core.hooksPath .githooks); `git push --no-verify`, or a clone without that setting, skips it. This script never passes --no-verify.
-
-Steps (in order — validate is FIRST, no skipping):
-    1. Pre-flight: working tree clean + required tools present
-    2. Validate (MANDATORY — all checks 0 errors): reports preflight, npm ci,
-       typecheck, lint, build, CPV, test, ruff, mypy, shellcheck, plugin.json
-    3. Determine next version (git-cliff --bumped-version or flag override)
-    4. Generate CHANGELOG.md (git-cliff)
-    5. Sync version to plugin.json, package.json, cli/main.ts, pyproject.toml
-    6. Rebuild dist (with new version)
-    7. Update README.md badges
-    8. Commit as `chore(release): vX.Y.Z`
-    9. Create annotated git tags vX.Y.Z AND {plugin-name}--vX.Y.Z
-       (the second is the plugin-dependency resolver tag, CC >= 2.1.110)
-   10. Push the branch and this release's two tags (pre-push hook walks ancestry, finds publish.py)
-   11. gh release create
+Prepare creates the versioned commit, validates it, pushes only its candidate
+branch, and dispatches Windows CI. Promote verifies the Windows run against
+that commit, repeats local validation, then pushes main and both release tags
+atomically. The pre-push hook verifies publisher ancestry for both pushes.
+Check-only and dry-run do not publish; validation may rebuild tracked output.
 """
 
 import argparse
@@ -339,7 +318,7 @@ def run_build_check(repo_root: Path) -> bool:
     return _run_check("build", ["npm", "run", "build"], mcp_dir, repo_root)
 
 
-def run_checks(repo_root: Path) -> bool:
+def run_checks(repo_root: Path, *, candidate: str | None = None) -> bool:
     """Run every mandatory check on the plugin. Fail-fast on any error.
 
     STRICT MODE: every check is mandatory. There are NO conditional SKIP
@@ -364,6 +343,8 @@ def run_checks(repo_root: Path) -> bool:
           previously ran only at release time, after the artifact was
           already being shipped, so a regression here reached CI unnoticed)
     """
+    if candidate is not None:
+        require_release_snapshot(repo_root, candidate)
     # CPV rejects a populated reports/ directory until upstream issue #275 is fixed.
     if any(entry.is_file() for entry in (repo_root / "reports").rglob("*")):
         print("ERROR: reports/ contains files that CPV rejects (issue #275).", file=sys.stderr)
@@ -414,6 +395,9 @@ def run_checks(repo_root: Path) -> bool:
     if not run_build_check(repo_root):
         return False
 
+    # The fresh build must not replace tracked release bytes before CPV reads them.
+    if candidate is not None:
+        require_release_snapshot(repo_root, candidate)
     # Validate the fresh build before spending time on the full test suite.
     if not run_cpv_validation(repo_root):
         return False
@@ -494,6 +478,26 @@ def run_checks(repo_root: Path) -> bool:
         return False
 
     return True
+
+
+
+def require_release_snapshot(repo_root: Path, commit: str) -> None:
+    """Reject drift from the pinned candidate, including untracked inputs."""
+    git = ["git", "-c", "core.fsmonitor=false"]
+    cwd = str(repo_root)
+    head = run([*git, "rev-parse", "--verify", "HEAD"], cwd=cwd).stdout.strip()
+    if head != commit:
+        raise SystemExit(f"ERROR: release candidate changed: expected {commit}, found {head}")
+    # Git status can hide worktree changes when these index flags are set.
+    index = run([*git, "ls-files", "-v", "-z"], cwd=cwd).stdout
+    if any(entry and (entry[0].islower() or entry[0] == "S") for entry in index.split("\0")):
+        raise SystemExit("ERROR: release candidate has assume-unchanged or skip-worktree entries")
+    status = run(
+        [*git, "status", "--porcelain=v1", "--untracked-files=all", "--ignore-submodules=none"],
+        cwd=cwd,
+    ).stdout
+    if status:
+        raise SystemExit(f"ERROR: release candidate has index, worktree, or untracked changes:\n{status}")
 
 
 # ── CPV skillaudit-advisory bootstrap (upstream bug Emasoft/claude-plugins-validation#41) ──
@@ -924,7 +928,16 @@ def main():
         action="store_true",
         help="Run all validation checks without publishing.",
     )
+    parser.add_argument("--prepare", action="store_true", help="Build and validate a candidate, then dispatch Windows CI")
+    parser.add_argument("--promote", type=int, metavar="RUN_ID", help="Promote after the specified Windows run succeeds")
+    parser.add_argument("--candidate", metavar="SHA", help="Full candidate commit SHA; required with --promote")
     args = parser.parse_args()
+    if sum((args.prepare, args.promote is not None, args.check_only, args.dry_run)) != 1:
+        parser.error("choose exactly one of --prepare, --promote, --check-only, or --dry-run")
+    if (args.candidate is not None) != (args.promote is not None):
+        parser.error("--candidate is required with --promote and invalid otherwise")
+    if args.promote is not None and (args.promote < 1 or args.patch or args.minor or args.major or args.set):
+        parser.error("--promote requires a positive run ID and takes no version bump flags")
 
     # Gate #1 — every required tool must be present. No mode skips this
     # (dry-run, check-only, and normal publish all need the full tool set
@@ -959,6 +972,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         report_working_tree(repo_root)
         return
 
+    if args.promote is not None:
+        promote_candidate(repo_root, plugin_json, changelog, args.candidate, args.promote)
+        return
     # ── 1. Pre-flight: working tree must be clean ──
     # Mutating version in a dirty tree mixes user changes with publish artifacts.
     print("\n── 1. Pre-flight: working tree check ──")
@@ -983,26 +999,16 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  Working tree is clean")
     print()
 
-    # ── 2. Validate — FIRST thing after pre-flight ──
-    # MANDATORY. Every check runs on the CURRENT code (no version bump
-    # yet), so the validation result reflects the exact state being
-    # released. If anything fails, publish aborts before any version, changelog
-    # or release-commit step. The checks themselves may still rewrite tracked
-    # files (npm run build regenerates scripts/llm-ext/dist), so every stop
-    # point calls report_working_tree instead of assuming the tree is untouched.
-    #
-    # Order matters: validation must pass BEFORE we compute the next
-    # version or generate the changelog. There's no point determining
-    # a version for code that won't build.
-    # TRDD-88IBHLIS: the shared runner validates the fresh build before tests.
-    print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
-    if not run_checks(repo_root):
-        print("ERROR: validation failed. Aborting.", file=sys.stderr)
-        report_working_tree(repo_root)
-        sys.exit(1)
-    print("  All checks passed")
-    print()
-
+    # A live release must validate the final commit, not the pre-bump tree.
+    if args.dry_run:
+        if not run_checks(repo_root):
+            report_working_tree(repo_root)
+            print("ERROR: validation failed. Aborting.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        require_release_target(repo_root)
+        base = run(["git", "rev-parse", "HEAD"], cwd=str(repo_root)).stdout.strip()
+        require_release_snapshot(repo_root, base)
     # ── 3. Determine next version ──
     # Default: git-cliff --bumped-version (uses conventional commit
     # types to decide major/minor/patch). Flags --patch/--minor/--major/--set
@@ -1234,6 +1240,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # ── 6. Rebuild dist (with new version) ──
     print("── 6. Rebuild dist ──")
     mcp_dir = str(repo_root / "scripts" / "llm-ext")
+    # Prepare also runs on clean checkouts without installed dependencies.
+    # The final validation gate reinstalls and rebuilds on the pinned commit.
+    if not _run_check("prepare-npm-ci", ["npm", "ci", "--ignore-scripts"], mcp_dir, repo_root):
+        raise SystemExit("ERROR: candidate dependency install failed")
     rebuild = run(["npm", "run", "build"], capture=True, check=False, cwd=mcp_dir)
     if rebuild.returncode != 0:
         print("ERROR: dist rebuild failed.", file=sys.stderr)
@@ -1314,79 +1324,151 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print("WARNING: unstaged modified files detected:", file=sys.stderr)
             for line in unstaged:
                 print(f"  {line}", file=sys.stderr)
+    # A commit hook must not substitute a different staged tree.
+    staged_tree = run(["git", "write-tree"], cwd=str(repo_root)).stdout.strip()
     run(["git", "commit", "-m", f"chore(release): {tag}"], capture=False, cwd=str(repo_root))
     print()
 
-    # ── 9. Tag ──
-    # Two annotated tags on the release commit: the human-facing release
-    # tag and the resolver tag the plugin-dependency system requires. Both
-    # are annotated; both are pushed by explicit refspec in step 10.
-    print("── 9. Tag ──")
-    run(["git", "tag", "-a", tag, "-m", f"Release {tag}"], capture=False, cwd=str(repo_root))
-    run(["git", "tag", "-a", resolver_tag, "-m", f"Dependency-resolver tag for {tag}"], capture=False, cwd=str(repo_root))
-    print()
 
-    # ── 10. Push ──
-    # The pre-push hook walks the process ancestry and finds THIS script as an
-    # ancestor of `git push`, which is what authorises the push. There is no
-    # lock file and no env var — both are spoofable, ancestry is not.
-    print("── 10. Push ──")
-    # WHY (TRDD-Z20KCBZY): the 14.6.2 publish failed at this step because a bare
-    # `git push --follow-tags` (the push used before TRDD-Z20KCBZY) obeys push.default=simple, which refuses to push
-    # when the local branch name (dev/after-14.3.0) differs from its upstream
-    # (origin/main). The destination is now explicit (<remote> HEAD:<merge ref>),
-    # so the result no longer depends on push.default or on the branch name
-    # matching its upstream. No upstream = fail fast, never guess a destination.
-    branch = run(["git", "symbolic-ref", "--short", "HEAD"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
-    # push_remote, not remote: step 3 already binds remote to the ls-remote CompletedProcess (mypy, v14.6.3 Release run).
-    push_remote = ""
-    merge_ref = ""
-    if branch:
-        push_remote = run(["git", "config", "--get", f"branch.{branch}.remote"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
-        merge_ref = run(["git", "config", "--get", f"branch.{branch}.merge"], capture=True, check=False, cwd=str(repo_root)).stdout.strip()
-    if not (branch and push_remote and merge_ref):
-        print(
-            f"ERROR: branch {branch or '(detached HEAD)'} has no upstream; "
-            f"set one with git branch --set-upstream-to=<remote>/<branch>",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    # WHY (TRDD-Z20KCBZY): push exactly the two tags of this release by explicit refspec,
-    # never --follow-tags. --follow-tags also pushes any stale unpushed annotated tag
-    # reachable from HEAD (the failed 14.6.2 left two), and GitHub creates no tag push
-    # events when more than three tags arrive in one push, so release.yml would not run.
-    push_result = run(["git", "push", push_remote, f"HEAD:{merge_ref}", f"refs/tags/{tag}", f"refs/tags/{resolver_tag}"], capture=True, check=False, cwd=str(repo_root))
-    if push_result.returncode != 0:
-        # WHY: a failed push must preserve local work and recovery evidence.
-        # The previous branch ran `git reset --hard HEAD~1` and deleted both
-        # tags, DESTROYING the release commit and the exact refs needed to
-        # diagnose the failure — a network blip became permanent lost work.
-        # Now everything is kept and the operator is told to inspect before
-        # retrying: remote refs may be PARTIALLY updated (the push is not
-        # atomic across refs), so a blind rerun can collide with whatever
-        # the remote did receive.
-        print("ERROR: push failed. Release commit and both tags are preserved locally.", file=sys.stderr)
-        if push_result.stderr:
-            print(f"  {push_result.stderr.strip()}", file=sys.stderr)
-        print(
-            "  Remote refs may be partially updated — inspect remote and local "
-            "state (including the retained tags) BEFORE any retry; do not blind-rerun.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-    print()
-
-    # ── 11. GitHub release ──
-    print("── 11. Create GitHub release ──")
-    notes = extract_release_notes(changelog, new_version)
-    run(
-        ["gh", "release", "create", tag, "--title", tag, "--notes", notes],
-        capture=False,
-        cwd=str(repo_root),
-    )
-
-    print(f"\nPublished {tag}")
+    candidate = run(["git", "rev-parse", "HEAD"], cwd=str(repo_root)).stdout.strip()
+    committed_tree = run(["git", "rev-parse", f"{candidate}^{{tree}}"], cwd=str(repo_root)).stdout.strip()
+    parent = run(["git", "rev-parse", f"{candidate}^"], cwd=str(repo_root)).stdout.strip()
+    if committed_tree != staged_tree or parent != base:
+        raise SystemExit("ERROR: release commit differs from the staged tree or expected parent")
+    validate_candidate(repo_root, candidate)
+    ref = candidate_ref(candidate)
+    existing = remote_ref(repo_root, ref)
+    if existing not in (None, candidate):
+        raise SystemExit(f"ERROR: candidate ref {ref} points to another commit")
+    require_release_snapshot(repo_root, candidate)
+    run(["git", "push", "--no-follow-tags", "origin", f"{candidate}:{ref}"], cwd=str(repo_root), capture=False)
+    print(f"Candidate commit: {candidate}")
+    run(["gh", "workflow", "run", "windows.yml", "--repo", RELEASE_REPO,
+         "--ref", ref.removeprefix("refs/heads/")], cwd=str(repo_root), capture=False)
 
 
+RELEASE_REPO = "Emasoft/llm-externalizer-plugin"
+WINDOWS_WORKFLOW = ".github/workflows/windows.yml"
+WINDOWS_JOB = "Build, CLI smoke and unit tests (Windows)"
+
+
+def require_release_target(repo_root: Path) -> None:
+    cwd = str(repo_root)
+    expected = f"https://github.com/{RELEASE_REPO}.git"
+    for flags in (["--all"], ["--push", "--all"]):
+        urls = run(["git", "remote", "get-url", *flags, "origin"], cwd=cwd).stdout.splitlines()
+        if urls != [expected]:
+            raise SystemExit("ERROR: expected exactly one canonical GitHub origin URL")
+    result = run(["git", "rev-parse", "--symbolic-full-name", "@{upstream}"], cwd=cwd, check=False)
+    upstream = result.stdout.strip() if result.returncode == 0 else ""
+    if upstream != "refs/remotes/origin/main":
+        raise SystemExit("ERROR: release branch must track origin/main")
+
+
+def candidate_ref(candidate: str) -> str:
+    if not re.fullmatch(r"[0-9a-f]{40}", candidate):
+        raise SystemExit("ERROR: expected a full candidate commit SHA")
+    return f"refs/heads/release-candidates/{candidate}"
+
+
+def remote_ref(repo_root: Path, ref: str) -> str | None:
+    lines = run(["git", "ls-remote", "origin", ref], cwd=str(repo_root)).stdout.splitlines()
+    if not lines:
+        return None
+    if len(lines) != 1:
+        raise SystemExit(f"ERROR: ambiguous remote ref {ref}")
+    sha, separator, name = lines[0].partition("\t")
+    if not separator or name != ref or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise SystemExit(f"ERROR: unexpected remote ref response for {ref}")
+    return sha
+
+
+def validate_candidate(repo_root: Path, candidate: str) -> None:
+    if not run_checks(repo_root, candidate=candidate):
+        report_working_tree(repo_root)
+        raise SystemExit("ERROR: candidate validation failed")
+    require_release_snapshot(repo_root, candidate)
+
+
+def require_new_tags(repo_root: Path, tag: str, resolver_tag: str) -> None:
+    for name in (tag, resolver_tag):
+        ref = f"refs/tags/{name}"
+        local = run(["git", "tag", "--list", name], cwd=str(repo_root)).stdout.strip()
+        if local == name or remote_ref(repo_root, ref) is not None:
+            raise SystemExit(f"ERROR: release tag {name} already exists; inspect before retrying")
+
+
+def verify_windows_run(repo_root: Path, candidate: str, run_id: int) -> None:
+    cwd = str(repo_root)
+    api = f"repos/{RELEASE_REPO}/actions"
+    workflow = json.loads(run(["gh", "api", f"{api}/workflows/windows.yml"], cwd=cwd).stdout)
+    result = json.loads(run(["gh", "api", f"{api}/runs/{run_id}"], cwd=cwd).stdout)
+    expected = {
+        "id": run_id, "workflow_id": workflow["id"], "path": WINDOWS_WORKFLOW,
+        "event": "workflow_dispatch", "head_branch": candidate_ref(candidate).removeprefix("refs/heads/"),
+        "head_sha": candidate, "status": "completed", "conclusion": "success",
+    }
+    if (workflow.get("path") != WINDOWS_WORKFLOW
+            or any(result.get(key) != value for key, value in expected.items())
+            or any((result.get(key) or {}).get("full_name") != RELEASE_REPO
+                   for key in ("repository", "head_repository"))):
+        raise SystemExit("ERROR: Windows run does not prove success for this candidate")
+    attempt = result["run_attempt"]
+    if type(attempt) is not int or attempt < 1:
+        raise SystemExit("ERROR: invalid Windows run attempt")
+    jobs = json.loads(run(["gh", "api", "--paginate", "--slurp",
+                           f"{api}/runs/{run_id}/attempts/{attempt}/jobs"], cwd=cwd).stdout)
+    matches = [job for page in jobs for job in page["jobs"] if job["name"] == WINDOWS_JOB]
+    if len(matches) != 1:
+        raise SystemExit("ERROR: expected exactly one Windows job")
+    job = matches[0]
+    unit = [step for step in job.get("steps", []) if step["name"] == "Unit tests (stage 1)"]
+    if (job.get("head_sha") != candidate or len(unit) != 1
+            or any(item.get("status") != "completed" or item.get("conclusion") != "success"
+                   for item in [job, *unit])):
+        raise SystemExit("ERROR: Windows job and stage-one unit tests must pass")
+    print(f"Verified Windows run: https://github.com/{RELEASE_REPO}/actions/runs/{run_id}/attempts/{attempt}")
+
+
+def promote_candidate(repo_root: Path, plugin_json: Path, changelog: Path, candidate: str, run_id: int) -> None:
+    ref = candidate_ref(candidate)
+    require_release_target(repo_root)
+    require_release_snapshot(repo_root, candidate)
+    if remote_ref(repo_root, ref) != candidate:
+        raise SystemExit("ERROR: remote candidate ref does not match the pinned commit")
+    manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
+    version = manifest["version"]
+    if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+        raise SystemExit("ERROR: candidate manifest has an invalid release version")
+    tag = f"v{version}"
+    resolver_tag = resolver_tag_for(manifest["name"], tag)
+    notes = extract_release_notes(changelog, version)
+    require_new_tags(repo_root, tag, resolver_tag)
+    verify_windows_run(repo_root, candidate, run_id)
+    validate_candidate(repo_root, candidate)
+    require_release_target(repo_root)
+    if remote_ref(repo_root, ref) != candidate:
+        raise SystemExit("ERROR: candidate ref moved during validation")
+    require_new_tags(repo_root, tag, resolver_tag)
+    require_release_snapshot(repo_root, candidate)
+    cwd = str(repo_root)
+    tags = (tag, resolver_tag)
+    for name in tags:
+        run(["git", "tag", "-a", name, candidate, "-m", f"Release {tag}"], cwd=cwd)
+    # Use tag object IDs for the push so moving local refs cannot change the upload.
+    refs = [f"refs/tags/{name}" for name in tags]
+    objects = [run(["git", "rev-parse", ref], cwd=cwd).stdout.strip() for ref in refs]
+    for obj in objects:
+        if run(["git", "rev-parse", f"{obj}^{{commit}}"], cwd=cwd).stdout.strip() != candidate:
+            raise SystemExit("ERROR: local tag no longer points to the candidate")
+    require_release_snapshot(repo_root, candidate)
+    run(["git", "push", "--atomic", "--no-follow-tags", "origin", f"{candidate}:refs/heads/main",
+         *(f"{obj}:{ref}" for obj, ref in zip(objects, refs, strict=True))], cwd=cwd, capture=False)
+    for ref in refs:
+        if remote_ref(repo_root, f"{ref}^{{}}") != candidate:
+            raise SystemExit(f"ERROR: published tag {ref} does not peel to the candidate")
+    run(["gh", "release", "create", tag, "--repo", RELEASE_REPO, "--verify-tag",
+         "--title", tag, "--notes", notes], cwd=cwd, capture=False)
+    print(f"Published {tag}")
 if __name__ == "__main__":
     main()

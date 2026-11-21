@@ -13,8 +13,8 @@ npm build and `gh` are stubbed, none of which is the code under test.
 
 from __future__ import annotations
 
-import argparse
 import importlib.util
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -98,42 +98,37 @@ def publish_repo(tmp_path, monkeypatch):
     return repo, remote
 
 
-def _publish(repo: Path) -> None:
-    args = argparse.Namespace(
-        patch=False,
-        minor=False,
-        major=False,
-        set=RELEASE_VERSION,
-        dry_run=False,
-        check_only=False,
-    )
-    publish._run_publish(args, repo, repo / ".claude-plugin" / "plugin.json", repo / "CHANGELOG.md")
-
-
-def test_push_goes_to_upstream_when_branch_name_differs(publish_repo):
-    """Branch dev/x tracking origin/main: remote main equals local HEAD, both tags arrive, stale tags do not."""
+def test_push_goes_to_main_when_branch_name_differs(publish_repo, monkeypatch):
+    """Promotion sends the exact candidate to main and does not follow unrelated tags."""
     repo, remote = publish_repo
-    _git(repo, "config", "branch.dev/x.remote", "origin")
-    _git(repo, "config", "branch.dev/x.merge", "refs/heads/main")
-    _git(repo, "tag", "-a", "v0.0.0-stale", "-m", "stale", "HEAD")
-    _git(repo, "tag", "-a", "test-plugin--v0.0.0-stale", "-m", "stale", "HEAD")
-
-    _publish(repo)
-
+    manifest = repo / ".claude-plugin" / "plugin.json"
+    manifest.write_text(json.dumps({"name": "test-plugin", "version": RELEASE_VERSION}), encoding="utf-8")
+    _git(repo, "add", ".claude-plugin/plugin.json")
+    _git(repo, "commit", "-m", f"chore(release): {TAG}")
     head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    ref = publish.candidate_ref(head)
+    _git(remote, "fetch", str(repo), f"{head}:{ref}")
+    _git(repo, "config", "push.followTags", "true")
+    _git(repo, "tag", "-a", "stale", "-m", "Unrelated", "HEAD")
+    # Exercise the real local Git transaction, not GitHub or the full suite.
+    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
+    monkeypatch.setattr(publish, "verify_windows_run", lambda *args: None)
+    monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
+
+    publish.promote_candidate(repo, manifest, repo / "CHANGELOG.md", head, 1)
+
+    assert _git(repo, "rev-parse", "HEAD").stdout.strip() == head
     assert _git(remote, "rev-parse", "refs/heads/main").stdout.strip() == head
-    for t in (TAG, RESOLVER_TAG):
-        assert _git(remote, "rev-parse", f"refs/tags/{t}^{{commit}}").stdout.strip() == head
-    assert _git(repo, "ls-remote", "--tags", str(remote), "v0.0.0-stale", "test-plugin--v0.0.0-stale").stdout.strip() == ""
+    assert _git(remote, "rev-parse", ref).stdout.strip() == head
+    for name in (TAG, RESOLVER_TAG):
+        assert _git(remote, "rev-parse", f"refs/tags/{name}^{{commit}}").stdout.strip() == head
+    assert _git(remote, "tag", "--list", "stale").stdout == ""
 
 
-def test_no_upstream_fails_fast_and_pushes_nothing(publish_repo, capsys):
-    """Branch with no upstream: exit 1, 'has no upstream' on stderr, remote left empty."""
+def test_no_upstream_fails_fast_and_pushes_nothing(publish_repo):
+    """A canonical origin without an upstream is rejected before any network operation."""
     repo, remote = publish_repo
-
-    with pytest.raises(SystemExit) as excinfo:
-        _publish(repo)
-
-    assert excinfo.value.code == 1
-    assert "has no upstream" in capsys.readouterr().err
-    assert _git(remote, "for-each-ref").stdout.strip() == ""
+    _git(repo, "remote", "set-url", "origin", f"https://github.com/{publish.RELEASE_REPO}.git")
+    with pytest.raises(SystemExit, match="must track origin/main"):
+        publish.require_release_target(repo)
+    assert _git(remote, "for-each-ref").stdout == ""
