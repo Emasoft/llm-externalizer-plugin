@@ -21,8 +21,8 @@ Push policy:
 
 Steps (in order — validate is FIRST, no skipping):
     1. Pre-flight: working tree clean + required tools present
-    2. Validate (MANDATORY — all checks 0 errors): npm ci, typecheck,
-       lint, build, test, ruff, mypy, shellcheck, plugin.json, CPV
+    2. Validate (MANDATORY — all checks 0 errors): reports preflight, npm ci,
+       typecheck, lint, build, CPV, test, ruff, mypy, shellcheck, plugin.json
     3. Determine next version (git-cliff --bumped-version or flag override)
     4. Generate CHANGELOG.md (git-cliff)
     5. Sync version to plugin.json, package.json, cli/main.ts, pyproject.toml
@@ -352,6 +352,7 @@ def run_checks(repo_root: Path) -> bool:
       2. npm run typecheck — tsc --noEmit
       3. npm run lint     — eslint --max-warnings 0
       4. npm run build    — full esbuild bundle (catches issues tsc misses)
+      4b. CPV             — validate the fresh build before the full suite
       5. npm test         — vitest run (all tests must pass)
       6. ruff check       — lint all Python scripts
       6b. mypy            — type-check all Python scripts (same command as release.yml)
@@ -363,6 +364,10 @@ def run_checks(repo_root: Path) -> bool:
           previously ran only at release time, after the artifact was
           already being shipped, so a regression here reached CI unnoticed)
     """
+    # CPV rejects a populated reports/ directory until upstream issue #275 is fixed.
+    if any(entry.is_file() for entry in (repo_root / "reports").rglob("*")):
+        print("ERROR: reports/ contains files that CPV rejects (issue #275).", file=sys.stderr)
+        return False
     mcp_dir = str(repo_root / "scripts" / "llm-ext")
     reports = _reports_dir(repo_root)
     print(f"  Reports: {reports}")
@@ -409,6 +414,9 @@ def run_checks(repo_root: Path) -> bool:
     if not run_build_check(repo_root):
         return False
 
+    # Validate the fresh build before spending time on the full test suite.
+    if not run_cpv_validation(repo_root):
+        return False
     # 5. Tests — all must pass. No flakes allowed, no skips allowed.
     if not _run_check("test", ["npm", "test"], mcp_dir, repo_root):
         return False
@@ -914,7 +922,7 @@ def main():
     parser.add_argument(
         "--check-only",
         action="store_true",
-        help="Run checks only (build, manifest, CPV) without publishing. Used by pre-push hook.",
+        help="Run all validation checks without publishing. Used by pre-push hook.",
     )
     args = parser.parse_args()
 
@@ -940,15 +948,11 @@ def main():
 def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
 
     # ── --check-only: run full validation without publishing ──
-    # Used by the pre-push hook. Checks are the SAME as the main publish
-    # flow — same run_checks(), same run_cpv_validation(). No shortcuts.
+    # Used by the pre-push hook. Both modes use the same validation runner.
     if args.check_only:
         print("\n── Check-only mode ──")
         if not run_checks(repo_root):
             print("ERROR: checks failed — see reports_dev/publish/.", file=sys.stderr)
-            report_working_tree(repo_root)
-            sys.exit(1)
-        if not run_cpv_validation(repo_root):
             report_working_tree(repo_root)
             sys.exit(1)
         print("All checks passed.")
@@ -990,13 +994,10 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     # Order matters: validation must pass BEFORE we compute the next
     # version or generate the changelog. There's no point determining
     # a version for code that won't build.
+    # TRDD-88IBHLIS: the shared runner validates the fresh build before tests.
     print("── 2. Validate (MANDATORY — all checks must pass with 0 errors) ──")
     if not run_checks(repo_root):
         print("ERROR: validation failed. Aborting.", file=sys.stderr)
-        report_working_tree(repo_root)
-        sys.exit(1)
-    if not run_cpv_validation(repo_root):
-        print("ERROR: CPV validation failed. Aborting.", file=sys.stderr)
         report_working_tree(repo_root)
         sys.exit(1)
     print("  All checks passed")
