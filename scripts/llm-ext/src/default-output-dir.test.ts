@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { execSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { _resetDefaultOutputDirCache } from "./index.js";
 
@@ -82,7 +82,8 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
         got === join(tmp, "reports", "llm-externalizer") ||
         got === join("/private" + tmp, "reports", "llm-externalizer"),
       ).toBe(true);
-      expect(got.endsWith(`/reports/llm-externalizer`)).toBe(true);
+      // Build the suffix with native separators, just like the resolved path.
+      expect(got.endsWith(sep + join("reports", "llm-externalizer"))).toBe(true);
       expect(got).not.toContain("llm_externalizer");
       expect(got).not.toContain("reports_dev");
     } finally {
@@ -112,7 +113,7 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
       // NO `git init` — just a plain dir.
       process.env.CLAUDE_PROJECT_DIR = tmp;
       const got = await resolveOnce();
-      expect(got.endsWith("/reports/llm-externalizer")).toBe(true);
+      expect(got.endsWith(sep + join("reports", "llm-externalizer"))).toBe(true);
       // Fallback should anchor on CLAUDE_PROJECT_DIR itself, not somewhere else.
       expect(got.startsWith(tmp) || got.startsWith("/private" + tmp)).toBe(true);
     } finally {
@@ -149,7 +150,7 @@ describe("defaultOutputDir resolution (Issue #5)", () => {
       process.env.LLM_OUTPUT_DIR = tmp; // old, unprefixed name — must have no effect
       const got = await resolveOnce();
       expect(got).not.toBe(tmp);
-      expect(got.endsWith("/reports/llm-externalizer")).toBe(true);
+      expect(got.endsWith(sep + join("reports", "llm-externalizer"))).toBe(true);
     } finally {
       delete process.env.LLM_OUTPUT_DIR;
       rmSync(tmp, { recursive: true, force: true });
