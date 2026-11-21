@@ -53,6 +53,9 @@ def two_repos(tmp_path, monkeypatch):
     _git(release, "add", ".claude-plugin/plugin.json")
     _git(release, "commit", "-m", "feat: add manifest")
     _init_repo(caller)
+    remote = tmp_path / "dry-run.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
     monkeypatch.chdir(caller)
     monkeypatch.setattr(publish, "run_checks", lambda root: True)
     monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
@@ -97,6 +100,16 @@ def test_preflight_ignores_dirty_caller(two_repos, capsys):
     assert "[DRY RUN] All checks passed." in capsys.readouterr().out
 
 
+def test_dry_run_rejects_remote_tag_collision(two_repos, tmp_path, capsys):
+    """A tag found only at the pinned remote blocks a successful dry run."""
+    release, _ = two_repos
+    remote = tmp_path / "dry-run.git"
+    ref = f"refs/tags/{TAG}"
+    _git(remote, "fetch", str(release), f"HEAD:{ref}")
+    assert _git(release, "tag", "--list", TAG).stdout == ""
+    with pytest.raises(SystemExit, match=f"release tag {TAG} already exists"):
+        _dry_run(release)
+    assert "All checks passed" not in capsys.readouterr().out
 def test_tag_check_uses_repo_root_not_caller(two_repos, capsys):
     """A release tag existing only in the release repo is found from an unrelated cwd."""
     release, caller = two_repos
@@ -108,8 +121,8 @@ def test_tag_check_uses_repo_root_not_caller(two_repos, capsys):
     assert f"tag '{TAG}' already exists locally" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("dirty_after_validation", [False, True], ids=["clean", "dirty"])
-def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, dirty_after_validation):
+@pytest.mark.parametrize("scenario", ["clean", "dirty", "race", "existing"])
+def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, capfd, scenario):
     """A full release started from an unrelated cwd runs git, git-cliff and gh only in repo_root."""
     import os
 
@@ -161,10 +174,12 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, di
     def validate(root, *, candidate):
         assert root == release
         validated.append(candidate)
+        if scenario == "existing":
+            _git(remote, "fetch", "--no-tags", str(release), f"{candidate}:{publish.candidate_ref(candidate)}")
         _git(release, "remote", "set-url", "--push", "origin", str(unintended))
         _git(release, "config", f"url.{unintended}.insteadOf", str(remote))
         _git(release, "config", f"url.{unintended}.pushInsteadOf", "release-pin-")
-        if dirty_after_validation:
+        if scenario == "dirty":
             (release / "tracked.txt").write_text("drift\n", encoding="utf-8")
         return True
 
@@ -178,6 +193,10 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, di
     def recording_run(cmd, *, check=True, capture=True, cwd=None, env=None):
         if cmd[:3] == ["npm", "run", "build"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        if scenario == "race" and cmd[0] == "git" and "push" in cmd:
+            candidate, ref = cmd[-1].split(":", 1)
+            ancestor = _git(release, "rev-parse", f"{candidate}^").stdout.strip()
+            _git(remote, "fetch", "--no-tags", str(release), f"{ancestor}:{ref}")
         seen.append((list(cmd), cwd))
         return real_run(cmd, check=check, capture=capture, cwd=cwd, env=env)
 
@@ -185,7 +204,7 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, di
     args = argparse.Namespace(
         patch=False, minor=False, major=False, set=VERSION, dry_run=False, check_only=False, promote=None
     )
-    if dirty_after_validation:
+    if scenario == "dirty":
         with pytest.raises(SystemExit, match=r"release candidate has index, worktree, or untracked changes:\n M tracked\.txt"):
             publish._run_publish(
                 args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
@@ -195,13 +214,31 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, di
         assert _git(unintended, "for-each-ref").stdout == ""
         assert not any(cmd[0] == "gh" for cmd, _ in seen)
         return
+    if scenario == "race":
+        with pytest.raises(subprocess.CalledProcessError) as failure:
+            publish._run_publish(
+                args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
+            )
+        candidate = _git(release, "rev-parse", "HEAD").stdout.strip()
+        ancestor = _git(release, "rev-parse", "HEAD^").stdout.strip()
+        assert validated == [candidate]
+        assert failure.value.cmd == seen[-1][0]
+        assert "push" in failure.value.cmd
+        assert "stale info" in capfd.readouterr().err
+        assert _git(remote, "show-ref").stdout.splitlines() == [f"{ancestor} {publish.candidate_ref(candidate)}"]
+        assert _git(unintended, "for-each-ref").stdout == ""
+        assert not any(cmd[0] == "gh" for cmd, _ in seen)
+        return
     publish._run_publish(
         args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
     )
 
     repo_cmds = [(c, d) for c, d in seen if c[0] in ("git", "git-cliff", "gh")]
-    verbs = {c[5] if c[1] == "-c" else c[1] for c, _ in repo_cmds if c[0] == "git"}
-    assert {"status", "tag", "add", "commit", "push"} <= verbs
+    verbs = {next(part for part in c[1:] if not part.startswith("-") and "=" not in part)
+             for c, _ in repo_cmds if c[0] == "git"}
+    assert {"status", "tag", "add", "commit", "ls-remote"} <= verbs
+    assert ("push" in verbs) == (scenario == "clean")
+    assert sum(cmd[:3] == ["gh", "workflow", "run"] for cmd, _ in seen) == 1
     assert all(d == str(release) for _, d in repo_cmds), repo_cmds
     # The release landed in the release repo; the unrelated caller repo is untouched.
     assert _git(release, "log", "-1", "--format=%s").stdout.strip() == f"chore(release): {TAG}"

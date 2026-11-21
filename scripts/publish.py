@@ -1000,7 +1000,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  Working tree is clean")
     print()
 
-    destination = None
+    destination = require_release_target(repo_root)
     # A live release must validate the final commit, not the pre-bump tree.
     if args.dry_run:
         if not run_checks(repo_root):
@@ -1008,7 +1008,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print("ERROR: validation failed. Aborting.", file=sys.stderr)
             sys.exit(1)
     else:
-        destination = require_release_target(repo_root)
+        # Live preparation also pins the base commit before changing files.
         base = run(["git", "rev-parse", "HEAD"], cwd=str(repo_root)).stdout.strip()
         require_release_snapshot(repo_root, base)
     # ── 3. Determine next version ──
@@ -1035,15 +1035,8 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print(f"ERROR: {plugin_json}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # Check both tags before changing the versioned files.
-    if destination is not None:
-        require_new_tags(repo_root, destination, tag, resolver_tag)
-    else:
-        for name in (tag, resolver_tag):
-            local = run(["git", "tag", "--list", name], cwd=str(repo_root)).stdout.strip()
-            if local == name:
-                print(f"ERROR: tag '{name}' already exists locally", file=sys.stderr)
-                sys.exit(1)
+    # Check both tags at the verified endpoint before changing versioned files.
+    require_new_tags(repo_root, destination, tag, resolver_tag)
 
     print(f"  Planned: {current} -> {new_version} (tags: {tag}, {resolver_tag})")
     print()
@@ -1335,8 +1328,6 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     parent = run(["git", "rev-parse", f"{candidate}^"], cwd=str(repo_root)).stdout.strip()
     if committed_tree != staged_tree or parent != base:
         raise SystemExit("ERROR: release commit differs from the staged tree or expected parent")
-    if destination is None:
-        raise SystemExit("ERROR: missing verified release destination")
     validate_candidate(repo_root, candidate)
     ref = candidate_ref(candidate)
     existing = remote_ref(repo_root, destination, ref)
@@ -1344,7 +1335,9 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         raise SystemExit(f"ERROR: candidate ref {ref} points to another commit")
     require_release_snapshot(repo_root, candidate)
     # Push the same commit that passed validation.
-    push_release_refs(repo_root, destination, f"{candidate}:{ref}")
+    if existing is None:
+        # The empty lease requires absence at push time, not just at lookup.
+        push_release_refs(repo_root, destination, f"{candidate}:{ref}", create_only=ref)
     print(f"Candidate commit: {candidate}")
     run(["gh", "workflow", "run", "windows.yml", "--repo", RELEASE_REPO,
          "--ref", ref.removeprefix("refs/heads/")], cwd=str(repo_root), capture=False)
@@ -1383,9 +1376,13 @@ def release_route(destination: str) -> tuple[list[str], str]:
             "-c", f"url.{destination}.pushInsteadOf={token}"], token
 
 
-def push_release_refs(repo_root: Path, destination: str, *refspecs: str, atomic: bool = False) -> None:
+def push_release_refs(
+    repo_root: Path, destination: str, *refspecs: str, atomic: bool = False, create_only: str | None = None,
+) -> None:
     git, token = release_route(destination)
     flags = ["--atomic"] if atomic else []
+    if create_only is not None:
+        flags.append(f"--force-with-lease={create_only}:")
     run([*git, "push", *flags, "--no-follow-tags", token, *refspecs], cwd=str(repo_root), capture=False)
 
 
@@ -1413,7 +1410,10 @@ def require_new_tags(repo_root: Path, destination: str, tag: str, resolver_tag: 
     for name in (tag, resolver_tag):
         ref = f"refs/tags/{name}"
         local = run(["git", "tag", "--list", name], cwd=str(repo_root)).stdout.strip()
-        if local == name or remote_ref(repo_root, destination, ref) is not None:
+        if local == name:
+            print(f"ERROR: tag {name!r} already exists locally", file=sys.stderr)
+            raise SystemExit(1)
+        if remote_ref(repo_root, destination, ref) is not None:
             raise SystemExit(f"ERROR: release tag {name} already exists; inspect before retrying")
 
 

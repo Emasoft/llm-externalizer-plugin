@@ -54,6 +54,9 @@ def repo(tmp_path, monkeypatch):
     other.mkdir()
     monkeypatch.chdir(other)
     monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
+    remote = tmp_path / "dry-run.git"
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True, timeout=120)
+    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
     return repo
 
 
