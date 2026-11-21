@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { parseDiffMode, resolveDiffScope } from "./diff-scope.js";
 
 let repo: string;
@@ -50,7 +50,8 @@ describe("parseDiffMode", () => {
 describe("resolveDiffScope — delegated to a real git repo", () => {
   it("workspace mode: modified + untracked files, each with hunks", () => {
     const s = resolveDiffScope({ kind: "workspace" }, repo);
-    const names = s.files.map((f) => f.split("/").pop()).sort();
+    // Diff scope returns native paths, including backslashes on Windows.
+    const names = s.files.map((f) => basename(f)).sort();
     expect(names).toEqual(["b.ts", "untracked.ts"]);
     const bHunk = [...s.hunksByFile.entries()].find(([k]) => k.endsWith("b.ts"))?.[1] ?? "";
     expect(bHunk).toContain("-export const b = 1;");
@@ -59,7 +60,7 @@ describe("resolveDiffScope — delegated to a real git repo", () => {
 
   it("commit mode: one commit vs its parent, hunk carries git's enclosing-function context", () => {
     const s = resolveDiffScope({ kind: "commit", commit: "HEAD" }, repo);
-    expect(s.files.map((f) => f.split("/").pop())).toEqual(["a.ts"]);
+    expect(s.files.map((f) => basename(f))).toEqual(["a.ts"]);
     const hunk = [...s.hunksByFile.values()][0];
     // --function-context widens to the whole function, so the signature line
     // appears in the hunk body — the reviewer sees WHERE the change lives.
@@ -69,7 +70,7 @@ describe("resolveDiffScope — delegated to a real git repo", () => {
 
   it("range mode: merge-base '...' semantics over the two fixture commits", () => {
     const s = resolveDiffScope({ kind: "range", from: "HEAD^", to: "HEAD" }, repo);
-    expect(s.files.map((f) => f.split("/").pop())).toEqual(["a.ts"]);
+    expect(s.files.map((f) => basename(f))).toEqual(["a.ts"]);
   });
 
   it("THROWS on a diff with no reviewable files — never a silent empty review", () => {
