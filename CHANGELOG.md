@@ -1,6 +1,41 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.9] - 2026-11-21
+
+### Documentation
+
+- Docs(publish): correct check-only help (TRDD-GQSUSYKY)
+
+- Docs: track Windows candidate validation (TRDD-M7KKVHEH)
+
+- Docs(trdd): record the 14.7.8 release and the e2e cap fix (TRDD-FC2TX9VU, TRDD-WPH1158N)
+
+
+### Fixed
+
+- Fix(publish): verify only fetch configuration for preview (TRDD-M7KKVHEH)
+
+- Fix(release): require absent candidate ref at creation (TRDD-M7KKVHEH)
+
+- Fix(release): pin Git transport destination (TRDD-M7KKVHEH)
+
+- Fix(release): require Windows CI on the pinned candidate (TRDD-M7KKVHEH)
+
+- Fix(publish): validate the fresh build before tests (TRDD-88IBHLIS)
+
+
+### Testing
+
+- Test: check backup mode only on POSIX (TRDD-1Y9UK5MK)
+
+- Test: use native report directory separators (TRDD-VQ0VEK3L)
+
+- Test: decode classifier fixture paths natively (TRDD-VQ0VEK3L)
+
+- Test: use native basenames in diff scope assertions (TRDD-VQ0VEK3L)
+
+
 ## [14.7.8] - 2026-11-20
 
 ### Changed
