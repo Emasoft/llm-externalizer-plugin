@@ -108,13 +108,16 @@ def test_tag_check_uses_repo_root_not_caller(two_repos, capsys):
     assert f"tag '{TAG}' already exists locally" in capsys.readouterr().err
 
 
-def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
+@pytest.mark.parametrize("dirty_after_validation", [False, True], ids=["clean", "dirty"])
+def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch, dirty_after_validation):
     """A full release started from an unrelated cwd runs git, git-cliff and gh only in repo_root."""
     import os
 
     release = tmp_path / "release"
     caller = tmp_path / "caller"
     remote = tmp_path / "remote.git"
+    unintended = tmp_path / "unintended.git"
+    subprocess.run(["git", "init", "--bare", str(unintended)], check=True, capture_output=True)
     _init_repo(release)
     _init_repo(caller)
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
@@ -152,8 +155,20 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     monkeypatch.chdir(caller)
     monkeypatch.setattr(publish, "run_checks", lambda root: True)
     # The fixture uses a real local remote, not the production GitHub destination.
-    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
-    monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
+    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
+    validated: list[str] = []
+
+    def validate(root, *, candidate):
+        assert root == release
+        validated.append(candidate)
+        _git(release, "remote", "set-url", "--push", "origin", str(unintended))
+        _git(release, "config", f"url.{unintended}.insteadOf", str(remote))
+        _git(release, "config", f"url.{unintended}.pushInsteadOf", "release-pin-")
+        if dirty_after_validation:
+            (release / "tracked.txt").write_text("drift\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(publish, "run_checks", validate)
     monkeypatch.setattr(publish, "_run_check", lambda *args: True)
     monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
 
@@ -170,12 +185,22 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     args = argparse.Namespace(
         patch=False, minor=False, major=False, set=VERSION, dry_run=False, check_only=False, promote=None
     )
+    if dirty_after_validation:
+        with pytest.raises(SystemExit, match=r"release candidate has index, worktree, or untracked changes:\n M tracked\.txt"):
+            publish._run_publish(
+                args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
+            )
+        assert validated == [_git(release, "rev-parse", "HEAD").stdout.strip()]
+        assert _git(remote, "for-each-ref").stdout == ""
+        assert _git(unintended, "for-each-ref").stdout == ""
+        assert not any(cmd[0] == "gh" for cmd, _ in seen)
+        return
     publish._run_publish(
         args, release, release / ".claude-plugin" / "plugin.json", release / "CHANGELOG.md"
     )
 
     repo_cmds = [(c, d) for c, d in seen if c[0] in ("git", "git-cliff", "gh")]
-    verbs = {c[1] for c, _ in repo_cmds if c[0] == "git"}
+    verbs = {c[5] if c[1] == "-c" else c[1] for c, _ in repo_cmds if c[0] == "git"}
     assert {"status", "tag", "add", "commit", "push"} <= verbs
     assert all(d == str(release) for _, d in repo_cmds), repo_cmds
     # The release landed in the release repo; the unrelated caller repo is untouched.
@@ -185,6 +210,8 @@ def test_full_release_runs_every_git_call_in_repo_root(tmp_path, monkeypatch):
     candidate = _git(release, "rev-parse", "HEAD").stdout.strip()
     remote_refs = _git(remote, "for-each-ref", "--format=%(objectname) %(refname)").stdout.splitlines()
     assert remote_refs == [f"{candidate} refs/heads/release-candidates/{candidate}"]
+    assert validated == [candidate]
+    assert _git(unintended, "for-each-ref").stdout == ""
 
 
 

@@ -98,7 +98,7 @@ def publish_repo(tmp_path, monkeypatch):
     return repo, remote
 
 
-def test_push_goes_to_main_when_branch_name_differs(publish_repo, monkeypatch):
+def test_push_goes_to_main_when_branch_name_differs(publish_repo, monkeypatch, tmp_path):
     """Promotion sends the exact candidate to main and does not follow unrelated tags."""
     repo, remote = publish_repo
     manifest = repo / ".claude-plugin" / "plugin.json"
@@ -111,9 +111,18 @@ def test_push_goes_to_main_when_branch_name_differs(publish_repo, monkeypatch):
     _git(repo, "config", "push.followTags", "true")
     _git(repo, "tag", "-a", "stale", "-m", "Unrelated", "HEAD")
     # Exercise the real local Git transaction, not GitHub or the full suite.
-    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
+    unintended = tmp_path / "unintended.git"
+    subprocess.run(["git", "init", "--bare", str(unintended)], check=True, capture_output=True)
+    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
     monkeypatch.setattr(publish, "verify_windows_run", lambda *args: None)
-    monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
+    def validate(root, *, candidate):
+        assert root == repo and candidate == head
+        _git(repo, "remote", "set-url", "--push", "origin", str(unintended))
+        _git(repo, "config", f"url.{unintended}.insteadOf", str(remote))
+        _git(repo, "config", f"url.{unintended}.pushInsteadOf", "release-pin-")
+        return True
+
+    monkeypatch.setattr(publish, "run_checks", validate)
 
     publish.promote_candidate(repo, manifest, repo / "CHANGELOG.md", head, 1)
 
@@ -123,6 +132,7 @@ def test_push_goes_to_main_when_branch_name_differs(publish_repo, monkeypatch):
     for name in (TAG, RESOLVER_TAG):
         assert _git(remote, "rev-parse", f"refs/tags/{name}^{{commit}}").stdout.strip() == head
     assert _git(remote, "tag", "--list", "stale").stdout == ""
+    assert _git(unintended, "for-each-ref").stdout == ""
 
 
 def test_no_upstream_fails_fast_and_pushes_nothing(publish_repo):

@@ -126,7 +126,7 @@ def test_failed_push_is_non_destructive(publish_repo, monkeypatch):
     candidate = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(remote, "fetch", str(repo), f"{candidate}:{publish.candidate_ref(candidate)}")
     # Test the real Git transaction; the external release gates are separate.
-    monkeypatch.setattr(publish, "require_release_target", lambda root: None)
+    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
     monkeypatch.setattr(publish, "verify_windows_run", lambda *args: None)
     monkeypatch.setattr(publish, "run_checks", lambda root, *, candidate: True)
     before = _git(remote, "show-ref").stdout
@@ -134,7 +134,7 @@ def test_failed_push_is_non_destructive(publish_repo, monkeypatch):
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         publish.promote_candidate(repo, manifest, repo / "CHANGELOG.md", candidate, 1)
 
-    assert excinfo.value.cmd[:3] == ["git", "push", "--atomic"]
+    assert excinfo.value.cmd[5:8] == ["push", "--atomic", "--no-follow-tags"]
     assert _git(remote, "show-ref").stdout == before
     assert _git(repo, "rev-parse", "HEAD").stdout.strip() == candidate
     for name in (TAG, RESOLVER_TAG):

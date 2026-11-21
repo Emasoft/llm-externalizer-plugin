@@ -23,6 +23,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 # CPV's integrity self-check bypass — the ONLY environment override this
 # pipeline passes to a child process. The VALUE is printed and written to the
@@ -999,6 +1000,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  Working tree is clean")
     print()
 
+    destination = None
     # A live release must validate the final commit, not the pre-bump tree.
     if args.dry_run:
         if not run_checks(repo_root):
@@ -1006,7 +1008,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
             print("ERROR: validation failed. Aborting.", file=sys.stderr)
             sys.exit(1)
     else:
-        require_release_target(repo_root)
+        destination = require_release_target(repo_root)
         base = run(["git", "rev-parse", "HEAD"], cwd=str(repo_root)).stdout.strip()
         require_release_snapshot(repo_root, base)
     # ── 3. Determine next version ──
@@ -1033,17 +1035,15 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
         print(f"ERROR: {plugin_json}: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    # Verify neither tag already exists (local + remote) — a stale copy of
-    # either aborts, since both are pushed together.
-    for t in (tag, resolver_tag):
-        local = run(["git", "tag", "--list", t], check=False, cwd=str(repo_root))
-        if local.stdout and local.stdout.strip() == t:
-            print(f"ERROR: tag '{t}' already exists locally", file=sys.stderr)
-            sys.exit(1)
-        remote = run(["git", "ls-remote", "--tags", "origin", t], check=False, cwd=str(repo_root))
-        if remote.stdout and remote.stdout.strip():
-            print(f"ERROR: tag '{t}' already exists on remote origin", file=sys.stderr)
-            sys.exit(1)
+    # Check both tags before changing the versioned files.
+    if destination is not None:
+        require_new_tags(repo_root, destination, tag, resolver_tag)
+    else:
+        for name in (tag, resolver_tag):
+            local = run(["git", "tag", "--list", name], cwd=str(repo_root)).stdout.strip()
+            if local == name:
+                print(f"ERROR: tag '{name}' already exists locally", file=sys.stderr)
+                sys.exit(1)
 
     print(f"  Planned: {current} -> {new_version} (tags: {tag}, {resolver_tag})")
     print()
@@ -1335,13 +1335,16 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     parent = run(["git", "rev-parse", f"{candidate}^"], cwd=str(repo_root)).stdout.strip()
     if committed_tree != staged_tree or parent != base:
         raise SystemExit("ERROR: release commit differs from the staged tree or expected parent")
+    if destination is None:
+        raise SystemExit("ERROR: missing verified release destination")
     validate_candidate(repo_root, candidate)
     ref = candidate_ref(candidate)
-    existing = remote_ref(repo_root, ref)
+    existing = remote_ref(repo_root, destination, ref)
     if existing not in (None, candidate):
         raise SystemExit(f"ERROR: candidate ref {ref} points to another commit")
     require_release_snapshot(repo_root, candidate)
-    run(["git", "push", "--no-follow-tags", "origin", f"{candidate}:{ref}"], cwd=str(repo_root), capture=False)
+    # Push the same commit that passed validation.
+    push_release_refs(repo_root, destination, f"{candidate}:{ref}")
     print(f"Candidate commit: {candidate}")
     run(["gh", "workflow", "run", "windows.yml", "--repo", RELEASE_REPO,
          "--ref", ref.removeprefix("refs/heads/")], cwd=str(repo_root), capture=False)
@@ -1352,7 +1355,7 @@ WINDOWS_WORKFLOW = ".github/workflows/windows.yml"
 WINDOWS_JOB = "Build, CLI smoke and unit tests (Windows)"
 
 
-def require_release_target(repo_root: Path) -> None:
+def require_release_target(repo_root: Path) -> str:
     cwd = str(repo_root)
     expected = f"https://github.com/{RELEASE_REPO}.git"
     for flags in (["--all"], ["--push", "--all"]):
@@ -1363,6 +1366,7 @@ def require_release_target(repo_root: Path) -> None:
     upstream = result.stdout.strip() if result.returncode == 0 else ""
     if upstream != "refs/remotes/origin/main":
         raise SystemExit("ERROR: release branch must track origin/main")
+    return expected
 
 
 def candidate_ref(candidate: str) -> str:
@@ -1371,8 +1375,23 @@ def candidate_ref(candidate: str) -> str:
     return f"refs/heads/release-candidates/{candidate}"
 
 
-def remote_ref(repo_root: Path, ref: str) -> str | None:
-    lines = run(["git", "ls-remote", "origin", ref], cwd=str(repo_root)).stdout.splitlines()
+def release_route(destination: str) -> tuple[list[str], str]:
+    # Git expands only one rewrite. A fresh full-length match takes precedence
+    # over configured prefixes even if origin or its push URL changes later.
+    token = f"release-pin-{uuid4().hex}:"
+    return ["git", "-c", f"url.{destination}.insteadOf={token}",
+            "-c", f"url.{destination}.pushInsteadOf={token}"], token
+
+
+def push_release_refs(repo_root: Path, destination: str, *refspecs: str, atomic: bool = False) -> None:
+    git, token = release_route(destination)
+    flags = ["--atomic"] if atomic else []
+    run([*git, "push", *flags, "--no-follow-tags", token, *refspecs], cwd=str(repo_root), capture=False)
+
+
+def remote_ref(repo_root: Path, destination: str, ref: str) -> str | None:
+    git, token = release_route(destination)
+    lines = run([*git, "ls-remote", token, ref], cwd=str(repo_root)).stdout.splitlines()
     if not lines:
         return None
     if len(lines) != 1:
@@ -1390,11 +1409,11 @@ def validate_candidate(repo_root: Path, candidate: str) -> None:
     require_release_snapshot(repo_root, candidate)
 
 
-def require_new_tags(repo_root: Path, tag: str, resolver_tag: str) -> None:
+def require_new_tags(repo_root: Path, destination: str, tag: str, resolver_tag: str) -> None:
     for name in (tag, resolver_tag):
         ref = f"refs/tags/{name}"
         local = run(["git", "tag", "--list", name], cwd=str(repo_root)).stdout.strip()
-        if local == name or remote_ref(repo_root, ref) is not None:
+        if local == name or remote_ref(repo_root, destination, ref) is not None:
             raise SystemExit(f"ERROR: release tag {name} already exists; inspect before retrying")
 
 
@@ -1432,9 +1451,9 @@ def verify_windows_run(repo_root: Path, candidate: str, run_id: int) -> None:
 
 def promote_candidate(repo_root: Path, plugin_json: Path, changelog: Path, candidate: str, run_id: int) -> None:
     ref = candidate_ref(candidate)
-    require_release_target(repo_root)
+    destination = require_release_target(repo_root)
     require_release_snapshot(repo_root, candidate)
-    if remote_ref(repo_root, ref) != candidate:
+    if remote_ref(repo_root, destination, ref) != candidate:
         raise SystemExit("ERROR: remote candidate ref does not match the pinned commit")
     manifest = json.loads(plugin_json.read_text(encoding="utf-8"))
     version = manifest["version"]
@@ -1443,13 +1462,12 @@ def promote_candidate(repo_root: Path, plugin_json: Path, changelog: Path, candi
     tag = f"v{version}"
     resolver_tag = resolver_tag_for(manifest["name"], tag)
     notes = extract_release_notes(changelog, version)
-    require_new_tags(repo_root, tag, resolver_tag)
+    require_new_tags(repo_root, destination, tag, resolver_tag)
     verify_windows_run(repo_root, candidate, run_id)
     validate_candidate(repo_root, candidate)
-    require_release_target(repo_root)
-    if remote_ref(repo_root, ref) != candidate:
+    if remote_ref(repo_root, destination, ref) != candidate:
         raise SystemExit("ERROR: candidate ref moved during validation")
-    require_new_tags(repo_root, tag, resolver_tag)
+    require_new_tags(repo_root, destination, tag, resolver_tag)
     require_release_snapshot(repo_root, candidate)
     cwd = str(repo_root)
     tags = (tag, resolver_tag)
@@ -1462,10 +1480,10 @@ def promote_candidate(repo_root: Path, plugin_json: Path, changelog: Path, candi
         if run(["git", "rev-parse", f"{obj}^{{commit}}"], cwd=cwd).stdout.strip() != candidate:
             raise SystemExit("ERROR: local tag no longer points to the candidate")
     require_release_snapshot(repo_root, candidate)
-    run(["git", "push", "--atomic", "--no-follow-tags", "origin", f"{candidate}:refs/heads/main",
-         *(f"{obj}:{ref}" for obj, ref in zip(objects, refs, strict=True))], cwd=cwd, capture=False)
+    push_release_refs(repo_root, destination, f"{candidate}:refs/heads/main",
+                      *(f"{obj}:{ref}" for obj, ref in zip(objects, refs, strict=True)), atomic=True)
     for ref in refs:
-        if remote_ref(repo_root, f"{ref}^{{}}") != candidate:
+        if remote_ref(repo_root, destination, f"{ref}^{{}}") != candidate:
             raise SystemExit(f"ERROR: published tag {ref} does not peel to the candidate")
     run(["gh", "release", "create", tag, "--repo", RELEASE_REPO, "--verify-tag",
          "--title", tag, "--notes", notes], cwd=cwd, capture=False)
