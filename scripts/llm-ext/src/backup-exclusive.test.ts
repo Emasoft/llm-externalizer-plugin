@@ -68,9 +68,11 @@ describe("backups never overwrite", () => {
     expect(writeBackupExclusive(stem, ".bin", first)).toBe(a);
   });
 
-  it("a new backup is created with mode 0600", () => {
+  it("writes the backup contents and restricts POSIX permissions to mode 0600", () => {
     const p = writeBackupExclusive(join(dir, "mode"), ".yaml", Buffer.from("k: v\n"));
-    expect(statSync(p).mode & 0o777).toBe(0o600);
+    expect(readFileSync(p, "utf-8")).toBe("k: v\n");
+    // Windows file access uses ACLs; stat mode bits do not describe them.
+    if (process.platform !== "win32") expect(statSync(p).mode & 0o777).toBe(0o600);
   });
 
   it("dedupe finds a -N backup written earlier in the same second", () => {
