@@ -3,6 +3,7 @@
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it, expect } from "vitest";
 
 import {
@@ -15,7 +16,7 @@ import {
 } from "./config.js";
 
 const classifier = (extra: Record<string, unknown> = {}): Profile =>
-  ({ "profile-type": "classifier", api: "openrouter-remote", api_key: "$OPENROUTER_API_KEY", model: "~typesafe/jev-latest", ...extra }) as unknown as Profile;
+  ({ "profile-type": "classifier", api: "openrouter-remote", model: "~typesafe/jev-latest", ...extra }) as unknown as Profile;
 
 describe("classifier schema (section 8)", () => {
   it("a minimal classifier profile with no mode is valid", () => {
@@ -74,7 +75,8 @@ function sourceFiles(dir: string): string[] {
 describe("classifier spend gate (D2)", () => {
   // PF-09. WHY a source scan: the absence of a gate is a property of every classify and browse code path, and a path added later is covered only if the test walks the directories. Comment lines may mention the switch (they say it does NOT apply).
   it("PF-09: no classify or browse code path consults allow_paid_models", () => {
-    const dirs = [new URL("./classifiers", import.meta.url), new URL("./browse", import.meta.url)].map((u) => u.pathname).filter((d) => existsSync(d));
+    // Decode file URLs into native paths so the policy scan also runs on Windows.
+    const dirs = [new URL("./classifiers", import.meta.url), new URL("./browse", import.meta.url)].map((u) => fileURLToPath(u)).filter((d) => existsSync(d));
     expect(dirs.length).toBeGreaterThan(0);
     const gate = /allow_paid_models|allowPaidModels|AllowPaidModels|paid-switch|shouldForceFreeMode|isPaidGatedProfileType/;
     const offenders = dirs.flatMap(sourceFiles).filter((f) =>
