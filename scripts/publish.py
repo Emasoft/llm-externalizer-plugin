@@ -922,7 +922,7 @@ def main():
     parser.add_argument(
         "--check-only",
         action="store_true",
-        help="Run all validation checks without publishing. Used by pre-push hook.",
+        help="Run all validation checks without publishing.",
     )
     args = parser.parse_args()
 
@@ -948,7 +948,7 @@ def main():
 def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> None:
 
     # ── --check-only: run full validation without publishing ──
-    # Used by the pre-push hook. Both modes use the same validation runner.
+    # Both modes use the same validation runner; check-only never pushes.
     if args.check_only:
         print("\n── Check-only mode ──")
         if not run_checks(repo_root):
