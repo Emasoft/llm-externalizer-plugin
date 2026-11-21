@@ -1000,7 +1000,7 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
     print("  Working tree is clean")
     print()
 
-    destination = require_release_target(repo_root)
+    destination = require_fetch_target(repo_root) if args.dry_run else require_release_target(repo_root)
     # A live release must validate the final commit, not the pre-bump tree.
     if args.dry_run:
         if not run_checks(repo_root):
@@ -1344,17 +1344,23 @@ def _run_publish(args, repo_root: Path, plugin_json: Path, changelog: Path) -> N
 
 
 RELEASE_REPO = "Emasoft/llm-externalizer-plugin"
+RELEASE_URL = f"https://github.com/{RELEASE_REPO}.git"
 WINDOWS_WORKFLOW = ".github/workflows/windows.yml"
 WINDOWS_JOB = "Build, CLI smoke and unit tests (Windows)"
 
 
+def require_fetch_target(repo_root: Path) -> str:
+    # A preview checks advertised tags without requiring a publishing branch.
+    urls = run(["git", "remote", "get-url", "--all", "origin"], cwd=str(repo_root)).stdout.splitlines()
+    if urls != [RELEASE_URL]:
+        raise SystemExit("ERROR: expected exactly one canonical GitHub origin URL")
+    return RELEASE_URL
 def require_release_target(repo_root: Path) -> str:
     cwd = str(repo_root)
-    expected = f"https://github.com/{RELEASE_REPO}.git"
-    for flags in (["--all"], ["--push", "--all"]):
-        urls = run(["git", "remote", "get-url", *flags, "origin"], cwd=cwd).stdout.splitlines()
-        if urls != [expected]:
-            raise SystemExit("ERROR: expected exactly one canonical GitHub origin URL")
+    expected = require_fetch_target(repo_root)
+    urls = run(["git", "remote", "get-url", "--push", "--all", "origin"], cwd=cwd).stdout.splitlines()
+    if urls != [expected]:
+        raise SystemExit("ERROR: expected exactly one canonical GitHub origin URL")
     result = run(["git", "rev-parse", "--symbolic-full-name", "@{upstream}"], cwd=cwd, check=False)
     upstream = result.stdout.strip() if result.returncode == 0 else ""
     if upstream != "refs/remotes/origin/main":

@@ -55,7 +55,8 @@ def two_repos(tmp_path, monkeypatch):
     _init_repo(caller)
     remote = tmp_path / "dry-run.git"
     subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
-    monkeypatch.setattr(publish, "require_release_target", lambda root: str(remote))
+    monkeypatch.setattr(publish, "RELEASE_URL", str(remote))
+    _git(release, "remote", "add", "origin", str(remote))
     monkeypatch.chdir(caller)
     monkeypatch.setattr(publish, "run_checks", lambda root: True)
     monkeypatch.setattr(publish, "run_cpv_validation", lambda root: True)
@@ -110,6 +111,38 @@ def test_dry_run_rejects_remote_tag_collision(two_repos, tmp_path, capsys):
     with pytest.raises(SystemExit, match=f"release tag {TAG} already exists"):
         _dry_run(release)
     assert "All checks passed" not in capsys.readouterr().out
+
+def test_preview_resolver_collision(two_repos, tmp_path):
+    """A resolver tag alone blocks release preview."""
+    release, _ = two_repos
+    name = f"test-plugin--{TAG}"
+    _git(tmp_path / "dry-run.git", "fetch", str(release), f"HEAD:refs/tags/{name}")
+    with pytest.raises(SystemExit, match=f"release tag {name} already exists"):
+        _dry_run(release)
+
+
+def test_preview_unreadable_origin(two_repos, tmp_path, capsys):
+    """An unreadable origin fails instead of reporting absent tags."""
+    release, _ = two_repos
+    (tmp_path / "dry-run.git").rename(tmp_path / "offline.git")
+    with pytest.raises(subprocess.CalledProcessError) as failure:
+        _dry_run(release)
+    assert "ls-remote" in failure.value.cmd
+    assert "All checks passed" not in capsys.readouterr().out
+
+
+def test_preview_ignores_push_url(two_repos, tmp_path, capsys):
+    """Preview uses fetch while live authorization rejects a different push URL."""
+    release, _ = two_repos
+    _git(release, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(release, "branch", "--set-upstream-to=origin/main")
+    assert publish.require_release_target(release) == str(tmp_path / "dry-run.git")
+    _git(release, "remote", "set-url", "--push", "origin", str(tmp_path / "unreachable.git"))
+    _dry_run(release)
+    assert "[DRY RUN] All checks passed." in capsys.readouterr().out
+    with pytest.raises(SystemExit, match="canonical GitHub origin URL"):
+        publish.require_release_target(release)
+
 def test_tag_check_uses_repo_root_not_caller(two_repos, capsys):
     """A release tag existing only in the release repo is found from an unrelated cwd."""
     release, caller = two_repos
