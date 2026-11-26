@@ -19,7 +19,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { extname, join, basename, dirname, resolve, sep } from "node:path";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { ctxStore } from "./usage-history.js";
 import { SCAN_PIPELINE_SECRET_PATTERNS } from "./secret-patterns.js";
@@ -236,6 +236,8 @@ export function sanitizeInputPath(filePath: string): string {
     resolve(process.env.HOME || process.env.USERPROFILE || homedir()),
   );
   const tmpReal = realpathSafe(resolve("/tmp"));
+  // WHY (TRDD-LA1MA1EL): on Windows "/tmp" resolves to <current drive>\tmp, not the system temp folder, so a folder under os.tmpdir() matched no root. POSIX keeps /tmp only.
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir()) : tmpReal;
   // Canonicalise the candidate path BEFORE comparing — if the file exists
   // and is a symlink we want the link target's identity to be checked. The
   // leaf-symlink rejection below still applies, so this is defense in depth.
@@ -250,13 +252,14 @@ export function sanitizeInputPath(filePath: string): string {
   if (
     !isUnder(cwdReal, resolvedReal) &&
     !isUnder(homeReal, resolvedReal) &&
+    !isUnder(sysTmpReal, resolvedReal) &&
     !isUnder(tmpReal, resolvedReal)
   ) {
     throw new Error(
       // WHY: the bare message named no way out; users hit it with /etc or a
       // sibling checkout and could not tell which roots are allowed (issue 16).
       `Path traversal blocked: ${filePath} resolves outside allowed directories. ` +
-        `Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). ` +
+        `Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp)${sysTmpReal !== tmpReal ? `, ${sysTmpReal} (system temp)` : ""}. ` +
         `Run from a parent directory of the files, or copy them under one of these roots.`,
     );
   }
@@ -913,7 +916,8 @@ export function validateGitCwd(dirPath: string): void {
   }
   const resolved = resolve(dirPath);
   const realpathSafe = (p: string): string => {
-    try { return realpathSync(p); } catch { return p; }
+    // WHY (TRDD-LA1MA1EL): native, like sanitizeInputPath: plain realpathSync keeps Windows 8.3 short names (RUNNER~1), so a temp folder never matched the long-form home root.
+    try { return realpathSync.native(p); } catch { return p; }
   };
   const resolvedReal = realpathSafe(resolved);
   if (resolvedReal === "/" || resolvedReal === "") {
@@ -934,11 +938,14 @@ export function validateGitCwd(dirPath: string): void {
     resolve(process.env.HOME || process.env.USERPROFILE || homedir()),
   );
   const tmpReal = realpathSafe(resolve("/tmp"));
+  // WHY (TRDD-LA1MA1EL): on Windows "/tmp" resolves to <current drive>\tmp, not the system temp folder, so a folder under os.tmpdir() matched no root. POSIX keeps /tmp only.
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir()) : tmpReal;
   const isUnder = (parent: string, child: string): boolean =>
     child === parent || child.startsWith(parent + sep);
   if (
     !isUnder(cwdReal, resolvedReal) &&
     !isUnder(homeReal, resolvedReal) &&
+    !isUnder(sysTmpReal, resolvedReal) &&
     !isUnder(tmpReal, resolvedReal)
   ) {
     throw new Error(
