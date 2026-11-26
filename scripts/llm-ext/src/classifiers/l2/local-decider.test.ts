@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { createServer as createTcpServer, type Server as TcpServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ensureLocalDecider, localFallbackErrors, singletonInstalledAt, type LocalDeciderConfig, type LocalDeciderDeps } from "./local-decider.js";
 import type { GlobalFetch } from "../l0/transport.js";
@@ -228,7 +228,7 @@ describe("singletonInstalledAt — the production install check, over a temp HOM
   it("the binary as a regular file on PATH is installed", () => {
     const { home, bin } = fresh();
     writeFileSync(join(bin, "mlx-decision"), "#!/bin/sh\n");
-    expect(singletonInstalledAt(home, `/nonexistent-dir:${bin}`)).toBe(true);
+    expect(singletonInstalledAt(home, ["/nonexistent-dir", bin].join(delimiter))).toBe(true);
   });
 
   it("a DIRECTORY named mlx-decision on PATH is not a binary", () => {
@@ -759,15 +759,18 @@ describe("listenersOf", () => {
     await expect(listenersOf([process.pid], "/nonexistent/lsof")).rejects.toThrow(/spawn error ENOENT/);
   });
 
-  it("stderr output with exit 3 rejects, carrying the exit code and stderr", async () => {
+  // WHY (TRDD-A5J6E4JB): the fake lsof is a #!/bin/sh script Windows cannot spawn; listenersOf runs only on macOS (local-decider.ts:234-237).
+  it.skipIf(process.platform === "win32")("stderr output with exit 3 rejects, carrying the exit code and stderr", async () => {
     await expect(listenersOf([1], fakeLsof("echo boom >&2; exit 3"))).rejects.toThrow(/exit 3.*boom/);
   });
 
-  it("stderr output with exit 1 rejects too (a warning on exit 1 is a retryable cannot-list)", async () => {
+  // WHY (TRDD-A5J6E4JB): the fake lsof is a #!/bin/sh script Windows cannot spawn; listenersOf runs only on macOS (local-decider.ts:234-237).
+  it.skipIf(process.platform === "win32")("stderr output with exit 1 rejects too (a warning on exit 1 is a retryable cannot-list)", async () => {
     await expect(listenersOf([1], fakeLsof("echo warn >&2; exit 1"))).rejects.toThrow(/exit 1.*warn/);
   });
 
-  it("exit 1 with no output is an empty map (lsof's own 'nothing matched')", async () => {
+  // WHY (TRDD-A5J6E4JB): the fake lsof is a #!/bin/sh script Windows cannot spawn; listenersOf runs only on macOS (local-decider.ts:234-237).
+  it.skipIf(process.platform === "win32")("exit 1 with no output is an empty map (lsof's own 'nothing matched')", async () => {
     expect((await listenersOf([1], fakeLsof("exit 1"))).size).toBe(0);
   });
 });

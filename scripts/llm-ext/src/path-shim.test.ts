@@ -141,7 +141,8 @@ function parseOneLineSystemMessage(stdout: string): string {
   return parsed.systemMessage as string;
 }
 
-describe("installer: hooks/install-path-shim.sh", () => {
+// WHY (TRDD-A5J6E4JB): the shim and its installer are POSIX sh scripts spawned through /bin/sh, and the hook exits early on Windows shells (install-path-shim.sh:27-28).
+describe.skipIf(process.platform === "win32")("installer: hooks/install-path-shim.sh", () => {
   const hasShellcheck = spawnSync("which", ["shellcheck"], { encoding: "utf8" }).status === 0;
 
   it("I1: sh -n passes on both the wrapper and the installer hook", () => {
@@ -333,7 +334,8 @@ function writeRegistry(dir: string, plugins: unknown): void {
   writeFileSync(join(dir, "plugins", "installed_plugins.json"), JSON.stringify({ plugins }));
 }
 
-describe("wrapper: path-shim/llm-ext", () => {
+// WHY (TRDD-A5J6E4JB): the shim and its installer are POSIX sh scripts spawned through /bin/sh, and the hook exits early on Windows shells (install-path-shim.sh:27-28).
+describe.skipIf(process.platform === "win32")("wrapper: path-shim/llm-ext", () => {
   it("W1 (V4): the registry-recorded install wins over an unrecorded, executable one", () => {
     const root = freshRoot();
     const home = join(root, "home");

@@ -32,6 +32,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from "node
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import Database from "better-sqlite3";
 import { _resetDefaultOutputDirCache } from "../project-root";
 
 import {
@@ -400,7 +401,7 @@ describe("runMassScoutCli — estimate", () => {
         "--live-context",
       ],
       {
-        apiKey: "test-key",
+        apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
         fetchImpl: async () => ({
           ok: true,
           status: 200,
@@ -454,7 +455,7 @@ describe("runMassScoutCli — estimate", () => {
         "--live-context",
       ],
       {
-        apiKey: "test-key",
+        apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
         fetchImpl: async () => ({
           ok: false,
           status: 500,
@@ -495,7 +496,7 @@ describe("runMassScoutCli — scout", () => {
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const events: { progress: number; total: number; message?: string }[] = [];
     const opts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       fetchImpl: fakeFetch({ is_async: false, summary: "x" }),
       mainRoot,
       onProgress: (progress, total, message) => {
@@ -537,7 +538,7 @@ describe("runMassScoutCli — scout", () => {
     writeFieldset();
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const opts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       fetchImpl: fakeFetch({ is_async: false, summary: "tiny constant" }),
       mainRoot,
     };
@@ -586,7 +587,7 @@ describe("runMassScoutCli — scout", () => {
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const customDir = join(mainRoot, "custom-report-out");
     const opts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       fetchImpl: fakeFetch({ is_async: false, summary: "tiny" }),
       mainRoot,
     };
@@ -638,7 +639,7 @@ describe("runMassScoutCli — scout", () => {
     _resetDefaultOutputDirCache();
     try {
       const opts: CliRunOptions = {
-        apiKey: "test-key",
+        apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
         fetchImpl: fakeFetch({ is_async: false, summary: "tiny" }),
         // No mainRoot injected — the real shape a production CLI/MCP call uses.
       };
@@ -985,7 +986,7 @@ describe("runMassScoutCli — register: gitignore", () => {
      *  the registry, even though the file exists on disk. */
     writeFiles({
       "src/a.ts": "export const a = 1\n",
-      "src/secret.txt": "should-not-be-registered",
+      "src/secret.txt": "should-not-be-registered", // ubs:ignore — test placeholder value, not a real credential
       ".gitignore": "src/secret.txt\n",
     });
     // Initialize a real git repo in sourceRoot.
@@ -1457,7 +1458,7 @@ describe("runMassScoutCli — Phase C3 diff", () => {
     writeFieldset();
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const baseOpts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       mainRoot,
     };
     // Job-A scouts both files with summary="from-a".
@@ -1567,7 +1568,7 @@ describe("runMassScoutCli — Phase C3 chain", () => {
     writeFieldset();
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const opts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       mainRoot,
       fetchImpl: fakeFetch({ is_async: false, summary: "tiny" }),
     };
@@ -1618,7 +1619,7 @@ describe("runMassScoutCli — Phase C3 chain", () => {
     writeFieldset();
     await runMassScoutCli(["register", "--db", dbPath, "--root", sourceRoot]);
     const opts: CliRunOptions = {
-      apiKey: "test-key",
+      apiKey: "test-key", // ubs:ignore — test placeholder value, not a real credential
       mainRoot,
       fetchImpl: fakeFetch({ is_async: false, summary: "v1" }),
     };
@@ -1669,11 +1670,10 @@ describe("runMassScoutCli — Phase C3 chain", () => {
 
     // Bucket must be restored — i.e. the file's bucket is not the
     // sentinel "chain:second".
-    const dump = execSync(
-      `sqlite3 '${dbPath}' "SELECT classifier_bucket FROM file_short_id LIMIT 1"`,
-    )
-      .toString()
-      .trim();
-    expect(dump).not.toMatch(/^chain:/);
+    // WHY (TRDD-A5J6E4JB): the Windows runner has no sqlite3 CLI; better-sqlite3 is the project dependency.
+    const db = new Database(dbPath, { readonly: true });
+    const row = db.prepare("SELECT classifier_bucket FROM file_short_id LIMIT 1").get() as { classifier_bucket: string } | undefined;
+    db.close();
+    expect(row?.classifier_bucket).not.toMatch(/^chain:/);
   });
 });

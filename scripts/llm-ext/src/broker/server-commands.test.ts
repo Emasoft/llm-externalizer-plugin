@@ -127,10 +127,10 @@ describe("server-status and server-stop", () => {
    * Review of 2a3ac697 (b): a real HTTP server on 127.0.0.1 answers /v1/health as this dir's broker would, with the
    * token check, so serverStopText reads the queued count over the network exactly as it does in production.
    */
-  async function fakeBrokerHealth(models: Array<{ engine: string; model: string; queued: number; running: number; held: number }>): Promise<Server> {
+  async function fakeBrokerHealth(models: Array<{ engine: string; model: string; queued: number; running: number; held: number }>): Promise<Server> { // ubs:ignore — fake test server; it compares req.url and one header, nothing is merged into an object
     const token = "t".repeat(32);
-    const srv = createServer((req, res) => {
-      const ok = req.url === "/v1/health" && req.headers[TOKEN_HEADER] === token;
+    const srv = createServer((req, res) => { // ubs:ignore — fake test server; it compares req.url and one header, nothing is merged into an object
+      const ok = req.url === "/v1/health" && req.headers[TOKEN_HEADER] === token; // ubs:ignore — fake test server; it compares req.url and one header, nothing is merged into an object
       res.writeHead(ok ? 200 : 403, { "content-type": "application/json" });
       res.end(JSON.stringify(ok ? { pid: process.pid, version: "t", draining: false, queued: 0, running: 0, held: 0, models } : { error: "no" }));
     });
@@ -191,7 +191,8 @@ describe("server-status and server-stop", () => {
     }
   });
 
-  it("a runner still alive 60 s after SIGTERM is named with its pid, never reported as stopped (review of 2411e6dc, finding D)", async () => {
+  // WHY (TRDD-VQ0VEK3L): Windows has no catchable SIGTERM; process.kill ends the fake runner at once, so the still-alive branch cannot be reached.
+  it.skipIf(process.platform === "win32")("a runner still alive 60 s after SIGTERM is named with its pid, never reported as stopped (review of 2411e6dc, finding D)", async () => {
     const cal = startFake();
     const runner = await startRunner("");
     await waitFor(() => pidState(cal) === "alive" && pidState(runner) === "alive");
