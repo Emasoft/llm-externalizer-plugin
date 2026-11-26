@@ -17,6 +17,10 @@ import { makeNetworkGiveUp, setNetworkGiveUpOverrideS } from "./network-give-up.
 import { chatCompletionWithRetry, resetServiceHealthForTests } from "./provider/completion.js";
 import { failureOf, type RetryClock } from "./provider/http.js";
 import type { BackendConfig, ChatMessage, CompletionDeps } from "./provider/types.js";
+
+// WHY (TRDD-1MT68BAJ): onPath looks for llama-server.exe on Windows (network-give-up.ts:91-104).
+const EXE = process.platform === "win32" ? ".exe" : "";
+
 // TRDD-FC2TX9VU: the governor switch as this file found it; the afterEach of the governor-off describe restores it.
 const GOVERNOR_ENABLED_BEFORE = process.env.LLM_EXT_GOVERNOR_ENABLED;
 
@@ -72,8 +76,8 @@ function readyFixture(withRecord = true): { settings: Settings; cfgDir: string; 
     ["active: local_llama", "profiles:", "  local_llama:", "    profile-type: local", "    mode: local", "    api: llamacpp-local", "    url: http://127.0.0.1:8181", "    server: managed", `    model: ${MODEL}`, ""].join("\n"),
     "utf-8",
   );
-  writeFileSync(join(binDir, "llama-server"), "#!/bin/sh\nexit 0\n", "utf-8");
-  chmodSync(join(binDir, "llama-server"), 0o755);
+  writeFileSync(join(binDir, "llama-server" + EXE), "#!/bin/sh\nexit 0\n", "utf-8");
+  chmodSync(join(binDir, "llama-server" + EXE), 0o755);
   const repo = join(cache, "models--ggml-org--tiny-llamas");
   mkdirSync(join(repo, "refs"), { recursive: true });
   writeFileSync(join(repo, "refs", "main"), "rev1", "utf-8");

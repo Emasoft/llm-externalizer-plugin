@@ -11,10 +11,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer, type Server } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
 import type { RetryClock } from "./provider/http.js";
+
+// WHY (TRDD-1MT68BAJ): onPath looks for llama-server.exe on Windows (network-give-up.ts:91-104).
+const EXE = process.platform === "win32" ? ".exe" : "";
 
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const created: string[] = [];
@@ -61,8 +64,8 @@ function fixture(ready: boolean, brokenCache = false): void {
   const binDir = tempDir("bin");
   const cache = tempDir("cache");
   if (ready) {
-    writeFileSync(join(binDir, "llama-server"), "#!/bin/sh\nexit 0\n", "utf-8");
-    chmodSync(join(binDir, "llama-server"), 0o755);
+    writeFileSync(join(binDir, "llama-server" + EXE), "#!/bin/sh\nexit 0\n", "utf-8");
+    chmodSync(join(binDir, "llama-server" + EXE), 0o755);
     const repo = join(cache, "models--ggml-org--tiny-llamas");
     mkdirSync(join(repo, "refs"), { recursive: true });
     if (brokenCache) mkdirSync(join(repo, "refs", "main"));
@@ -79,7 +82,7 @@ function fixture(ready: boolean, brokenCache = false): void {
   vi.stubEnv("LLAMA_CACHE", cache);
   vi.stubEnv("BAI_API_KEY", undefined);
   vi.stubEnv("OPENROUTER_API_KEY", undefined);
-  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+  vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
 }
 
 /** A provider answering every POST with a certain 402 (and the JSON models list on GET, a live provider). Counts the POSTs. */

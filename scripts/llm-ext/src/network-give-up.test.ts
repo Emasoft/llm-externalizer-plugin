@@ -34,6 +34,9 @@ import {
   type RetryClock,
 } from "./provider/http.js";
 
+// WHY (TRDD-1MT68BAJ): onPath looks for llama-server.exe on Windows (network-give-up.ts:91-104).
+const EXE = process.platform === "win32" ? ".exe" : "";
+
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const GENUINE_MODELS = JSON.stringify({ data: [{ id: "vendor/some-model" }] });
 
@@ -111,8 +114,8 @@ function readyFixture(o: { binary?: boolean; model?: boolean; record?: "ok" | "f
     "utf-8",
   );
   if (o.binary !== false) {
-    writeFileSync(join(binDir, "llama-server"), "#!/bin/sh\nexit 0\n", "utf-8");
-    chmodSync(join(binDir, "llama-server"), 0o755);
+    writeFileSync(join(binDir, "llama-server" + EXE), "#!/bin/sh\nexit 0\n", "utf-8");
+    chmodSync(join(binDir, "llama-server" + EXE), 0o755);
   }
   if (o.model !== false) {
     const repoDir = join(cache, `models--${(o.id === undefined ? "ggml-org/tiny-llamas" : id.split(":")[0]).replace("/", "--")}`);

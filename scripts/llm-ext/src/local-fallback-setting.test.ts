@@ -11,7 +11,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { createServer, type Server } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
 import { fallbackToLocalErrors, fallbackToLocalSetting, GENERATED_MARKER, getSettingsPath, isFallbackLocalProfile, loadSettings, localsPlatformSupported, settingsLevelErrors, unpopulatedDefaultProfile, validateSettings, type Profile, type Settings } from "./config.js";
@@ -37,6 +37,9 @@ import { makeNetworkGiveUp, readyLocalTarget, setNetworkGiveUpOverrideS } from "
 import { chatCompletionWithRetry, resetServiceHealthForTests } from "./provider/completion.js";
 import type { RetryClock } from "./provider/http.js";
 import type { BackendConfig, ChatMessage, CompletionDeps } from "./provider/types.js";
+
+// WHY (TRDD-1MT68BAJ): onPath looks for llama-server.exe and locals.exe on Windows (network-give-up.ts:91-104).
+const EXE = process.platform === "win32" ? ".exe" : "";
 
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const MODEL2 = "ggml-org/tiny-llamas/stories260K.gguf";
@@ -94,7 +97,7 @@ function fixture(yaml: string, ready: readonly string[]): Fixture {
   // The catalog the free pool reads (as local-fallback-dispatch.test.ts writes it): without it no request is sent.
   const ids = ["vendor/free-a:free", "vendor/free-b:free"];
   writeFileSync(join(cfgDir, "catalog-cache.json"), JSON.stringify({ fetchedAtMs: Date.now(), models: ids.map((id) => ({ id, pricing: { prompt: "0", completion: "0" } })) }), "utf-8");
-  for (const bin of ["llama-server", "locals"]) {
+  for (const bin of ["llama-server" + EXE, "locals" + EXE]) {
     writeFileSync(join(binDir, bin), "#!/bin/sh\nexit 0\n", "utf-8");
     chmodSync(join(binDir, bin), 0o755);
   }
@@ -118,7 +121,7 @@ function fixture(yaml: string, ready: readonly string[]): Fixture {
   vi.stubEnv("HF_HUB_CACHE", hub);
   vi.stubEnv("BAI_API_KEY", undefined);
   vi.stubEnv("OPENROUTER_API_KEY", undefined);
-  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+  vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
   // The injected env of the unit cases holds ONLY the throwaway dirs, so nothing installed on this machine can make a profile ready.
   return { cfgDir, env: { PATH: binDir, LLAMA_CACHE: cache, HF_HUB_CACHE: hub } };
 }

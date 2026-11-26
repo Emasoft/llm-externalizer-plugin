@@ -12,9 +12,12 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { readBrokerState } from "./broker/protocol.js";
 import { createServer, type Server } from "node:http";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { recordFixture } from "./calibration/test-record.js";
 import { writeRecord } from "./calibration/record.js";
+
+// WHY (TRDD-1MT68BAJ): onPath looks for llama-server.exe on Windows (network-give-up.ts:91-104).
+const EXE = process.platform === "win32" ? ".exe" : "";
 
 const MODEL = "ggml-org/tiny-llamas/stories15M-q4_0.gguf";
 const CREDIT = "credit exhausted on the paid profile: top up; answered locally";
@@ -51,8 +54,8 @@ function fixture(yaml: string, ready: boolean): string {
   // The catalog the free pool and the price gate read (as outage-detection.test.ts writes it): without it no request is sent.
   const ids = ["vendor/free-a:free", "vendor/free-b:free", "vendor/paid-head", "vendor/paid-a"];
   writeFileSync(join(cfgDir, "catalog-cache.json"), JSON.stringify({ fetchedAtMs: Date.now(), models: ids.map((id) => ({ id, pricing: { prompt: "0", completion: "0" } })) }), "utf-8");
-  writeFileSync(join(binDir, "llama-server"), "#!/bin/sh\nexit 0\n", "utf-8");
-  chmodSync(join(binDir, "llama-server"), 0o755);
+  writeFileSync(join(binDir, "llama-server" + EXE), "#!/bin/sh\nexit 0\n", "utf-8");
+  chmodSync(join(binDir, "llama-server" + EXE), 0o755);
   const repo = join(cache, "models--ggml-org--tiny-llamas");
   mkdirSync(join(repo, "refs"), { recursive: true });
   writeFileSync(join(repo, "refs", "main"), "rev1", "utf-8");
@@ -68,7 +71,7 @@ function fixture(yaml: string, ready: boolean): string {
   // A b.ai key in the environment adds a reserved b.ai slot to the free profile, which fans out (the ensemble site, a later
   // increment of the card): unset it, as outage-detection.test.ts does, so the single-model sites under test are the ones reached.
   vi.stubEnv("BAI_API_KEY", undefined);
-  vi.stubEnv("PATH", `${binDir}:${process.env.PATH ?? ""}`);
+  vi.stubEnv("PATH", `${binDir}${delimiter}${process.env.PATH ?? ""}`);
   return cfgDir;
 }
 
