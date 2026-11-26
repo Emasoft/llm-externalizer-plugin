@@ -2,7 +2,7 @@
 import { execFileSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { stringify } from "yaml";
@@ -105,7 +105,7 @@ function run(spec: AnySpec, argv: string[], fetch: GlobalFetch = async () => { t
   };
   return runDecisionArgv(spec, argv, deps).then((code) => ({ code, out, err }));
 }
-const baseNames = (items: { id: string }[]): string[] => items.map((i) => i.id.slice(work().length + 1)).sort();
+const baseNames = (items: { id: string }[]): string[] => items.map((i) => relative(resolve(work()), i.id).split(sep).join("/")).sort();
 
 describe("assembleFileInput over real files", () => {
   it("a directory in a real git repo: tracked and untracked files, not the ignored one (E119); ids are paths; positionals fill the spec fields", async () => {
@@ -136,7 +136,7 @@ describe("assembleFileInput over real files", () => {
     const log = put("app.log", "one\n\nthree\n");
     put("b.md", "md\n");
     const lines = await assembleFileInput(filterSpec as AnySpec, ["q", log], { lines: true }, unreadStdin());
-    expect((lines.input as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([`${log}:1`, `${log}:3`]);
+    expect((lines.input as { items: { id: string }[] }).items.map((i) => i.id)).toEqual([`${resolve(log)}:1`, `${resolve(log)}:3`]);
     const ext = await assembleFileInput(filterSpec as AnySpec, ["q", work()], { ext: "md" }, unreadStdin());
     expect(baseNames((ext.input as { items: { id: string }[] }).items)).toEqual(["b.md"]);
     await expect(assembleFileInput(filterSpec as AnySpec, ["q", work()], { limit: 1 }, unreadStdin())).rejects.toThrow(/more than 1 items/);
@@ -178,7 +178,7 @@ describe("assembleFileInput over real files", () => {
   it("rank and find run in files mode (candidates / items); find refuses --lines", async () => {
     const f = put("r.txt", "text\n");
     const rank = await assembleFileInput(rankSpec as AnySpec, ["query", f], {}, unreadStdin());
-    expect(rank.input).toMatchObject({ query: "query", mode: "files", candidates: [{ id: f, text: "text\n" }] });
+    expect(rank.input).toMatchObject({ query: "query", mode: "files", candidates: [{ id: resolve(f), text: "text\n" }] });
     const find = await assembleFileInput(findSpec as AnySpec, ["query", f], {}, unreadStdin());
     expect(find.input).toMatchObject({ query: "query", mode: "files", items: [{ id: f }] });
     await expect(assembleFileInput(findSpec as AnySpec, ["query", f], { lines: true }, unreadStdin())).rejects.toThrow(/--lines is not supported/);
@@ -349,7 +349,8 @@ describe("file options reach collectInputs end to end", () => {
   });
 
   it("an unreadable file is a one-line refusal, not a stack (a plain system error from the reader)", async () => {
-    if (process.getuid?.() === 0) return; // root reads a mode-000 file, so the error cannot be produced
+    // WHY (TRDD-5KZJQ9N4): chmod 0 does not make a file unreadable on Windows, so the EACCES refusal cannot be produced there.
+    if (process.getuid?.() === 0 || process.platform === "win32") return; // root reads a mode-000 file, so the error cannot be produced
     const f = put("locked.txt", "secret-free text\n");
     chmodSync(f, 0);
     try {
@@ -423,7 +424,7 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
     expect(code).toBe(0);
     expect(s.units.map((u) => (u as string).length).sort((a, b) => a - b)).toEqual([10, 100]);
     expect(s.units).toContain("short text");
-    expect(rankDecision(out).rows.map((r) => [r.id, r.headCut])).toEqual([[long, true], [short, false]]);
+    expect(rankDecision(out).rows.map((r) => [r.id, r.headCut])).toEqual([[resolve(long), true], [resolve(short), false]]);
   });
 
   it("--head cuts by BYTES, not characters: 101 bytes of two-byte characters is backed off to 100 bytes (50 characters)", async () => {
@@ -469,7 +470,7 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
     // `--all` takes no value: the token after it stays a positional input.
     const all = await run(rankSpec as AnySpec, ["q", "--all", f, "--profile", "c", "--json"], serveRank().fetch);
     expect(all.err.filter((l) => !l.startsWith("— "))).toEqual([]);
-    expect(rankDecision(all.out).rows.map((r) => r.id)).toEqual([f]);
+    expect(rankDecision(all.out).rows.map((r) => r.id)).toEqual([resolve(f)]);
   });
 
   it("--head 1500 --keep-at 0.5 (D27 form): head reaches the request (1500 bytes sent), keep-at reaches the result (0.95 drops the 0.9325 candidate, 0.5 keeps it)", async () => {
@@ -526,7 +527,7 @@ describe("rank --head and --all as spec flags (IN-03)", () => {
     const f = put("a.txt", "alpha");
     const kept = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.9", "--profile", "c", "--json"], serveRank().fetch);
     expect(kept.err.filter((l) => !l.startsWith("— "))).toEqual([]);
-    expect(rankDecision(kept.out)).toMatchObject({ total: 1, rows: [{ id: f }] });
+    expect(rankDecision(kept.out)).toMatchObject({ total: 1, rows: [{ id: resolve(f) }] });
     const dropped = await run(rankSpec as AnySpec, ["q", f, "--keep-at", "0.95", "--profile", "c", "--json"], serveRank().fetch);
     expect(dropped.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(rankDecision(dropped.out)).toMatchObject({ total: 1, rows: [] });
@@ -560,7 +561,7 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
     expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.bodies).toHaveLength(2);
-    expect(rowsOf(out).map((r) => [r.id, r.label])).toEqual([[a, "bug"], [b, "bug"]]);
+    expect(rowsOf(out).map((r) => [r.id, r.label])).toEqual([[resolve(a), "bug"], [resolve(b), "bug"]]);
   });
 
   it("--labels \"a:hint,b\": text after the first colon is the hint (further colons stay in it), blank entries are dropped, a label without a hint has a null description", async () => {
@@ -660,7 +661,7 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
     const r = await run(labelSpec as AnySpec, ["--labels", "bug report,feature", f, "--profile", "c", "--json"], s.fetch);
     expect(r.err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(classesSent(s).map((c) => c.id)).toEqual(["bug report", "feature"]);
-    expect(rowsOf(r.out)).toMatchObject([{ id: f, label: "bug report" }]);
+    expect(rowsOf(r.out)).toMatchObject([{ id: resolve(f), label: "bug report" }]);
   });
 
   it("a chunked file takes the default-label no-vote rule (E117): chunks that say the default label do not outvote the one chunk with the finding", async () => {
@@ -672,7 +673,7 @@ describe("label --labels / --labels-json and file inputs (IN-02)", () => {
     expect(err.filter((l) => !l.startsWith("— "))).toEqual([]);
     expect(code).toBe(0);
     expect(s.bodies.length).toBeGreaterThan(2);
-    expect(rowsOf(out)).toMatchObject([{ id: f, label: "bug" }]);
+    expect(rowsOf(out)).toMatchObject([{ id: resolve(f), label: "bug" }]);
   });
 
   it("the flags also work with JSON input: they fill `classes`, and a JSON input that already holds `classes` is refused", async () => {

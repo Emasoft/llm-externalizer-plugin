@@ -1,8 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { collectInputs, readForJev, isSecretPath, HARD_MAX_BYTES, InputError } from './inputs.js';
+
+// WHY (TRDD-NIEDC62V): an existing file outside every allowed root; /etc does not exist on Windows.
+const OUTSIDE_FILE = process.platform === 'win32' ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'drivers', 'etc', 'hosts') : '/etc/hosts';
 
 // /tmp (not os.tmpdir()): sanitizeInputPath only allows cwd, HOME and /tmp.
 const made: string[] = [];
@@ -76,7 +79,7 @@ describe('readForJev named single input', () => {
   });
 
   it('E35: a path outside the allowed roots is refused by sanitizeInputPath', async () => {
-    await expect(readForJev('/etc/hosts', { kind: 'whole' })).rejects.toThrow(/Path traversal blocked/);
+    await expect(readForJev(OUTSIDE_FILE, { kind: 'whole' })).rejects.toThrow(/Path traversal blocked/);
   });
 
   it('E35/E122: a named symlink is refused', async () => {
@@ -122,7 +125,7 @@ describe('collectInputs walking', () => {
     put(d, 'ignored.txt', 'i\n');
     put(d, 'node_modules/x.js', 'n\n'); // inside git only .gitignore decides, not the skip list
     const c = await collectInputs([d]);
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['.gitignore', 'kept.txt', 'node_modules/x.js'.split('/').pop()]);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['.gitignore', 'kept.txt', 'node_modules/x.js'.split(/[\\/]/).pop()]);
     expect(ids(c).some((i) => i.endsWith('ignored.txt'))).toBe(false);
   });
 
@@ -143,7 +146,7 @@ describe('collectInputs walking', () => {
     put(d, 'dist/o.js', 'o\n');
     put(d, '.cache/c.txt', 'c\n');
     const c = await collectInputs([d]);
-    const tails = ids(c).map((i) => i.split('/').pop());
+    const tails = ids(c).map((i) => i.split(/[\\/]/).pop());
     expect(tails.sort()).toEqual(['.eslintrc', 'a.ts']);
   });
 
@@ -156,7 +159,7 @@ describe('collectInputs walking', () => {
     put(d, 'a.txt', 'a\n');
     put(d, 'b.md', 'b\n');
     const c = await collectInputs([join(d, '*.txt')]);
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['a.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['a.txt']);
   });
 
   it('E122: a symlink is skipped and listed unless --follow-symlinks', async () => {
@@ -164,7 +167,7 @@ describe('collectInputs walking', () => {
     put(d, 'real.txt', 'r\n');
     symlinkSync(join(d, 'real.txt'), join(d, 'link.txt'));
     const c = await collectInputs([d]);
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['real.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['real.txt']);
     expect(reasons(c).some((r) => r.includes('link.txt') && r.includes('symlink'))).toBe(true);
   });
 
@@ -175,7 +178,7 @@ describe('collectInputs walking', () => {
     symlinkSync(outside, join(d, 'notes.txt'));
     symlinkSync(d, join(d, 'sub', 'loop'));
     const c = await collectInputs([d], { followSymlinks: true });
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['a.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['a.txt']);
     expect(reasons(c).some((r) => r.includes('notes.txt') && r.includes('secret'))).toBe(true);
   });
 
@@ -185,7 +188,7 @@ describe('collectInputs walking', () => {
     put(d, '.env', 'X=1\n');
     put(d, 'k.pem', 'K\n');
     const c = await collectInputs([d]);
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['a.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['a.txt']);
     expect(reasons(c).filter((r) => r.includes('secret')).length).toBe(2);
   });
 
@@ -198,7 +201,7 @@ describe('collectInputs walking', () => {
     put(d, 'empty.txt', '');
     put(d, 'bin.dat', Buffer.from([1, 0, 2]));
     const c = await collectInputs([d]);
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['a.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['a.txt']);
     const r = reasons(c).join('\n');
     expect(r).toMatch(/package-lock\.json\|lock/);
     expect(r).toMatch(/app\.min\.js\|minified/);
@@ -212,7 +215,7 @@ describe('collectInputs walking', () => {
     put(d, 'small.txt', 'ok\n');
     put(d, 'large.txt', 'x'.repeat(500));
     const c = await collectInputs([d], { maxBytes: 100 });
-    expect(ids(c).map((i) => i.split('/').pop())).toEqual(['small.txt']);
+    expect(ids(c).map((i) => i.split(/[\\/]/).pop())).toEqual(['small.txt']);
     expect(reasons(c).some((r) => r.includes('large.txt') && r.includes('over 100 bytes'))).toBe(true);
   });
 
@@ -280,7 +283,7 @@ describe('review fixes F1-F9', () => {
 
   it.skipIf(!node22)('F1: a file a glob reaches through a link to outside the roots is refused', async () => {
     const d = tmp();
-    symlinkSync('/etc', join(d, 'lnk'));
+    symlinkSync(dirname(OUTSIDE_FILE), join(d, 'lnk'));
     // l[n]k keeps the static prefix inside the roots, so only the per-file check can catch /etc/hosts
     await expect(collectInputs([join(d, 'l[n]k', 'hosts')])).rejects.toThrow(/Path traversal blocked/);
   });
@@ -316,15 +319,16 @@ describe('review fixes F1-F9', () => {
     const d = tmp();
     const t = put(d, 'real.txt', 'hi\n');
     symlinkSync(t, join(d, 'link.txt'));
-    for (const p of ['/etc/hosts', join(d, 'link.txt')]) {
+    for (const p of [OUTSIDE_FILE, join(d, 'link.txt')]) {
       const err = await readForJev(p, { kind: 'whole' }).then(() => null, (e: unknown) => e);
       expect(err, p).toBeInstanceOf(InputError);
       expect((err as Error).message).toMatch(/Path traversal blocked|Symlink rejected/);
     }
-    await expect(collectInputs(['/etc/hosts'])).rejects.toBeInstanceOf(InputError);
+    await expect(collectInputs([OUTSIDE_FILE])).rejects.toBeInstanceOf(InputError);
   });
 
-  it('F6: a FIFO named as an input is refused before any read', async () => {
+  // WHY (TRDD-NIEDC62V): a FIFO (mkfifo) does not exist on Windows; the test proves a named pipe is refused before any read.
+  it.skipIf(process.platform === 'win32')('F6: a FIFO named as an input is refused before any read', async () => {
     const p = join(tmp(), 'pipe');
     execFileSync('mkfifo', [p]);
     await expect(readForJev(p, { kind: 'whole' })).rejects.toThrow(/not a regular file/);
@@ -342,10 +346,12 @@ describe('review fixes F1-F9', () => {
     const d = tmp();
     put(d, 'my dir/é ü 日本.txt', 'a\n');
     put(d, '[draft] notes/a{1}.txt', 'b\n');
-    put(d, 'plain/[x] r?.txt', 'c\n');
+    // WHY (TRDD-NIEDC62V): "?" is not allowed in Windows file names, so Windows uses a name without it.
+    const bracketFile = process.platform === 'win32' ? 'plain/[x] r.txt' : 'plain/[x] r?.txt';
+    put(d, bracketFile, 'c\n');
     const walked = await collectInputs([join(d, '[draft] notes')]);
     expect(walked.items.map((i) => i.text)).toEqual(['b\n']);
-    const named = await collectInputs([join(d, 'plain', '[x] r?.txt'), join(d, 'my dir')]);
+    const named = await collectInputs([join(d, bracketFile), join(d, 'my dir')]);
     expect(named.items.map((i) => i.text).sort()).toEqual(['a\n', 'c\n']);
     expect((await readForJev(join(d, 'my dir', 'é ü 日本.txt'), { kind: 'whole' })).text).toBe('a\n');
   });

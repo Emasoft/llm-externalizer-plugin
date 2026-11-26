@@ -53,6 +53,8 @@ const unreadStdin = (): { stdin: PassThrough; read: () => Promise<Buffer> } => {
 const neverRead = (stdin: PassThrough): void => { expect(stdin.readableDidRead).toBe(false); };
 const findings = findingsSpec as AnySpec;
 const testOutput = testOutputSpec as AnySpec;
+// WHY (TRDD-NIEDC62V): an existing file outside every allowed root; /etc does not exist on Windows.
+const OUTSIDE_FILE = process.platform === "win32" ? join(process.env.SystemRoot ?? "C:\\Windows", "System32", "drivers", "etc", "hosts") : "/etc/hosts";
 
 async function runFindings(jsonPath: string) {
   const out: string[] = [];
@@ -76,9 +78,10 @@ const findingsJson = (file: string): string => put("in.json", JSON.stringify({ f
 
 describe("major 1: the files a findings JSON names stay inside the current directory and the JSON directory", () => {
   it.each([
-    ["an absolute path outside every allowed directory", () => "/etc/hosts", "outside the directories a findings file may name"],
-    ["a ../ path that climbs out of every allowed directory", () => `${"../".repeat(30)}etc/hosts`, "outside the directories a findings file may name"],
-    ["a symlink beside the JSON that points outside", () => { const l = join(tmp, "link-out"); symlinkSync("/etc/hosts", l); return l; }, "outside the directories a findings file may name"],
+    ["an absolute path outside every allowed directory", () => OUTSIDE_FILE, "outside the directories a findings file may name"],
+    // WHY (TRDD-NIEDC62V): the test folders and the system files sit on different Windows drives, so no ../ path reaches a file outside the roots; this row is left out on win32 because it.each has no per-row skip.
+    ...(process.platform === "win32" ? [] : [["a ../ path that climbs out of every allowed directory", () => `${"../".repeat(30)}etc/hosts`, "outside the directories a findings file may name"] as [string, () => string, string]]),
+    ["a symlink beside the JSON that points outside", () => { const l = join(tmp, "link-out"); symlinkSync(OUTSIDE_FILE, l); return l; }, "outside the directories a findings file may name"],
     ["a symlink beside the JSON that points inside", () => { const target = put("real.txt", "x = 1\n"); const l = join(tmp, "link-in"); symlinkSync(target, l); return l; }, "Symlink rejected"],
   ])("%s is refused with a clear message and nothing is sent", async (_name, makePath, message) => {
     const r = await runFindings(findingsJson(makePath()));
@@ -117,7 +120,8 @@ describe("major 1: the files a findings JSON names stay inside the current direc
     expect(idx.map((i) => r.errLines[i])).toEqual([`read ${a} (20 bytes) to send`, `read ${b} (20 bytes) to send`]);
     neverRead(r.stdin);
   });
-  it("a path with an escape sequence and a control byte is printed without them", async () => {
+  // WHY (TRDD-NIEDC62V): a file name with control bytes does not exist on Windows (Windows file names may not hold control bytes); the test proves a name holding an escape sequence is printed without its control bytes.
+  it.skipIf(process.platform === "win32")("a path with an escape sequence and a control byte is printed without them", async () => {
     const odd = put("c\u001b[31mol\u0007or.ts", "export const c = 3;\n");
     const r = await runFindings(put("in.json", JSON.stringify({ findings: [{ file: odd }] })));
     const line = r.errLines.find((l) => l.startsWith("read "))!;
