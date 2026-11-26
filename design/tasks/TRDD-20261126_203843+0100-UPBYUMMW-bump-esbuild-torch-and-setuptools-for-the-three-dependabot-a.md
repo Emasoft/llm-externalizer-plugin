@@ -1,10 +1,10 @@
 ---
 trdd-id: UPBYUMMW
 title: Bump esbuild, torch and setuptools for the three Dependabot alerts still real on dev
-column: todo
+column: testing
 status: tasked
 created: 2026-11-26T20:38:43+0100
-updated: 2026-11-26T20:38:43+0100
+updated: 2026-11-26T20:43:42+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: security
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-26T20:38:43+0100
+implementation-commits: [9f7d898a, 26affe4a]
 ---
 
 # Bump esbuild, torch and setuptools for the three Dependabot alerts still real on dev
@@ -24,3 +25,7 @@ Open Dependabot alerts (2026-11-26, against main v14.7.8): 33. Checked against t
 ## Approval log
 
 - 2026-11-26T20:38:43+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-26T20:43:41+0100 Done on dev/after-14.3.0: 9f7d898a (esbuild 0.28.2, torch 2.15.0, setuptools 84.2.1) and 26affe4a (dist rebuilt). Checked: binding loads, build, tsc and the regex-worker, parallel-repair and pick-lock tests pass. The GitHub alerts close only when the release reaches main.
