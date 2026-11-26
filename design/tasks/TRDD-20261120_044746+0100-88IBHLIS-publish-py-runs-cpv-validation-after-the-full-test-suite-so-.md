@@ -1,10 +1,10 @@
 ---
 trdd-id: 88IBHLIS
 title: publish.py runs CPV validation after the full test suite, so a CPV-only failure costs a whole suite run
-column: todo
+column: human_review
 status: tasked
 created: 2026-11-20T04:47:46+0100
-updated: 2026-11-20T05:05:07+0100
+updated: 2026-11-26T21:03:54+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -15,6 +15,7 @@ mandated-by: none
 approved: true
 approval-judge: main-agent@llm-externalizer-plugin
 approval-datetime: 2026-11-20T04:47:46+0100
+implementation-commits: [a706d4b6]
 ---
 
 # publish.py runs CPV validation after the full test suite, so a CPV-only failure costs a whole suite run
@@ -29,3 +30,4 @@ scripts/publish.py calls run_cpv_validation (defined at publish.py:630; the abor
 
 2026-11-20T04:58:38+0100 main agent (written by worker): second part of this card. Add a publish.py pre-flight check, run before npm ci, that fails at once when the plugin tree holds a reports/ folder with any file, tracked or untracked, while CPV issue 275 (Emasoft/claude-plugins-validation) is open. CPV raises '[MAJOR] .gitignore missing coverage for: Agent/script reports (reports/)' for such a folder, and that finding stopped the 14.7.3, 14.7.6 and 14.7.8 publishes only after a green test suite. Remove the check when issue 275 is fixed.
 2026-11-20T05:05:05+0100 main agent correction: the note above and commit 94ba99e5 say the reports/ finding stopped the 14.7.3, 14.7.6 and 14.7.8 publishes after a green test suite. Only 14.7.6 and 14.7.8 are verified (FC2TX9VU notes of 2026-11-19T19:28:06 and 2026-11-20T04:48:00). For 14.7.3 the card FC2TX9VU records only that reports were moved into reports_dev/ (note of 2026-11-19T01:08:40); its publish run 6 lost a green suite to two other CPV findings (RC-164 and an absolute path, 1b7b3d82), so the 14.7.3 case for reports/ is unverified.
+2026-11-26T21:03:52+0100 Done by a706d4b6 (CPV validation before npm test in both publisher modes; a populated reports/ folder refused before dependency setup; tests/test_publish_cpv_runs_first.py). Live evidence: the 2026-11-26 prepare log reports_dev/release/*-prepare-14.7.10.log runs cpv-remote-validate at lines 261-263, before the npm test failure at line 345.
