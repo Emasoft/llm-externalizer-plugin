@@ -4,7 +4,7 @@ title: Benchmark scores and the hq-scan quality gate differ on Windows
 column: todo
 status: tasked
 created: 2026-11-18T16:54:16+0100
-updated: 2026-11-20T00:28:33+0100
+updated: 2026-11-26T19:56:50+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: spike
@@ -42,3 +42,7 @@ Failing tests (group, log line, file, test name, first error line; log order):
 
 - 2026-11-18T16:54:16+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
 - 2026-11-20T00:28:33+0100 — column → todo by main-agent@llm-externalizer-plugin.
+
+## Notes
+
+2026-11-26T19:56:47+0100 Fixed on dev/after-14.3.0 by f28002d2 (benchmark stubs match either separator). Investigation: reports_dev/windows-investigation/; plan FIX-PLAN.md. macOS: tsc, eslint and the 36 changed test files pass. Windows CI not yet run (needs a release candidate, blocked on the llama-server repair).

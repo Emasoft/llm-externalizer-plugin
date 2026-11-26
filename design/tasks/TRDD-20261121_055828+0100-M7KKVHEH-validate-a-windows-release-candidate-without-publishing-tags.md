@@ -4,7 +4,7 @@ title: Validate a Windows release candidate without publishing tags
 column: backburner
 status: tasked
 created: 2026-11-21T05:58:28+0100
-updated: 2026-11-21T05:58:28+0100
+updated: 2026-11-26T19:56:47+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -30,3 +30,7 @@ Run Windows CI on a pinned candidate without publishing tags or changing main. P
 ## Approval log
 
 - 2026-11-21T05:58:28+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-26T19:56:47+0100 USER kept 92076520 ("Keep it"). A rerun of --prepare without --patch stops with git-cliff found no bumpable commits (the version already moved); --prepare --patch made 0f1bc55d v14.7.10 and failed local validation on the broken Homebrew llama-server, so each failed prepare leaves one more unpushed release commit.

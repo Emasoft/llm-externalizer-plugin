@@ -4,7 +4,7 @@ title: Session goal 2026-11-16 complete all TRDDs, fix all issues, publish and u
 column: dev
 status: tasked
 created: 2026-11-16T09:20:14+0100
-updated: 2026-11-20T06:51:35+0100
+updated: 2026-11-26T19:56:29+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: audit
@@ -94,6 +94,7 @@ Goal set: complete all TRDDs. fix all issues. publish and update.
 2026-11-20T04:48:00+0100 main agent (written by worker): publish 14.7.8 attempt 1 passed every test stage, then CPV stopped it on two non-skillaudit MAJOR findings. (1) .gitignore missing coverage for reports/: 9b9d3e1c had committed the rule-check report into this worktree reports/ folder; 01c27723 moved it byte for byte (cmp) into the main checkout reports/4dfr9ftx/ folder, untracked there (CPV issue 275). (2) RC-164 on card 1MT68BAJ line 46: 62f5c817 had removed the test wrapper that 1b7b3d82 added; restored (CPV issue 281). Card 88IBHLIS filed so publish.py runs CPV before the test suite.
 2026-11-20T04:52:36+0100 main agent correction: the message of 01c27723 says the archived card 4DFR9FTX keeps a resolvable reference to reports/4dfr9ftx/20261120_031437+0100-rule-check-check-1.md. At the HEAD of branch dev/after-14.3.0 that path does not exist; it resolves only in the main checkout, where the file is untracked, and in branch history at 9b9d3e1c. The report is therefore tracked nowhere at HEAD, against the USER rule of 2026-11-15 that reports/ is git-tracked, until CPV issue 275 is fixed.
 2026-11-20T06:51:33+0100 main agent (written by worker, facts checked by the main agent 2026-11-20): v14.7.8 PUBLISHED by publish attempt 3 (log reports_dev/publish/20261120-14.7.8-publish.log, last lines 'Published v14.7.8' and publish-exit=0): release commit 7eaa155c pushed to origin main, tags v14.7.8 and llm-externalizer--v14.7.8, GitHub release https://github.com/Emasoft/llm-externalizer-plugin/releases/tag/v14.7.8. Attempt 1 stopped at CPV (note of 04:48:00); attempt 2 failed only local-fallback-e2e.test.ts:266, fixed in c64315ae (TRDD-WPH1158N); attempt 3 passed every gate. Logs of attempts 1 and 2: reports_dev/publish/20261120-14.7.8-attempt1-publish.log and 20261120-14.7.8-attempt2-publish.log. Marketplace updated; claude plugin list shows llm-externalizer@emasoft-plugins 14.7.8 at user scope; the PATH shim run with the session plugin bin dirs removed from PATH prints 14.7.8 (inside the running session it still runs 14.7.7 until restart, by design). On 7eaa155c Notify Marketplace succeeded; CI, Windows and Release were still running at 06:47.
+2026-11-26T19:56:29+0100 USER decisions (AskUserQuestion, verbatim): 14.7.9 bump commit 92076520 -> "Keep it"; push rights -> "Full release when green (Recommended)" (push CI and release-candidate branches, dispatch Windows CI; once Windows is green push main and the tag and create the GitHub release); broken Homebrew llama-server -> "You repair it" (the USER repairs it). Prepare --patch made 0f1bc55d v14.7.10 (unpushed) and failed macOS validation: broker, governor-load and governor-threads need llama-server, which fails with dyld Library not loaded libggml.0.dylib. Release blocked until the USER repairs it; next prepare is 14.7.11.
 
 ## Next
 

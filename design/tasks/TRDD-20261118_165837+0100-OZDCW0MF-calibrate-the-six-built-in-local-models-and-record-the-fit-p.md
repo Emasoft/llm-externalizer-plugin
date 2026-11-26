@@ -4,7 +4,7 @@ title: Calibrate the six built-in local models and record the fit per model
 column: todo
 status: tasked
 created: 2026-11-18T16:58:37+0100
-updated: 2026-11-18T17:08:07+0100
+updated: 2026-11-26T19:56:48+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: infra
@@ -26,3 +26,7 @@ Child of TRDD-1OOAH3LD (local_llama) and TRDD-ZGSGGHQG (locals-mlx), both left o
 ## Approval log
 
 - 2026-11-18T16:58:37+0100 — MANDATE issued by main-agent@llm-externalizer-plugin (min-approval-requirement: none). Pre-approved: issuer authority >= required approver. No approval request was sent.
+
+## Notes
+
+2026-11-26T19:56:47+0100 USER decision (verbatim answer): "You repair it" for the broken Homebrew llama-server (dyld: Library not loaded /opt/homebrew/opt/ggml/lib/libggml.0.dylib). Calibration waits for that repair.

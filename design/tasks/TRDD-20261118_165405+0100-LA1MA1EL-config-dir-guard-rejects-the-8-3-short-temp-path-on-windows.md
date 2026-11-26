@@ -4,7 +4,7 @@ title: Config dir guard rejects the 8.3 short temp path on Windows
 column: todo
 status: tasked
 created: 2026-11-18T16:54:05+0100
-updated: 2026-11-20T01:54:47+0100
+updated: 2026-11-26T19:56:30+0100
 current-owner: main-agent@llm-externalizer-plugin
 created-by: main-agent@llm-externalizer-plugin
 task-type: bugfix
@@ -72,3 +72,4 @@ Failing tests (group, log line, file, test name, first error line; log order):
 
 2026-11-20 (main agent read config.ts:895-922): getConfigDir resolves the config dir and homedir() with plain realpathSync and compares them by string prefix. On the Windows runner the temp dir is C:\Users\RUNNER~1\AppData\Local\Temp\..., the home folder in 8.3 short form, while home resolves to C:\Users\runneradmin, so the prefix check fails. INFERRED, not run: realpathSync.native returns the long name, which would fix group G1 (36 failures) without widening the allowlist. Map: reports_dev/windows-ci-map/20261119_232646+0100-windows-failure-map.md.
 2026-11-20: 9315510b switches getConfigDir, assertNotRealConfigDirUnderTest, rule-install.ts and sanitizeInputPath to realpathSync.native on both sides of the home/temp comparison. INFERRED to fix the 8.3 short-name mismatch (RUNNER~1 vs runneradmin); not run on Windows. Stays open until a Windows CI run shows the G1 tests green. Known gap: the first test in src/config-dir-hermetic.test.ts ("resolves under /tmp") still uses plain realpathSync("/tmp") and a "/" separator, and the osTmpReal block was not reviewed for Windows.
+2026-11-26T19:56:29+0100 Fixed on dev/after-14.3.0 by 4d6a4f56 (validateGitCwd native realpath, win32 os.tmpdir root in both path guards). Investigation: reports_dev/windows-investigation/; plan FIX-PLAN.md. macOS: tsc, eslint and the 36 changed test files pass. Windows CI not yet run (needs a release candidate, blocked on the llama-server repair).
