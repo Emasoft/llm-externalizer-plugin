@@ -9,7 +9,7 @@
  */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -95,7 +95,7 @@ describe("runScanFolder report routing (TRDD-PNU8XECB)", () => {
     const scratch = join(root, "reports_dev", "llm-externalizer");
     expect(seen.pieceDirs).toEqual([scratch, scratch]);
     expect(seen.mergedDirs).toEqual([undefined]);
-    expect(seen.mergedPaths[0]!.startsWith(join(root, "reports", "llm-externalizer") + "/")).toBe(true);
+    expect(seen.mergedPaths[0]!.startsWith(join(root, "reports", "llm-externalizer") + sep)).toBe(true);
     // The merge really read the pieces from the scratch root.
     const merged = readFileSync(seen.mergedPaths[0]!, "utf-8");
     expect(merged).toContain(`review of ${join(srcDir, "a.ts")}`);

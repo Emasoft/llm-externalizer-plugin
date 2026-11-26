@@ -12,7 +12,7 @@
 // writeFileSync happen at the call site, not inside buildReportPath).
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
@@ -60,7 +60,7 @@ describe("buildReportPath (C9 write-roots sweep)", () => {
       _resetDefaultOutputDirCache();
 
       const path = buildReportPath();
-      expect(path.startsWith(join(fakeRoot, "reports_dev", "llm-externalizer", "benchmark") + "/")).toBe(true);
+      expect(path.startsWith(join(fakeRoot, "reports_dev", "llm-externalizer", "benchmark") + sep)).toBe(true);
       expect(path.endsWith("-model-comparison.md")).toBe(true);
     } finally {
       rmSync(fakeRoot, { recursive: true, force: true });

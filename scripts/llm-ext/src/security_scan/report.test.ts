@@ -10,6 +10,7 @@
  * mainRoot-override branches ARE covered.
  */
 
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
   aggregate,
@@ -143,8 +144,8 @@ describe("resolveReportDir", () => {
     // the SAME reports/llm-externalizer/ tree as every other llm-ext
     // report (write-roots rule, 2026-09-18), not a bare reports/security_scan/.
     expect(resolveReportDir("/abs/out", "/root")).toBe("/abs/out");
-    expect(resolveReportDir(undefined, "/root")).toBe("/root/reports/llm-externalizer/security_scan");
-    expect(resolveReportDir("", "/root")).toBe("/root/reports/llm-externalizer/security_scan");
+    expect(resolveReportDir(undefined, "/root")).toBe(join("/root", "reports", "llm-externalizer", "security_scan"));
+    expect(resolveReportDir("", "/root")).toBe(join("/root", "reports", "llm-externalizer", "security_scan"));
   });
 });
 

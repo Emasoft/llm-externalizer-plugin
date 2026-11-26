@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync, realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { parse as yamlParse } from "yaml";
@@ -1513,7 +1513,7 @@ describe("paid sweep — per-call daily-spend booking (P5 §2.5 requirement 1/2)
     // This one assertion carries the test: it failed red on the HEAD archive
     // (pre-fix resolveMainRoot() falls back to process.cwd(), not cfgReal).
     const cfgReal = realpathSync.native(cfg); // native, like getConfigDir() (TRDD-LA1MA1EL)
-    expect(sweep!.reportPath.startsWith(cfgReal + "/")).toBe(true);
+    expect(sweep!.reportPath.startsWith(cfgReal + sep)).toBe(true);
   });
 });
 

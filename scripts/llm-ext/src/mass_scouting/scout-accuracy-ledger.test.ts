@@ -5,6 +5,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   loadCache,
@@ -37,7 +38,7 @@ describe("scout-accuracy ledger (D4)", () => {
     const p = scoutAccuracyLedgerPath();
     expect(p).toMatch(/scout-accuracy-results\.json$/);
     expect(p).not.toMatch(/security-triage/);
-    expect(p).toContain(cfgDir);
+    expect(p).toContain(resolve(cfgDir));
   });
 
   it("the hash covers fixture version + threshold + target bytes", () => {

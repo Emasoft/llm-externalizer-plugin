@@ -503,7 +503,7 @@ describe("dispatchMassScoutTool — check_model_health (TRDD-828238b5 A2)", () =
     expect(text).toContain("Report:");
     // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
     // (TRDD-PNU8XECB), not a bare top-level reports/model-health/.
-    expect(text).toContain("reports_dev/llm-externalizer/model-health");
+    expect(text).toContain(join("reports_dev", "llm-externalizer", "model-health"));
   });
 
   it("flags isError + critical when the configured model is absent from the catalog", async () => {
@@ -573,7 +573,7 @@ describe("dispatchMassScoutTool — discover_new_models (TRDD-828238b5 A4)", () 
     expect(text).toContain("seeded the snapshot");
     // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
     // (TRDD-PNU8XECB), not a bare top-level reports/model-arrivals/.
-    expect(text).toContain("reports_dev/llm-externalizer/model-arrivals");
+    expect(text).toContain(join("reports_dev", "llm-externalizer", "model-arrivals"));
   });
 
   it("second run reports the genuinely-new model offline", async () => {
@@ -641,7 +641,7 @@ describe("dispatchMassScoutTool — check_tool_replacements (TRDD-828238b5 A7-P3
     expect(text).toContain("Report:");
     // write-roots fix (c9b): default now nests under reports_dev/llm-externalizer/
     // (TRDD-PNU8XECB), not a bare top-level reports/auto-replace/.
-    expect(text).toContain("reports_dev/llm-externalizer/auto-replace");
+    expect(text).toContain(join("reports_dev", "llm-externalizer", "auto-replace"));
     // The report file was actually written.
     const reportLine = text.split("\n").find((l) => l.startsWith("Report:"));
     expect(reportLine).toBeDefined();

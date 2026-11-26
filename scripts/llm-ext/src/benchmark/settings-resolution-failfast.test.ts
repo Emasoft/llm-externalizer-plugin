@@ -73,7 +73,7 @@ describe("main() fails fast on an unresolvable settings/active-profile (row99)",
   // refusal `return` happens textually before that fetch is even referenced.
   it("(a) unreadable/invalid settings.yaml refuses the default sweep with the named cause, no network call", () => {
     writeFileSync(join(cfg, "settings.yaml"), ": : : not valid yaml : : :\n\tbad-indent", "utf-8");
-    const r = run([], { OPENROUTER_API_KEY: "sk-test-literal-unused" });
+    const r = run([], { OPENROUTER_API_KEY: "sk-test-literal-unused" }); // ubs:ignore — test placeholder value, not a real credential
     expect(r.status).not.toBe(0);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[FAILED\] settings\.yaml unreadable or invalid at /);
@@ -86,7 +86,7 @@ describe("main() fails fast on an unresolvable settings/active-profile (row99)",
   // Same reasoning: refused before the sweep's catalog fetch, so no network.
   it("(b) missing/unresolvable active profile refuses the default sweep with the named cause, no network call", () => {
     writeFileSync(join(cfg, "settings.yaml"), "profiles:\n  other:\n    mode: remote\n    api: openrouter-remote\n    model: v/x\n", "utf-8");
-    const r = run([], { OPENROUTER_API_KEY: "sk-test-literal-unused" });
+    const r = run([], { OPENROUTER_API_KEY: "sk-test-literal-unused" }); // ubs:ignore — test placeholder value, not a real credential
     expect(r.status).not.toBe(0);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[FAILED\] active profile 'free' is not configured in /);
@@ -131,7 +131,7 @@ describe("main() fails fast on an unresolvable settings/active-profile (row99)",
       "active: paid\nprofiles:\n  paid:\n    mode: remote\n    api: openrouter-remote\n    model: v/x\n",
       "utf-8",
     );
-    const r = run(["--update-all"], { OPENROUTER_API_KEY: "sk-test-literal-unused" });
+    const r = run(["--update-all"], { OPENROUTER_API_KEY: "sk-test-literal-unused" }); // ubs:ignore — test placeholder value, not a real credential
     expect(r.status).not.toBe(0);
     expect(r.finals).toHaveLength(1);
     expect(r.final).toMatch(/^\[FAILED\] --update-all refused: 'paid' is a GENERATED dynamic profile/);
@@ -164,7 +164,7 @@ describe("main() fails fast on an unresolvable settings/active-profile (row99)",
   // already calls getSettingsPath() -> getConfigDir() unconditionally.
   it("(f) LLM_EXT_CONFIG_DIR outside home/tmp refuses with one settings/config-could-not-be-resolved line, exit 2, no network call", () => {
     const r = run([], {
-      OPENROUTER_API_KEY: "sk-test-literal-unused",
+      OPENROUTER_API_KEY: "sk-test-literal-unused", // ubs:ignore — test placeholder value, not a real credential
       LLM_EXT_CONFIG_DIR: "/var/row99-outside-home-and-tmp-config-dir",
     });
     expect(r.status).toBe(2);
@@ -320,7 +320,7 @@ describe("update-all report path (review of 43e3694, S4)", () => {
   it("nests under <mainRoot>/reports_dev/llm-externalizer/update-all/", async () => {
     const { updateAllReportDir } = await import("./update-all.js");
     expect(updateAllReportDir("/tmp/fake-project-root")).toBe(
-      "/tmp/fake-project-root/reports_dev/llm-externalizer/update-all",
+      join("/tmp/fake-project-root", "reports_dev", "llm-externalizer", "update-all"),
     );
   });
 });

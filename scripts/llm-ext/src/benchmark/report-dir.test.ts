@@ -9,6 +9,7 @@
 // on the path, which the old shape never had).
 // TRDD-PNU8XECB (2026-11-15): benchmark output is model-pool tool configuration, so the
 // default moved from the tracked reports/ tree to the gitignored reports_dev/ tree.
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 
 import { benchmarkSubReportDir } from "./report-dir.js";
@@ -16,12 +17,12 @@ import { benchmarkSubReportDir } from "./report-dir.js";
 describe("benchmarkSubReportDir (C9 write-roots sweep)", () => {
   it("nests the sub-dir under <mainRoot>/reports_dev/llm-externalizer/, not <mainRoot>/reports/ directly", () => {
     const dir = benchmarkSubReportDir("scan-folder-benchmark", "/tmp/fake-project-root");
-    expect(dir).toBe("/tmp/fake-project-root/reports_dev/llm-externalizer/scan-folder-benchmark");
+    expect(dir).toBe(join("/tmp/fake-project-root", "reports_dev", "llm-externalizer", "scan-folder-benchmark"));
   });
 
   it("uses a distinct sub-dir per caller-supplied name", () => {
     const dir = benchmarkSubReportDir("text-tools-benchmark", "/tmp/fake-project-root");
-    expect(dir).toBe("/tmp/fake-project-root/reports_dev/llm-externalizer/text-tools-benchmark");
+    expect(dir).toBe(join("/tmp/fake-project-root", "reports_dev", "llm-externalizer", "text-tools-benchmark"));
   });
 
   // c9b (2026-09-18): pins the exact `sub` string each of the six
@@ -38,6 +39,6 @@ describe("benchmarkSubReportDir (C9 write-roots sweep)", () => {
     ["security-triage-benchmark", "security-triage/index.ts"],
   ])("pins %s (%s) to <mainRoot>/reports_dev/llm-externalizer/<sub>", (sub) => {
     const dir = benchmarkSubReportDir(sub, "/tmp/fake-project-root");
-    expect(dir).toBe(`/tmp/fake-project-root/reports_dev/llm-externalizer/${sub}`);
+    expect(dir).toBe(join("/tmp/fake-project-root", "reports_dev", "llm-externalizer", sub));
   });
 });
