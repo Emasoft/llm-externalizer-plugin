@@ -18,11 +18,20 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err) => function __init() {
+  if (err) throw err[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err = [e], e;
+  }
 };
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -221300,7 +221309,7 @@ import {
   realpathSync as realpathSync2
 } from "node:fs";
 import { extname, join as join10, basename as basename2, dirname as dirname3, resolve as resolve4, sep } from "node:path";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir4, tmpdir as tmpdir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 function codeTaskSystemPrompt(lang, lineNumbers) {
   return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
@@ -221363,6 +221372,7 @@ function sanitizeInputPath(filePath) {
     resolve4(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve4("/tmp"));
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir2()) : tmpReal;
   const resolvedReal = (() => {
     try {
       return realpathSync2.native(resolved);
@@ -221371,11 +221381,11 @@ function sanitizeInputPath(filePath) {
     }
   })();
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(sysTmpReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       // WHY: the bare message named no way out; users hit it with /etc or a
       // sibling checkout and could not tell which roots are allowed (issue 16).
-      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). Run from a parent directory of the files, or copy them under one of these roots.`
+      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp)${sysTmpReal !== tmpReal ? `, ${sysTmpReal} (system temp)` : ""}. Run from a parent directory of the files, or copy them under one of these roots.`
     );
   }
   try {
@@ -221659,7 +221669,7 @@ function validateGitCwd(dirPath) {
   const resolved = resolve4(dirPath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync2.native(p);
     } catch {
       return p;
     }
@@ -221679,8 +221689,9 @@ function validateGitCwd(dirPath) {
     resolve4(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve4("/tmp"));
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir2()) : tmpReal;
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(sysTmpReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
     );
@@ -233361,7 +233372,7 @@ import { cpus } from "node:os";
 init_local_llama_server();
 import { execFile as execFile4, execFileSync as execFileSync3 } from "node:child_process";
 import { lstatSync as lstatSync2, mkdirSync as mkdirSync17, readFileSync as readFileSync28, renameSync as renameSync14, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync16 } from "node:fs";
-import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
+import { tmpdir as tmpdir3, userInfo as userInfo2 } from "node:os";
 import { join as join27 } from "node:path";
 var PS_ENV = { ...process.env, LC_ALL: "C", TZ: "UTC" };
 
@@ -234986,7 +234997,7 @@ var DESCRIBE_CASES = [
 // src/benchmark/text-tools/bench-runner.ts
 init_openrouter();
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync19 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
+import { tmpdir as tmpdir4 } from "node:os";
 import { join as join38 } from "node:path";
 
 // src/benchmark/text-tools/score.ts
@@ -235287,7 +235298,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
           modelId,
           ctx,
           async (deps) => {
-            const dir = mkdtempSync2(join38(tmpdir3(), "llm-ext-describe-bench-"));
+            const dir = mkdtempSync2(join38(tmpdir4(), "llm-ext-describe-bench-"));
             try {
               const filePath = join38(dir, c.fileName);
               writeFileSync19(filePath, c.content, "utf-8");

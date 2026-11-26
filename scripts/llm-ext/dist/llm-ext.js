@@ -18,11 +18,20 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   if (typeof require !== "undefined") return require.apply(this, arguments);
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
-var __esm = (fn, res) => function __init() {
-  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+var __esm = (fn, res, err3) => function __init() {
+  if (err3) throw err3[0];
+  try {
+    return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+  } catch (e) {
+    throw err3 = [e], e;
+  }
 };
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __export = (target, all) => {
   for (var name in all)
@@ -7272,7 +7281,7 @@ var require_public_api = __commonJS({
       }
       return doc;
     }
-    function parse3(src, reviver, options) {
+    function parse4(src, reviver, options) {
       let _reviver = void 0;
       if (typeof reviver === "function") {
         _reviver = reviver;
@@ -7313,7 +7322,7 @@ var require_public_api = __commonJS({
         return value.toString(options);
       return new Document.Document(value, _replacer, options).toString(options);
     }
-    exports.parse = parse3;
+    exports.parse = parse4;
     exports.parseAllDocuments = parseAllDocuments;
     exports.parseDocument = parseDocument4;
     exports.stringify = stringify;
@@ -13698,7 +13707,7 @@ import {
   realpathSync as realpathSync2
 } from "node:fs";
 import { extname, join as join10, basename as basename2, dirname as dirname4, resolve as resolve3, sep } from "node:path";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir4, tmpdir as tmpdir2 } from "node:os";
 import { spawnSync } from "node:child_process";
 function codeTaskSystemPrompt(lang, lineNumbers) {
   return `Expert ${lang} developer. Analyse the provided code and complete the task. No preamble.
@@ -13765,6 +13774,7 @@ function sanitizeInputPath(filePath) {
     resolve3(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve3("/tmp"));
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir2()) : tmpReal;
   const resolvedReal = (() => {
     try {
       return realpathSync2.native(resolved);
@@ -13773,11 +13783,11 @@ function sanitizeInputPath(filePath) {
     }
   })();
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(sysTmpReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       // WHY: the bare message named no way out; users hit it with /etc or a
       // sibling checkout and could not tell which roots are allowed (issue 16).
-      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp). Run from a parent directory of the files, or copy them under one of these roots.`
+      `Path traversal blocked: ${filePath} resolves outside allowed directories. Allowed roots: ${cwdReal} (current directory), ${homeReal} (home), ${tmpReal} (/tmp)${sysTmpReal !== tmpReal ? `, ${sysTmpReal} (system temp)` : ""}. Run from a parent directory of the files, or copy them under one of these roots.`
     );
   }
   try {
@@ -14065,7 +14075,7 @@ function validateGitCwd(dirPath) {
   const resolved = resolve3(dirPath);
   const realpathSafe = (p) => {
     try {
-      return realpathSync2(p);
+      return realpathSync2.native(p);
     } catch {
       return p;
     }
@@ -14085,8 +14095,9 @@ function validateGitCwd(dirPath) {
     resolve3(process.env.HOME || process.env.USERPROFILE || homedir4())
   );
   const tmpReal = realpathSafe(resolve3("/tmp"));
+  const sysTmpReal = process.platform === "win32" ? realpathSafe(tmpdir2()) : tmpReal;
   const isUnder = (parent, child) => child === parent || child.startsWith(parent + sep);
-  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
+  if (!isUnder(cwdReal, resolvedReal) && !isUnder(homeReal, resolvedReal) && !isUnder(sysTmpReal, resolvedReal) && !isUnder(tmpReal, resolvedReal)) {
     throw new Error(
       `validateGitCwd: ${dirPath} resolves outside allowed roots (cwd/$HOME/tmp)`
     );
@@ -203452,7 +203463,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
         return ts_textChanges_exports.ChangeTracker.with(
           { host, formatContext, preferences },
           (changeTracker) => {
-            const parsed = contents.map((c) => parse3(sourceFile, c));
+            const parsed = contents.map((c) => parse4(sourceFile, c));
             const flattenedLocations = focusLocations && flatten(focusLocations);
             for (const nodes of parsed) {
               placeNodeGroup(
@@ -203465,7 +203476,7 @@ ${newComment.split("\n").map((c) => ` * ${c}`).join("\n")}
           }
         );
       }
-      function parse3(sourceFile, content) {
+      function parse4(sourceFile, content) {
         const nodeKinds = [
           {
             parse: () => createSourceFile(
@@ -230054,6 +230065,10 @@ var init_free_rotation = __esm({
         this.causes = causes;
         this.name = "AllFreeModelsExhaustedError";
       }
+      tried;
+      earliestResetMs;
+      lastDetail;
+      causes;
     };
     persistentRotationStore = {
       get: getCooldownStore,
@@ -238486,7 +238501,7 @@ var init_memory = __esm({
 // src/governor/state.ts
 import { execFile as execFile4, execFileSync as execFileSync3 } from "node:child_process";
 import { lstatSync as lstatSync2, mkdirSync as mkdirSync19, readFileSync as readFileSync30, renameSync as renameSync15, rmdirSync as rmdirSync4, statSync as statSync16, writeFileSync as writeFileSync16 } from "node:fs";
-import { tmpdir as tmpdir2, userInfo as userInfo2 } from "node:os";
+import { tmpdir as tmpdir3, userInfo as userInfo2 } from "node:os";
 import { join as join30 } from "node:path";
 function governorDirFor(env, platform3, user, tmp) {
   const override = env.LLM_EXT_GOVERNOR_DIR;
@@ -238500,7 +238515,7 @@ function governorDirFor(env, platform3, user, tmp) {
   }
 }
 function governorDir() {
-  return governorDirFor(process.env, process.platform, () => userInfo2(), tmpdir2);
+  return governorDirFor(process.env, process.platform, () => userInfo2(), tmpdir3);
 }
 function isGovernorDirError(err3) {
   for (let e = err3, depth = 0; e instanceof Error && depth < 8; e = e.cause, depth++) if (e instanceof GovernorDirError) return true;
@@ -240519,6 +240534,7 @@ var init_memory_wait = __esm({
         super(message);
         this.step = step;
       }
+      step;
     };
   }
 });
@@ -240803,18 +240819,21 @@ var init_phase_b = __esm({
         super(message);
         this.step = step;
       }
+      step;
     };
     StepFailed = class extends Error {
       constructor(step, message) {
         super(message);
         this.step = step;
       }
+      step;
     };
     StepPending = class extends Error {
       constructor(step, message) {
         super(message);
         this.step = step;
       }
+      step;
     };
     now2 = () => (/* @__PURE__ */ new Date()).toISOString();
     stepKey = (kind, tokens) => `B/${kind}/${tokens}`;
@@ -245815,7 +245834,7 @@ var init_score6 = __esm({
 
 // src/benchmark/text-tools/bench-runner.ts
 import { mkdtempSync as mkdtempSync2, rmSync as rmSync5, writeFileSync as writeFileSync23 } from "node:fs";
-import { tmpdir as tmpdir3 } from "node:os";
+import { tmpdir as tmpdir4 } from "node:os";
 import { join as join37 } from "node:path";
 function emptyResult2(modelId) {
   return { content: "", model: modelId, finishReason: "error", truncated: false };
@@ -246000,7 +246019,7 @@ async function runTextToolBenchmarkOnModel(tool, modelId, opts = {
           modelId,
           ctx,
           async (deps) => {
-            const dir = mkdtempSync2(join37(tmpdir3(), "llm-ext-describe-bench-"));
+            const dir = mkdtempSync2(join37(tmpdir4(), "llm-ext-describe-bench-"));
             try {
               const filePath = join37(dir, c.fileName);
               writeFileSync23(filePath, c.content, "utf-8");
@@ -246944,6 +246963,7 @@ var init_registry3 = __esm({
         this.holder = holder2;
         this.name = "SlotBusyError";
       }
+      holder;
     };
   }
 });
@@ -247129,6 +247149,9 @@ var init_load = __esm({
         this.observedBytes = observedBytes;
         this.needBytes = needBytes;
       }
+      reason;
+      observedBytes;
+      needBytes;
     };
     BREACHES_TO_FAIL = 3;
     LOCALS_CACHE_MIN_GB = 0.1;
@@ -250516,18 +250539,18 @@ var init_parse = __esm({
       return result.issues.length === 0;
     };
     _encode = (_Err) => {
-      const parse3 = _parse(_Err);
+      const parse4 = _parse(_Err);
       const fn = (schema, value, _ctx, _params) => {
         const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
-        return parse3(schema, value, ctx, finalizeParams(fn, _params));
+        return parse4(schema, value, ctx, finalizeParams(fn, _params));
       };
       return fn;
     };
     encode = /* @__PURE__ */ _encode($ZodRealError);
     _decode = (_Err) => {
-      const parse3 = _parse(_Err);
+      const parse4 = _parse(_Err);
       const fn = (schema, value, _ctx, _params) => {
-        return parse3(schema, value, _ctx, finalizeParams(fn, _params));
+        return parse4(schema, value, _ctx, finalizeParams(fn, _params));
       };
       return fn;
     };
@@ -251452,7 +251475,7 @@ function capSize(inst, size) {
   if (!caps.length)
     return;
   const cap = Math.min(...caps.map((c) => c[0]));
-  const parse3 = inst._zod.parse;
+  const parse4 = inst._zod.parse;
   inst._zod.parse = (payload, ctx) => {
     const n = size(payload.value);
     if (n > cap && !ctx?.skipChecks && ctx?.direction !== "backward") {
@@ -251466,7 +251489,7 @@ function capSize(inst, size) {
         }
       }
     }
-    return parse3(payload, ctx);
+    return parse4(payload, ctx);
   };
 }
 function handleArrayResult(result, final, index) {
@@ -269940,6 +269963,7 @@ var init_ids = __esm({
         this.code = code2;
         this.name = "IdError";
       }
+      code;
     };
     ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
     KEY_STEM = /^[A-Za-z][A-Za-z0-9_]*$/;
@@ -274322,6 +274346,7 @@ var init_deadline = __esm({
         this.reason = reason2;
         this.name = "DeadlineError";
       }
+      reason;
     };
   }
 });
@@ -274936,6 +274961,7 @@ var init_fan_out = __esm({
         this.billed = billed;
         this.cause = original.cause;
       }
+      billed;
     };
     REASON_PREFIX = { error: "invalid_response", aborted: "aborted", budget: "not_sent_budget", stopped: "not_sent_timeout", fatal: "not_sent_fatal" };
   }
@@ -275061,6 +275087,7 @@ var init_cost_cap = __esm({
         this.cap = cap;
         if (cap !== void 0) validCap(cap);
       }
+      cap;
       total = 0;
       add(costUsd) {
         if (!Number.isFinite(costUsd) || costUsd < 0) throw new Error(`invalid request cost ${costUsd}`);
@@ -275871,8 +275898,9 @@ function entries(f, follow) {
   return st.isDirectory() ? walk(f, [], true, /* @__PURE__ */ new Set()) : st.isFile() ? [f] : [];
 }
 function checkGlobPrefix(spec17) {
-  const segs = spec17.split("/");
-  checkRoot(segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join("/") || (spec17.startsWith("/") ? "/" : "."));
+  const segs = spec17.split(process.platform === "win32" ? /[\\/]/ : "/");
+  const prefix = segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join(path.sep);
+  checkRoot(prefix && !/^[A-Za-z]:$/.test(prefix) ? prefix : path.isAbsolute(spec17) ? path.parse(spec17).root : prefix || ".");
 }
 function expand(spec17, follow, nodeMajor) {
   if (GLOB_RE.test(spec17) && !fs.existsSync(spec17)) {
@@ -277053,6 +277081,7 @@ var init_run_decision = __esm({
         super(message);
         this.code = code2;
       }
+      code;
     };
     VALUE_FLAGS = new Set([...SHARED_FLAGS, ...INPUT_FLAGS].filter((f) => f.type !== "boolean").map((f) => f.flag));
   }
@@ -277457,7 +277486,7 @@ var init_local_input_budget = __esm({
 
 // src/network-give-up.ts
 import { accessSync as accessSync2, constants as constants2, existsSync as existsSync35, readdirSync as readdirSync14, readFileSync as readFileSync46 } from "node:fs";
-import { delimiter as delimiter3, isAbsolute as isAbsolute6, join as join48 } from "node:path";
+import { delimiter as delimiter3, isAbsolute as isAbsolute7, join as join48 } from "node:path";
 function setNetworkGiveUpOverrideS(seconds2) {
   flagOverrideS = seconds2;
 }
@@ -277495,7 +277524,7 @@ function probeBaseUrl(requestUrl) {
 function onPath(command, env) {
   const exe = process.platform === "win32" ? `${command}.exe` : command;
   for (const dir of (env.PATH ?? "").split(delimiter3)) {
-    if (!dir || !isAbsolute6(dir)) continue;
+    if (!dir || !isAbsolute7(dir)) continue;
     try {
       accessSync2(join48(dir, exe), constants2.X_OK);
       return true;
@@ -277636,6 +277665,8 @@ var init_network_give_up = __esm({
         this.code = code2;
         this.relativeDir = relativeDir;
       }
+      code;
+      relativeDir;
     };
   }
 });
@@ -277891,7 +277922,7 @@ var init_review_rules = __esm({
 
 // src/diff-scope.ts
 import { spawnSync as spawnSync2 } from "node:child_process";
-import { isAbsolute as isAbsolute7, join as join51, resolve as resolve18 } from "node:path";
+import { isAbsolute as isAbsolute8, join as join51, resolve as resolve18 } from "node:path";
 function assertSafeRef(ref, label2) {
   if (!ref || ref.startsWith("-") || /\s/.test(ref)) {
     throw new Error(`diff scope: invalid ${label2} ref: '${ref}'`);
@@ -277967,7 +277998,7 @@ function resolveDiffScope(mode, dir) {
   const files = [];
   const skipped = [];
   for (const r of rel) {
-    const abs2 = isAbsolute7(r) ? r : resolve18(join51(repoRoot, r));
+    const abs2 = isAbsolute8(r) ? r : resolve18(join51(repoRoot, r));
     const hunk = untracked.includes(r) ? git(
       repoRoot,
       ["diff", "--no-index", "--function-context", "--", "/dev/null", r],
@@ -284897,7 +284928,7 @@ var init_or_model_info = __esm({
 
 // src/tools/or-model-info-json.ts
 import { writeFileSync as writeFileSync37 } from "node:fs";
-import { isAbsolute as isAbsolute8 } from "node:path";
+import { isAbsolute as isAbsolute9 } from "node:path";
 async function handleOrModelInfoJson(call, deps) {
   const { args, backend, name } = call;
   const { model: infoModel, file_path: infoFilePath } = args;
@@ -284969,7 +285000,7 @@ async function handleOrModelInfoJson(call, deps) {
     const jsonText = formatModelInfoJson(result.data, infoModel);
     if (infoFilePath && typeof infoFilePath === "string" && infoFilePath.trim()) {
       const rawPath = infoFilePath.trim();
-      if (!isAbsolute8(rawPath)) {
+      if (!isAbsolute9(rawPath)) {
         return {
           content: [
             {
@@ -285678,6 +285709,7 @@ var init_transcript = __esm({
         this.reason = reason2;
         this.name = "TranscriptRedactionError";
       }
+      reason;
     };
     JANITOR_HEARTBEAT_FIRST_LINE = "[janitor-heartbeat]";
     NO_VISIBLE_OUTPUT_MARKER = "[Your previous response had no visible output. Please continue and produce a user-visible response.]";
@@ -286758,6 +286790,9 @@ var init_driver = __esm({
         this.detail = detail;
         this.name = "ModelUnavailableError";
       }
+      reason;
+      modelId;
+      detail;
     };
     ContextOverflowError = class extends Error {
       constructor(modelId, detail) {
@@ -286766,6 +286801,8 @@ var init_driver = __esm({
         this.detail = detail;
         this.name = "ContextOverflowError";
       }
+      modelId;
+      detail;
     };
     ChunkAbortedError = class extends Error {
       constructor(label2, cause) {
@@ -288272,7 +288309,7 @@ import {
   unlinkSync as unlinkSync6
 } from "node:fs";
 import { randomBytes as randomBytes4 } from "node:crypto";
-import { homedir as homedir7, tmpdir as tmpdir4 } from "node:os";
+import { homedir as homedir7, tmpdir as tmpdir5 } from "node:os";
 import { dirname as dirname23, join as join63, resolve as resolve23, sep as sep4 } from "node:path";
 import { fileURLToPath as fileURLToPath9 } from "node:url";
 function parseRuleVersion(text2) {
@@ -288320,7 +288357,7 @@ function underAllowedRoot(dir) {
   if (process.env.CLAUDE_CONFIG_DIR && process.env.CLAUDE_CONFIG_DIR.length > 0) {
     roots.push(canonical(resolve23(process.env.CLAUDE_CONFIG_DIR)));
   }
-  const tmp = tmpdir4();
+  const tmp = tmpdir5();
   try {
     roots.push(realpathSync9.native(tmp));
   } catch {
