@@ -107,7 +107,8 @@ function fakeFetch(
  * so the absent case yields zero false positives.
  */
 function correctSlugifyModel(featurePrompt: string, path: string): boolean {
-  return /\bslug\b/i.test(featurePrompt) && path.endsWith("/src/util/slug.ts");
+  // WHY (TRDD-WANWRYNT, TRDD-Z3YW19WC): request paths are native; on Windows they carry (escaped) backslashes, so the match runs on "/"-normalized text.
+  return /\bslug\b/i.test(featurePrompt) && path.replace(/\\+/g, "/").endsWith("/src/util/slug.ts");
 }
 
 const PRICING = { input_per_m_usd: 0.04, output_per_m_usd: 0.1, context_window: 128_000 };

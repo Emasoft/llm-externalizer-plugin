@@ -26,7 +26,8 @@ function requestText(body: string): string {
 function fixtureOfRequest(body: string): string {
   const text = requestText(body);
   const all = scannedFilesFor(SCAN_FOLDER_CASES[0]!);
-  const hit = all.find((rel) => text.includes(`/${rel}`));
+  // WHY (TRDD-WANWRYNT, TRDD-Z3YW19WC): request paths are native; on Windows they carry (escaped) backslashes, so the match runs on "/"-normalized text.
+  const hit = all.find((rel) => text.replace(/\\+/g, "/").includes(`/${rel}`));
   if (!hit) throw new Error(`no fixture matched the request`);
   return hit;
 }

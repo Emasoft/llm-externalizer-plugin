@@ -92,7 +92,8 @@ function fakeOpenRouter(answer: (body: string) => string, captured?: string[]): 
 function fixtureOfRequest(body: string): string {
   const text = requestText(body);
   const all = scannedFilesFor(SCAN_FOLDER_CASES[0]);
-  const hit = all.find((rel) => text.includes(`/${rel}`));
+  // WHY (TRDD-WANWRYNT, TRDD-Z3YW19WC): request paths are native; on Windows they carry (escaped) backslashes, so the match runs on "/"-normalized text.
+  const hit = all.find((rel) => text.replace(/\\+/g, "/").includes(`/${rel}`));
   if (!hit) throw new Error(`no fixture matched the request: ${text.slice(0, 200)}`);
   return hit;
 }
@@ -256,7 +257,7 @@ describe("runScanFolderBenchmarkOnModel — hermetic, real pipeline + real score
     //     model for one 500 would be measuring the network.
     // The COVERAGE floor is what catches the systemic case (see the next test).
     const flaky: FetchImpl = (async (_url: string, init: { body: string }) => {
-      if (requestText(init.body).includes("/src/jsonl.ts")) {
+      if (requestText(init.body).replace(/\\+/g, "/").includes("/src/jsonl.ts")) {
         return { ok: false, status: 500, json: async () => ({}), text: async () => "boom" };
       }
       return {
@@ -281,7 +282,7 @@ describe("runScanFolderBenchmarkOnModel — hermetic, real pipeline + real score
     // reason — not a flattened "no report produced". "API error 500" and "rate
     // limited" are different facts about a run and the report must be able to say so.
     expect(run.failures.length).toBe(SCAN_FOLDER_CASES.length);
-    expect(run.failures.every((f) => f.file.endsWith("/src/jsonl.ts"))).toBe(true);
+    expect(run.failures.every((f) => f.file.replace(/\\+/g, "/").endsWith("/src/jsonl.ts"))).toBe(true);
     expect(run.failures.every((f) => /API error 500/.test(f.reason))).toBe(true);
 
     // The other 33 decisions were still scored — the sweep did not abort.
@@ -301,7 +302,7 @@ describe("runScanFolderBenchmarkOnModel — hermetic, real pipeline + real score
     const OUT = ["/src/jsonl.ts", "/src/report.ts", "/src/rule-install.ts", "/src/unionfind.ts"];
     const outage: FetchImpl = (async (_url: string, init: { body: string }) => {
       const text = requestText(init.body);
-      if (OUT.some((f) => text.includes(f))) {
+      if (OUT.some((f) => text.replace(/\\+/g, "/").includes(f))) {
         return { ok: false, status: 503, json: async () => ({}), text: async () => "down" };
       }
       return {

@@ -61,7 +61,8 @@ function fakeOpenRouter(
 /** Which case's fixture is in this request? Matched on the path in the file tag. */
 function caseOfRequest(body: string, cases: readonly CodeAuditCase[]): CodeAuditCase {
   const text = requestText(body);
-  const hit = cases.find((c) => text.includes(`/${c.file}`));
+  // WHY (TRDD-WANWRYNT, TRDD-Z3YW19WC): request paths are native; on Windows they carry (escaped) backslashes, so the match runs on "/"-normalized text.
+  const hit = cases.find((c) => text.replace(/\\+/g, "/").includes(`/${c.file}`));
   if (!hit) throw new Error(`no fixture matched the request: ${text.slice(0, 200)}`);
   return hit;
 }

@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 
 import {
   MIN_MATCHES_PER_CASE,
@@ -43,7 +44,7 @@ describe("the corpus", () => {
   it("is scanned from src/, so the provenance README is never fed to the model as an 11th file", () => {
     // The README announces every answer in a table. Scanning the fixture ROOT
     // instead of its src/ subtree would hand the model the answer key.
-    expect(fixtureScanRoot(ROOT).endsWith("/src")).toBe(true);
+    expect(basename(fixtureScanRoot(ROOT))).toBe("src");
     expect(listFixtureFiles(ROOT).every((f) => f.startsWith("src/"))).toBe(true);
     expect(listFixtureFiles(ROOT).some((f) => f.toLowerCase().includes("readme"))).toBe(false);
   });
