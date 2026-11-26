@@ -292,8 +292,11 @@ function entries(f: string, follow: boolean): string[] {
 // Why every path is root-checked: a glob has no single named path, so its static prefix and each file it returns get the same E35 check a
 // named path gets; otherwise `/etc/*.conf` or `../../*` would be read, limited only by the deny list.
 function checkGlobPrefix(spec: string): void {
-  const segs = spec.split("/");
-  checkRoot(segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join("/") || (spec.startsWith("/") ? "/" : "."));
+  // WHY (TRDD-J6O3YJC0): a Windows glob may use "\" separators; splitting on "/" only left the whole spec as one segment, so the prefix check ran on "." instead of the real static prefix. POSIX behaviour is unchanged.
+  const segs = spec.split(process.platform === "win32" ? /[\\/]/ : "/");
+  const prefix = segs.slice(0, segs.findIndex((s) => GLOB_RE.test(s))).join(path.sep);
+  // A bare drive ("C:") names that drive's current directory, not its root, so an absolute spec falls back to its root.
+  checkRoot(prefix && !/^[A-Za-z]:$/.test(prefix) ? prefix : path.isAbsolute(spec) ? path.parse(spec).root : prefix || ".");
 }
 
 function expand(spec: string, follow: boolean, nodeMajor: number): string[] {
