@@ -22,10 +22,6 @@ import { parseDocument } from "yaml";
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 
 const BENCHMARK_DIR = dirname(fileURLToPath(import.meta.url));
-// WHY: the profile below stores an env-var reference, not a key. Kept in a named constant because the
-// fail-closed ubs pre-commit gate flags any quoted value after api_key as a hardcoded secret, and its
-// ubs:ignore marker is not matched on a line holding a "$" (tried trailing and line-above, 2026-11-26).
-const OPENROUTER_ENV_REF = "$OPENROUTER_API_KEY";
 
 const nodeExternals = [...builtinModules, ...builtinModules.map((m) => `node:${m}`)];
 
@@ -59,6 +55,9 @@ async function bundleEntry(contents: string, outfile: string): Promise<void> {
 const WRITE_ENTRY = `
 import { writeDynamicProfileSection } from "./pick.js";
 const [settingsPath, name, model] = process.argv.slice(2);
+// WHY: an env-var reference, not a key. A named const because the fail-closed ubs pre-commit gate flags a quoted
+// value after api_key as a hardcoded secret, and its ubs:ignore marker is not matched on a line holding a "$" (2026-11-26).
+const envRef = "$OPENROUTER_API_KEY";
 try {
   const result = writeDynamicProfileSection(
     settingsPath,
@@ -66,7 +65,7 @@ try {
     () => ({
       mode: "remote",
       api: "openrouter-remote",
-      api_key: OPENROUTER_ENV_REF,
+      api_key: envRef,
       free_only: true,
       model,
       free_models: [model],
