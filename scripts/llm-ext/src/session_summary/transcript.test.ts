@@ -6,6 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync, appendFileSync, statSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { readTranscript, TranscriptRedactionError } from "./transcript.js";
 
 describe("readTranscript", () => {
@@ -584,7 +585,7 @@ describe("readTranscript", () => {
       // source itself only ever reaches for the streaming primitive, so a
       // future edit can't silently regress into buffering the 265 MB
       // transcript from TRDD-T4MZ8YQR §Verified facts.
-      const srcPath = new URL("./transcript.ts", import.meta.url).pathname;
+      const srcPath = fileURLToPath(new URL("./transcript.ts", import.meta.url));
       const source = readFileSync(srcPath, "utf8");
       expect(source).not.toMatch(/\breadFileSync\b/);
       expect(source).not.toMatch(/\breadFile\(/);
@@ -598,7 +599,7 @@ describe("readTranscript", () => {
       // the pattern the streaming write exists to avoid. Assert the source
       // only ever reaches for the incremental `createWriteStream` primitive
       // for this path, with no whole-array-join write anywhere in the file.
-      const srcPath = new URL("./transcript.ts", import.meta.url).pathname;
+      const srcPath = fileURLToPath(new URL("./transcript.ts", import.meta.url));
       const source = readFileSync(srcPath, "utf8");
       expect(source).toContain("createWriteStream");
       expect(source).not.toMatch(/\bwriteFileSync\b/);

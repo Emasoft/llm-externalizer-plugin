@@ -2,7 +2,8 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { Worker } from "node:worker_threads";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { tmpdir } from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { MAX_CANDIDATE_CHARS, REGEX_TIMEOUT_MS, runRegex, runRegexLines, runRegexes } from "./regex-worker.js";
@@ -318,10 +319,10 @@ describe("runRegexLines: 1-based ascending line numbers", () => {
 // proving the inline worker source needs no neighbouring file. A check against dist/llm-ext.js itself is only possible once the command layer calls the worker (see the report).
 describe("needs build: the inline worker survives bundling", () => {
   it("a bundled copy of regex-worker.ts, run from an unrelated directory, still times out a catastrophic regex and finds matches", async () => {
-    const dir = mkdtempSync(join("/tmp", "llm-ext-sp22-"));
+    const dir = mkdtempSync(join(tmpdir(), "llm-ext-sp22-"));
     try {
       const out = join(dir, "bundle.mjs");
-      await build({ entryPoints: [new URL("./regex-worker.ts", import.meta.url).pathname], bundle: true, platform: "node", target: "node18", format: "esm", outfile: out, external: ["node:*"], logLevel: "silent" });
+      await build({ entryPoints: [fileURLToPath(new URL("./regex-worker.ts", import.meta.url))], bundle: true, platform: "node", target: "node18", format: "esm", outfile: out, external: ["node:*"], logLevel: "silent" });
       writeFileSync(join(dir, "package.json"), "{}");
       const m = (await import(pathToFileURL(out).href)) as typeof import("./regex-worker.js");
       expect((await m.runRegex("a1 b2", "[a-z]\\d", "", 5)).candidates).toEqual(["a1", "b2"]);

@@ -8,6 +8,7 @@ import { describe, it, expect, afterAll, afterEach, beforeEach } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { parse } from "yaml";
@@ -82,7 +83,8 @@ describe("parallel inline repair of one invalid marked section (TRDD-5Q79QZM7)",
     else process.env.OPENROUTER_API_KEY = prevKey;
   });
   it("two real processes racing: exactly one regenerates and backs up, the other reports placeholder-present, original bytes survive", async () => {
-    const work = mkdtempSync(join("/tmp", "llm-ext-parallel-repair-"));
+    // WHY (TRDD-PX0X1JRD): esbuild needs a drive path on Windows, and macOS must stay under /tmp, the root the config-dir guard allows (config.ts:922-928).
+    const work = mkdtempSync(join(process.platform === "win32" ? tmpdir() : "/tmp", "llm-ext-parallel-repair-"));
     created.push(work);
     const cfgDir = join(work, "cfg");
     const homeDir = join(work, "home");
@@ -125,7 +127,7 @@ describe("parallel inline repair of one invalid marked section (TRDD-5Q79QZM7)",
       HOME: homeDir,
       LLM_EXT_CONFIG_DIR: cfgDir,
       LLM_EXT_INSTALL_RULE: "0",
-      OPENROUTER_API_KEY: "test-openrouter-key-not-a-real-one",
+      OPENROUTER_API_KEY: "test-openrouter-key-not-a-real-one", // ubs:ignore — test placeholder value, not a real credential
     };
     const gate = join(work, "go");
     const readyA = join(work, "ready-a");
