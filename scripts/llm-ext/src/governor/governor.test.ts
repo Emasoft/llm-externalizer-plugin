@@ -386,7 +386,8 @@ describe("the state directory", () => {
     const target = join(dir, "a", "gov");
     process.env.LLM_EXT_GOVERNOR_DIR = target;
     withStateLock(target, () => undefined);
-    expect(statSync(target).mode & 0o777).toBe(0o700);
+    // WHY (TRDD-1Y9UK5MK): POSIX mode bits do not exist on Windows; the 0o700 check proves the private dir mode on POSIX only.
+    if (process.platform !== "win32") expect(statSync(target).mode & 0o777).toBe(0o700);
   });
 
   it.each(["tryAcquire", "snapshot"])("a symlinked dir is refused by %s, naming the path and the variable", (call) => {
@@ -409,7 +410,8 @@ describe("the state directory", () => {
     expect(() => tryAcquire({ timeoutMs: 1000 })).toThrow("LLM_EXT_GOVERNOR_DIR");
   });
 
-  it("an unwritable dir is refused, not passed through", () => {
+  // WHY (TRDD-1Y9UK5MK): Windows does not enforce read-only directory modes, so chmod 0o500 refuses nothing there; the test proves the POSIX refusal.
+  it.skipIf(process.platform === "win32")("an unwritable dir is refused, not passed through", () => {
     const target = join(dir, "gov");
     mkdirSync(target, { mode: 0o500 });
     process.env.LLM_EXT_GOVERNOR_DIR = target;
@@ -421,7 +423,8 @@ describe("the state directory", () => {
     }
   });
 
-  it("an unwritable parent is refused too", () => {
+  // WHY (TRDD-1Y9UK5MK): Windows does not enforce read-only directory modes, so chmod 0o500 refuses nothing there; the test proves the POSIX refusal.
+  it.skipIf(process.platform === "win32")("an unwritable parent is refused too", () => {
     chmodSync(dir, 0o500);
     const target = join(dir, "gov");
     process.env.LLM_EXT_GOVERNOR_DIR = target;
@@ -747,7 +750,8 @@ describe("real processes", () => {
     await until("the release", () => snapshot().leases.length === 0);
   });
 
-  it("a change the directory refuses is not lost and reaches the next caller as an error, never as a crash", async () => {
+  // WHY (TRDD-1Y9UK5MK): Windows does not enforce read-only directory modes, so chmod 0o500 refuses nothing there; the test proves the POSIX refusal.
+  it.skipIf(process.platform === "win32")("a change the directory refuses is not lost and reaches the next caller as an error, never as a crash", async () => {
     const gate = await acquire({ timeoutMs: DEADLINE_MS });
     chmodSync(dir, 0o500);
     try {
@@ -760,7 +764,8 @@ describe("real processes", () => {
     expect(snapshot().leases.map((l) => l.id)).not.toContain(gate.id);
     withdraw();
   });
-  it("a live pid with the wrong start time is reclaimed, and one with the right start time is not", async () => {
+  // WHY (TRDD-1Y9UK5MK): process start times come from ps and are empty on Windows by design (state.ts:343-358); Windows has no SIGSTOP or zombies.
+  it.skipIf(process.platform === "win32")("a live pid with the wrong start time is reclaimed, and one with the right start time is not", async () => {
     const sleeper = spawn(process.execPath, ["-e", "setTimeout(() => {}, 600000)"], { stdio: "ignore" });
     children.push(sleeper);
     const pid = sleeper.pid as number;
@@ -781,7 +786,8 @@ describe("real processes", () => {
     expect(snapshot().leases.map((l) => l.id)).toContain("right");
   });
 
-  it("the start string of this process agrees with what the check reads", async () => {
+  // WHY (TRDD-1Y9UK5MK): process start times come from ps and are empty on Windows by design (state.ts:343-358); Windows has no SIGSTOP or zombies.
+  it.skipIf(process.platform === "win32")("the start string of this process agrees with what the check reads", async () => {
     expect((await readStarts([process.pid])).get(process.pid)).toBe(ownStart());
   });
 
@@ -889,7 +895,8 @@ describe("real processes", () => {
     expect(self.holder.pid).toBe(process.pid);
     withdraw();
   });
-  it("a live head that stops polling loses its turn after 10 s, and still has a place when it resumes", async () => {
+  // WHY (TRDD-1Y9UK5MK): process start times come from ps and are empty on Windows by design (state.ts:343-358); Windows has no SIGSTOP or zombies.
+  it.skipIf(process.platform === "win32")("a live head that stops polling loses its turn after 10 s, and still has a place when it resumes", async () => {
     process.env.LLM_EXT_GOVERNOR_MAX_INFERENCES = "1";
     const gate = await acquire({ timeoutMs: DEADLINE_MS });
     const out = join(root, "resumed.json");
@@ -917,7 +924,8 @@ describe("real processes", () => {
     }
   }, DEADLINE_MS);
 
-  it("a zombie reads as alive, and is passed like any stopped head", async () => {
+  // WHY (TRDD-1Y9UK5MK): process start times come from ps and are empty on Windows by design (state.ts:343-358); Windows has no SIGSTOP or zombies.
+  it.skipIf(process.platform === "win32")("a zombie reads as alive, and is passed like any stopped head", async () => {
     const parent = spawn("perl", ["-e", '$| = 1; my $p = fork(); if (!$p) { exit 0 } print "$p\\n"; sleep 120;'], { stdio: ["ignore", "pipe", "ignore"] });
     children.push(parent);
     const pid = await new Promise<number>((resolve) => parent.stdout?.once("data", (d: Buffer) => resolve(Number(String(d).trim()))));

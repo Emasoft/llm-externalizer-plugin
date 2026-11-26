@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, chmodSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { _resetDefaultOutputDirCache } from "../../project-root.js";
 import { prepareReportDir, writeAtomic, writeReport } from "./report.js";
@@ -25,7 +25,7 @@ describe("prepareReportDir", () => {
   });
   it("uses defaultOutputDir() when -o is omitted", () => {
     process.env.LLM_EXT_OUTPUT_DIR = join(root, "default");
-    expect(prepareReportDir(undefined)).toBe(join(root, "default"));
+    expect(prepareReportDir(undefined)).toBe(resolve(join(root, "default")));
     expect(existsSync(join(root, "default"))).toBe(true);
   });
   it("E52: a directory that cannot be created fails with a clear error", () => {
@@ -34,7 +34,8 @@ describe("prepareReportDir", () => {
     expect(() => prepareReportDir(join(f, "sub"))).toThrow(/cannot write report directory/);
   });
   it("E52: an existing read-only directory fails before any write", () => {
-    if (process.getuid?.() === 0) return; // root ignores permission bits
+    // WHY (TRDD-1Y9UK5MK): Windows does not enforce read-only directory modes, so chmod 0o500 refuses nothing there; the test proves the POSIX refusal.
+    if (process.getuid?.() === 0 || process.platform === "win32") return; // root ignores permission bits
     const d = join(root, "ro");
     mkdirSync(d);
     chmodSync(d, 0o500);
@@ -47,10 +48,11 @@ describe("writeReport", () => {
   it("writes exactly the given text to a timestamped .json file and leaves no temp file", () => {
     const text = JSON.stringify({ schema: 1 }, null, 2) + "\n";
     const p = writeReport(root, "filter", text);
-    expect(p.startsWith(root)).toBe(true);
-    expect(p).toMatch(/\/\d{8}_\d{6}[+-]\d{4}-filter-[0-9a-f]{6}\.json$/);
+    expect(p.startsWith(resolve(root))).toBe(true);
+    // WHY (TRDD-1Y9UK5MK): writeReport joins with the native separator, "\" on Windows.
+    expect(p).toMatch(/[\\/]\d{8}_\d{6}[+-]\d{4}-filter-[0-9a-f]{6}\.json$/);
     expect(readFileSync(p, "utf-8")).toBe(text);
-    expect(readdirSync(root)).toEqual([p.split("/").pop()]);
+    expect(readdirSync(root)).toEqual([basename(p)]);
   });
   it("refuses a decision that is not lowercase kebab-case (it becomes part of the file name)", () => {
     for (const bad of ["a/b", "..", "Filter", "", "a b"]) expect(() => writeReport(root, bad, "x")).toThrow(/decision/);

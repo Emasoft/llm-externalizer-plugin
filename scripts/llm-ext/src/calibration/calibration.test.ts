@@ -43,7 +43,8 @@ describe("calibration record (spec section 7)", () => {
   it("writeRecord is atomic and 0600, and refuses an invalid record without writing", () => {
     writeRecord(dir, recordFixture("llama", "a/b:Q4"));
     const p = recordPath(dir, "llama", "a/b:Q4");
-    expect(statSync(p).mode & 0o777).toBe(0o600);
+    // WHY (TRDD-1Y9UK5MK): POSIX mode bits do not exist on Windows; the 0o600 check proves the atomic write mode on POSIX only.
+    if (process.platform !== "win32") expect(statSync(p).mode & 0o777).toBe(0o600);
     expect(readRecord(dir, "llama", "a/b:Q4")?.status).toBe("ok");
     expect(() => writeRecord(dir, { ...recordFixture("llama", "x/y:Q4"), main: { slots: 0, slot_ctx: 0 } })).toThrow(/invalid calibration record.*main/);
     expect(existsSync(recordPath(dir, "llama", "x/y:Q4"))).toBe(false);

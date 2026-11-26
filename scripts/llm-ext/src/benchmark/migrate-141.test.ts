@@ -238,7 +238,8 @@ describe("migrateSettingsTo141 — price-ceiling-into-paid", () => {
   // ONE position actually holds a value. A chmod 0444 file reproduces the
   // real failure mode (a write error, not a parse/logic error) instead of
   // mocking the fs.
-  it("only the top-level ceiling present, and the config dir is read-only (write fails): settingsLevelErrors reports the write-failure message, not a false 'twice' claim, and the file is left byte-identical", () => {
+  // WHY (TRDD-1Y9UK5MK): Windows does not enforce read-only directory modes, so chmod 0o555 on the config dir does not make the write fail there; the test proves the POSIX write-failure message.
+  it.skipIf(process.platform === "win32")("only the top-level ceiling present, and the config dir is read-only (write fails): settingsLevelErrors reports the write-failure message, not a false 'twice' claim, and the file is left byte-identical", () => {
     write([`ensemble_price_ceiling_usd_per_million: 0.42`, BASE_PROFILES, ""].join("\n"));
     const before = readFileSync(getSettingsPath(), "utf-8");
     // WHY chmod the DIRECTORY, not the file: every writer here is an
