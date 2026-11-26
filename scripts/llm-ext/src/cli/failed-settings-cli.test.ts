@@ -20,7 +20,7 @@ import { CLI_SCRIPT } from "../test-helpers.js";
 
 const execFileAsync = promisify(execFile);
 
-// TRDD-LA1MA1EL: Windows has no /tmp; there the runner temp dir (under home) is the base. Elsewhere the literal /tmp the config-dir allowlist names.
+// TRDD-LA1MA1EL: Windows has no /tmp; there the runner temp root is the base. Elsewhere the literal /tmp the config-dir allowlist names. TRDD-VQ0VEK3L: the config-dir guard (config.ts:922-928) allows only home or /tmp, and USERPROFILE points at root/home, so cfgDir sits under root/home.
 const TMP_BASE = process.platform === "win32" ? tmpdir() : "/tmp";
 
 interface RunResult {
@@ -35,7 +35,7 @@ let inputFile: string;
 
 beforeEach(() => {
   root = mkdtempSync(join(TMP_BASE, "llm-ext-failedcfg-"));
-  cfgDir = join(root, "cfg");
+  cfgDir = join(root, "home", "cfg");
   mkdirSync(join(root, "home"));
   mkdirSync(join(root, "out"));
   mkdirSync(join(cfgDir, "settings.yaml"), { recursive: true });

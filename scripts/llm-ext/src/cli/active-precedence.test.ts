@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
   DEFAULT_PROFILE_NAME,
   effectiveProfileName,
@@ -271,7 +271,7 @@ describe("TRDD-OE27RD7I 14.1-C2 §3b — shouldFailProfileSelection truth table 
       expect(r.isError).toBe(true);
       expect(text).toContain("not found");
       const copyPath = /Full settings file copied to: (\S+)/.exec(text)?.[1] ?? "";
-      expect(copyPath.startsWith(scratch)).toBe(true);
+      expect(copyPath.startsWith(resolve(scratch))).toBe(true);
       // The copy must equal the file on disk when get_settings runs. Boot can rewrite settings.yaml through its migrations, so the file on disk, not the yaml this test wrote, is the reference.
       const configDir = process.env.LLM_EXT_CONFIG_DIR;
       if (configDir === undefined) throw new Error("loadFreshIndex must set LLM_EXT_CONFIG_DIR");

@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CLI_SCRIPT } from "../test-helpers.js";
@@ -48,7 +49,8 @@ async function run(args: string[], env: Record<string, string> = {}): Promise<Ru
   seen = [];
   auths = [];
   // WHY RVW_KEY is removed first: the parent environment must never supply the key; only the case that passes one gets it.
-  const childEnv: Record<string, string | undefined> = { ...process.env, HOME: dir, LLM_EXT_CONFIG_DIR: dir, LLM_EXT_INSTALL_RULE: "0", NODE_OPTIONS: `--import=${join(dir, "preload.mjs")}`, RVW_BASE: base, RVW_KEY: env.RVW_KEY };
+  // WHY a file URL: a bare Windows path (C:\...) is read by --import as a URL scheme and refused.
+  const childEnv: Record<string, string | undefined> = { ...process.env, HOME: dir, LLM_EXT_CONFIG_DIR: dir, LLM_EXT_INSTALL_RULE: "0", NODE_OPTIONS: `--import=${pathToFileURL(join(dir, "preload.mjs")).href}`, RVW_BASE: base, RVW_KEY: env.RVW_KEY };
 if (env.RVW_KEY === undefined) delete childEnv.RVW_KEY;
   // Round 2, major 3: no provider key of the parent reaches the child (OPENROUTER_API_KEY, every *_API_KEY, the plugin option copies); only RVW_KEY, when a case passes it.
   for (const name of Object.keys(childEnv)) if (/API_KEY|PLUGIN_OPTION/i.test(name)) delete childEnv[name];
