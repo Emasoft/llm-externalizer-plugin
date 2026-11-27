@@ -1,0 +1,83 @@
+# gitleaks configuration for the pre-commit secret gate (TRDD-AVXXFSRR).
+# .githooks/pre-commit passes this file with --config and blocks the commit
+# when it is missing, so the OpenRouter rule below always runs.
+
+title = "llm-externalizer gitleaks config"
+
+[extend]
+# Keep every gitleaks default rule; this file only adds to them.
+useDefault = true
+
+# WHY a custom rule: gitleaks 8.30.1 ships no OpenRouter rule. Its
+# generic-api-key rule needs a keyword such as "key" before the value, so it
+# missed a fake OpenRouter key written as an array element, a single string,
+# an escaped template line and a Markdown line (measured 2026-11-26). This
+# rule matches the key shape itself, in any file and any form. It is in no
+# allowlist below, so a real OpenRouter key is refused in every file.
+[[rules]]
+id = "openrouter-api-key"
+description = "OpenRouter API key"
+regex = '''sk-or-v1-[0-9a-f]{64}'''
+keywords = ["sk-or-v1-"]
+
+# Fixture allowlist. Each entry names ONE file and only the rules that fired
+# there on 2026-11-26 (gitleaks dir over the HEAD tree: 15 findings in 11
+# files), with the reason the value is fake. A pre-commit run scans only the
+# staged changes, so an entry matters when a commit adds or changes those lines.
+# Known gap: a real key of the same rule type placed in one of these files
+# would pass. No entry covers openrouter-api-key.
+
+[[allowlists]]
+description = "Benchmark fixture snapshot (b816534) of live-extended.test.ts: placeholder OPENAI_API_KEY in a config-file test string"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/benchmark-fixtures/check-specs/src/b816534/live-extended\.test\.ts$''']
+
+[[allowlists]]
+description = "Benchmark fixture snapshot (31ce212) of live-extended.test.ts: placeholder OPENAI_API_KEY in a config-file test string"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/benchmark-fixtures/check-specs/src/31ce212/live-extended\.test\.ts$''']
+
+[[allowlists]]
+description = "live-extended.test.ts: placeholder OPENAI_API_KEY in a config-file test string"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/live-extended\.test\.ts$''']
+
+[[allowlists]]
+description = "ping.test.ts: fake KEY constant passed to the ping command under test"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/classifiers/commands/ping\.test\.ts$''']
+
+[[allowlists]]
+description = "transport.test.ts: fake KEY constant passed to the transport under test"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/classifiers/l0/transport\.test\.ts$''']
+
+[[allowlists]]
+description = "content-redact.test.ts: redaction fixtures; the PEM blocks are built from a repeated literal body, not a real key"
+targetRules = ["private-key"]
+paths = ['''(^|/)scripts/llm-ext/src/classifiers/l2/content-redact\.test\.ts$''']
+
+[[allowlists]]
+description = "classify-review-cli.test.ts: RVW_KEY is the literal rvw-test-key-0123456789"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/cli/classify-review-cli\.test\.ts$''']
+
+[[allowlists]]
+description = "broker.test.ts: SENTINEL_OPENROUTER_KEY is the literal sentinel-or-key-4711, which the tests assert never leaks"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/broker/broker\.test\.ts$''']
+
+[[allowlists]]
+description = "scan-pipeline.test.ts: redactSecrets fixtures use the literal abcd1234efgh5678"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)scripts/llm-ext/src/scan-pipeline\.test\.ts$''']
+
+[[allowlists]]
+description = "test_diagnostics.py: redact fixture uses the literal abcdefgh12345"
+targetRules = ["generic-api-key"]
+paths = ['''(^|/)tests/test_diagnostics\.py$''']
+
+[[allowlists]]
+description = "security_scan.test.ts: secret-scanner and redaction fixtures (abcd1234efgh5678, a sample JWT, a PEM built from a repeated literal body)"
+targetRules = ["generic-api-key", "jwt", "private-key"]
+paths = ['''(^|/)scripts/llm-ext/src/security_scan/security_scan\.test\.ts$''']

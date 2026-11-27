@@ -34,6 +34,59 @@ block() {
   exit 1
 }
 
+# Secret gate: gitleaks over the staged changes, before ubs (TRDD-AVXXFSRR).
+#
+# WHY a second scanner: the hardcoded-secrets rule of ubs 5.5.26 flags a key
+# only in a property-shaped line. Measured 2026-11-26, it passed a fake
+# OpenRouter key written as an array element, a single string, an escaped
+# template line and a Markdown line, and the default gitleaks rules missed
+# the same forms. With the openrouter-api-key rule in .gitleaks.toml, gitleaks
+# caught all six forms tried. ubs also scans no Markdown or other non-code
+# file (UBS_ALLOW_NO_SCAN below); gitleaks scans every staged file.
+# WHY fail-closed, like the ubs gate: a missing or too-old gitleaks, a missing
+# .gitleaks.toml (which would drop the OpenRouter rule) and a scan error all
+# block the commit.
+# WHY --ignore-gitleaks-allow: the only allowlist is .gitleaks.toml, where each
+# entry carries its reason; an inline gitleaks:allow comment needs none.
+# WHY --redact: the hook must never print a secret it found.
+# WHY --exit-code 3: gitleaks also exits 1 on its own errors, so a distinct
+# code is the only way to tell "secrets found" from "scan failed".
+gitleaks_bin="${GITLEAKS_BIN:-/opt/homebrew/bin/gitleaks}"
+gitleaks_min_version="8.30.1"
+if [[ ! -x "$gitleaks_bin" ]]; then
+  block "gitleaks not found or not executable at $gitleaks_bin (install gitleaks $gitleaks_min_version or later, or set GITLEAKS_BIN) — commit blocked"
+fi
+gl_version_line="$("$gitleaks_bin" version 2>&1)"
+if [[ "$gl_version_line" =~ ([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+  gl_have=("${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}")
+else
+  block "cannot read a version from '$gitleaks_bin version' (printed: $gl_version_line) — commit blocked"
+fi
+IFS=. read -r -a gl_want <<< "$gitleaks_min_version"
+gl_version_ok=1
+for i in 0 1 2; do
+  if (( 10#${gl_have[i]} > 10#${gl_want[i]} )); then break; fi
+  if (( 10#${gl_have[i]} < 10#${gl_want[i]} )); then gl_version_ok=0; break; fi
+done
+if (( ! gl_version_ok )); then
+  block "gitleaks ${gl_have[0]}.${gl_have[1]}.${gl_have[2]} at $gitleaks_bin is older than the required $gitleaks_min_version — commit blocked"
+fi
+repo_root="$(git rev-parse --show-toplevel)" || block "cannot find the repository root — commit blocked"
+gitleaks_config="$repo_root/.gitleaks.toml"
+if [[ ! -f "$gitleaks_config" ]]; then
+  block "gitleaks config $gitleaks_config is missing, so the OpenRouter key rule would not run — commit blocked"
+fi
+echo "pre-commit: scanning staged changes for secrets with gitleaks ${gl_have[0]}.${gl_have[1]}.${gl_have[2]}..." >&2
+"$gitleaks_bin" git --pre-commit --staged --config "$gitleaks_config" \
+  --exit-code 3 --redact --verbose --no-banner --ignore-gitleaks-allow \
+  --timeout 300 "$repo_root"
+gl_status=$?
+case "$gl_status" in
+  0) ;;
+  3) block "gitleaks found secrets in the staged changes (listed above, redacted). Remove them; a verified fake test value goes in .gitleaks.toml as an allowlist entry with its reason" ;;
+  *) block "gitleaks could not complete the scan (exit $gl_status; see its message above) — commit blocked" ;;
+esac
+
 # WHY an absolute path and a minimum version: a GUI git client, or a shell with
 # a different PATH, can resolve an older ubs copy elsewhere on PATH whose checks
 # and exit codes differ from the release this gate was written against. UBS_BIN
