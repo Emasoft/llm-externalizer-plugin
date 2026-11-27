@@ -216,9 +216,19 @@ function configDir(name: string, url: string, governor: string[]): string {
   return cfg;
 }
 
+/**
+ * WHY out-of-reach defaults (TRDD-B1NW5GN9): a CLI child reads its limits from this file alone (runCli drops the env
+ * ones), so a test that set no cpu_limit_pct or ram_limit_pct ran at the defaults of 80 and waited on the host. With
+ * the host CPU at 87 % (2026-11-27) the crash and no-touch tests waited out their 180 s deadline, alone and in the full
+ * suite. A key the test sets wins; cpu_limit_pct 100 switches the CPU ceiling off (controller.ts cpuOver).
+ */
+const OUT_OF_REACH_LIMITS = ["cpu_limit_pct: 100", "ram_limit_pct: 99"];
+
 function writeSettings(cfg: string, url: string, governor: string[]): void {
   const path = join(cfg, "settings.yaml");
-  writeFileSync(path, ["active: prof-a", "profiles:", "  prof-a:", "    mode: local", "    api: generic-local", "    model: model-a", `    url: ${url}`, "    timeout: 120", ...(governor.length > 0 ? ["local_governor:", ...governor.map((l) => `  ${l}`)] : []), ""].join("\n"));
+  const keys = new Set(governor.map((l) => l.split(":")[0].trim()));
+  const section = [...governor, ...OUT_OF_REACH_LIMITS.filter((l) => !keys.has(l.split(":")[0].trim()))];
+  writeFileSync(path, ["active: prof-a", "profiles:", "  prof-a:", "    mode: local", "    api: generic-local", "    model: model-a", `    url: ${url}`, "    timeout: 120", "local_governor:", ...section.map((l) => `  ${l}`), ""].join("\n"));
   // A rewrite inside one clock tick must still be a new stamp for the reader (governor/settings.ts).
   const at = Date.now() / 1000 + Math.random();
   utimesSync(path, at, at);
@@ -433,7 +443,8 @@ describe("governor burn tests (spec section 3)", () => {
     expect(status).toMatch(/governor: RAM \d+% used, limit 99%; CPU/);
     expect(status).toMatch(new RegExp(`governor: last denial \\d+ s ago, an inference of pid ${run.child.pid}: RAM is \\d+% used, limit ${limit}%`));
     // Review m6: the waiter is printed with its own limits (its settings.yaml), not those of this config dir (99 above).
-    expect(status).toMatch(new RegExp(`governor: waiting \\d+ s, an inference of pid ${run.child.pid}: its limits RAM ${limit}%, CPU 80%, max_inferences 8`));
+    // The RAM limit is the value that tells them apart; CPU 100% is the out-of-reach default writeSettings adds (TRDD-B1NW5GN9).
+    expect(status).toMatch(new RegExp(`governor: waiting \\d+ s, an inference of pid ${run.child.pid}: its limits RAM ${limit}%, CPU 100%, max_inferences 8`));
     writeSettings(cfg, srv.url, ["ram_limit_pct: 99"]);
     const { code, stderr: all } = await run.done;
     expect(code, all).toBe(0);
