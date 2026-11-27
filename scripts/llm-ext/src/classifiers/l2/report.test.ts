@@ -8,7 +8,7 @@ import { prepareReportDir, writeAtomic, writeReport } from "./report.js";
 let root: string;
 const savedEnv = process.env.LLM_EXT_OUTPUT_DIR;
 beforeEach(() => {
-  root = mkdtempSync("/tmp/llmext-report-");
+  root = resolve(mkdtempSync("/tmp/llmext-report-")); // resolve: on Windows mkdtemp returns \tmp\... without the drive (TRDD-PX0X1JRD)
   _resetDefaultOutputDirCache();
 });
 afterEach(() => {

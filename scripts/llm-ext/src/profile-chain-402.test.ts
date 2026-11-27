@@ -472,7 +472,7 @@ describe("Row 102 (1) — caller-pinned modelOverride bypass, DYNAMIC `paid` pro
         expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
         expect(text).toContain("2 processed, 1 failed, 0 skipped");
         expect(text).not.toMatch(/ABORTED/);
-        const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
+        const failedLine = text.split("\n").find((l) => /[\\/]a\.txt: /.test(l)); // [\\/]: Windows prints a backslash before a.txt (TRDD-J6O3YJC0)
         expect(failedLine, `a.txt must be listed as failed. text:\n${text}`).toContain(
           STATIC_PROFILE_EXHAUSTED_MESSAGE,
         );
@@ -844,7 +844,7 @@ describe("D2 item 11 — scan_folder's per-file path on a DYNAMIC `paid` profile
       // isError is true since 40e7a8e7: a failed file exits 1. The batch still goes on (2 processed).
       expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
       expect(text).toContain("2 processed, 1 failed, 0 skipped");
-      const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
+      const failedLine = text.split("\n").find((l) => /[\\/]a\.txt: /.test(l)); // [\\/]: Windows prints a backslash before a.txt (TRDD-J6O3YJC0)
       expect(failedLine).toContain(`${STATIC_PROFILE_EXHAUSTED_MESSAGE} (HTTP 413)`);
       expect(await requestedUpdates()).toBe(0);
     },
@@ -1122,7 +1122,7 @@ describe("9000b8d follow-up (A) — mixed causes on a chain exhaustion", () => {
         expect(result.isError, `a failed file sets isError. text:\n${text}`).toBe(true);
         expect(text).toContain("2 processed, 1 failed, 0 skipped");
         expect(text).not.toMatch(/ABORTED/);
-        const failedLine = text.split("\n").find((l) => l.includes("/a.txt: "));
+        const failedLine = text.split("\n").find((l) => /[\\/]a\.txt: /.test(l)); // [\\/]: Windows prints a backslash before a.txt (TRDD-J6O3YJC0)
         expect(failedLine, `a.txt must be listed as failed. text:\n${text}`).toContain(
           STATIC_PROFILE_EXHAUSTED_MESSAGE,
         );

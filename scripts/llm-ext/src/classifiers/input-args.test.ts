@@ -33,7 +33,7 @@ let tmp: string;
 let prevKey: string | undefined;
 let prevCfg: string | undefined;
 beforeEach(() => {
-  tmp = mkdtempSync(join("/tmp", "llm-ext-in01-"));
+  tmp = resolve(mkdtempSync(join("/tmp", "llm-ext-in01-"))); // resolve: on Windows mkdtemp returns \tmp\... without the drive the code prints (TRDD-5KZJQ9N4)
   prevKey = process.env.IN01_TEST_KEY;
   prevCfg = process.env.LLM_EXT_CONFIG_DIR;
   process.env.IN01_TEST_KEY = KEY;
