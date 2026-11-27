@@ -238616,12 +238616,25 @@ function dropLock(dir) {
     if (errnoOf(err3) !== "ENOENT") throw dirError(dir, err3.message, err3);
   }
 }
+function renameReplacing(from, to, rename = renameSync15, platform3 = process.platform) {
+  const deadline = Date.now() + RENAME_RETRY_MS;
+  for (let waitMs = 2; ; waitMs = Math.min(waitMs * 2, 50)) {
+    try {
+      rename(from, to);
+      return;
+    } catch (err3) {
+      const code2 = errnoOf(err3);
+      if (platform3 !== "win32" || code2 === void 0 || !RENAME_RETRY_CODES.has(code2) || Date.now() + waitMs > deadline) throw err3;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
+  }
+}
 function writeState(dir, state) {
   const file2 = join30(dir, STATE_FILE);
   const temp = `${file2}.${process.pid}.tmp`;
   try {
     writeFileSync16(temp, JSON.stringify(state), { mode: 384 });
-    renameSync15(temp, file2);
+    renameReplacing(temp, file2);
   } catch (err3) {
     throw dirError(dir, err3.message, err3);
   }
@@ -238698,7 +238711,7 @@ function readStarts(pids) {
     });
   });
 }
-var STATE_FILE, LOCK_DIR, LOCK_STALE_MS, PS_TIMEOUT_MS, PS_ENV, GovernorDirError;
+var STATE_FILE, LOCK_DIR, LOCK_STALE_MS, PS_TIMEOUT_MS, PS_ENV, GovernorDirError, RENAME_RETRY_CODES, RENAME_RETRY_MS;
 var init_state = __esm({
   "src/governor/state.ts"() {
     "use strict";
@@ -238712,6 +238725,8 @@ var init_state = __esm({
     GovernorDirError = class extends Error {
       name = "GovernorDirError";
     };
+    RENAME_RETRY_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+    RENAME_RETRY_MS = 500;
   }
 });
 
@@ -293995,7 +294010,7 @@ function stopNoticeLine(reason2, cancelled, failed2) {
 
 // src/cli/main.ts
 var loadEngine = () => Promise.resolve().then(() => (init_index(), index_exports));
-var VERSION = "14.7.15";
+var VERSION = "14.7.16";
 function toKebab(toolName) {
   return toolName.replace(/_/g, "-");
 }

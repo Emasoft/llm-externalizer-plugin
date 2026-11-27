@@ -1,6 +1,91 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [14.7.16] - 2026-11-27
+
+### Changed
+
+- Build: rebuild dist with esbuild 0.28.2 and the Windows path-guard fixes (TRDD-UPBYUMMW, TRDD-LA1MA1EL)
+
+
+### Documentation
+
+- Docs(trdd): 88IBHLIS complete and archived with its acceptance checklist (TRDD-88IBHLIS)
+
+- Docs(trdd): close 88IBHLIS, CPV now runs before the test suite (TRDD-88IBHLIS)
+
+- Docs(trdd): UPBYUMMW done on dev, to testing until the release reaches main (TRDD-UPBYUMMW)
+
+- Docs(trdd): record the USER release decisions and the Windows fix commits (TRDD-FC2TX9VU, TRDD-M7KKVHEH, TRDD-OZDCW0MF)
+
+- Docs(publish): correct check-only help (TRDD-GQSUSYKY)
+
+- Docs: track Windows candidate validation (TRDD-M7KKVHEH)
+
+- Docs(trdd): record the 14.7.8 release and the e2e cap fix (TRDD-FC2TX9VU, TRDD-WPH1158N)
+
+
+### Fixed
+
+- Fix(governor): retry the state-file rename on Windows while a reader holds it open (TRDD-2VZ3JGDH)
+
+- Fix(hooks): gitleaks secret gate in pre-commit, fail closed (TRDD-AVXXFSRR)
+
+- Fix(deps): bump esbuild to 0.28.2, torch to 2.15.0 and setuptools to 84.2.1 (TRDD-UPBYUMMW)
+
+- Fix(windows): split glob specs on both separators before the root check (TRDD-J6O3YJC0)
+
+- Fix(windows): accept the system temp folder and long names in the path guards (TRDD-LA1MA1EL)
+
+- Fix(publish): verify only fetch configuration for preview (TRDD-M7KKVHEH)
+
+- Fix(release): require absent candidate ref at creation (TRDD-M7KKVHEH)
+
+- Fix(release): pin Git transport destination (TRDD-M7KKVHEH)
+
+- Fix(release): require Windows CI on the pinned candidate (TRDD-M7KKVHEH)
+
+- Fix(publish): validate the fresh build before tests (TRDD-88IBHLIS)
+
+
+### Miscellaneous
+
+- Chore(reports): keep the AVXXFSRR hook-test report out of tracked reports/ (TRDD-AVXXFSRR)
+
+
+### Testing
+
+- Test(windows): last 6 Windows failures, backslash and drive-less temp paths (TRDD-J6O3YJC0, TRDD-5KZJQ9N4, TRDD-PX0X1JRD)
+
+- Test(governor): burn-test CLIs get out-of-reach CPU and RAM limits unless a test sets them (TRDD-B1NW5GN9)
+
+- Test(windows): declare the env reference inside the pick-lock child source (TRDD-1Y9UK5MK)
+
+- Test(windows): guard POSIX mode, read-only dir and ps/SIGSTOP checks (TRDD-1Y9UK5MK)
+
+- Test(windows): fix built-CLI spawns, config dir and scratch path (TRDD-CEBZRG4Y, TRDD-VQ0VEK3L)
+
+- Test(windows): use real file paths for esbuild entries and own-source reads (TRDD-PX0X1JRD)
+
+- Test(windows): match fixture paths in benchmark stubs with either separator (TRDD-WANWRYNT)
+
+- Test(windows): build expected report paths with node:path (TRDD-Z3YW19WC)
+
+- Test(windows): compare input ids by native path and use a real outside file (TRDD-J6O3YJC0, TRDD-NIEDC62V, TRDD-5KZJQ9N4)
+
+- Test(windows): skip or replace tests that need sh, lsof, sqlite3 or SIGTERM (TRDD-A5J6E4JB, TRDD-VQ0VEK3L)
+
+- Test(windows): name fake engines .exe and join PATH with the platform delimiter (TRDD-1MT68BAJ)
+
+- Test: check backup mode only on POSIX (TRDD-1Y9UK5MK)
+
+- Test: use native report directory separators (TRDD-VQ0VEK3L)
+
+- Test: decode classifier fixture paths natively (TRDD-VQ0VEK3L)
+
+- Test: use native basenames in diff scope assertions (TRDD-VQ0VEK3L)
+
+
 ## [14.7.15] - 2026-11-27
 
 ### Changed
