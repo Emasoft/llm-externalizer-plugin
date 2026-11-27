@@ -276,12 +276,43 @@ function dropLock(dir: string): void {
   }
 }
 
+/**
+ * WHY a retry on Windows (TRDD-2VZ3JGDH): readState reads state-1.json with no lock, and on Windows a rename that
+ * replaces a file another process holds open fails with EPERM, while POSIX renames over an open file. Windows CI run
+ * 45931381708 failed on exactly that: a child of the 20-process test exited 1 on rename state-1.json.<pid>.tmp ->
+ * state-1.json. A reader keeps the file open for one readFileSync, so the rename succeeds a few ms later.
+ * RENAME_RETRY_MS stays far under LOCK_STALE_MS, so a lock holder waiting here never looks stale to another process.
+ */
+const RENAME_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
+export const RENAME_RETRY_MS = 500;
+
+/** renameSync, retried on win32 while another process holds the target open; every other failure throws at once. */
+export function renameReplacing(
+  from: string,
+  to: string,
+  rename: (from: string, to: string) => void = renameSync,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  const deadline = Date.now() + RENAME_RETRY_MS;
+  for (let waitMs = 2; ; waitMs = Math.min(waitMs * 2, 50)) {
+    try {
+      rename(from, to);
+      return;
+    } catch (err) {
+      const code = errnoOf(err);
+      if (platform !== "win32" || code === undefined || !RENAME_RETRY_CODES.has(code) || Date.now() + waitMs > deadline) throw err;
+      // A sync sleep: writeState runs inside a sync critical section that must never span an await.
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs);
+    }
+  }
+}
+
 function writeState(dir: string, state: GovernorState): void {
   const file = join(dir, STATE_FILE);
   const temp = `${file}.${process.pid}.tmp`;
   try {
     writeFileSync(temp, JSON.stringify(state), { mode: 0o600 });
-    renameSync(temp, file);
+    renameReplacing(temp, file);
   } catch (err) {
     throw dirError(dir, (err as Error).message, err);
   }

@@ -307,6 +307,8 @@ export default defineConfig({
       'src/broker/broker.test.ts',
       // TRDD-ZTO9K8EK governor core: pure controller tables plus real child processes through acquire.
       'src/governor/governor.test.ts',
+      // TRDD-2VZ3JGDH: renameReplacing, the Windows rename retry of the governor state file (the include list is explicit, so a new test file runs only once listed here).
+      'src/governor/state-rename.test.ts',
       'src/broker/broker-governor.test.ts',
       // TRDD-ZTO9K8EK governor unit 3: leases on the direct path and calibration senders; 100 real processes against a
       // counting loopback server, so it runs in the sequential step of npm test (package.json), not beside the parallel run.
